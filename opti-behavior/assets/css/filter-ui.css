@@ -1,0 +1,171 @@
+/**
+ * OptiBehavior shared filter-UI styles.
+ *
+ * Styles for the shared advanced-filters machinery in
+ * opti-behavior-filter-ui.js: icon multi-select dropdowns (.ob-icon-select*)
+ * and free-text autocomplete suggestion menus (.ob-suggest*).
+ *
+ * SOURCE OF TRUTH: opti-behavior/assets/css/filter-ui.css
+ * The PRO plugin ships its own copy at
+ * opti-behavior-pro/assets/css/filter-ui.css. Keep both in sync.
+ *
+ * Rules were moved verbatim from dashboard_styles.css (unchanged selectors,
+ * still scoped to .opti-behavior-dashboard-page) so the dashboard renders
+ * identically.
+ */
+
+/* Icon dropdowns (Browser / Country / Device / OS in the advanced-filters
+   panel). The native <select> is kept hidden as the source of truth; the
+   toggle button + menu replicate it with colored icons (flagcdn flags,
+   branded browser SVGs, device/OS glyphs). */
+.opti-behavior-dashboard-page .ob-icon-select,
+.opti-behavior-recordings-page .ob-icon-select {
+	position: relative;
+	width: 100%;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select > select,
+.opti-behavior-recordings-page .ob-icon-select > select {
+	display: none;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-toggle,
+.opti-behavior-recordings-page .ob-icon-select-toggle {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-label,
+.opti-behavior-recordings-page .ob-icon-select-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-caret,
+.opti-behavior-recordings-page .ob-icon-select-caret {
+	margin-left: auto;
+	color: #6b7280;
+	font-size: 11px;
+	line-height: 1;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-icon,
+.opti-behavior-recordings-page .ob-icon-select-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	flex: 0 0 auto;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-icon svg,
+.opti-behavior-recordings-page .ob-icon-select-icon svg {
+	display: block;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-flag,
+.opti-behavior-recordings-page .ob-icon-select-flag {
+	width: 20px;
+	height: 14px;
+	border-radius: 2px;
+	object-fit: cover;
+	box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-menu,
+.opti-behavior-recordings-page .ob-icon-select-menu {
+	position: absolute;
+	top: calc(100% + 4px);
+	left: 0;
+	right: 0;
+	z-index: 1200;
+	background: #fff;
+	border: 1px solid #d1d5db;
+	border-radius: 8px;
+	box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+	max-height: 260px;
+	overflow-y: auto;
+	padding: 4px;
+	box-sizing: border-box;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-option,
+.opti-behavior-recordings-page .ob-icon-select-option {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 10px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	font-size: 13px;
+	color: #1f2937;
+	text-align: left;
+	cursor: pointer;
+	box-sizing: border-box;
+	transition: background 0.15s ease;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-option:hover,
+.opti-behavior-recordings-page .ob-icon-select-option:hover {
+	background: #f3f4f6;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-option.is-selected,
+.opti-behavior-recordings-page .ob-icon-select-option.is-selected {
+	background: #ede9fe;
+	color: #5b21b6;
+	font-weight: 600;
+}
+
+/* Fixed-width checkmark column keeps icons aligned in multi-select menus. */
+.opti-behavior-dashboard-page .ob-icon-select-check,
+.opti-behavior-recordings-page .ob-icon-select-check {
+	display: inline-block;
+	width: 14px;
+	flex: 0 0 auto;
+	color: #7c3aed;
+	font-weight: 700;
+	line-height: 1;
+}
+
+/* Custom suggestion dropdowns for the free-text filter inputs (Entry Page /
+   Exit Page / Referrer). The wrapper anchors the .ob-suggest-menu (which
+   reuses .ob-icon-select-menu styling) directly under the input, replacing
+   the browser-positioned native <datalist> popup. */
+.opti-behavior-dashboard-page .ob-suggest,
+.opti-behavior-recordings-page .ob-suggest {
+	position: relative;
+	width: 100%;
+}
+
+.opti-behavior-dashboard-page .ob-suggest .advanced-filter-input,
+.opti-behavior-recordings-page .ob-suggest .advanced-filter-input {
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.opti-behavior-dashboard-page .ob-suggest-option .ob-icon-select-label,
+.opti-behavior-recordings-page .ob-suggest-option .ob-icon-select-label {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.opti-behavior-dashboard-page .ob-suggest-count,
+.opti-behavior-recordings-page .ob-suggest-count {
+	flex: 0 0 auto;
+	margin-left: auto;
+	font-size: 12px;
+	color: #6b7280;
+}

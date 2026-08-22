@@ -1,0 +1,514 @@
+/**
+ * Opti-Behavior Consent Banner Styles
+ *
+ * Uses CSS custom properties injected by PHP via wp_add_inline_style:
+ *   --ob-consent-accent   : accent / primary button color
+ *   --ob-consent-bg       : banner background
+ *   --ob-consent-text     : body text color
+ *
+ * Supports three position variants:
+ *   .ob-consent-banner--bottom-bar  (fixed bottom, full width)
+ *   .ob-consent-banner--top-bar     (fixed top, full width)
+ *   .ob-consent-banner--popup       (centered modal + overlay)
+ *   .ob-consent-banner--compact-card (fixed bottom-right, compact card)
+ *
+ * @package opti-behavior
+ * @since 1.0.3
+ */
+
+/* -----------------------------------------------------------------
+   CSS variable defaults (overridden by inline style on banner element)
+   ----------------------------------------------------------------- */
+.ob-consent-banner {
+    --ob-consent-accent : #2e7d32;
+    --ob-consent-bg     : #ffffff;
+    --ob-consent-text   : #333333;
+}
+
+/* -----------------------------------------------------------------
+   Overlay (popup mode only)
+   ----------------------------------------------------------------- */
+.ob-consent-overlay {
+    position         : fixed;
+    inset            : 0;
+    background       : rgba(0, 0, 0, 0.5);
+    z-index          : 999998;
+    opacity          : 0;
+    transition       : opacity 0.3s ease;
+    pointer-events   : none;
+}
+
+.ob-consent-overlay--visible {
+    opacity        : 1;
+    pointer-events : auto;
+}
+
+/* -----------------------------------------------------------------
+   Banner base
+   ----------------------------------------------------------------- */
+.ob-consent-banner {
+    position       : fixed;
+    z-index        : 999999;
+    box-sizing     : border-box;
+    font-family    : system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size      : 14px;
+    line-height    : 1.5;
+    color          : var(--ob-consent-text);
+    background     : var(--ob-consent-bg);
+    box-shadow     : 0 -2px 20px rgba(0, 0, 0, 0.12);
+    transition     : transform 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+                     opacity 0.35s ease;
+}
+
+/* -----------------------------------------------------------------
+   Position: bottom-bar
+   ----------------------------------------------------------------- */
+.ob-consent-banner--bottom-bar {
+    bottom         : 0;
+    left           : 0;
+    right          : 0;
+    border-top     : 3px solid var(--ob-consent-accent);
+    transform      : translateY(100%);
+    opacity        : 0;
+}
+
+.ob-consent-banner--bottom-bar.ob-consent-banner--visible {
+    transform : translateY(0);
+    opacity   : 1;
+}
+
+.ob-consent-banner--bottom-bar.ob-consent-banner--hidden {
+    transform : translateY(100%);
+    opacity   : 0;
+}
+
+/* -----------------------------------------------------------------
+   Position: top-bar
+   ----------------------------------------------------------------- */
+.ob-consent-banner--top-bar {
+    top            : 0;
+    left           : 0;
+    right          : 0;
+    border-bottom  : 3px solid var(--ob-consent-accent);
+    box-shadow     : 0 2px 20px rgba(0, 0, 0, 0.12);
+    transform      : translateY(-100%);
+    opacity        : 0;
+}
+
+.ob-consent-banner--top-bar.ob-consent-banner--visible {
+    transform : translateY(0);
+    opacity   : 1;
+}
+
+.ob-consent-banner--top-bar.ob-consent-banner--hidden {
+    transform : translateY(-100%);
+    opacity   : 0;
+}
+
+/* -----------------------------------------------------------------
+   Position: popup (centered modal)
+   ----------------------------------------------------------------- */
+.ob-consent-banner--popup {
+    top            : 50%;
+    left           : 50%;
+    transform      : translate(-50%, -48%) scale(0.95);
+    opacity        : 0;
+    width          : 520px;
+    max-width      : calc(100vw - 32px);
+    border-radius  : 12px;
+    box-shadow     : 0 8px 40px rgba(0, 0, 0, 0.2);
+    border-top     : 4px solid var(--ob-consent-accent);
+}
+
+.ob-consent-banner--popup.ob-consent-banner--visible {
+    transform : translate(-50%, -50%) scale(1);
+    opacity   : 1;
+}
+
+.ob-consent-banner--popup.ob-consent-banner--hidden {
+    transform : translate(-50%, -48%) scale(0.95);
+    opacity   : 0;
+}
+
+/* -----------------------------------------------------------------
+   Position: compact-card (bottom-right professional card)
+   ----------------------------------------------------------------- */
+.ob-consent-banner--compact-card {
+    right         : 20px;
+    bottom        : 20px;
+    width         : 492px;
+    max-width     : calc(100vw - 40px);
+    border        : 1px solid rgba(15, 23, 42, 0.12);
+    border-radius : 14px;
+    box-shadow    : 0 18px 48px rgba(15, 23, 42, 0.18);
+    transform     : translateY(18px) scale(0.98);
+    opacity       : 0;
+}
+
+.ob-consent-banner--compact-card.ob-consent-banner--visible {
+    transform : translateY(0) scale(1);
+    opacity   : 1;
+}
+
+.ob-consent-banner--compact-card.ob-consent-banner--hidden {
+    transform : translateY(18px) scale(0.98);
+    opacity   : 0;
+}
+
+/* -----------------------------------------------------------------
+   Inner layout
+   ----------------------------------------------------------------- */
+.ob-consent-banner__inner {
+    display        : flex;
+    flex-direction : column;
+    gap            : 12px;
+    padding        : 20px 24px;
+    max-width      : 1200px;
+    margin         : 0 auto;
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__inner {
+    gap       : 18px;
+    padding   : 24px 22px 20px;
+    max-width : none;
+}
+
+/* Side-by-side layout for bar variants on wider screens */
+@media (min-width: 768px) {
+    .ob-consent-banner--bottom-bar .ob-consent-banner__inner,
+    .ob-consent-banner--top-bar    .ob-consent-banner__inner {
+        flex-direction  : row;
+        align-items     : center;
+        justify-content : space-between;
+        gap             : 24px;
+    }
+
+    .ob-consent-banner--bottom-bar .ob-consent-banner__content,
+    .ob-consent-banner--top-bar    .ob-consent-banner__content {
+        flex : 1 1 0;
+    }
+}
+
+/* -----------------------------------------------------------------
+   Content
+   ----------------------------------------------------------------- */
+.ob-consent-banner__title {
+    margin      : 0 0 4px;
+    font-size   : 15px;
+    font-weight : 700;
+    color       : var(--ob-consent-text);
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__title {
+    margin      : 0 0 14px;
+    font-size   : 22px;
+    line-height : 1.25;
+}
+
+.ob-consent-banner__message {
+    margin : 0;
+    color  : var(--ob-consent-text);
+    opacity: 0.85;
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__message {
+    font-size   : 16px;
+    line-height : 1.55;
+    opacity     : 0.82;
+}
+
+.ob-consent-banner__policy-link {
+    color           : var(--ob-consent-accent);
+    font-weight     : 600;
+    text-decoration : underline;
+}
+
+.ob-consent-banner__close {
+    position        : absolute;
+    top             : 10px;
+    right           : 12px;
+    width           : 28px;
+    height          : 28px;
+    border          : 0;
+    background      : transparent;
+    color           : #94a3b8;
+    font-size       : 24px;
+    line-height     : 1;
+    cursor          : pointer;
+    border-radius   : 999px;
+    display         : inline-flex;
+    align-items     : center;
+    justify-content : center;
+}
+
+.ob-consent-banner__close:hover,
+.ob-consent-banner__close:focus-visible {
+    color      : var(--ob-consent-text);
+    background : rgba(15, 23, 42, 0.06);
+}
+
+/* -----------------------------------------------------------------
+   Buttons row
+   ----------------------------------------------------------------- */
+.ob-consent-banner__buttons {
+    display         : flex;
+    flex-wrap       : wrap;
+    gap             : 8px;
+    align-items     : center;
+    flex-shrink     : 0;
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__buttons {
+    display               : grid;
+    grid-template-columns : repeat(3, minmax(0, 1fr));
+    gap                   : 10px;
+}
+
+/* -----------------------------------------------------------------
+   Button base
+   ----------------------------------------------------------------- */
+.ob-consent-banner__btn {
+    display         : inline-flex;
+    align-items     : center;
+    justify-content : center;
+    padding         : 9px 20px;
+    border          : 2px solid transparent;
+    border-radius   : 6px;
+    font-family     : inherit;
+    font-size       : 13px;
+    font-weight     : 600;
+    line-height     : 1;
+    cursor          : pointer;
+    transition      : background 0.2s ease, color 0.2s ease, border-color 0.2s ease,
+                      box-shadow 0.2s ease;
+    white-space     : nowrap;
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__btn {
+    width         : 100%;
+    min-height    : 54px;
+    padding       : 12px 14px;
+    border-radius : 2px;
+    font-size     : 16px;
+}
+
+.ob-consent-banner__btn:focus-visible {
+    outline        : 3px solid var(--ob-consent-accent);
+    outline-offset : 2px;
+}
+
+/* Accept — primary (green, prominent) */
+.ob-consent-banner__btn--accept {
+    background : var(--ob-consent-accent);
+    color      : #fff;
+    border-color: var(--ob-consent-accent);
+    padding    : 10px 28px;
+    font-size  : 14px;
+}
+
+.ob-consent-banner__btn--accept:hover {
+    filter : brightness(1.1);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__btn--accept {
+    background   : var(--ob-consent-accent);
+    border-color : var(--ob-consent-accent);
+}
+
+/* Reject — muted / discouraging */
+.ob-consent-banner__btn--reject {
+    background   : transparent;
+    color        : #999;
+    border-color : #ccc;
+}
+
+.ob-consent-banner__btn--reject:hover {
+    background : #f0f0f0;
+    color      : #666;
+    border-color : #999;
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__btn--reject,
+.ob-consent-banner--compact-card .ob-consent-banner__btn--customize {
+    color           : var(--ob-consent-accent);
+    border-color    : var(--ob-consent-accent);
+    background      : transparent;
+    opacity         : 1;
+    text-decoration : none;
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__btn--reject:hover,
+.ob-consent-banner--compact-card .ob-consent-banner__btn--customize:hover {
+    background   : var(--ob-consent-accent);
+    border-color : var(--ob-consent-accent);
+    color        : #fff;
+}
+
+/* Customize — text link */
+.ob-consent-banner__btn--customize {
+    background   : transparent;
+    color        : var(--ob-consent-text);
+    border-color : transparent;
+    opacity      : 0.7;
+    padding-left : 8px;
+    padding-right: 8px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.ob-consent-banner__btn--customize:hover {
+    opacity : 1;
+}
+
+/* Save choice — secondary */
+.ob-consent-banner__btn--save-choice {
+    margin-top   : 10px;
+    background   : var(--ob-consent-accent);
+    color        : #fff;
+    border-color : var(--ob-consent-accent);
+}
+
+.ob-consent-banner__btn--save-choice:hover {
+    filter : brightness(1.1);
+}
+
+/* -----------------------------------------------------------------
+   Mobile: stack buttons vertically
+   ----------------------------------------------------------------- */
+@media (max-width: 480px) {
+    .ob-consent-banner__buttons {
+        flex-direction : column;
+        align-items    : stretch;
+    }
+
+    .ob-consent-banner__btn {
+        width           : 100%;
+        justify-content : center;
+    }
+
+    .ob-consent-banner--compact-card {
+        right     : 12px;
+        bottom    : 12px;
+        max-width : calc(100vw - 24px);
+    }
+
+    .ob-consent-banner--compact-card .ob-consent-banner__buttons {
+        grid-template-columns : 1fr;
+    }
+}
+
+/* -----------------------------------------------------------------
+   Customize panel
+   ----------------------------------------------------------------- */
+.ob-consent-customize__row {
+    display        : flex;
+    flex-direction : column;
+    gap            : 6px;
+}
+
+.ob-consent-customize__label {
+    display     : flex;
+    align-items : center;
+    gap         : 10px;
+    cursor      : pointer;
+    font-weight : 600;
+    color       : var(--ob-consent-text);
+}
+
+.ob-consent-customize__desc {
+    margin  : 0;
+    color   : var(--ob-consent-text);
+    opacity : 0.7;
+    font-size: 12px;
+}
+
+/* Toggle switch */
+.ob-consent-customize__toggle {
+    position      : relative;
+    display       : inline-block;
+    width         : 40px;
+    height        : 22px;
+    flex-shrink   : 0;
+}
+
+.ob-consent-customize__checkbox {
+    opacity  : 0;
+    width    : 0;
+    height   : 0;
+    position : absolute;
+}
+
+.ob-consent-customize__slider {
+    position        : absolute;
+    inset           : 0;
+    background      : #ccc;
+    border-radius   : 22px;
+    transition      : background 0.25s ease;
+    cursor          : pointer;
+}
+
+.ob-consent-customize__slider::before {
+    content          : '';
+    position         : absolute;
+    left             : 3px;
+    top              : 3px;
+    width            : 16px;
+    height           : 16px;
+    border-radius    : 50%;
+    background       : #fff;
+    transition       : transform 0.25s ease;
+    box-shadow       : 0 1px 3px rgba(0,0,0,0.25);
+}
+
+.ob-consent-customize__checkbox:checked + .ob-consent-customize__slider {
+    background : var(--ob-consent-accent);
+}
+
+.ob-consent-customize__checkbox:checked + .ob-consent-customize__slider::before {
+    transform : translateX(18px);
+}
+
+.ob-consent-customize__checkbox:focus-visible + .ob-consent-customize__slider {
+    outline        : 3px solid var(--ob-consent-accent);
+    outline-offset : 2px;
+}
+
+/* -----------------------------------------------------------------
+   Customize panel label text
+   ----------------------------------------------------------------- */
+.ob-consent-customize__label-text {
+    font-size   : 13px;
+    font-weight : 600;
+    color       : var(--ob-consent-text);
+    line-height : 1.3;
+}
+
+/* -----------------------------------------------------------------
+   Accordion slide-down animation for customize panel
+   ----------------------------------------------------------------- */
+.ob-consent-customize {
+    max-height  : 0;
+    overflow    : hidden;
+    transition  : max-height 0.3s ease, padding-top 0.3s ease, opacity 0.3s ease;
+    opacity     : 0;
+    /* Override border/padding to 0 when collapsed */
+    border-top  : 0 solid rgba(0, 0, 0, 0.08);
+    padding-top : 0;
+    margin-top  : 0;
+}
+
+.ob-consent-customize--open {
+    max-height  : 300px;
+    opacity     : 1;
+    border-top  : 1px solid rgba(0, 0, 0, 0.08);
+    padding-top : 12px;
+    margin-top  : 4px;
+}
+
+/* -----------------------------------------------------------------
+   Ensure pointer-events disabled while hidden (fallback for display:none)
+   ----------------------------------------------------------------- */
+.ob-consent-customize:not(.ob-consent-customize--open) {
+    pointer-events : none;
+}

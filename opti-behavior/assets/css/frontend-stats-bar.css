@@ -1,0 +1,654 @@
+/**
+ * Frontend Stats Bar — Styles
+ *
+ * Modern, glassmorphism-inspired analytics bar for admins.
+ * Uses CSS custom properties for theming + backdrop-filter for depth.
+ *
+ * @package opti-behavior
+ * @since   1.2.3
+ */
+
+/* =========================================================================
+   CSS Custom Properties (Themes) — Refined palettes with glass support
+   ========================================================================= */
+
+.opti-stats-bar--dark {
+	--osb-bg: rgba(17, 17, 27, 0.82);
+	--osb-bg-solid: #11111b;
+	--osb-text: #e4e4ef;
+	--osb-accent: #7c8aff;
+	--osb-accent-secondary: #c084fc;
+	--osb-muted: #7f849c;
+	--osb-separator: rgba(127, 132, 156, 0.2);
+	--osb-hover: rgba(127, 132, 156, 0.1);
+	--osb-item-bg: rgba(127, 132, 156, 0.08);
+	--osb-pill-bg: rgba(17, 17, 27, 0.9);
+	--osb-glow: rgba(124, 138, 255, 0.3);
+	--osb-gradient: linear-gradient(135deg, #7c8aff, #c084fc);
+	--osb-border: rgba(127, 132, 156, 0.15);
+}
+
+.opti-stats-bar--light {
+	--osb-bg: rgba(255, 255, 255, 0.82);
+	--osb-bg-solid: #ffffff;
+	--osb-text: #0f172a;
+	--osb-accent: #4f46e5;
+	--osb-accent-secondary: #7c3aed;
+	--osb-muted: #64748b;
+	--osb-separator: rgba(100, 116, 139, 0.15);
+	--osb-hover: rgba(100, 116, 139, 0.06);
+	--osb-item-bg: rgba(100, 116, 139, 0.05);
+	--osb-pill-bg: rgba(255, 255, 255, 0.92);
+	--osb-glow: rgba(79, 70, 229, 0.2);
+	--osb-gradient: linear-gradient(135deg, #4f46e5, #7c3aed);
+	--osb-border: rgba(100, 116, 139, 0.12);
+}
+
+.opti-stats-bar--blue {
+	--osb-bg: rgba(15, 23, 42, 0.85);
+	--osb-bg-solid: #0f172a;
+	--osb-text: #e0f2fe;
+	--osb-accent: #38bdf8;
+	--osb-accent-secondary: #818cf8;
+	--osb-muted: #64748b;
+	--osb-separator: rgba(100, 116, 139, 0.2);
+	--osb-hover: rgba(56, 189, 248, 0.08);
+	--osb-item-bg: rgba(56, 189, 248, 0.06);
+	--osb-pill-bg: rgba(15, 23, 42, 0.92);
+	--osb-glow: rgba(56, 189, 248, 0.3);
+	--osb-gradient: linear-gradient(135deg, #38bdf8, #818cf8);
+	--osb-border: rgba(56, 189, 248, 0.15);
+}
+
+.opti-stats-bar--green {
+	--osb-bg: rgba(5, 28, 17, 0.85);
+	--osb-bg-solid: #051c11;
+	--osb-text: #d1fae5;
+	--osb-accent: #34d399;
+	--osb-accent-secondary: #2dd4bf;
+	--osb-muted: #6b8f7e;
+	--osb-separator: rgba(107, 143, 126, 0.2);
+	--osb-hover: rgba(52, 211, 153, 0.08);
+	--osb-item-bg: rgba(52, 211, 153, 0.06);
+	--osb-pill-bg: rgba(5, 28, 17, 0.92);
+	--osb-glow: rgba(52, 211, 153, 0.3);
+	--osb-gradient: linear-gradient(135deg, #34d399, #2dd4bf);
+	--osb-border: rgba(52, 211, 153, 0.15);
+}
+
+.opti-stats-bar--purple {
+	--osb-bg: rgba(25, 10, 50, 0.85);
+	--osb-bg-solid: #190a32;
+	--osb-text: #ede9fe;
+	--osb-accent: #a78bfa;
+	--osb-accent-secondary: #f472b6;
+	--osb-muted: #7c6f9b;
+	--osb-separator: rgba(124, 111, 155, 0.2);
+	--osb-hover: rgba(167, 139, 250, 0.08);
+	--osb-item-bg: rgba(167, 139, 250, 0.06);
+	--osb-pill-bg: rgba(25, 10, 50, 0.92);
+	--osb-glow: rgba(167, 139, 250, 0.3);
+	--osb-gradient: linear-gradient(135deg, #a78bfa, #f472b6);
+	--osb-border: rgba(167, 139, 250, 0.15);
+}
+
+.opti-stats-bar--orange {
+	--osb-bg: rgba(35, 14, 5, 0.85);
+	--osb-bg-solid: #230e05;
+	--osb-text: #fff1e6;
+	--osb-accent: #fb923c;
+	--osb-accent-secondary: #f87171;
+	--osb-muted: #9b7a60;
+	--osb-separator: rgba(155, 122, 96, 0.2);
+	--osb-hover: rgba(251, 146, 60, 0.08);
+	--osb-item-bg: rgba(251, 146, 60, 0.06);
+	--osb-pill-bg: rgba(35, 14, 5, 0.92);
+	--osb-glow: rgba(251, 146, 60, 0.3);
+	--osb-gradient: linear-gradient(135deg, #fb923c, #f87171);
+	--osb-border: rgba(251, 146, 60, 0.15);
+}
+
+/* =========================================================================
+   Body Offset — Push page content below the fixed bar
+   ========================================================================= */
+
+body.opti-stats-bar-active {
+	margin-top: var(--osb-bar-height, 42px) !important;
+	transition: margin-top 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.opti-stats-bar-active.admin-bar {
+	margin-top: var(--osb-bar-height, 42px) !important;
+}
+
+body.opti-stats-bar-collapsed {
+	margin-top: 0 !important;
+}
+
+/* =========================================================================
+   Bar Layout — Glassmorphism
+   ========================================================================= */
+
+.opti-stats-bar {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	z-index: 999999;
+	color: var(--osb-text);
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	font-size: 13px;
+	line-height: 1;
+	pointer-events: none;
+	transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Push below WP admin bar */
+.admin-bar .opti-stats-bar {
+	top: 32px;
+}
+
+@media screen and (max-width: 782px) {
+	.admin-bar .opti-stats-bar {
+		top: 46px;
+	}
+}
+
+.opti-stats-bar__inner {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	position: relative;
+	width: fit-content;
+	max-width: calc(100vw - 32px);
+	margin: 0 auto;
+	padding: 8px 16px;
+	gap: 10px;
+	background: var(--osb-bg);
+	-webkit-backdrop-filter: blur(16px) saturate(1.4);
+	backdrop-filter: blur(16px) saturate(1.4);
+	border: 1px solid var(--osb-border);
+	border-radius: 18px;
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.05),
+		0 2px 6px rgba(0, 0, 0, 0.12),
+		0 10px 28px rgba(0, 0, 0, 0.10);
+	box-sizing: border-box;
+	overflow: visible;
+	pointer-events: auto;
+	isolation: isolate;
+}
+
+.opti-stats-bar__inner::after {
+	content: '';
+	position: absolute;
+	bottom: 0;
+	left: 12px;
+	right: 12px;
+	height: 2px;
+	background: var(--osb-gradient);
+	border-radius: 999px;
+	opacity: 0.65;
+	pointer-events: none;
+}
+
+.opti-stats-bar__inner::-webkit-scrollbar {
+	display: none;
+}
+
+/* =========================================================================
+   Period Badge — Pill-shaped accent label
+   ========================================================================= */
+
+.opti-stats-bar__period {
+	font-weight: 600;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--osb-accent);
+	white-space: nowrap;
+	flex-shrink: 0;
+	background: var(--osb-item-bg);
+	border: 1px solid var(--osb-separator);
+	padding: 4px 10px;
+	border-radius: 100px;
+	line-height: 1.3;
+	display: inline-flex;
+	align-items: center;
+	cursor: pointer;
+}
+
+.opti-stats-bar__period-select {
+	font: inherit;
+	font-weight: 600;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--osb-accent);
+	background: transparent;
+	border: 0;
+	margin: 0;
+	padding: 0 15px 0 0;
+	line-height: 1.3;
+	cursor: pointer;
+	box-shadow: none;
+	outline: none;
+	height: auto;
+	min-height: 0;
+	appearance: none;
+	-webkit-appearance: none;
+	-moz-appearance: none;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23f97316' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right center;
+	max-width: 130px;
+}
+
+.opti-stats-bar__period-select:focus-visible {
+	outline: 1px solid var(--osb-accent);
+	outline-offset: 2px;
+}
+
+.opti-stats-bar__period-select option {
+	color: #1e293b;
+	background: #fff;
+	text-transform: none;
+	letter-spacing: normal;
+}
+
+.opti-stats-bar__period .screen-reader-text {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+.opti-stats-bar__separator {
+	width: 1px;
+	height: 18px;
+	background: var(--osb-separator);
+	flex-shrink: 0;
+}
+
+.opti-stats-bar__stats {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 1 auto;
+	flex-wrap: nowrap;
+	min-width: 0;
+	max-width: 100%;
+	overflow: visible;
+}
+
+/* =========================================================================
+   Stat Items — Chip-style with hover micro-interaction
+   ========================================================================= */
+
+.opti-stats-bar__item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+	padding: 4px 8px;
+	border-radius: 8px;
+	background: var(--osb-item-bg);
+	border: 1px solid transparent;
+	transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+	cursor: default;
+}
+
+.opti-stats-bar__item--clickable {
+	color: inherit;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.opti-stats-bar__item--sessions-link {
+	border-color: rgba(56, 189, 248, 0.95);
+	background: rgba(14, 165, 233, 0.12);
+	box-shadow:
+		inset 0 0 0 1px rgba(56, 189, 248, 0.34),
+		0 0 0 1px rgba(14, 165, 233, 0.18),
+		0 0 12px rgba(14, 165, 233, 0.28);
+	position: relative;
+}
+
+.opti-stats-bar__item--recordings-link {
+	border-color: rgba(249, 115, 22, 0.95);
+	background: rgba(249, 115, 22, 0.12);
+	box-shadow:
+		inset 0 0 0 1px rgba(249, 115, 22, 0.32),
+		0 0 0 1px rgba(249, 115, 22, 0.18),
+		0 0 12px rgba(249, 115, 22, 0.18);
+}
+
+.opti-stats-bar__item:hover {
+	background: var(--osb-hover);
+	border-color: var(--osb-separator);
+	transform: translateY(-1px);
+}
+
+.opti-stats-bar__item--recordings-link:hover,
+.opti-stats-bar__item--recordings-link:focus {
+	background: rgba(249, 115, 22, 0.20);
+	border-color: rgba(251, 146, 60, 1);
+	box-shadow:
+		inset 0 0 0 1px rgba(251, 146, 60, 0.48),
+		0 0 0 2px rgba(249, 115, 22, 0.28),
+		0 0 16px rgba(249, 115, 22, 0.28);
+	outline: none;
+}
+
+.opti-stats-bar__item--sessions-link:hover,
+.opti-stats-bar__item--sessions-link:focus {
+	background: rgba(14, 165, 233, 0.20);
+	border-color: rgba(125, 211, 252, 1);
+	box-shadow:
+		inset 0 0 0 1px rgba(125, 211, 252, 0.48),
+		0 0 0 2px rgba(14, 165, 233, 0.28),
+		0 0 16px rgba(56, 189, 248, 0.38);
+	outline: none;
+}
+
+.opti-stats-bar__item--recordings-link:focus-visible {
+	outline: 2px solid rgba(251, 146, 60, 1);
+	outline-offset: 2px;
+}
+
+.opti-stats-bar__item--sessions-link:focus-visible {
+	outline: 2px solid rgba(125, 211, 252, 1);
+	outline-offset: 2px;
+}
+
+.opti-stats-bar__item svg {
+	width: 13px;
+	height: 13px;
+	color: var(--osb-accent);
+	flex-shrink: 0;
+	opacity: 0.8;
+}
+
+.opti-stats-bar__item:hover svg {
+	opacity: 1;
+}
+
+.opti-stats-bar__item--recordings-link svg {
+	color: rgba(251, 146, 60, 1);
+	opacity: 1;
+}
+
+.opti-stats-bar__item--sessions-link svg {
+	color: rgba(125, 211, 252, 1);
+	opacity: 1;
+}
+
+.opti-stats-bar__label {
+	color: var(--osb-muted);
+	font-size: 10px;
+	font-weight: 500;
+	letter-spacing: 0.01em;
+}
+
+.opti-stats-bar__value {
+	font-weight: 700;
+	font-size: 12px;
+	color: var(--osb-text);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: -0.01em;
+}
+
+/* =========================================================================
+   Skeleton Loading — Shimmer animation
+   ========================================================================= */
+
+.opti-stats-bar__value[data-loading="true"] {
+	display: inline-block;
+	width: 30px;
+	height: 12px;
+	background: linear-gradient(
+		90deg,
+		var(--osb-separator) 25%,
+		var(--osb-hover) 50%,
+		var(--osb-separator) 75%
+	);
+	background-size: 200% 100%;
+	border-radius: 4px;
+	animation: osb-shimmer 1.5s ease-in-out infinite;
+	vertical-align: middle;
+}
+
+@keyframes osb-shimmer {
+	0% { background-position: 200% 0; }
+	100% { background-position: -200% 0; }
+}
+
+/* =========================================================================
+   Toggle Button
+   ========================================================================= */
+
+.opti-stats-bar__toggle {
+	background: var(--osb-item-bg);
+	border: 1px solid transparent;
+	color: var(--osb-muted);
+	cursor: pointer;
+	padding: 5px;
+	border-radius: 8px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	position: relative;
+	z-index: 2;
+	transition: color 0.2s, background 0.2s, border-color 0.2s, transform 0.15s;
+}
+
+.opti-stats-bar__toggle:hover {
+	color: var(--osb-accent);
+	background: var(--osb-hover);
+	border-color: var(--osb-separator);
+	transform: scale(1.05);
+}
+
+.opti-stats-bar__toggle svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* =========================================================================
+   Dynamic Fit Modes — applied by frontend-stats-bar.js after measuring width
+   ========================================================================= */
+
+.opti-stats-bar--compact .opti-stats-bar__label {
+	display: none;
+}
+
+.opti-stats-bar--compact .opti-stats-bar__item {
+	gap: 5px;
+}
+
+.opti-stats-bar--wrap .opti-stats-bar__inner {
+	width: calc(100vw - 32px);
+	align-items: center;
+}
+
+.opti-stats-bar--wrap .opti-stats-bar__stats {
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	overflow: visible;
+	row-gap: 5px;
+}
+
+/* =========================================================================
+   Collapsed Pill — Modern floating action button
+   ========================================================================= */
+
+.opti-stats-bar-pill {
+	position: fixed;
+	top: 8px;
+	right: 16px;
+	z-index: 999999;
+	background: var(--osb-pill-bg);
+	-webkit-backdrop-filter: blur(16px) saturate(1.4);
+	backdrop-filter: blur(16px) saturate(1.4);
+	color: var(--osb-accent);
+	border: 1px solid var(--osb-border);
+	border-radius: 12px;
+	width: 38px;
+	height: 38px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	box-shadow:
+		0 2px 8px rgba(0, 0, 0, 0.12),
+		0 0 0 0 var(--osb-glow);
+	transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+		box-shadow 0.25s ease,
+		border-color 0.2s ease;
+}
+
+.admin-bar .opti-stats-bar-pill {
+	top: 40px;
+}
+
+@media screen and (max-width: 782px) {
+	.admin-bar .opti-stats-bar-pill {
+		top: 54px;
+	}
+}
+
+.opti-stats-bar-pill:hover {
+	transform: scale(1.08);
+	border-color: var(--osb-accent);
+	box-shadow:
+		0 4px 16px rgba(0, 0, 0, 0.15),
+		0 0 16px var(--osb-glow);
+}
+
+.opti-stats-bar-pill svg {
+	width: 17px;
+	height: 17px;
+}
+
+/* =========================================================================
+   Responsive — Progressive disclosure
+   ========================================================================= */
+
+@media screen and (max-width: 1100px) {
+	.opti-stats-bar__item {
+		padding: 4px 8px;
+		gap: 5px;
+	}
+
+	.opti-stats-bar__stats {
+		gap: 4px;
+	}
+
+	.opti-stats-bar__inner {
+		gap: 10px;
+	}
+}
+
+@media screen and (max-width: 900px) {
+	.opti-stats-bar__label {
+		display: none;
+	}
+
+	.opti-stats-bar__stats {
+		gap: 4px;
+	}
+
+	.opti-stats-bar__inner {
+		padding: 8px 12px;
+		gap: 8px;
+	}
+
+	.opti-stats-bar__item {
+		padding: 4px 8px;
+		border-radius: 6px;
+	}
+}
+
+@media screen and (max-width: 600px) {
+	.opti-stats-bar__period {
+		display: none;
+	}
+
+	.opti-stats-bar__separator {
+		display: none;
+	}
+
+	.opti-stats-bar__stats {
+		gap: 3px;
+	}
+
+	.opti-stats-bar__value {
+		font-size: 12px;
+	}
+
+	.opti-stats-bar__item svg {
+		width: 12px;
+		height: 12px;
+	}
+
+	.opti-stats-bar__item {
+		padding: 3px 6px;
+		gap: 4px;
+	}
+}
+
+/* =========================================================================
+   Third-party select-enhancer immunity
+   Themes/plugins that run $('select').select2() (or niceSelect, Chosen,
+   Selectric, SlimSelect, selectWoo) hijack the period select: they hide the
+   native control and inject a large widget, inflating the bar (~81px).
+   These rules hide any injected widget and force the native select back.
+   ========================================================================= */
+
+/* Hide anything injected inside the period label. The label legitimately
+   contains only the screen-reader span and the native select. */
+.opti-stats-bar__period > *:not(.opti-stats-bar__period-select):not(.screen-reader-text) {
+	display: none !important;
+}
+
+/* Explicit kill-switches for known enhancer containers anywhere in the bar
+   (some libs append as siblings of the label or deeper). */
+.opti-stats-bar .select2-container,
+.opti-stats-bar .select2,
+.opti-stats-bar .nice-select,
+.opti-stats-bar .chosen-container,
+.opti-stats-bar .selectric-wrapper,
+.opti-stats-bar .ss-main {
+	display: none !important;
+}
+
+/* Restore the native select if an enhancer visually removed it.
+   Select2 uses .select2-hidden-accessible (absolute + 1px + clip). */
+select.opti-stats-bar__period-select,
+select.opti-stats-bar__period-select.select2-hidden-accessible {
+	position: static !important;
+	display: inline-block !important;
+	width: auto !important;
+	height: auto !important;
+	margin: 0 !important;
+	padding: 0 15px 0 0 !important;
+	border: 0 !important;
+	clip: auto !important;
+	clip-path: none !important;
+	opacity: 1 !important;
+	overflow: visible !important;
+	visibility: visible !important;
+	white-space: nowrap !important;
+}
+
+/* Final backstop: no injected box may inflate the period pill / the bar. */
+.opti-stats-bar__period {
+	max-height: 24px;
+	overflow: hidden;
+}

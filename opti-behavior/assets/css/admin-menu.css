@@ -1,0 +1,89 @@
+/**
+ * Admin Menu Styles
+ * Styles for WordPress admin menu items
+ *
+ * @package OptiBehavior
+ */
+
+/* Menu icon sizing for all opti-behavior menu items */
+#adminmenu .toplevel_page_opti-behavior-analytics .dashicons,
+#adminmenu .menu-icon-opti-behavior .dashicons {
+	font-size: 16px !important;
+	width: 16px !important;
+	height: 16px !important;
+}
+
+/* Submenu Dashicons styling */
+#adminmenu .opti-behavior-menu-icon.dashicons {
+	font-size: 16px !important;
+	width: 16px !important;
+	height: 16px !important;
+	vertical-align: middle;
+	margin-right: 6px;
+}
+
+/* Specific menu item icons */
+.dashicons-dashboard.opti-behavior-menu-icon,
+.dashicons-chart-area.opti-behavior-menu-icon,
+.dashicons-video-alt3.opti-behavior-menu-icon,
+.dashicons-admin-settings.opti-behavior-menu-icon,
+.dashicons-lightbulb.opti-behavior-menu-icon {
+	font-size: 16px;
+	width: 16px;
+	height: 16px;
+}
+
+/* Menu icon image sizing (for custom PNG icons) - 35x35 as requested */
+#adminmenu #toplevel_page_opti-behavior-analytics .wp-menu-image img {
+	width: 35px !important;
+	height: 35px !important;
+	padding: 0 !important;
+	margin: 0 auto !important;
+	object-fit: contain !important;
+	display: block !important;
+	opacity: 0.6;
+	filter: grayscale(100%);
+	transition: opacity 0.1s ease-in-out, filter 0.1s ease-in-out;
+}
+
+/* Center the icon container */
+#adminmenu #toplevel_page_opti-behavior-analytics .wp-menu-image {
+	text-align: center !important;
+}
+
+/* Hover and active states for icon - match WordPress behavior */
+#adminmenu #toplevel_page_opti-behavior-analytics:hover .wp-menu-image img,
+#adminmenu #toplevel_page_opti-behavior-analytics.wp-has-current-submenu .wp-menu-image img,
+#adminmenu #toplevel_page_opti-behavior-analytics.current .wp-menu-image img {
+	opacity: 1;
+	filter: grayscale(0%);
+}
+
+/* Hide dashicons pseudo-element when using custom image */
+#adminmenu #toplevel_page_opti-behavior-analytics .wp-menu-image.dashicons-before::before {
+	content: none !important;
+	display: none !important;
+}
+
+/* PRO badge in submenu items */
+#adminmenu #toplevel_page_opti-behavior-analytics .wp-submenu a[href*="opti-behavior-recordings"],
+#adminmenu #toplevel_page_opti-behavior-analytics .wp-submenu a[href*="opti-behavior-errors"],
+#adminmenu #toplevel_page_opti-behavior-analytics .wp-submenu a[href*="opti-behavior-user-journey"] {
+	white-space: nowrap;
+}
+
+.opti-menu-pro-badge {
+	display: inline-block;
+	margin-left: 4px;
+	padding: 0 4px;
+	font-size: 8px;
+	font-weight: 700;
+	line-height: 14px;
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+	color: #fff;
+	background: linear-gradient(135deg, #6366f1, #8b5cf6);
+	border-radius: 3px;
+	vertical-align: middle;
+}
+

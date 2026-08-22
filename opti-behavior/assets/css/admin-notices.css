@@ -1,0 +1,221 @@
+/**
+ * Admin Notices Suppression Styles
+ * Hides third-party admin notices on Opti-Behavior plugin pages
+ * 
+ * @package OptiBehavior
+ */
+
+/* === COMPREHENSIVE ADMIN NOTICE SUPPRESSION === */
+
+/* Standard WordPress notices */
+#wpbody-content > .notice,
+#wpbody-content > .updated,
+#wpbody-content > .error,
+#wpbody-content > .update-nag,
+.wrap > .notice,
+.wrap > .updated,
+.wrap > .error,
+.wrap > .update-nag,
+
+/* Notice variations */
+.notice,
+.notice-error,
+.notice-warning,
+.notice-success,
+.notice-info,
+.updated,
+.error,
+.update-nag,
+
+/* Dismissible notices */
+div[data-dismissible],
+.notice.is-dismissible,
+.notice-dismiss,
+
+/* WordPress pointers and tips */
+#wpbody-content .wp-pointer,
+.wp-pointer,
+
+/* Plugin-specific notices (common plugins) */
+.jetpack-message,
+.rank-math-notice,
+.elementor-message,
+.woocommerce-message,
+.woocommerce-error,
+.woocommerce-info,
+.yoast-notification,
+.acf-notice,
+.wordfence-notice,
+.updraft-ad-container,
+.itsec-notice,
+.wpforms-notice,
+.monsterinsights-notice,
+.astra-notice,
+.ocean-notice,
+
+/* Generic message containers (exclude ob-* prefixed classes — Opti-Behavior internal elements) */
+div[id^="message"]:not(#support-form-message),
+div[id*="notice"],
+div[id*="warning"],
+div[id*="error"],
+div[class*="notice"]:not([class^="ob-"]),
+div[class*="message"]:not(.form-message):not(#support-form-message):not([class^="ob-"]),
+div[class*="notification"]:not([class^="ob-"]),
+div[class*="alert"]:not([class^="ob-"]),
+
+/* Admin bar notices */
+#wpadminbar .notice,
+
+/* Nag notices */
+.update-nag,
+.updated-nag,
+
+/* Review/rating notices.
+ * Keep Opti-Behavior internal `ob-*` elements visible; words like "preview"
+ * contain "review" and are valid product UI, not third-party notices. */
+div[class*="review"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ai-feedback-section):not(.feedback-card):not(.opti-ab-review-summary):not(.opti-ab-review-section),
+div[class*="rating"]:not([class^="ob-"]):not([class*=" ob-"]),
+div[class*="feedback"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ai-feedback-section):not(.feedback-card):not(.feedback-icon):not(.feedback-title):not(.feedback-description):not(.feedback-actions):not(.feedback-btn):not(.feedback-note),
+
+/* Newsletter/subscription notices */
+div[class*="newsletter"],
+div[class*="subscribe"],
+
+/* Promotional notices (third-party). Allow Opti-Behavior upgrade layouts. */
+div[class*="promo"]:not([class*="opti-behavior"]),
+div[class*="upgrade"]:not([class*="opti-behavior"]):not(.upgrade-card):not(.upgrade-features):not(.upgrade-action):not(.recordings-upgrade-content):not(.upgrade-preview):not(.upgrade-cta):not(.upgrade-description):not(.upgrade-icon):not(.upgrade-title),
+div[class*="premium"]:not([class*="opti-behavior"]),
+
+/* Survey/feedback notices */
+div[class*="survey"],
+div[class*="poll"],
+
+/* Cookie/GDPR notices (admin only) */
+#wpbody-content div[class*="cookie"],
+#wpbody-content div[class*="gdpr"],
+
+/* Backup/security notices */
+div[class*="backup"],
+div[class*="security"],
+
+/* Update notices */
+div[class*="update"],
+
+/* Donation/support notices */
+div[class*="donate"],
+div[class*="support"]:not(.support-form):not([id*="support-"]),
+
+/* Onboarding/welcome notices */
+div[class*="welcome"],
+div[class*="onboard"],
+div[class*="getting-started"],
+
+/* Specific plugin patterns (exclude ob-* prefixed classes — those are Opti-Behavior internal elements) */
+div[class*="-notice"]:not([class^="ob-"]),
+div[class*="-message"]:not([class^="ob-"]),
+div[class*="-notification"]:not([class^="ob-"]),
+div[class*="-alert"]:not([class^="ob-"]),
+div[class*="-banner"]:not([class^="ob-"]),
+
+/* Catch-all for admin notices in content area */
+#wpbody-content > div[class*="notice"]:not([class*="opti-behavior"]),
+#wpbody-content > div[class*="message"]:not([class*="opti-behavior"]),
+#wpbody-content > div[class*="error"]:not([class*="opti-behavior"]),
+#wpbody-content > div[class*="warning"]:not([class*="opti-behavior"]),
+#wpbody-content > div[class*="info"]:not([class*="opti-behavior"]),
+#wpbody-content > div[class*="alert"]:not([class*="opti-behavior"]),
+
+/* Inline notices before wrap */
+.wrap + .notice,
+.wrap + .error,
+.wrap + .updated {
+	display: none !important;
+	visibility: hidden !important;
+	opacity: 0 !important;
+	height: 0 !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	overflow: hidden !important;
+}
+
+/* EXCEPTION: Keep opti-behavior notices visible.
+ * Selectors intentionally use compound class selectors (e.g. .notice.opti-behavior-notice)
+ * so they beat the higher-specificity hide rules like `.wrap > .notice` above. */
+div.notice.opti-behavior-notice,
+.wrap > div.notice.opti-behavior-notice,
+#wpbody-content div.notice.opti-behavior-notice,
+div[class*="opti-behavior-notice"],
+div[id*="opti-behavior-notice"],
+.opti-behavior-notice,
+#opti-behavior-notice {
+	display: block !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+	height: auto !important;
+	margin: 5px 0 15px !important;
+	padding: 12px !important;
+	overflow: visible !important;
+}
+
+/* EXCEPTION: Keep Opti-Behavior Broadcast banners visible */
+div.opti-behavior-broadcast-banner {
+	display: flex !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+	height: auto !important;
+	margin: 10px 0 16px 0 !important;
+	padding: 0 !important;
+	overflow: hidden !important;
+}
+
+div.opti-behavior-broadcast-banner div,
+div.opti-behavior-broadcast-banner p,
+div.opti-behavior-broadcast-banner a,
+div.opti-behavior-broadcast-banner button,
+div.opti-behavior-broadcast-banner img,
+div.opti-behavior-broadcast-banner span {
+	display: revert !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+	height: auto !important;
+	overflow: visible !important;
+}
+
+div.opti-behavior-broadcast-banner .opti-behavior-broadcast-inner {
+	display: flex !important;
+}
+
+/* EXCEPTION: Keep Opti-Behavior Pro Trial banner and all children visible */
+div.opti-behavior-trial-banner {
+	display: flex !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+	height: auto !important;
+	margin: 0 0 24px 0 !important;
+	padding: 18px 28px !important;
+	overflow: hidden !important;
+}
+
+div.opti-behavior-trial-banner div {
+	display: flex !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+	height: auto !important;
+	overflow: visible !important;
+}
+
+/* NOTE: The onboarding popup is rendered via admin_footer hook (outside #wpbody-content)
+   so it is not affected by the wildcard hide rules above. No exception needed here. */
+
+/* EXCEPTION: Keep AI Insights support form visible */
+.ai-feedback-section,
+.ai-feedback-section *,
+.feedback-card,
+.support-form,
+#opti-behavior-support-form {
+	display: block !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+	height: auto !important;
+}
+

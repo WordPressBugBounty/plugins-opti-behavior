@@ -1,0 +1,61 @@
+/**
+ * Admin Utility Styles
+ * Utility classes for loading states, forms, and common UI patterns
+ * 
+ * @package OptiBehavior
+ */
+
+/* Loading state for top users table */
+.optibehavior-loading-state {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: #6b7280;
+}
+
+.optibehavior-loading-state .spinner.is-active {
+	float: none;
+	visibility: visible;
+}
+
+/* Table skeleton loading state */
+.table-skeleton {
+	padding: 32px 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #6b7280;
+}
+
+.table-skeleton .spinner {
+	width: 16px;
+	height: 16px;
+	border: 2px solid #c7d2fe;
+	border-top-color: #4f46e5;
+	border-radius: 50%;
+	display: inline-block;
+	margin-right: 8px;
+	animation: spn 0.8s linear infinite;
+}
+
+/* Inline form for delete actions */
+.optibehavior-inline-form {
+	display: inline;
+	margin-left: 6px;
+}
+
+/* Delete button styling */
+.btn-delete {
+	background: none;
+	border: none;
+	cursor: pointer;
+	padding: 0;
+	font-size: 16px;
+	opacity: 0.6;
+	transition: opacity 0.2s ease;
+}
+
+.btn-delete:hover {
+	opacity: 1;
+}
+

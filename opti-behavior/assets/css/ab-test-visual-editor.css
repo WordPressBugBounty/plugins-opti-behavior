@@ -1,0 +1,2323 @@
+/**
+ * A/B Test Visual Editor Styles
+ *
+ * Styles for the iframe-based visual editor page.
+ *
+ * @package opti-behavior
+ * @since   1.2.8
+ */
+
+/* =========================================================================
+   Visual Editor Layout
+   ========================================================================= */
+
+.opti-ab-ve {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 999999;
+    display: flex;
+    flex-direction: column;
+    background: #f3f4f6;
+}
+
+.opti-ab-ve-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 48px;
+    background: #1f2937;
+    color: #fff;
+    padding: 0 16px;
+    flex-shrink: 0;
+    gap: 16px;
+}
+
+.opti-ab-ve-toolbar__left,
+.opti-ab-ve-toolbar__center,
+.opti-ab-ve-toolbar__right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.opti-ab-ve-back {
+    color: #9ca3af;
+    text-decoration: none;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: color 0.15s;
+}
+
+.opti-ab-ve-back:hover {
+    color: #fff;
+}
+
+.opti-ab-ve-separator {
+    color: #4b5563;
+}
+
+.opti-ab-ve-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: #d1d5db;
+}
+
+/* =========================================================================
+   Toolbar Button Design System — consistent dimensions across all actions
+   Applies to: Edit/Preview segmented toggle, Reset all, Save Changes
+   Shared tokens:
+     Height       32px (via line-height + padding)
+     Padding      0 14px
+     Radius       8px
+     Font         12px / 600 / -0.01em tracking
+     Icon size    14px
+     Icon gap     6px
+     Transition   all 0.15s ease
+   ========================================================================= */
+
+.opti-ab-ve-mode-toggle {
+    display: inline-flex;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 3px;
+    gap: 2px;
+    height: 32px;
+    box-sizing: border-box;
+}
+
+.opti-ab-ve-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px;
+    height: 26px;
+    background: transparent;
+    border: none;
+    color: #9ca3af;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    line-height: 1;
+}
+
+.opti-ab-ve-mode-btn svg { flex-shrink: 0; }
+
+.opti-ab-ve-mode-btn:hover:not(.active) {
+    color: #f3f4f6;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.opti-ab-ve-mode-btn.active {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(99, 102, 241, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.1) inset;
+}
+
+.opti-ab-ve-changes-count {
+    font-size: 12px;
+    font-weight: 500;
+    color: #9ca3af;
+    padding: 0 4px;
+    letter-spacing: -0.01em;
+}
+
+/* Undo / Redo icon-only buttons */
+.opti-ab-ve-undo-btn,
+.opti-ab-ve-redo-btn {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px !important;
+    padding: 0 !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    background: rgba(255, 255, 255, 0.06);
+    color: #d1d5db;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    box-sizing: border-box;
+    flex-shrink: 0;
+}
+.opti-ab-ve-undo-btn:hover:not(:disabled),
+.opti-ab-ve-redo-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.25) !important;
+    color: #fff;
+}
+.opti-ab-ve-undo-btn:active:not(:disabled),
+.opti-ab-ve-redo-btn:active:not(:disabled) {
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateY(0);
+}
+.opti-ab-ve-undo-btn:disabled,
+.opti-ab-ve-redo-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+.opti-ab-ve-undo-btn:focus-visible,
+.opti-ab-ve-redo-btn:focus-visible {
+    outline: 2px solid #8b5cf6;
+    outline-offset: 2px;
+}
+.opti-ab-ve-undo-btn svg,
+.opti-ab-ve-redo-btn svg { flex-shrink: 0; }
+
+/*
+ * Shared base for Reset all + Save Changes. Both use the same height /
+ * padding / radius / font so they sit in perfect alignment with the
+ * Edit/Preview toggle.
+ */
+.opti-ab-ve-reset-btn,
+.opti-ab-ve-toolbar .button-primary,
+.opti-ab-ve-toolbar #opti-ab-ve-save {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 6px;
+    height: 32px !important;
+    padding: 0 14px !important;
+    border-radius: 8px !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.01em !important;
+    line-height: 1 !important;
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+/* Secondary destructive — Reset all */
+.opti-ab-ve-reset-btn {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.35) !important;
+    color: #fca5a5 !important;
+}
+
+.opti-ab-ve-reset-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: #ef4444 !important;
+    color: #fff !important;
+}
+
+.opti-ab-ve-reset-btn:active {
+    background: rgba(239, 68, 68, 0.3);
+}
+
+.opti-ab-ve-reset-btn:focus-visible {
+    outline: 2px solid #ef4444;
+    outline-offset: 2px;
+}
+
+.opti-ab-ve-reset-btn svg { flex-shrink: 0; }
+
+/* Primary — Save Changes. Override WordPress core button styles. */
+.opti-ab-ve-toolbar .button-primary,
+.opti-ab-ve-toolbar #opti-ab-ve-save {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+    border: 1px solid transparent !important;
+    color: #fff !important;
+    box-shadow: 0 1px 3px rgba(99, 102, 241, 0.4) !important;
+    text-shadow: none !important;
+}
+
+.opti-ab-ve-toolbar .button-primary:hover,
+.opti-ab-ve-toolbar #opti-ab-ve-save:hover {
+    background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.5) !important;
+    transform: translateY(-1px);
+}
+
+.opti-ab-ve-toolbar .button-primary:active,
+.opti-ab-ve-toolbar #opti-ab-ve-save:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 2px rgba(99, 102, 241, 0.4) !important;
+}
+
+.opti-ab-ve-toolbar .button-primary:focus-visible,
+.opti-ab-ve-toolbar #opti-ab-ve-save:focus-visible {
+    outline: 2px solid #8b5cf6;
+    outline-offset: 2px;
+}
+
+.opti-ab-ve-toolbar .button-primary:disabled,
+.opti-ab-ve-toolbar #opti-ab-ve-save:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* =========================================================================
+   Reset confirmation modal — destructive dialog pattern
+   ========================================================================= */
+
+.opti-ab-ve-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.75);
+    backdrop-filter: blur(4px);
+    z-index: 9999999;
+    align-items: center;
+    justify-content: center;
+    animation: opti-ab-ve-fade-in 0.15s ease;
+}
+
+@keyframes opti-ab-ve-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.opti-ab-ve-modal {
+    width: 100%;
+    max-width: 460px;
+    padding: 28px 24px 22px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    text-align: center;
+    animation: opti-ab-ve-pop 0.2s ease-out;
+}
+
+@keyframes opti-ab-ve-pop {
+    from { transform: translateY(12px); opacity: 0; }
+    to   { transform: translateY(0); opacity: 1; }
+}
+
+.opti-ab-ve-modal__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    margin-bottom: 14px;
+    background: #fef2f2;
+    color: #dc2626;
+    border-radius: 50%;
+}
+
+.opti-ab-ve-modal__title {
+    margin: 0 0 10px;
+    font-size: 18px;
+    font-weight: 700;
+    color: #111827;
+    letter-spacing: -0.01em;
+}
+
+.opti-ab-ve-modal__message {
+    margin: 0 0 12px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #4b5563;
+}
+
+.opti-ab-ve-modal__warning {
+    margin: 0 0 18px;
+    font-size: 12px;
+    color: #b91c1c;
+}
+
+.opti-ab-ve-modal__actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.opti-ab-ve-modal__btn-cancel,
+.opti-ab-ve-modal__btn-danger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.opti-ab-ve-modal__btn-cancel {
+    background: #f3f4f6;
+    color: #374151;
+    border-color: #e5e7eb;
+}
+
+.opti-ab-ve-modal__btn-cancel:hover {
+    background: #e5e7eb;
+    color: #111827;
+}
+
+.opti-ab-ve-modal__btn-danger {
+    background: #dc2626;
+    color: #fff;
+}
+
+.opti-ab-ve-modal__btn-danger:hover {
+    background: #b91c1c;
+}
+
+.opti-ab-ve-modal__btn-danger:focus-visible,
+.opti-ab-ve-modal__btn-cancel:focus-visible {
+    outline: 2px solid #6366f1;
+    outline-offset: 2px;
+}
+
+/* Sidebar — 3-region flex column: Top (Changes), Body (Inspector), Bottom (Add Block) */
+.opti-ab-ve-sidebar {
+    position: fixed;
+    top: 48px;
+    right: 0;
+    width: 360px;
+    bottom: 0;
+    background: #fff;
+    border-left: 1px solid #e5e7eb;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* No outer scroll — each region manages its own */
+}
+
+/* ---- Top region: Changes list (compact, collapsible) ---- */
+.opti-ab-ve-sidebar__top {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    max-height: 28vh;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fafbfc;
+}
+
+.opti-ab-ve-sidebar__top.is-collapsed {
+    max-height: 44px;
+}
+
+.opti-ab-ve-sidebar__top.is-collapsed .opti-ab-ve-changes-list {
+    display: none;
+}
+
+.opti-ab-ve-sidebar__top.is-collapsed .opti-ab-ve-changes-toggle svg {
+    transform: rotate(180deg);
+}
+
+.opti-ab-ve-sidebar__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fff;
+    flex-shrink: 0;
+}
+
+.opti-ab-ve-sidebar__header h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #111827;
+}
+
+.opti-ab-ve-header-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 20px;
+    padding: 0 6px;
+    background: #eef2ff;
+    color: #4338ca;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 10px;
+}
+
+.opti-ab-ve-changes-toggle {
+    width: 26px;
+    height: 26px;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    border-radius: 6px;
+    color: #6b7280;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: all 0.15s;
+}
+
+.opti-ab-ve-changes-toggle:hover {
+    background: #f3f4f6;
+    color: #111827;
+}
+
+.opti-ab-ve-changes-toggle svg {
+    transition: transform 0.2s ease;
+}
+
+.opti-ab-ve-changes-list {
+    padding: 8px 10px;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+/* ---- Middle region: Inspector (single scroll covers everything) ---- */
+.opti-ab-ve-sidebar__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* ---- Bottom region: pinned Add Block + drawer ---- */
+.opti-ab-ve-sidebar__bottom {
+    flex-shrink: 0;
+    border-top: 1px solid #e5e7eb;
+    background: #fff;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.opti-ab-ve-no-changes {
+    color: #9ca3af;
+    font-size: 13px;
+    text-align: center;
+    padding: 24px 0;
+}
+
+.opti-ab-ve-change-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    margin-bottom: 2px;
+    background: #fff;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.opti-ab-ve-change-item:hover {
+    background: #f9fafb;
+    border-color: #e5e7eb;
+}
+
+.opti-ab-ve-change-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.opti-ab-ve-change-selector {
+    font-size: 12px;
+    color: #374151;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+}
+
+.opti-ab-ve-change-remove {
+    background: none;
+    border: none;
+    color: #dc3545;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.opti-ab-ve-change-item:hover .opti-ab-ve-change-remove {
+    opacity: 1;
+}
+
+/* Edit Panel */
+.opti-ab-ve-edit-panel {
+    padding: 10px 14px 14px;
+    background: #fff;
+}
+
+.opti-ab-ve-edit-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 12px;
+}
+
+.opti-ab-ve-tab {
+    padding: 5px 10px;
+    border: 1px solid #d1d5db;
+    background: #fff;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.opti-ab-ve-tab.active {
+    background: #6366f1;
+    border-color: #6366f1;
+    color: #fff;
+}
+
+.opti-ab-ve-tab:hover:not(.active) {
+    background: #f5f3ff;
+    border-color: #a5b4fc;
+    color: #4f46e5;
+}
+
+.opti-ab-ve-help {
+    margin: 8px 0 0;
+    font-size: 11px;
+    color: #6b7280;
+    line-height: 1.4;
+}
+
+/* Field wrapper — label + control stacked */
+.opti-ab-ve-field {
+    margin-bottom: 10px;
+}
+
+.opti-ab-ve-field > label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: #374151;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+}
+
+.opti-ab-ve-input {
+    width: 100%;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    box-sizing: border-box;
+    background: #fff;
+    color: #111827;
+}
+
+.opti-ab-ve-input:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+/* ---- Breadcrumb — grows naturally, no nested scroll ---- */
+.opti-ab-ve-breadcrumb {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    margin-top: 8px;
+    font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+    font-size: 10px;
+}
+
+.opti-ab-ve-bc-item {
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #f3f4f6;
+    color: #4b5563;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.opti-ab-ve-bc-item:hover {
+    background: #e0e7ff;
+    color: #4338ca;
+}
+
+.opti-ab-ve-bc-item.is-current {
+    background: #6366f1;
+    color: #fff;
+    cursor: default;
+}
+
+.opti-ab-ve-bc-sep {
+    color: #9ca3af;
+    font-size: 12px;
+    line-height: 1;
+}
+
+/* ---- Attributes tab — flows naturally inside the body scroll ---- */
+.opti-ab-ve-attrs-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.opti-ab-ve-attr-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.opti-ab-ve-attr-row > label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #374151;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.opti-ab-ve-attr-row > label code {
+    font-size: 10px;
+    background: #f3f4f6;
+    color: #6b7280;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 400;
+}
+
+.opti-ab-ve-attr-check {
+    display: flex !important;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500 !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    color: #374151;
+}
+
+.opti-ab-ve-attrs-footer {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed #d1d5db;
+}
+
+.opti-ab-ve-attrs-footer > label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: #374151;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 6px;
+}
+
+.opti-ab-ve-attrs-custom {
+    display: flex;
+    gap: 6px;
+}
+
+.opti-ab-ve-attrs-custom .opti-ab-ve-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.opti-ab-ve-attrs-custom .button {
+    flex-shrink: 0;
+}
+
+/* ---- Classes tab: chips ---- */
+.opti-ab-ve-class-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 32px;
+    padding: 6px;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+}
+
+.opti-ab-ve-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 4px 3px 10px;
+    border-radius: 14px;
+    background: #eef2ff;
+    color: #4338ca;
+    font-size: 11px;
+    font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+    font-weight: 600;
+}
+
+.opti-ab-ve-chip__x {
+    border: none;
+    background: transparent;
+    color: #6366f1;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 6px;
+    border-radius: 50%;
+    transition: all 0.15s;
+}
+
+.opti-ab-ve-chip__x:hover {
+    background: #6366f1;
+    color: #fff;
+}
+
+.opti-ab-ve-class-add-row {
+    display: flex;
+    gap: 6px;
+}
+
+.opti-ab-ve-class-add-row .opti-ab-ve-input {
+    flex: 1;
+    min-width: 0;
+    font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+}
+
+.opti-ab-ve-class-add-row .button {
+    flex-shrink: 0;
+}
+
+/* =========================================================================
+   Design tab — visual controls for colour / typography / spacing / effects
+   ========================================================================= */
+
+.opti-ab-ve-design-section {
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px dashed #e5e7eb;
+}
+
+.opti-ab-ve-design-section:last-of-type {
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+.opti-ab-ve-design-section__title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #111827;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+}
+
+.opti-ab-ve-design-section__title svg {
+    color: #6366f1;
+}
+
+.opti-ab-ve-design-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.opti-ab-ve-design-grid--two {
+    grid-template-columns: 1fr 1fr;
+}
+
+.opti-ab-ve-design-field > label {
+    display: block;
+    font-size: 10px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+}
+
+/* Color field: swatch + hex + clear */
+.opti-ab-ve-color-field > label {
+    display: block;
+    font-size: 10px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+}
+
+.opti-ab-ve-color-pick {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.opti-ab-ve-color-swatch {
+    width: 32px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.opti-ab-ve-color-swatch::-webkit-color-swatch-wrapper { padding: 2px; }
+.opti-ab-ve-color-swatch::-webkit-color-swatch { border: none; border-radius: 4px; }
+
+.opti-ab-ve-color-hex {
+    flex: 1;
+    min-width: 0;
+    font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+    font-size: 11px;
+    padding: 5px 8px !important;
+    text-transform: uppercase;
+}
+
+.opti-ab-ve-color-clear {
+    width: 26px;
+    height: 26px;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    border-radius: 6px;
+    color: #9ca3af;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: all 0.15s;
+}
+
+.opti-ab-ve-color-clear:hover {
+    background: #fef2f2;
+    border-color: #ef4444;
+    color: #ef4444;
+}
+
+/* Unit wrapper: number input + "px" suffix */
+.opti-ab-ve-unit-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.opti-ab-ve-unit-wrap > .opti-ab-ve-input {
+    padding-right: 30px !important;
+}
+
+.opti-ab-ve-unit {
+    position: absolute;
+    right: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #9ca3af;
+    pointer-events: none;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+/* Segment button group */
+.opti-ab-ve-btn-group {
+    display: inline-flex;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #fff;
+}
+
+.opti-ab-ve-seg-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 8px;
+    border: none;
+    background: transparent;
+    color: #6b7280;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    min-width: 28px;
+    transition: all 0.15s;
+}
+
+.opti-ab-ve-seg-btn + .opti-ab-ve-seg-btn {
+    border-left: 1px solid #e5e7eb;
+}
+
+.opti-ab-ve-seg-btn:hover:not(.is-active) {
+    background: #f3f4f6;
+    color: #111827;
+}
+
+.opti-ab-ve-seg-btn.is-active {
+    background: #6366f1;
+    color: #fff;
+}
+
+/* Style toggles (italic / underline / strike) */
+.opti-ab-ve-style-row {
+    display: flex;
+    gap: 6px;
+}
+
+.opti-ab-ve-style-toggle {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 30px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+    color: #374151;
+    transition: all 0.15s;
+}
+
+.opti-ab-ve-style-toggle input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.opti-ab-ve-style-toggle:hover {
+    background: #f3f4f6;
+}
+
+.opti-ab-ve-style-toggle:has(input:checked) {
+    background: #6366f1;
+    border-color: #6366f1;
+    color: #fff;
+}
+
+/* Fallback for browsers without :has() support */
+.opti-ab-ve-style-toggle input[type="checkbox"]:checked + span {
+    color: #fff;
+}
+
+/* Box-model inputs (padding / margin 4-in-a-row) */
+.opti-ab-ve-box-model {
+    margin-bottom: 10px;
+}
+
+.opti-ab-ve-box-model__label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+}
+
+.opti-ab-ve-box-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+}
+
+.opti-ab-ve-box-input {
+    font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+    font-size: 11px !important;
+    padding: 5px 6px !important;
+    text-align: center;
+}
+
+/* Range input (opacity) */
+input[type="range"].opti-ab-ve-design-control {
+    width: 100%;
+    accent-color: #6366f1;
+}
+
+.opti-ab-ve-design-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 8px;
+    padding-top: 10px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.opti-ab-ve-design-reset-btn {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px !important;
+    padding: 4px 10px !important;
+    color: #6b7280 !important;
+}
+
+.opti-ab-ve-design-reset-btn:hover {
+    color: #ef4444 !important;
+    border-color: #fecaca !important;
+}
+
+.opti-ab-ve-design-footer .opti-ab-ve-help {
+    margin: 0;
+    flex: 1;
+    text-align: right;
+}
+
+/* ---- JS tab banner ---- */
+.opti-ab-ve-js-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #fde68a;
+    border-radius: 6px;
+    font-size: 11px;
+    margin-bottom: 8px;
+}
+
+.opti-ab-ve-js-hint svg {
+    flex-shrink: 0;
+}
+
+.opti-ab-ve-tab-content {
+    display: none;
+}
+
+.opti-ab-ve-tab-content.active {
+    display: block;
+}
+
+.opti-ab-ve-textarea {
+    width: 100%;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 13px;
+    resize: vertical;
+    box-sizing: border-box;
+}
+
+.opti-ab-ve-textarea--code {
+    font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+    font-size: 12px;
+}
+
+.opti-ab-ve-edit-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+}
+
+.opti-ab-ve-edit-actions > div {
+    display: flex;
+    gap: 8px;
+}
+
+.opti-ab-ve-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #374151;
+    cursor: pointer;
+}
+
+/* Iframe */
+.opti-ab-ve-iframe-wrap {
+    flex: 1;
+    position: relative;
+    margin-right: 360px; /* sidebar width */
+}
+
+.opti-ab-ve-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+}
+
+.opti-ab-ve-iframe-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #f3f4f6;
+    z-index: 5;
+}
+
+/* Toast */
+.opti-ab-ve-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    opacity: 0;
+    transition: all 0.3s ease;
+    z-index: 999999;
+}
+
+.opti-ab-ve-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.opti-ab-ve-toast--success {
+    background: #10b981;
+    color: #fff;
+}
+
+.opti-ab-ve-toast--error {
+    background: #ef4444;
+    color: #fff;
+}
+
+.opti-ab-ve-toast--info {
+    background: #6366f1;
+    color: #fff;
+}
+
+/* =========================================================================
+   Visual Editor Button in Wizard Variant Rows
+   ========================================================================= */
+
+.opti-ab-ve-open-btn {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px !important;
+    font-size: 11px !important;
+    color: #6366f1 !important;
+    border-color: #6366f1 !important;
+    border-radius: 6px !important;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+    height: auto !important;
+    line-height: 1.4 !important;
+}
+
+.opti-ab-ve-open-btn:hover {
+    background: #6366f1 !important;
+    color: #fff !important;
+}
+
+.opti-ab-ve-open-btn svg {
+    flex-shrink: 0;
+}
+
+/* =========================================================================
+   Heatmap by Variant (Results Page)
+   ========================================================================= */
+
+.opti-ab-heatmap-variant-section {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.opti-ab-heatmap-variant-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+}
+
+.opti-ab-heatmap-variant-card {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.opti-ab-heatmap-variant-card--control {
+    border-color: #6366f1;
+    border-width: 2px;
+}
+
+.opti-ab-heatmap-variant-card__header h4 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.opti-ab-heatmap-variant-card__metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.opti-ab-heatmap-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.opti-ab-heatmap-metric__value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1f2937;
+}
+
+.opti-ab-heatmap-metric__label {
+    font-size: 11px;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.opti-ab-heatmap-variant-card__actions {
+    display: flex;
+    gap: 8px;
+    padding-top: 4px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.opti-ab-heatmap-variant-card__actions .button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: #6366f1;
+    border-color: #6366f1;
+}
+
+.opti-ab-heatmap-variant-card__actions .button:hover {
+    background: #6366f1;
+    color: #fff;
+}
+
+.opti-ab-heatmap-variant-card__actions .button-disabled {
+    color: #9ca3af;
+    border-color: #d1d5db;
+    cursor: default;
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+.opti-ab-heatmap-no-data {
+    color: #6b7280;
+    font-size: 13px;
+    text-align: center;
+    padding: 24px;
+    grid-column: 1 / -1;
+}
+
+/* =========================================================================
+   Responsive
+   ========================================================================= */
+
+@media (max-width: 1280px) {
+    .opti-ab-ve-sidebar {
+        width: 320px;
+    }
+    .opti-ab-ve-iframe-wrap {
+        margin-right: 320px;
+    }
+
+    .opti-ab-bayesian-cards,
+    .opti-ab-revenue-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .opti-ab-schedule-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .opti-ab-targeting-rule {
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 768px) {
+    .opti-ab-ve-sidebar {
+        width: 100%;
+        position: static;
+        max-height: 300px;
+    }
+    .opti-ab-ve-iframe-wrap {
+        margin-right: 0;
+    }
+    .opti-ab-ve-toolbar {
+        flex-wrap: wrap;
+        height: auto;
+        padding: 8px 12px;
+    }
+}
+
+/* =========================================================================
+   Visual Editor — Element Info Section
+   ========================================================================= */
+
+.opti-ab-ve-element-info {
+    padding: 10px 14px;
+    background: #f0f4ff;
+}
+
+.opti-ab-ve-element-info__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.opti-ab-ve-element-info__row:last-child {
+    margin-bottom: 0;
+}
+
+.opti-ab-ve-element-info__label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    flex-shrink: 0;
+}
+
+.opti-ab-ve-element-info code {
+    font-size: 11px;
+    background: #e5e7eb;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #374151;
+    font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 180px;
+}
+
+.opti-ab-ve-origin-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: #fff;
+    background: #6b7280;
+    white-space: nowrap;
+}
+
+#opti-ab-ve-element-type {
+    font-size: 12px;
+    color: #374151;
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+/* =========================================================================
+   Visual Editor — Element Actions Toolbar
+   ========================================================================= */
+
+.opti-ab-ve-actions {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    align-items: stretch;
+    gap: 4px;
+    padding: 10px 12px;
+    border-top: 1px solid #e5e7eb;
+    background: #fafbfc;
+}
+
+.opti-ab-ve-actions-sep {
+    grid-column: 1 / -1;
+    height: 1px;
+    background: #e5e7eb;
+    margin: 2px 0;
+}
+
+.opti-ab-ve-action-btn {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 4px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    color: #374151;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    line-height: 1.1;
+}
+
+.opti-ab-ve-action-btn svg {
+    flex-shrink: 0;
+}
+
+.opti-ab-ve-action-lbl {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+}
+
+.opti-ab-ve-action-btn:hover:not(:disabled) {
+    background: #eef2ff;
+    border-color: #6366f1;
+    color: #4338ca;
+}
+
+.opti-ab-ve-action-btn--danger:hover:not(:disabled) {
+    background: #fef2f2;
+    border-color: #ef4444;
+    color: #b91c1c;
+}
+
+.opti-ab-ve-action-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+    pointer-events: none;
+}
+
+.opti-ab-ve-action-btn--danger:hover {
+    background: #fef2f2;
+    border-color: #ef4444;
+    color: #dc2626;
+}
+
+.opti-ab-ve-action-btn svg {
+    flex-shrink: 0;
+}
+
+.opti-ab-ve-actions-sep {
+    width: 1px;
+    height: 20px;
+    background: #d1d5db;
+    margin: 0 4px;
+}
+
+/* =========================================================================
+   Visual Editor — Image Tab
+   ========================================================================= */
+
+.opti-ab-ve-image-preview {
+    margin-bottom: 10px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #f9fafb;
+    min-height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.opti-ab-ve-image-preview img {
+    max-width: 100%;
+    max-height: 200px;
+    object-fit: contain;
+}
+
+.opti-ab-ve-image-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.opti-ab-ve-image-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #374151;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.opti-ab-ve-input {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 12px;
+    box-sizing: border-box;
+    font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+}
+
+.opti-ab-ve-input:focus {
+    border-color: #6366f1;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.opti-ab-ve-image-controls .button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+}
+
+/* =========================================================================
+   Visual Editor — Add Block Panel
+   ========================================================================= */
+
+.opti-ab-ve-add-block-wrap {
+    padding: 10px 12px;
+    /* border-top removed — sidebar__bottom has its own */
+}
+
+.opti-ab-ve-add-block-btn {
+    width: 100%;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 12px !important;
+    font-size: 13px !important;
+    color: #6366f1 !important;
+    border-color: #6366f1 !important;
+    border-radius: 6px !important;
+    border-style: dashed !important;
+    transition: all 0.15s ease;
+}
+
+.opti-ab-ve-add-block-btn:hover {
+    background: #6366f1 !important;
+    color: #fff !important;
+    border-style: solid !important;
+}
+
+.opti-ab-ve-block-panel {
+    border-bottom: 1px solid #e5e7eb;
+    background: #f9fafb;
+    padding: 12px;
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
+.opti-ab-ve-block-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.opti-ab-ve-block-panel__header h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.opti-ab-ve-block-panel__close {
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    color: #6b7280;
+    padding: 2px 6px;
+    border-radius: 4px;
+    line-height: 1;
+}
+
+.opti-ab-ve-block-panel__close:hover {
+    background: #e5e7eb;
+    color: #1f2937;
+}
+
+.opti-ab-ve-block-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+}
+
+.opti-ab-ve-block-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 8px;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-align: center;
+}
+
+.opti-ab-ve-block-item:hover {
+    border-color: #6366f1;
+    background: #f0f0ff;
+    box-shadow: 0 2px 4px rgba(99, 102, 241, 0.1);
+}
+
+.opti-ab-ve-block-item__icon {
+    color: #6366f1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.opti-ab-ve-block-item__name {
+    font-size: 11px;
+    font-weight: 500;
+    color: #374151;
+}
+
+/* =========================================================================
+   Visual Editor — Change Type Badge
+   ========================================================================= */
+
+.opti-ab-ve-change-type {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #e5e7eb;
+    color: #6b7280;
+    margin-left: 4px;
+    vertical-align: middle;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* =========================================================================
+   Pro Goal Config Fields (Wizard Step 4)
+   ========================================================================= */
+
+/* Scroll depth: slider + synced number input */
+.opti-ab-goal-scroll-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 6px 0 4px;
+}
+
+.opti-ab-goal-scroll-slider {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(
+        to right,
+        #6366f1 0%,
+        #6366f1 calc(var(--slider-pct, 75%) ),
+        #e5e7eb calc(var(--slider-pct, 75%) ),
+        #e5e7eb 100%
+    );
+    outline: none;
+    cursor: pointer;
+}
+
+.opti-ab-goal-scroll-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #6366f1;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(99, 102, 241, 0.4);
+    transition: box-shadow 0.15s ease;
+}
+
+.opti-ab-goal-scroll-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #6366f1;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(99, 102, 241, 0.4);
+}
+
+.opti-ab-goal-scroll-slider::-webkit-slider-thumb:hover,
+.opti-ab-goal-scroll-slider:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.15);
+}
+
+.opti-ab-goal-scroll-number-wrap {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.opti-ab-goal-scroll-number-wrap .opti-ab-goal-scroll-number {
+    width: 64px;
+}
+
+/* Time on page: number + unit dropdown */
+.opti-ab-goal-time-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 4px;
+}
+
+.opti-ab-goal-time-wrap .opti-ab-goal-time-value {
+    width: 80px;
+}
+
+.opti-ab-goal-time-wrap .opti-ab-goal-time-unit {
+    width: auto;
+}
+
+/* Revenue / WooCommerce scope dropdowns */
+.opti-ab-goal-revenue-scope,
+.opti-ab-goal-woo-cart-scope,
+.opti-ab-goal-woo-purchase-scope {
+    margin: 6px 0 4px;
+    width: 100%;
+    max-width: 340px;
+}
+
+/* Conditional sub-fields that appear under scope dropdowns */
+.opti-ab-goal-sub-field {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+}
+
+.opti-ab-goal-sub-field .opti-ab-field-label {
+    font-size: 12px;
+    color: #6b7280;
+    margin-bottom: 4px;
+}
+
+.opti-ab-goal-sub-field .opti-ab-input,
+.opti-ab-goal-sub-field .opti-ab-select {
+    width: 100%;
+    max-width: 280px;
+}
+
+/* Revenue category / min-value inputs */
+.opti-ab-goal-revenue-category,
+.opti-ab-goal-revenue-min-value,
+.opti-ab-goal-woo-cart-product,
+.opti-ab-goal-woo-purchase-min-value {
+    width: 140px !important;
+}
+
+/* Bounce rate: threshold number input + seconds label */
+.opti-ab-goal-bounce-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 8px;
+}
+
+.opti-ab-goal-bounce-wrap .opti-ab-goal-bounce-threshold {
+    width: 80px;
+}
+
+/* Bounce rate: inverse toggle checkbox row */
+.opti-ab-goal-bounce-inverse-wrap {
+    margin: 4px 0 6px;
+}
+
+.opti-ab-goal-bounce-inverse-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #374151;
+    cursor: pointer;
+    line-height: 1.4;
+}
+
+.opti-ab-goal-bounce-inverse-label input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+/* ============================================================
+   Goal Form Submit — Pro Form Picker (Step 7)
+   ============================================================ */
+
+/* Detected forms panel wrapper */
+.opti-ab-goal-form-detected-panel {
+    margin-top: 6px;
+}
+
+/* Form picker container */
+.opti-ab-form-picker-chooser {
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 6px;
+    background: #fff;
+}
+
+/* Search input inside picker */
+.opti-ab-goal-form-search {
+    border: 0 !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    border-radius: 0 !important;
+    padding: 7px 10px !important;
+    font-size: 13px !important;
+    background: #f9fafb !important;
+}
+
+.opti-ab-goal-form-search:focus {
+    outline: none !important;
+    box-shadow: none !important;
+    background: #fff !important;
+}
+
+/* Scrollable form list */
+.opti-ab-form-picker-list {
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+/* Loading / error / empty states */
+.opti-ab-form-picker-loading,
+.opti-ab-form-picker-error,
+.opti-ab-form-picker-empty {
+    padding: 14px 12px;
+    font-size: 13px;
+    color: #6b7280;
+    text-align: center;
+}
+
+.opti-ab-form-picker-error {
+    color: #dc2626;
+}
+
+.opti-ab-form-picker-empty a {
+    color: #2271b1;
+    text-decoration: underline;
+}
+
+/* Individual form item */
+.opti-ab-form-picker-item {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #f3f4f6;
+    transition: background 0.1s;
+}
+
+.opti-ab-form-picker-item:last-child {
+    border-bottom: 0;
+}
+
+.opti-ab-form-picker-item:hover {
+    background: #f0f7ff;
+}
+
+/* Form name */
+.opti-ab-form-picker-item-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: #111827;
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Plugin badge */
+.opti-ab-form-picker-plugin-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #e0f2fe;
+    color: #0369a1;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* Page URL (subtle) */
+.opti-ab-form-picker-item-url {
+    font-size: 11px;
+    color: #9ca3af;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Selected form display */
+.opti-ab-form-picker-selected {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: 6px;
+    margin-top: 6px;
+    font-size: 13px;
+}
+
+.opti-ab-form-picker-selected-label {
+    flex: 1 1 auto;
+    color: #374151;
+    min-width: 0;
+}
+
+/* "Change" link button */
+.opti-ab-btn-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    color: #2271b1;
+    cursor: pointer;
+    text-decoration: underline;
+    flex-shrink: 0;
+}
+
+.opti-ab-btn-link:hover {
+    color: #135e96;
+}
+
+/* Custom selector wrap (same as free, available in Pro panel too) */
+.opti-ab-goal-form-custom-wrap {
+    margin-top: 6px;
+}
+
+/* ============================================================
+   Goal Click — Visual Element Selector (Multi-Entry, Step 10)
+   ============================================================ */
+
+/* Per-entry "✦ Select" button — compact, branded */
+.opti-ab-goal-entry-select-btn {
+    flex-shrink: 0;
+    display: inline-flex !important;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px !important;
+    padding: 2px 8px !important;
+    height: 26px !important;
+    white-space: nowrap;
+    border-color: #2563eb !important;
+    color: #2563eb !important;
+    background: #eff6ff !important;
+    line-height: 1 !important;
+    border-radius: 4px;
+}
+
+.opti-ab-goal-entry-select-btn:hover,
+.opti-ab-goal-entry-select-btn:focus {
+    background: #dbeafe !important;
+    border-color: #1d4ed8 !important;
+    color: #1d4ed8 !important;
+}
+
+.opti-ab-goal-entry-select-btn svg {
+    flex-shrink: 0;
+    vertical-align: middle;
+}
+
+/* ---- Modal backdrop ---- */
+.opti-ab-goal-selector-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 999990;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ---- Instruction bar at the top of the modal ---- */
+.opti-ab-goal-selector-modal__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #1d4ed8;
+    color: #fff;
+    padding: 10px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    flex-shrink: 0;
+    gap: 16px;
+    line-height: 1.4;
+    transition: background 0.2s;
+}
+
+.opti-ab-goal-selector-modal__instruction {
+    flex: 1;
+}
+
+/* Status area for "✓ Selected!" feedback */
+.opti-ab-goal-selector-modal__status {
+    flex-shrink: 0;
+    min-width: 0;
+}
+
+.opti-ab-goal-selector-modal__selected-feedback {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(16, 185, 129, 0.25);
+    color: #fff;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    animation: opti-ab-feedback-fade 0.3s ease;
+}
+
+@keyframes opti-ab-feedback-fade {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Close button inside the instruction bar ---- */
+.opti-ab-goal-selector-modal__close {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border: 1px solid rgba(255, 255, 255, 0.35) !important;
+    color: #fff !important;
+    cursor: pointer;
+    font-size: 12px !important;
+    padding: 4px 12px !important;
+    border-radius: 4px;
+    transition: background 0.15s;
+    flex-shrink: 0;
+    line-height: 1.4 !important;
+    height: auto !important;
+    white-space: nowrap;
+}
+
+.opti-ab-goal-selector-modal__close:hover {
+    background: rgba(255, 255, 255, 0.28) !important;
+}
+
+/* ---- Loading spinner shown while iframe navigates ---- */
+.opti-ab-goal-selector-modal__loading {
+    position: absolute;
+    top: 40px; /* below the instruction bar */
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+    pointer-events: none;
+}
+
+/* ---- Iframe fills remaining height ---- */
+.opti-ab-goal-selector-modal__iframe {
+    flex: 1;
+    width: 100%;
+    border: none;
+    display: block;
+    background: #fff;
+}
+
+/* ---- Variant picker bar — shown below the instruction bar ---- */
+.opti-ab-goal-selector-modal__variant-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    background: #1e3a8a;
+    padding: 8px 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    flex-shrink: 0;
+}
+
+.opti-ab-goal-selector-modal__variant-label {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 12px;
+    font-weight: 500;
+    margin-right: 4px;
+    white-space: nowrap;
+}
+
+.opti-ab-variant-tab {
+    background: rgba(255, 255, 255, 0.12) !important;
+    border: 1px solid rgba(255, 255, 255, 0.25) !important;
+    color: rgba(255, 255, 255, 0.85) !important;
+    font-size: 12px !important;
+    padding: 4px 12px !important;
+    border-radius: 4px !important;
+    cursor: pointer;
+    line-height: 1.4 !important;
+    height: auto !important;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.opti-ab-variant-tab.is-active {
+    background: rgba(255, 255, 255, 0.3) !important;
+    border-color: rgba(255, 255, 255, 0.5) !important;
+    color: #fff !important;
+    font-weight: 600 !important;
+}
+
+.opti-ab-variant-tab:hover:not(.is-active) {
+    background: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* Adjust loading overlay top when the variant bar is also shown.
+   Instruction bar ~40px + variant bar ~40px = 80px. */
+.opti-ab-goal-selector-modal--with-variants .opti-ab-goal-selector-modal__loading {
+    top: 80px;
+}
+
+/* ---- Per-variant click goal toggle ---- */
+.opti-ab-click-goal-mode-wrap {
+    margin-bottom: 8px;
+}
+.opti-ab-click-goal-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    color: #475569;
+}
+.opti-ab-click-goal-mode-toggle input[type="checkbox"] {
+    /* hidden; replaced by .opti-ab-toggle__track */
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.opti-ab-toggle__track {
+    width: 32px;
+    height: 18px;
+    border-radius: 9px;
+    background: #cbd5e1;
+    position: relative;
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+.opti-ab-toggle__track::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.opti-ab-click-goal-mode-toggle input:checked + .opti-ab-toggle__track {
+    background: #3b82f6;
+}
+.opti-ab-click-goal-mode-toggle input:checked + .opti-ab-toggle__track::after {
+    transform: translateX(14px);
+}
+
+/* ---- Per-variant selectors section ---- */
+.opti-ab-goal-per-variant-selectors {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 4px 0 8px;
+}
+.opti-ab-goal-variant-selector-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.opti-ab-goal-variant-selector-label {
+    flex-shrink: 0;
+    min-width: 80px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+    white-space: nowrap;
+}
+/* Reuse existing .opti-ab-goal-selector-entry styles — no extra styles needed. */
+.opti-ab-goal-variant-selector-row .opti-ab-goal-selector-entry {
+    flex: 1;
+    /* Remove the remove button for per-variant rows (each row is fixed to a variant). */
+}
+.opti-ab-goal-variant-selector-row .opti-ab-goal-selector-entry__remove {
+    display: none;
+}
+
+/* ---- Per-variant form-submit goal toggle ---- */
+.opti-ab-form-goal-mode-wrap {
+    margin-bottom: 8px;
+}
+.opti-ab-form-goal-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    color: #475569;
+}
+.opti-ab-form-goal-mode-toggle input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+/* Reuse .opti-ab-toggle__track base styles (already defined). */
+.opti-ab-form-goal-mode-toggle input:checked + .opti-ab-toggle__track {
+    background: #3b82f6;
+}
+.opti-ab-form-goal-mode-toggle input:checked + .opti-ab-toggle__track::after {
+    transform: translateX(14px);
+}
+
+/* ---- Per-variant form selector rows ---- */
+.opti-ab-goal-form-per-variant-selectors {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 4px 0 8px;
+}
+.opti-ab-goal-form-variant-selector-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.opti-ab-goal-form-variant-selector-label {
+    flex-shrink: 0;
+    min-width: 80px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+    white-space: nowrap;
+}
+.opti-ab-goal-form-variant-selector-row .opti-ab-goal-selector-entry {
+    flex: 1;
+}
+.opti-ab-goal-form-variant-selector-row .opti-ab-goal-selector-entry__remove {
+    display: none;
+}

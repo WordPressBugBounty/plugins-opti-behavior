@@ -1,0 +1,780 @@
+/**
+ * Opti-Behavior Tooltip Styles
+ * User-friendly tooltips that explain features in simple terms
+ * Designed to be understandable by users of all ages (14+)
+ *
+ * @package OptiBehavior
+ * @version 1.0.0
+ */
+
+/* ============================================
+   Base Tooltip Styles
+   ============================================ */
+
+/* Note: Horizontal scrollbar prevention is handled by using display:none
+   on hidden tooltip content instead of visibility:hidden */
+
+/* Tooltip container - can be applied to any element */
+.ob-tooltip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    cursor: help;
+}
+
+/* Tooltip trigger icon (question mark) */
+.ob-tooltip-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    margin-left: 5px;
+    background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+    border: 1px solid #4f46e5;
+    border-radius: 50%;
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    cursor: help;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    box-shadow: 0 2px 6px rgba(79, 70, 229, 0.3);
+}
+
+.ob-tooltip-icon:hover {
+    background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+    border-color: #a5b4fc;
+    color: #4f46e5;
+    transform: scale(1.1);
+    box-shadow: none;
+}
+
+/* Tooltip icon using Lucide */
+.ob-tooltip-icon i {
+    width: 10px;
+    height: 10px;
+}
+
+/* The actual tooltip content */
+.ob-tooltip-content {
+    position: absolute;
+    z-index: 1000000;
+    min-width: 260px;
+    max-width: 320px !important;
+    width: 320px !important;
+    padding: 16px 18px;
+    background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.1);
+    /* CRITICAL: Use display:none to prevent hidden tooltips from causing overflow */
+    display: none;
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+    pointer-events: none;
+    text-align: left;
+    line-height: 1.6;
+    /* Reset text-transform to prevent inheriting uppercase from parent labels */
+    text-transform: none !important;
+    letter-spacing: normal !important;
+    /* Ensure text wraps properly within tooltip */
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal !important;
+    box-sizing: border-box;
+    /* Prevent any overflow outside the tooltip box */
+    overflow: hidden;
+}
+
+/* JavaScript-controlled active state.
+   Used for click-open tooltips and for fixed viewport positioning. */
+.ob-tooltip.is-active .ob-tooltip-content {
+    display: block !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+}
+
+/* Show tooltip on hover */
+.ob-tooltip:hover .ob-tooltip-content,
+.ob-tooltip:focus .ob-tooltip-content,
+.ob-tooltip:focus-within .ob-tooltip-content {
+    display: block;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+}
+
+/* Tooltip positioning - default is top, aligned LEFT to prevent right overflow */
+.ob-tooltip-content {
+    bottom: calc(100% + 12px);
+    left: 0;
+    right: auto;
+    transform: translateY(8px);
+}
+
+.ob-tooltip:hover .ob-tooltip-content {
+    transform: translateY(0);
+}
+
+/* Position: Bottom */
+.ob-tooltip.ob-tooltip-bottom .ob-tooltip-content {
+    bottom: auto;
+    top: calc(100% + 12px);
+    left: 0;
+    right: auto;
+    transform: translateY(-8px);
+}
+
+.ob-tooltip.ob-tooltip-bottom:hover .ob-tooltip-content {
+    transform: translateY(0);
+}
+
+/* Position: Left */
+.ob-tooltip.ob-tooltip-left .ob-tooltip-content {
+    bottom: auto;
+    top: 50%;
+    left: auto;
+    right: calc(100% + 12px);
+    transform: translateY(-50%) translateX(8px);
+}
+
+.ob-tooltip.ob-tooltip-left:hover .ob-tooltip-content {
+    transform: translateY(-50%) translateX(0);
+}
+
+/* Position: Right */
+.ob-tooltip.ob-tooltip-right .ob-tooltip-content {
+    bottom: auto;
+    top: 50%;
+    left: calc(100% + 12px);
+    right: auto;
+    transform: translateY(-50%) translateX(-8px);
+}
+
+.ob-tooltip.ob-tooltip-right:hover .ob-tooltip-content {
+    transform: translateY(-50%) translateX(0);
+}
+
+/* ============================================
+   Edge Detection - Prevent Overflow
+   ============================================ */
+
+/* Align tooltip to the right edge when near right side of viewport */
+.ob-tooltip.ob-tooltip-align-right .ob-tooltip-content {
+    left: auto;
+    right: 0;
+    transform: translateY(8px);
+}
+
+.ob-tooltip.ob-tooltip-align-right:hover .ob-tooltip-content {
+    transform: translateY(0);
+}
+
+.ob-tooltip.ob-tooltip-bottom.ob-tooltip-align-right .ob-tooltip-content {
+    transform: translateY(-8px);
+}
+
+.ob-tooltip.ob-tooltip-bottom.ob-tooltip-align-right:hover .ob-tooltip-content {
+    transform: translateY(0);
+}
+
+/* Align tooltip to the left edge when near left side of viewport */
+.ob-tooltip.ob-tooltip-align-left .ob-tooltip-content {
+    left: 0;
+    right: auto;
+    transform: translateY(8px);
+}
+
+.ob-tooltip.ob-tooltip-align-left:hover .ob-tooltip-content {
+    transform: translateY(0);
+}
+
+/* Arrow adjustments for edge-aligned tooltips
+   Now using dynamic --arrow-position from JavaScript */
+.ob-tooltip.ob-tooltip-align-right .ob-tooltip-content::before,
+.ob-tooltip.ob-tooltip-align-left .ob-tooltip-content::before {
+    left: var(--arrow-position, 18px);
+    right: auto;
+    margin-left: -6px;
+}
+
+/* Tooltip arrow */
+.ob-tooltip-content::before {
+    content: "";
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-top: none;
+    border-left: none;
+    transform: rotate(45deg);
+}
+
+/* Arrow position - default top
+   Uses CSS custom property --arrow-position set by JavaScript
+   Falls back to 18px if not set */
+.ob-tooltip-content::before {
+    bottom: -7px;
+    left: var(--arrow-position, 18px);
+    right: auto;
+    margin-left: -6px; /* Center the arrow on the position */
+}
+
+/* Arrow position - bottom */
+.ob-tooltip.ob-tooltip-bottom .ob-tooltip-content::before {
+    bottom: auto;
+    top: -7px;
+    left: var(--arrow-position, 18px);
+    right: auto;
+    margin-left: -6px;
+    transform: rotate(-135deg);
+}
+
+/* Arrow position - left */
+.ob-tooltip.ob-tooltip-left .ob-tooltip-content::before {
+    top: var(--arrow-top, 50%);
+    left: auto;
+    right: -7px;
+    bottom: auto;
+    margin-left: 0;
+    margin-top: -6px;
+    transform: rotate(-45deg);
+}
+
+/* Arrow position - right */
+.ob-tooltip.ob-tooltip-right .ob-tooltip-content::before {
+    top: var(--arrow-top, 50%);
+    right: auto;
+    left: -7px;
+    bottom: auto;
+    margin-left: 0;
+    margin-top: -6px;
+    transform: rotate(135deg);
+}
+
+/* Portal mode: JS moves active tooltip content to <body> so transformed
+   WordPress editor containers cannot create a false fixed-position context. */
+.ob-tooltip-content-portal {
+    z-index: 1000000 !important;
+}
+
+.ob-tooltip-content-portal.ob-tooltip-content-top::before {
+    bottom: -7px;
+    top: auto;
+    left: var(--arrow-position, 18px);
+    right: auto;
+    margin-left: -6px;
+    margin-top: 0;
+    transform: rotate(45deg);
+}
+
+.ob-tooltip-content-portal.ob-tooltip-content-bottom::before {
+    bottom: auto;
+    top: -7px;
+    left: var(--arrow-position, 18px);
+    right: auto;
+    margin-left: -6px;
+    margin-top: 0;
+    transform: rotate(-135deg);
+}
+
+.ob-tooltip-content-portal.ob-tooltip-content-left::before {
+    top: var(--arrow-top, 50%);
+    left: auto;
+    right: -7px;
+    bottom: auto;
+    margin-left: 0;
+    margin-top: -6px;
+    transform: rotate(-45deg);
+}
+
+.ob-tooltip-content-portal.ob-tooltip-content-right::before {
+    top: var(--arrow-top, 50%);
+    right: auto;
+    left: -7px;
+    bottom: auto;
+    margin-left: 0;
+    margin-top: -6px;
+    transform: rotate(135deg);
+}
+
+/* Metabox/editor panels must not cover an active tooltip. */
+.optibehavior-analytics-container .ob-tooltip,
+.optibehavior-analytics-container .ob-tooltip.is-active {
+    z-index: 1000000;
+}
+
+.optibehavior-analytics-container .tooltip-active,
+.optibehavior-analytics-container .ob-tooltip.is-active .ob-tooltip-content {
+    z-index: 1000000 !important;
+}
+
+/* ============================================
+   Tooltip Content Styling
+   ============================================ */
+
+/* Global rule: ensure ALL content inside tooltips wraps properly */
+.ob-tooltip-content,
+.ob-tooltip-content * {
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal !important;
+    text-transform: none !important;
+    letter-spacing: normal !important;
+}
+
+/* Tooltip title */
+.ob-tooltip-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px 0;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #e5e7eb;
+    font-size: 15px;
+    font-weight: 700;
+    color: #1e293b;
+}
+
+.ob-tooltip-title i {
+    width: 18px;
+    height: 18px;
+    color: #6366f1;
+}
+
+/* Tooltip text */
+.ob-tooltip-text {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 400;
+    color: #475569;
+    line-height: 1.7;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal !important;
+    box-sizing: border-box;
+}
+
+/* Simple explanation for younger users */
+.ob-tooltip-simple {
+    display: block;
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+    border: 1px solid #86efac;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #166534;
+    /* Ensure text wraps properly */
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal !important;
+    box-sizing: border-box;
+}
+
+.ob-tooltip-simple::before {
+    content: "In simple terms: ";
+    font-weight: 600;
+}
+
+/* Example section */
+.ob-tooltip-example {
+    display: block;
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: #f8fafc;
+    border-left: 3px solid #6366f1;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    color: #64748b;
+    font-style: italic;
+}
+
+.ob-tooltip-example::before {
+    content: "Example: ";
+    font-weight: 600;
+    font-style: normal;
+    color: #6366f1;
+}
+
+/* Pro feature badge in tooltip */
+.ob-tooltip-pro {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    margin-left: 8px;
+    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #78350f;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ============================================
+   Tooltip Sizes
+   ============================================ */
+
+/* Small tooltip */
+.ob-tooltip.ob-tooltip-sm .ob-tooltip-content {
+    min-width: 200px;
+    max-width: 260px;
+    padding: 12px 14px;
+}
+
+.ob-tooltip.ob-tooltip-sm .ob-tooltip-title {
+    font-size: 14px;
+}
+
+.ob-tooltip.ob-tooltip-sm .ob-tooltip-text {
+    font-size: 13px;
+}
+
+/* Large tooltip */
+.ob-tooltip.ob-tooltip-lg .ob-tooltip-content {
+    min-width: 340px;
+    max-width: 450px;
+    padding: 20px 22px;
+}
+
+/* Extra small tooltip - for inside buttons */
+.ob-tooltip.ob-tooltip-xs {
+    margin-left: 4px;
+}
+
+.ob-tooltip.ob-tooltip-xs .ob-tooltip-icon {
+    width: 14px;
+    height: 14px;
+    margin-left: 0;
+    font-size: 9px;
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.5);
+    color: inherit;
+}
+
+.ob-tooltip.ob-tooltip-xs .ob-tooltip-icon:hover {
+    background: rgba(255, 255, 255, 0.5);
+    border-color: rgba(255, 255, 255, 0.7);
+    color: inherit;
+    transform: scale(1.05);
+    box-shadow: none;
+}
+
+/* When inside active button (purple background) */
+.heatmap-tab.active .ob-tooltip.ob-tooltip-xs .ob-tooltip-icon {
+    background: rgba(255, 255, 255, 0.25);
+    border-color: rgba(255, 255, 255, 0.4);
+    color: #fff;
+}
+
+.heatmap-tab.active .ob-tooltip.ob-tooltip-xs .ob-tooltip-icon:hover {
+    background: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+/* When inside inactive button */
+.heatmap-tab:not(.active) .ob-tooltip.ob-tooltip-xs .ob-tooltip-icon {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+    color: #64748b;
+}
+
+.heatmap-tab:not(.active) .ob-tooltip.ob-tooltip-xs .ob-tooltip-icon:hover {
+    background: #e2e8f0;
+    border-color: #94a3b8;
+    color: #475569;
+}
+
+/* ============================================
+   Tooltip Color Themes
+   ============================================ */
+
+/* Info theme (blue) - default is filled, hover is light */
+.ob-tooltip.ob-tooltip-info .ob-tooltip-icon {
+    background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+    border-color: #2563eb;
+    color: white;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+}
+
+.ob-tooltip.ob-tooltip-info .ob-tooltip-icon:hover {
+    background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+    border-color: #93c5fd;
+    color: #2563eb;
+    box-shadow: none;
+}
+
+/* Success theme (green) - default is filled, hover is light */
+.ob-tooltip.ob-tooltip-success .ob-tooltip-icon {
+    background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+    border-color: #16a34a;
+    color: white;
+    box-shadow: 0 2px 8px rgba(22, 163, 74, 0.35);
+}
+
+.ob-tooltip.ob-tooltip-success .ob-tooltip-icon:hover {
+    background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
+    border-color: #86efac;
+    color: #16a34a;
+    box-shadow: none;
+}
+
+/* Warning theme (yellow) - default is filled, hover is light */
+.ob-tooltip.ob-tooltip-warning .ob-tooltip-icon {
+    background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);
+    border-color: #d97706;
+    color: white;
+    box-shadow: 0 2px 8px rgba(217, 119, 6, 0.35);
+}
+
+.ob-tooltip.ob-tooltip-warning .ob-tooltip-icon:hover {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border-color: #fcd34d;
+    color: #d97706;
+    box-shadow: none;
+}
+
+/* Danger theme (red) - default is filled, hover is light */
+.ob-tooltip.ob-tooltip-danger .ob-tooltip-icon {
+    background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+    border-color: #dc2626;
+    color: white;
+    box-shadow: 0 2px 8px rgba(220, 38, 38, 0.35);
+}
+
+.ob-tooltip.ob-tooltip-danger .ob-tooltip-icon:hover {
+    background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+    border-color: #fca5a5;
+    color: #dc2626;
+    box-shadow: none;
+}
+
+/* ============================================
+   Inline Tooltip (for text with tooltip)
+   ============================================ */
+
+.ob-tooltip-inline {
+    position: relative;
+    border-bottom: 1px dashed #94a3b8;
+    cursor: help;
+}
+
+.ob-tooltip-inline:hover {
+    border-bottom-color: #6366f1;
+    color: #6366f1;
+}
+
+/* ============================================
+   Widget Tooltip Specific Styles
+   ============================================ */
+
+/* Tooltip for dashboard widget headers */
+.widget-header .ob-tooltip {
+    margin-left: auto;
+}
+
+.widget-header .ob-tooltip-icon {
+    width: 16px;
+    height: 16px;
+}
+
+/* Widget header tooltips - position handled dynamically by JavaScript */
+.widget-header .ob-tooltip .ob-tooltip-content {
+    /* Position set dynamically */
+}
+
+/* Arrow position handled dynamically by JavaScript via --arrow-position */
+
+/* Tooltip for stat cards */
+.stat-card .ob-tooltip {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+}
+
+/* Stat card tooltips - position handled dynamically by JavaScript */
+.stat-card .ob-tooltip .ob-tooltip-content {
+    /* Position set dynamically */
+}
+
+/* Arrow position handled dynamically by JavaScript via --arrow-position */
+
+/* Dashboard/Heatmaps/Settings header tooltips - position handled dynamically by JavaScript */
+/* Arrow position handled dynamically by JavaScript via --arrow-position */
+
+/* Tooltip for table column headers */
+.heatmap-table th,
+.heatmaps-modern-table th {
+    white-space: nowrap;
+}
+
+/* Allow tooltips to overflow the table wrapper and panel */
+.simplified-heatmap-table[data-optibehavior-table],
+div.simplified-heatmap-table,
+.heatmaps-panel,
+.heatmaps-panel .panel-content {
+    overflow: visible !important;
+}
+
+.heatmap-table th .ob-tooltip,
+.heatmaps-modern-table th .ob-tooltip {
+    display: inline-flex;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+
+.heatmap-table th .ob-tooltip-icon,
+.heatmaps-modern-table th .ob-tooltip-icon {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    font-size: 10px;
+}
+
+/* Reset text-transform for tooltip content inside table headers */
+.heatmap-table th .ob-tooltip-content,
+.heatmaps-modern-table th .ob-tooltip-content,
+.heatmap-table th .ob-tooltip-title,
+.heatmaps-modern-table th .ob-tooltip-title,
+.heatmap-table th .ob-tooltip-text,
+.heatmaps-modern-table th .ob-tooltip-text,
+.heatmap-table th .ob-tooltip-simple,
+.heatmaps-modern-table th .ob-tooltip-simple {
+    text-transform: none !important;
+    white-space: normal !important;
+}
+
+.heatmap-table th a,
+.heatmaps-modern-table th a,
+.simplified-heatmap-table thead th a[data-sort] {
+    display: inline-flex !important;
+    vertical-align: middle;
+}
+
+/* Tooltip for settings labels */
+.setting-label .ob-tooltip {
+    display: inline-flex;
+    vertical-align: middle;
+}
+
+.label-text .ob-tooltip-icon {
+    margin-left: 8px;
+}
+
+/* ============================================
+   Responsive Adjustments
+   ============================================ */
+
+@media (max-width: 768px) {
+    .ob-tooltip-content {
+        min-width: 240px;
+        max-width: 300px;
+        padding: 14px 16px;
+    }
+
+    .ob-tooltip-title {
+        font-size: 14px;
+    }
+
+    .ob-tooltip-text {
+        font-size: 13px;
+    }
+
+    /* On mobile, prefer bottom positioning (left-aligned) */
+    .ob-tooltip:not(.ob-tooltip-bottom):not(.ob-tooltip-left):not(.ob-tooltip-right) .ob-tooltip-content {
+        bottom: auto;
+        top: calc(100% + 10px);
+        left: 0;
+        right: auto;
+        transform: translateY(-8px);
+    }
+
+    .ob-tooltip:not(.ob-tooltip-bottom):not(.ob-tooltip-left):not(.ob-tooltip-right):hover .ob-tooltip-content {
+        transform: translateY(0);
+    }
+
+    .ob-tooltip:not(.ob-tooltip-bottom):not(.ob-tooltip-left):not(.ob-tooltip-right) .ob-tooltip-content::before {
+        bottom: auto;
+        top: -7px;
+        left: var(--arrow-position, 18px);
+        right: auto;
+        margin-left: -6px;
+        transform: rotate(-135deg);
+    }
+}
+
+/* ============================================
+   Accessibility
+   ============================================ */
+
+/* Ensure focus styles for keyboard users */
+.ob-tooltip-icon:focus {
+    outline: 2px solid #6366f1;
+    outline-offset: 2px;
+}
+
+.ob-tooltip-icon:focus-visible {
+    background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+    border-color: #a5b4fc;
+    color: #4f46e5;
+    box-shadow: none;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+    .ob-tooltip-content,
+    .ob-tooltip-icon {
+        transition: none;
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .ob-tooltip-content {
+        border-width: 2px;
+        border-color: #000;
+    }
+
+    .ob-tooltip-icon {
+        border-width: 2px;
+    }
+}
+
+/* ============================================
+   Print Styles
+   ============================================ */
+
+@media print {
+    .ob-tooltip-icon,
+    .ob-tooltip-content {
+        display: none !important;
+    }
+}
+
+/* Responsive tooltip constraints. */
+.ob-tooltip,
+.optibehavior-tooltip,
+.tooltip-content,
+.tooltipster-base,
+[data-ob-tooltip]::after {
+	max-width: calc(100vw - 32px) !important;
+	box-sizing: border-box;
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+	.ob-tooltip,
+	.optibehavior-tooltip,
+	.tooltip-content,
+	.tooltipster-base,
+	[data-ob-tooltip]::after {
+		min-width: 0 !important;
+		max-width: calc(100vw - 24px) !important;
+	}
+}
+

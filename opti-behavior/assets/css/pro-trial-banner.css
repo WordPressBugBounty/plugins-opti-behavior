@@ -1,0 +1,436 @@
+/**
+ * Pro Trial Banner Styles
+ *
+ * Styles for the "Try Pro FREE for 6 Months" banner displayed
+ * on all Opti-Behavior admin pages when Pro is not active.
+ *
+ * @package opti-behavior
+ * @version 1.1.3
+ */
+
+/* ===== BANNER CONTAINER ===== */
+.opti-behavior-trial-banner {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    height: auto !important;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 40%, #2563eb 100%);
+    color: #ffffff;
+    padding: 18px 28px;
+    margin: 0 0 24px 0;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(79, 70, 229, 0.3);
+    position: relative;
+    overflow: hidden;
+    animation: opti-behavior-trial-slideIn 0.4s ease-out;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
+}
+
+/* Subtle dot pattern overlay */
+.opti-behavior-trial-banner::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: url('data:image/svg+xml,<svg width="80" height="80" xmlns="http://www.w3.org/2000/svg"><circle cx="40" cy="40" r="1.5" fill="white" opacity="0.08"/></svg>');
+    background-size: 40px 40px;
+    pointer-events: none;
+}
+
+/* ===== LEFT SECTION: ICON + TEXT ===== */
+.opti-behavior-trial-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    z-index: 1;
+}
+
+.opti-behavior-trial-banner-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    backdrop-filter: blur(4px);
+}
+
+.opti-behavior-trial-banner-icon svg {
+    width: 24px;
+    height: 24px;
+    color: #fff;
+}
+
+.opti-behavior-trial-banner-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.opti-behavior-trial-banner-title {
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.3;
+    margin: 0;
+    color: #ffffff;
+}
+
+.opti-behavior-trial-banner-title .opti-behavior-trial-highlight {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 1px 8px;
+    border-radius: 6px;
+    font-weight: 800;
+}
+
+.opti-behavior-trial-banner-description {
+    font-size: 13px;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.85);
+    margin: 0;
+}
+
+/* ===== FEATURE PILLS ===== */
+.opti-behavior-trial-features {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.opti-behavior-trial-feature-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.9);
+    white-space: nowrap;
+}
+
+.opti-behavior-trial-feature-pill svg {
+    width: 12px;
+    height: 12px;
+}
+
+/* ===== RIGHT SECTION: ACTIONS ===== */
+.opti-behavior-trial-banner-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+}
+
+/* Primary CTA Button */
+.opti-behavior-trial-btn-start {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #ffffff;
+    color: #4f46e5;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    text-decoration: none;
+    line-height: 1.4;
+}
+
+.opti-behavior-trial-btn-start:hover {
+    background: #f0f0ff;
+    color: #4338ca;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.opti-behavior-trial-btn-start:active {
+    transform: translateY(0);
+}
+
+.opti-behavior-trial-btn-start svg {
+    width: 18px;
+    height: 18px;
+}
+
+.opti-behavior-trial-btn-start.opti-behavior-trial-loading {
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+/* Spinner inside button */
+.opti-behavior-trial-btn-start .opti-behavior-trial-spinner {
+    display: none;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(79, 70, 229, 0.3);
+    border-top-color: #4f46e5;
+    border-radius: 50%;
+    animation: opti-behavior-trial-spin 0.6s linear infinite;
+}
+
+.opti-behavior-trial-btn-start.opti-behavior-trial-loading .opti-behavior-trial-spinner {
+    display: inline-block;
+}
+
+.opti-behavior-trial-btn-start.opti-behavior-trial-loading .opti-behavior-trial-btn-icon {
+    display: none;
+}
+
+/* Dismiss button */
+.opti-behavior-trial-btn-dismiss {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.opti-behavior-trial-btn-dismiss:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+}
+
+.opti-behavior-trial-btn-dismiss svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* ===== TRIAL ACTIVE STATE ===== */
+.opti-behavior-trial-banner.opti-behavior-trial-active {
+    background: linear-gradient(135deg, #059669 0%, #10b981 40%, #0d9488 100%);
+    box-shadow: 0 4px 20px rgba(5, 150, 105, 0.3);
+}
+
+.opti-behavior-trial-banner-countdown {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffffff;
+    white-space: nowrap;
+}
+
+.opti-behavior-trial-banner-countdown svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* Download Pro button (shown after trial activation when Pro not installed) */
+.opti-behavior-trial-btn-download {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #ffffff;
+    color: #059669;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    text-decoration: none;
+    line-height: 1.4;
+}
+
+.opti-behavior-trial-btn-download:hover {
+    background: #ecfdf5;
+    color: #047857;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.opti-behavior-trial-btn-download svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* ===== TRIAL EXPIRED STATE ===== */
+.opti-behavior-trial-banner.opti-behavior-trial-expired {
+    background: linear-gradient(135deg, #dc2626 0%, #e11d48 40%, #be123c 100%);
+    box-shadow: 0 4px 20px rgba(220, 38, 38, 0.3);
+}
+
+.opti-behavior-trial-btn-upgrade {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #ffffff;
+    color: #dc2626;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    text-decoration: none;
+    line-height: 1.4;
+}
+
+.opti-behavior-trial-btn-upgrade:hover {
+    background: #fef2f2;
+    color: #b91c1c;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.opti-behavior-trial-btn-upgrade svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* ===== ANIMATIONS ===== */
+@keyframes opti-behavior-trial-slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes opti-behavior-trial-slideOut {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+        max-height: 120px;
+        margin-bottom: 24px;
+        padding: 18px 28px;
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-12px);
+        max-height: 0;
+        margin-bottom: 0;
+        padding: 0 28px;
+        overflow: hidden;
+    }
+}
+
+.opti-behavior-trial-banner.opti-behavior-trial-dismissing {
+    animation: opti-behavior-trial-slideOut 0.35s ease-in forwards;
+}
+
+@keyframes opti-behavior-trial-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ===== SUCCESS CHECK ANIMATION ===== */
+.opti-behavior-trial-success-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    animation: opti-behavior-trial-popIn 0.3s ease-out;
+}
+
+.opti-behavior-trial-success-check svg {
+    width: 28px;
+    height: 28px;
+    color: #ffffff;
+}
+
+@keyframes opti-behavior-trial-popIn {
+    0% {
+        transform: scale(0);
+        opacity: 0;
+    }
+    60% {
+        transform: scale(1.15);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 960px) {
+    .opti-behavior-trial-banner {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 16px 20px;
+        gap: 14px;
+    }
+
+    .opti-behavior-trial-banner-actions {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .opti-behavior-trial-btn-start,
+    .opti-behavior-trial-btn-download,
+    .opti-behavior-trial-btn-upgrade {
+        flex: 1;
+        justify-content: center;
+    }
+}
+
+@media (max-width: 600px) {
+    .opti-behavior-trial-banner {
+        padding: 14px 16px;
+        border-radius: 8px;
+    }
+
+    .opti-behavior-trial-banner-content {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .opti-behavior-trial-features {
+        display: none;
+    }
+
+    .opti-behavior-trial-btn-start,
+    .opti-behavior-trial-btn-download,
+    .opti-behavior-trial-btn-upgrade {
+        font-size: 13px;
+        padding: 8px 16px;
+    }
+}

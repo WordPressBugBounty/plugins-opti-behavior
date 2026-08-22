@@ -1,0 +1,122 @@
+.ob-deactivation-survey {
+	display: none;
+	position: fixed;
+	inset: 0;
+	z-index: 100001;
+	background: rgba(0, 0, 0, 0.56);
+	padding: 32px 16px;
+	overflow-y: auto;
+}
+
+.ob-deactivation-survey.is-visible {
+	display: block;
+}
+
+.ob-deactivation-survey__dialog {
+	position: relative;
+	max-width: 640px;
+	margin: 24px auto;
+	background: #ffffff;
+	border-radius: 8px;
+	box-shadow: 0 18px 44px rgba(0, 0, 0, 0.2);
+	padding: 24px;
+}
+
+.ob-deactivation-survey__close {
+	position: absolute;
+	top: 10px;
+	right: 12px;
+	border: 0;
+	background: transparent;
+	color: #646970;
+	font-size: 24px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.ob-deactivation-survey__close:hover,
+.ob-deactivation-survey__close:focus {
+	color: #1d2327;
+}
+
+.ob-deactivation-survey__title {
+	margin: 0 24px 12px 0;
+	font-size: 20px;
+	line-height: 1.35;
+}
+
+.ob-deactivation-survey__intro {
+	margin: 0 0 16px;
+	color: #50575e;
+}
+
+.ob-deactivation-survey__fieldset {
+	margin: 0 0 16px;
+	padding: 0;
+	border: 0;
+}
+
+.ob-deactivation-survey__legend {
+	font-weight: 600;
+	margin-bottom: 8px;
+}
+
+.ob-deactivation-survey__reason {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0 0 8px;
+}
+
+.ob-deactivation-survey__reason input {
+	margin-top: 2px;
+}
+
+.ob-deactivation-survey__label {
+	display: block;
+	font-weight: 600;
+	margin: 12px 0 6px;
+}
+
+.ob-deactivation-survey__textarea,
+.ob-deactivation-survey__input {
+	width: 100%;
+}
+
+.ob-deactivation-survey__help {
+	margin: 6px 0 0;
+	font-size: 12px;
+	color: #646970;
+}
+
+.ob-deactivation-survey__error {
+	margin: 12px 0 0;
+	color: #b32d2e;
+	font-weight: 600;
+}
+
+.ob-deactivation-survey__actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 20px;
+}
+
+.ob-deactivation-survey-open {
+	overflow: hidden;
+}
+
+@media (max-width: 782px) {
+	.ob-deactivation-survey__dialog {
+		padding: 18px;
+	}
+
+	.ob-deactivation-survey__actions {
+		flex-direction: column-reverse;
+	}
+
+	.ob-deactivation-survey__actions .button {
+		width: 100%;
+		text-align: center;
+	}
+}

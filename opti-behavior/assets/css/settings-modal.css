@@ -1,0 +1,91 @@
+/**
+ * Settings Modal Styles
+ * Styles for debug log viewer and other modals
+ * 
+ * @package OptiBehavior
+ */
+
+/* Debug log viewer modal */
+#opti-behavior-log-viewer {
+	display: none;
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: rgba(0, 0, 0, 0.8);
+	z-index: 100000;
+}
+
+#opti-behavior-log-viewer .log-viewer-container {
+	background: white;
+	max-width: 1200px;
+	margin: 0 auto;
+	height: 100%;
+	border-radius: 8px;
+	display: flex;
+	flex-direction: column;
+}
+
+#opti-behavior-log-viewer .log-viewer-header {
+	padding: 20px;
+	border-bottom: 1px solid #ddd;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+#opti-behavior-log-viewer .log-viewer-header h3 {
+	margin: 0;
+}
+
+#opti-behavior-log-viewer .log-viewer-content {
+	flex: 1;
+	overflow: auto;
+	padding: 20px;
+}
+
+#opti-behavior-log-content {
+	background: #1e1e1e;
+	color: #d4d4d4;
+	padding: 20px;
+	border-radius: 4px;
+	font-family: 'Courier New', monospace;
+	font-size: 12px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-wrap: break-word;
+}
+
+/* Inline forms */
+.optibehavior-inline-form-block {
+	display: inline-block;
+}
+
+/* Danger warning text */
+.danger-warning-text {
+	margin-top: 12px;
+}
+
+/* Storage stats grid */
+.storage-stats-grid {
+	margin-top: 20px;
+}
+
+/* Cleanup result containers */
+#cleanup_result,
+#orphaned_cleanup_result {
+	margin-top: 15px;
+}
+
+/* Cleanup buttons */
+#cleanup_by_date_btn,
+#cleanup_by_duration_btn {
+	margin-left: 10px;
+}
+
+/* Description text spacing */
+.optibehavior-description-spacing {
+	margin-top: 10px;
+}
+
