@@ -436,8 +436,18 @@ class Opti_Behavior_Report_Generator {
 					AVG(
 						CASE
 							WHEN pv.time_on_page > 0 THEN pv.time_on_page
-							WHEN s.end_time IS NOT NULL THEN GREATEST(0, TIMESTAMPDIFF(SECOND, pv.view_time, s.end_time))
-							ELSE NULL
+							ELSE LEAST(1800, GREATEST(0, TIMESTAMPDIFF(SECOND, pv.view_time,
+								COALESCE(
+									(
+										SELECT MIN(pv_next.view_time)
+										FROM {$wpdb->prefix}optibehavior_pageviews pv_next
+										WHERE pv_next.session_id = pv.session_id
+										AND pv_next.session_id <> ''
+										AND pv_next.view_time > pv.view_time
+									),
+									s.end_time
+								)
+							)))
 						END
 					) as avg_time,
 					AVG(pv.scroll_depth) as avg_scroll

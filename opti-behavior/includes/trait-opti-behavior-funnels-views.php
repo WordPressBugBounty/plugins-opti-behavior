@@ -32,6 +32,17 @@ trait Opti_Behavior_Funnels_Views_Trait {
 		}
 		$rendered = true;
 
+		// Per-funnel detail routing (spec.md §4.1). A `funnel` query arg switches
+		// this same page slug from the funnels LIST to a single funnel's detail
+		// view (header + period control + advanced filter + KPIs + steps). No
+		// `funnel` arg → the index list below, unchanged.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only view routing; no state change.
+		$requested_funnel = isset( $_GET['funnel'] ) ? absint( wp_unslash( $_GET['funnel'] ) ) : 0;
+		if ( $requested_funnel > 0 ) {
+			$this->render_funnel_detail( $requested_funnel );
+			return;
+		}
+
 		global $wpdb;
 		$table_sessions = $wpdb->prefix . 'opti_behavior_sessions';
 
@@ -220,6 +231,189 @@ trait Opti_Behavior_Funnels_Views_Trait {
 			</div><!-- .funnels-content-wrapper -->
 		</div>
 		<?php
+	}
+
+	/**
+	 * Render a single funnel's detail page (spec.md §4.1 / §4.2).
+	 *
+	 * Reached via `admin.php?page=opti-behavior-funnels&funnel=<id>`. Shows the
+	 * funnel header with a kept period control and the PRO advanced-filter panel
+	 * (live for entitled PRO users, locked + upsell otherwise), plus KPI cards
+	 * and the step visualization (rendered client-side by funnels.js).
+	 *
+	 * @param int $funnel_id Requested funnel id.
+	 */
+	private function render_funnel_detail( $funnel_id ) {
+		global $wpdb;
+		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
+		$index_url     = admin_url( 'admin.php?page=opti-behavior-funnels' );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix.
+		$funnel = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT id, name, description, steps, status FROM {$table_funnels} WHERE id = %d",
+				$funnel_id
+			)
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		// Graceful not-found: unknown, deleted, or inactive funnel → message + back
+		// link, never a fatal or an empty analytics shell (spec.md §4.1).
+		if ( ! $funnel || 'active' !== $funnel->status ) {
+			?>
+			<div class="wrap opti-behavior-funnels-page opti-behavior-funnel-detail-page">
+				<div class="opti-funnel-detail-back">
+					<a href="<?php echo esc_url( $index_url ); ?>" class="opti-funnel-back-link">
+						<i data-lucide="arrow-left"></i>
+						<span><?php esc_html_e( 'Back to Funnels', 'opti-behavior' ); ?></span>
+					</a>
+				</div>
+				<div class="funnels-empty-state">
+					<h2 class="empty-state-title"><?php esc_html_e( 'Funnel not found', 'opti-behavior' ); ?></h2>
+					<p class="empty-state-description">
+						<?php esc_html_e( 'This funnel does not exist or is no longer active.', 'opti-behavior' ); ?>
+					</p>
+				</div>
+			</div>
+			<?php
+			return;
+		}
+
+		$step_defs    = json_decode( $funnel->steps, true );
+		$step_count   = is_array( $step_defs ) ? count( $step_defs ) : 0;
+		$pro_active   = $this->funnel_advanced_filter_available();
+		$exclude_spam = method_exists( $this, 'resolve_spam_exclusion_from_request' )
+			? $this->resolve_spam_exclusion_from_request( $_GET ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter state.
+			: true;
+		$upgrade_url  = admin_url( 'admin.php?page=opti-behavior-recordings' );
+		?>
+		<div class="wrap opti-behavior-funnels-page opti-behavior-funnel-detail-page" data-exclude-spam="<?php echo esc_attr( $exclude_spam ? '1' : '0' ); ?>">
+			<div class="heatmaps-header">
+				<a href="<?php echo esc_url( $index_url ); ?>" class="opti-funnel-back-btn">
+					<i data-lucide="arrow-left"></i>
+					<span><?php esc_html_e( 'Back to Funnels', 'opti-behavior' ); ?></span>
+				</a>
+				<div class="heatmaps-header-content">
+					<div class="heatmaps-title-section">
+						<div class="heatmaps-icon"><i data-lucide="filter"></i></div>
+						<div class="heatmaps-title-text">
+							<h1 class="heatmaps-title"><?php echo esc_html( $funnel->name ); ?></h1>
+							<div class="heatmaps-subtitle">
+								<?php
+								/* translators: %d: number of funnel steps. */
+								echo esc_html( sprintf( _n( '%d step', '%d steps', $step_count, 'opti-behavior' ), $step_count ) );
+								?>
+								<?php if ( $funnel->description ) : ?>
+									&nbsp;&middot;&nbsp;<?php echo esc_html( $funnel->description ); ?>
+								<?php endif; ?>
+							</div>
+						</div>
+					</div>
+					<div class="heatmaps-header-actions dashboard-controls opti-funnel-detail-controls">
+						<!-- Period control bar — reuses dashboard .dashboard-controls / .period-selector /
+						     .refresh-btn classes so the funnel header matches the Analytics Dashboard
+						     control row (period + always-visible date pickers + Apply + Refresh + Filters). -->
+						<select id="funnel-detail-period" class="period-selector">
+							<option value="7days"><?php esc_html_e( 'Last 7 Days', 'opti-behavior' ); ?></option>
+							<option value="30days" selected><?php esc_html_e( 'Last 30 Days', 'opti-behavior' ); ?></option>
+							<option value="90days"><?php esc_html_e( 'Last 90 Days', 'opti-behavior' ); ?></option>
+							<option value="custom"><?php esc_html_e( 'Custom Range', 'opti-behavior' ); ?></option>
+						</select>
+						<input type="date" id="funnel-detail-start" class="opti-funnel-detail-date" />
+						<input type="date" id="funnel-detail-end" class="opti-funnel-detail-date" />
+						<button type="button" class="refresh-btn" id="funnel-detail-apply-range">
+							<i data-lucide="calendar"></i>
+							<?php esc_html_e( 'Apply', 'opti-behavior' ); ?>
+						</button>
+						<button type="button" class="refresh-btn" id="funnel-detail-refresh">
+							<i data-lucide="refresh-cw"></i>
+							<?php esc_html_e( 'Refresh', 'opti-behavior' ); ?>
+						</button>
+						<!-- Advanced filter toggle (mirrors dashboard #toggle-advanced-filters) -->
+						<button class="refresh-btn" id="toggle-advanced-filters" type="button" aria-expanded="false" aria-controls="advanced-filters-panel">
+							<i data-lucide="sliders-horizontal"></i>
+							<span class="advanced-filters-toggle-label"><?php esc_html_e( 'Filters', 'opti-behavior' ); ?></span>
+							<?php if ( ! $pro_active ) : ?>
+								<span class="opti-funnel-pro-lock" aria-hidden="true"><i data-lucide="lock"></i></span>
+							<?php endif; ?>
+						</button>
+					</div>
+				</div>
+			</div>
+
+			<?php $this->render_funnel_advanced_filters_panel( ! $pro_active, $upgrade_url ); ?>
+
+			<div id="opti-funnel-detail" class="opti-funnel-detail" data-funnel-id="<?php echo esc_attr( (int) $funnel->id ); ?>" data-advanced-pro="<?php echo esc_attr( $pro_active ? '1' : '0' ); ?>">
+				<!-- KPI summary bar -->
+				<div class="opti-funnel-stats-bar">
+					<div class="opti-funnel-stat-card">
+						<div class="opti-funnel-stat-card__icon opti-funnel-stat-card__icon--entries"><i data-lucide="log-in"></i></div>
+						<div class="opti-funnel-stat-card__body">
+							<span class="opti-funnel-stat-card__value" id="funnel-detail-entries">—</span>
+							<span class="opti-funnel-stat-card__label"><?php esc_html_e( 'Total Entries', 'opti-behavior' ); ?></span>
+						</div>
+					</div>
+					<div class="opti-funnel-stat-card">
+						<div class="opti-funnel-stat-card__icon opti-funnel-stat-card__icon--completions"><i data-lucide="check-circle"></i></div>
+						<div class="opti-funnel-stat-card__body">
+							<span class="opti-funnel-stat-card__value" id="funnel-detail-completions">—</span>
+							<span class="opti-funnel-stat-card__label"><?php esc_html_e( 'Total Completions', 'opti-behavior' ); ?></span>
+						</div>
+					</div>
+					<div class="opti-funnel-stat-card">
+						<div class="opti-funnel-stat-card__icon opti-funnel-stat-card__icon--rate"><i data-lucide="trending-up"></i></div>
+						<div class="opti-funnel-stat-card__body">
+							<span class="opti-funnel-stat-card__value" id="funnel-detail-rate">—</span>
+							<span class="opti-funnel-stat-card__label"><?php esc_html_e( 'Conversion Rate', 'opti-behavior' ); ?></span>
+						</div>
+					</div>
+					<div class="opti-funnel-stat-card">
+						<div class="opti-funnel-stat-card__icon opti-funnel-stat-card__icon--funnels"><i data-lucide="trending-down"></i></div>
+						<div class="opti-funnel-stat-card__body">
+							<span class="opti-funnel-stat-card__value" id="funnel-detail-dropoff">—</span>
+							<span class="opti-funnel-stat-card__label"><?php esc_html_e( 'Drop-off Rate', 'opti-behavior' ); ?></span>
+						</div>
+					</div>
+				</div>
+
+				<!-- Step visualization (rendered client-side by funnels.js) -->
+				<div class="funnel-steps-wrapper">
+					<div class="funnel-steps-label"><?php esc_html_e( 'Steps', 'opti-behavior' ); ?></div>
+					<div class="funnel-steps-container" data-funnel-id="<?php echo esc_attr( (int) $funnel->id ); ?>">
+						<div class="funnel-loading"><span class="loading-spinner"></span><span><?php esc_html_e( 'Loading...', 'opti-behavior' ); ?></span></div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render the funnel detail-page advanced-filters panel (spec.md §4.2).
+	 *
+	 * Mirrors the dashboard 4-column panel (render_advanced_filters_panel() in
+	 * trait-opti-behavior-dashboard-views.php) but drops `filter-exit-page`
+	 * (spec.md §3-6: funnel completion/abandonment already models the exit). The
+	 * element ids are reused verbatim from the dashboard panel — safe here because
+	 * the funnel detail page renders NO dashboard markup, so there is no id
+	 * collision (spec.md §6). When $locked is true (free / non-entitled), fields
+	 * are disabled and an upsell overlay replaces the Apply/Reset actions.
+	 *
+	 * @param bool   $locked      Whether to render the locked (free) variant.
+	 * @param string $upgrade_url Upgrade CTA target for the locked variant.
+	 */
+	private function render_funnel_advanced_filters_panel( $locked, $upgrade_url = '' ) {
+		// Reuse the dashboard's exact panel component (shared trait). Funnel drops
+		// the Exit Page field (spec §3-6) and, for free users, renders the locked
+		// PRO-upsell variant — everything else is byte-for-byte the dashboard panel.
+		$this->render_shared_advanced_filters_panel(
+			array(
+				'include_exit_page' => false,
+				'locked'            => (bool) $locked,
+				'upgrade_url'       => $upgrade_url,
+			)
+		);
 	}
 
 }

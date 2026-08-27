@@ -70,8 +70,13 @@ class Opti_Behavior_Heatmap_Options implements ArrayAccess {
 			// saturating PHP-FPM on busy/plugin-heavy sites. 15000ms keeps
 			// batching responsive while cutting request volume ~3x; the
 			// sendBeacon unload flush still guarantees tail delivery.
+			// Perf Fix B (customer report 2026-08): raised 15000ms -> 30000ms.
+			// The Free heatmap flush was a secondary contributor to the observed
+			// ~8-11s admin-ajax cadence alongside the Pro recorder; 30s halves its
+			// request volume again. Flush is still size-triggered (`ajax_bulk`)
+			// and the sendBeacon unload flush guarantees tail delivery.
 			'ajax_bulk'                   => 5,
-			'ajax_interval'               => 15000,
+			'ajax_interval'               => 30000,
 
 			// Legacy data-retention period in months for the daily cron's
 			// delete_old_data() call. 0 = retention disabled (never delete).

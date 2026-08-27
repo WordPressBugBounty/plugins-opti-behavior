@@ -164,148 +164,10 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
          * @since 1.0.4
          */
         private function render_advanced_filters_panel() {
-            ?>
-            <div class="advanced-filters-panel" id="advanced-filters-panel" style="display: none;">
-                <div class="advanced-filters-grid">
-                    <!-- Column 1: Visitor Attributes -->
-                    <div class="filter-column">
-                        <h3 class="filter-column-title"><?php esc_html_e( 'Visitor Attributes', 'opti-behavior' ); ?></h3>
-
-                        <div class="filter-group">
-                            <label for="filter-browser"><?php esc_html_e( 'Browser Name', 'opti-behavior' ); ?></label>
-                            <select id="filter-browser" class="advanced-filter-select">
-                                <option value=""><?php esc_html_e( 'All Browsers', 'opti-behavior' ); ?></option>
-                            </select>
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-country"><?php esc_html_e( 'Country', 'opti-behavior' ); ?></label>
-                            <select id="filter-country" class="advanced-filter-select">
-                                <option value=""><?php esc_html_e( 'All Countries', 'opti-behavior' ); ?></option>
-                            </select>
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-device"><?php esc_html_e( 'Device Type', 'opti-behavior' ); ?></label>
-                            <select id="filter-device" class="advanced-filter-select">
-                                <option value=""><?php esc_html_e( 'All Devices', 'opti-behavior' ); ?></option>
-                            </select>
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-os"><?php esc_html_e( 'Operating System', 'opti-behavior' ); ?></label>
-                            <select id="filter-os" class="advanced-filter-select">
-                                <option value=""><?php esc_html_e( 'All OS', 'opti-behavior' ); ?></option>
-                            </select>
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-visitor-type"><?php esc_html_e( 'Visitor Type', 'opti-behavior' ); ?></label>
-                            <select id="filter-visitor-type" class="advanced-filter-select">
-                                <option value=""><?php esc_html_e( 'All Visitors', 'opti-behavior' ); ?></option>
-                                <option value="new"><?php esc_html_e( 'New Visitor', 'opti-behavior' ); ?></option>
-                                <option value="returning"><?php esc_html_e( 'Returning Visitor', 'opti-behavior' ); ?></option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Column 2: Session Attributes -->
-                    <div class="filter-column">
-                        <h3 class="filter-column-title"><?php esc_html_e( 'Session Attributes', 'opti-behavior' ); ?></h3>
-
-                        <div class="filter-group">
-                            <label for="filter-duration-min"><?php esc_html_e( 'Min Duration (seconds)', 'opti-behavior' ); ?></label>
-                            <input type="number" id="filter-duration-min" class="advanced-filter-input" min="0" placeholder="0">
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-duration-max"><?php esc_html_e( 'Max Duration (seconds)', 'opti-behavior' ); ?></label>
-                            <input type="number" id="filter-duration-max" class="advanced-filter-input" min="0" placeholder="&#8734;">
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-page-count-min"><?php esc_html_e( 'Min Page Count', 'opti-behavior' ); ?></label>
-                            <input type="number" id="filter-page-count-min" class="advanced-filter-input" min="1" placeholder="1">
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-page-count-max"><?php esc_html_e( 'Max Page Count', 'opti-behavior' ); ?></label>
-                            <input type="number" id="filter-page-count-max" class="advanced-filter-input" min="1" placeholder="&#8734;">
-                        </div>
-                    </div>
-
-                    <!-- Column 3: Pages & Traffic -->
-                    <div class="filter-column">
-                        <h3 class="filter-column-title"><?php esc_html_e( 'Pages & Traffic', 'opti-behavior' ); ?></h3>
-
-                        <div class="filter-group">
-                            <label for="filter-entry-page"><?php esc_html_e( 'Entry Page', 'opti-behavior' ); ?></label>
-                            <input type="text" id="filter-entry-page" class="advanced-filter-input" autocomplete="off" placeholder="<?php esc_attr_e( 'e.g., /home', 'opti-behavior' ); ?>">
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-exit-page"><?php esc_html_e( 'Exit Page', 'opti-behavior' ); ?></label>
-                            <input type="text" id="filter-exit-page" class="advanced-filter-input" autocomplete="off" placeholder="<?php esc_attr_e( 'e.g., /thank-you', 'opti-behavior' ); ?>">
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-referrer"><?php esc_html_e( 'Referrer URL', 'opti-behavior' ); ?></label>
-                            <input type="text" id="filter-referrer" class="advanced-filter-input" autocomplete="off" placeholder="<?php esc_attr_e( 'e.g., google.com', 'opti-behavior' ); ?>">
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-traffic-channel"><?php esc_html_e( 'Traffic Channel', 'opti-behavior' ); ?></label>
-                            <select id="filter-traffic-channel" class="advanced-filter-select">
-                                <option value=""><?php esc_html_e( 'All Channels', 'opti-behavior' ); ?></option>
-                                <option value="Direct"><?php esc_html_e( 'Direct', 'opti-behavior' ); ?></option>
-                                <option value="Organic Search"><?php esc_html_e( 'Organic Search', 'opti-behavior' ); ?></option>
-                                <option value="Paid Ads"><?php esc_html_e( 'Paid Ads', 'opti-behavior' ); ?></option>
-                                <option value="Social Media"><?php esc_html_e( 'Social Media', 'opti-behavior' ); ?></option>
-                                <option value="Email"><?php esc_html_e( 'Email', 'opti-behavior' ); ?></option>
-                                <option value="Referral"><?php esc_html_e( 'Referral', 'opti-behavior' ); ?></option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Column 4: UTM Parameters -->
-                    <div class="filter-column">
-                        <h3 class="filter-column-title"><?php esc_html_e( 'UTM Parameters', 'opti-behavior' ); ?></h3>
-
-                        <div class="filter-group">
-                            <label for="filter-utm-campaign"><?php esc_html_e( 'UTM Campaign', 'opti-behavior' ); ?></label>
-                            <select id="filter-utm-campaign" class="advanced-filter-select">
-                                <option value=""><?php esc_html_e( 'All Campaigns', 'opti-behavior' ); ?></option>
-                            </select>
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-utm-source"><?php esc_html_e( 'UTM Source', 'opti-behavior' ); ?></label>
-                            <select id="filter-utm-source" class="advanced-filter-select">
-                                <option value=""><?php esc_html_e( 'All Sources', 'opti-behavior' ); ?></option>
-                            </select>
-                        </div>
-
-                        <div class="filter-group">
-                            <label for="filter-utm-medium"><?php esc_html_e( 'UTM Medium', 'opti-behavior' ); ?></label>
-                            <select id="filter-utm-medium" class="advanced-filter-select">
-                                <option value=""><?php esc_html_e( 'All Mediums', 'opti-behavior' ); ?></option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="advanced-filters-actions">
-                    <button id="apply-advanced-filters" class="button button-primary" type="button">
-                        <span class="dashicons dashicons-yes"></span>
-                        <?php esc_html_e( 'Apply Filters', 'opti-behavior' ); ?>
-                    </button>
-                    <button id="reset-advanced-filters" class="button" type="button">
-                        <span class="dashicons dashicons-undo"></span>
-                        <?php esc_html_e( 'Reset', 'opti-behavior' ); ?>
-                    </button>
-                </div>
-            </div>
-            <?php
+            // Delegates to the shared renderer (Opti_Behavior_Advanced_Filters_Trait)
+            // so the dashboard + Funnels detail page emit one identical panel. The
+            // dashboard keeps its full field set (Exit Page included).
+            $this->render_shared_advanced_filters_panel( array( 'include_exit_page' => true ) );
         }
 
         /**
@@ -675,6 +537,9 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                         $views_trend        = isset( $page['views_trend'] ) ? (string) $page['views_trend'] : 'neutral';
                                         $clicks_change      = isset( $page['clicks_change'] ) ? (int) $page['clicks_change'] : 0;
                                         $clicks_trend       = isset( $page['clicks_trend'] ) ? (string) $page['clicks_trend'] : 'neutral';
+                                        $avg_time_formatted = isset( $page['avg_time_formatted'] ) ? (string) $page['avg_time_formatted'] : '0s';
+                                        $avg_time_change    = isset( $page['avg_time_change'] ) ? (int) $page['avg_time_change'] : 0;
+                                        $avg_time_trend     = isset( $page['avg_time_trend'] ) ? (string) $page['avg_time_trend'] : 'neutral';
                                         $pc_heatmap_url     = isset( $page['pc_heatmap'] ) ? $page['pc_heatmap'] : '';
                                         $mobile_heatmap_url = isset( $page['mobile_heatmap'] ) ? $page['mobile_heatmap'] : '';
                                         $edit_url           = isset( $page['edit_url'] ) ? (string) $page['edit_url'] : '';
@@ -699,8 +564,19 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                             $clicks_arrow       = '↓';
                                         }
 
-                                        $views_change_display  = abs( $views_change );
-                                        $clicks_change_display = abs( $clicks_change );
+                                        $avg_time_trend_class = 'neutral';
+                                        $avg_time_arrow       = '–';
+                                        if ( 'up' === $avg_time_trend ) {
+                                            $avg_time_trend_class = 'positive';
+                                            $avg_time_arrow       = '↑';
+                                        } elseif ( 'down' === $avg_time_trend ) {
+                                            $avg_time_trend_class = 'negative';
+                                            $avg_time_arrow       = '↓';
+                                        }
+
+                                        $views_change_display    = abs( $views_change );
+                                        $clicks_change_display   = abs( $clicks_change );
+                                        $avg_time_change_display = abs( $avg_time_change );
 
                                         // "Hot" badge heuristic: no dedicated data field exists, so approximate it
                                         // from the existing views trend/change (presentation-only, no data-layer change).
@@ -739,6 +615,14 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                                     <span class="metric-change <?php echo esc_attr( $clicks_trend_class ); ?>">
                                                         <span class="metric-arrow"><?php echo esc_html( $clicks_arrow ); ?></span>
                                                         <span class="metric-percent"><?php echo esc_html( $clicks_change_display ); ?>%</span>
+                                                    </span>
+                                                </div>
+                                                <div class="metric metric-avg-time" title="<?php echo esc_attr__( 'Average time spent', 'opti-behavior' ); ?>">
+                                                    <i class="metric-icon" data-lucide="clock"></i>
+                                                    <span class="metric-value"><?php echo esc_html( $avg_time_formatted ); ?></span>
+                                                    <span class="metric-change <?php echo esc_attr( $avg_time_trend_class ); ?>">
+                                                        <span class="metric-arrow"><?php echo esc_html( $avg_time_arrow ); ?></span>
+                                                        <span class="metric-percent"><?php echo esc_html( $avg_time_change_display ); ?>%</span>
                                                     </span>
                                                 </div>
                                             </div>
@@ -990,25 +874,28 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
             $intent_data = $this->get_user_intent_data();
             $has_data = $intent_data['total_sessions'] > 0;
 
-            if (!$has_data) {
-                // Show empty state when no data is available
-                ?>
-                <div class="optibehavior-empty-state is-visible">
-                    <i data-lucide="target" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
-                    <div class="optibehavior-empty-title"><?php esc_html_e( 'No data available', 'opti-behavior' ); ?></div>
-                    <div class="optibehavior-empty-sub"><?php esc_html_e( 'Try broadening the date range or check back later.', 'opti-behavior' ); ?></div>
-                </div>
-                <?php
-                return;
-            }
+            // Always emit the canvas + container so the JS widget can upgrade it once
+            // the async widget AJAX delivers fresh data. The PHP render and the AJAX
+            // render use different paths (cached vs force-live), so the initial
+            // synchronous render can report zero while the AJAX reports data. If we
+            // omitted the canvas here, initUserIntentWidget() would hit its
+            // `if (!intentEl) return;` guard and never draw the chart, leaving the
+            // widget stuck on "No data available" despite a valid payload.
+            // The empty state below is a sibling the JS toggles (show/hide), not a
+            // replacement for the canvas.
             ?>
             <div class="user-intent-chart-container">
-                <canvas id="user-intent-chart" width="300" height="300"></canvas>
+                <canvas id="user-intent-chart" width="300" height="300"<?php echo $has_data ? '' : ' style="display:none;"'; ?>></canvas>
                 <table class="user-intent-legend">
                     <tbody id="user-intent-legend-body">
                         <!-- Populated by JavaScript -->
                     </tbody>
                 </table>
+                <div class="optibehavior-empty-state<?php echo $has_data ? '' : ' is-visible'; ?>"<?php echo $has_data ? ' style="display:none;"' : ''; ?>>
+                    <i data-lucide="target" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
+                    <div class="optibehavior-empty-title"><?php esc_html_e( 'No data available', 'opti-behavior' ); ?></div>
+                    <div class="optibehavior-empty-sub"><?php esc_html_e( 'Try broadening the date range or check back later.', 'opti-behavior' ); ?></div>
+                </div>
             </div>
             <!-- Note: User intent chart script is now properly enqueued via wp_add_inline_script() in get_dashboard_scripts() method -->
             <?php
@@ -1315,6 +1202,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                 $sample_limit = (int) apply_filters( 'opti_behavior_user_intent_large_sample', 250 );
             }
 
+            // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
             // Step 1: sample sessions in range (duration only).
             // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $spam_clause is an internal hard-coded SQL fragment; date values are bound via prepare().
             $session_rows = $wpdb->get_results(
@@ -1327,6 +1215,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     array_merge( array( $start_date, $end_date ), $filter_sql['params'], array( $sample_limit ) )
                 )
             );
+            // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
             if ( empty( $session_rows ) ) {
                 return array();
@@ -1346,6 +1235,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
             $click_map = array();
             foreach ( $id_chunks as $chunk ) {
                 $id_list = implode( ',', $chunk );
+                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
                 // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $id_list is a comma-joined list of esc_sql()'d, quoted session ids; analytics aggregate.
                 $click_rows = $wpdb->get_results(
                     "SELECT e.session_id AS sid, COUNT(*) AS click_count
@@ -1353,6 +1243,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     WHERE e.session_id IN ({$id_list}) AND e.event IN (16, 17)
                     GROUP BY e.session_id"
                 );
+                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
                 foreach ( (array) $click_rows as $row ) {
                     $click_map[ (string) $row->sid ] = (int) $row->click_count;
                 }
@@ -1362,6 +1253,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
             $scroll_map = array();
             foreach ( $id_chunks as $chunk ) {
                 $id_list = implode( ',', $chunk );
+                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
                 // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $id_list is a comma-joined list of esc_sql()'d, quoted session ids; analytics aggregate.
                 $scroll_rows = $wpdb->get_results(
                     "SELECT pv.session_id AS sid, MAX(pv.scroll_depth) AS max_scroll_depth
@@ -1369,6 +1261,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     WHERE pv.session_id IN ({$id_list})
                     GROUP BY pv.session_id"
                 );
+                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
                 foreach ( (array) $scroll_rows as $row ) {
                     $scroll_map[ (string) $row->sid ] = (int) $row->max_scroll_depth;
                 }

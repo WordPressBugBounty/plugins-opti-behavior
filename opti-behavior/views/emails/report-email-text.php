@@ -84,7 +84,7 @@ if ( ! empty( $kpis ) ) {
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 		}
 
-		echo sprintf( "  %-20s %s%s\n", esc_html( $label ) . ':', esc_html( $value ), esc_html( $change_str ) );
+		printf( "  %-20s %s%s\n", esc_html( $label ) . ':', esc_html( $value ), esc_html( $change_str ) );
 	}
 	echo "\n";
 }
@@ -93,7 +93,7 @@ if ( ! empty( $kpis ) ) {
 if ( ! empty( $smart_insights ) ) {
 	echo esc_html( strtoupper( __( 'Smart Insights', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 14 ) ) . "\n\n";
-	echo sprintf(
+	printf(
 		"  %s\n\n",
 		esc_html(
 			sprintf(
@@ -113,16 +113,16 @@ if ( ! empty( $smart_insights ) ) {
 			$confidence = ! empty( $insight['confidence'] ) ? ' | Confidence: ' . $insight['confidence'] . '%' : '';
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
-			echo sprintf( "  %d. %s%s\n", intval( $i + 1 ), esc_html( $title ), esc_html( $entity ) );
-			echo sprintf( "     Priority: %s%s\n", esc_html( $priority ), esc_html( $confidence ) );
+			printf( "  %d. %s%s\n", intval( $i + 1 ), esc_html( $title ), esc_html( $entity ) );
+			printf( "     Priority: %s%s\n", esc_html( $priority ), esc_html( $confidence ) );
 			if ( ! empty( $insight['interpretation'] ) ) {
-				echo sprintf( "     %s\n", esc_html( $insight['interpretation'] ) );
+				printf( "     %s\n", esc_html( $insight['interpretation'] ) );
 			}
 			if ( ! empty( $insight['evidence'] ) ) {
-				echo sprintf( "     Evidence: %s\n", esc_html( implode( ' | ', array_slice( $insight['evidence'], 0, 3 ) ) ) );
+				printf( "     Evidence: %s\n", esc_html( implode( ' | ', array_slice( $insight['evidence'], 0, 3 ) ) ) );
 			}
 			if ( ! empty( $insight['recommended_action'] ) ) {
-				echo sprintf( "     Next action: %s\n", esc_html( $insight['recommended_action'] ) );
+				printf( "     Next action: %s\n", esc_html( $insight['recommended_action'] ) );
 			}
 			echo "\n";
 		}
@@ -143,10 +143,10 @@ if ( ! empty( $top_pages ) ) {
 		$time  = $page['avg_time_formatted'] ?? '-';
 		// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
-		echo sprintf( "  %d. %s\n", intval( $i + 1 ), esc_html( $title ) );
-		echo sprintf(
+		printf( "  %d. %s\n", intval( $i + 1 ), esc_html( $title ) );
+		printf(
 			/* translators: 1: view count, 2: average time on page */
-			'     ' . __( 'Views: %1$s | Avg. Time: %2$s', 'opti-behavior' ) . "\n\n",
+			'     ' . esc_html__( 'Views: %1$s | Avg. Time: %2$s', 'opti-behavior' ) . "\n\n",
 			esc_html( $views ),
 			esc_html( $time )
 		);
@@ -164,9 +164,9 @@ if ( ! empty( $top_referrers ) ) {
 		$visits = number_format( $ref['visits'] );
 		// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
-		echo sprintf(
+		printf(
 			/* translators: 1: rank number, 2: referrer source, 3: visit count */
-			__( '  %1$d. %2$-30s %3$s visits', 'opti-behavior' ) . "\n",
+			esc_html__( '  %1$d. %2$-30s %3$s visits', 'opti-behavior' ) . "\n",
 			intval( $i + 1 ),
 			esc_html( $source ),
 			esc_html( $visits )
@@ -187,7 +187,7 @@ if ( ! empty( $traffic ) && ! empty( $traffic['breakdown'] ) ) {
 		$pct   = $item['percentage'] ?? 0;
 		// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
-		echo sprintf( "  %-20s %s (%s%%)\n", esc_html( $type ) . ':', esc_html( $count ), esc_html( $pct ) );
+		printf( "  %-20s %s (%s%%)\n", esc_html( $type ) . ':', esc_html( $count ), esc_html( $pct ) );
 	}
 	echo "\n";
 }
@@ -204,9 +204,9 @@ if ( ! empty( $geographic ) ) {
 		$sessions = number_format( $country['sessions'] );
 		// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
-		echo sprintf(
+		printf(
 			/* translators: 1: rank number, 2: country name, 3: visitor count, 4: session count */
-			__( '  %1$d. %2$-25s %3$s visitors, %4$s sessions', 'opti-behavior' ) . "\n",
+			esc_html__( '  %1$d. %2$-25s %3$s visitors, %4$s sessions', 'opti-behavior' ) . "\n",
 			intval( $i + 1 ),
 			esc_html( $name ),
 			esc_html( $visitors ),
@@ -221,8 +221,10 @@ if ( ! empty( $heatmap ) ) {
 	echo esc_html( strtoupper( __( 'Click Heatmap Summary', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 21 ) ) . "\n\n";
 
-	echo sprintf( '  ' . __( 'Total Clicks: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $heatmap['total_clicks'] ?? 0 ) ) );
-	echo sprintf( '  ' . __( 'Pages Tracked: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $heatmap['pages_tracked'] ?? 0 ) ) );
+	/* translators: %s: total click count */
+	printf( '  ' . esc_html__( 'Total Clicks: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $heatmap['total_clicks'] ?? 0 ) ) );
+	/* translators: %s: number of pages tracked */
+	printf( '  ' . esc_html__( 'Pages Tracked: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $heatmap['pages_tracked'] ?? 0 ) ) );
 
 	if ( ! empty( $heatmap['top_clicked'] ) ) {
 		echo "\n  " . esc_html__( 'Most Clicked Pages:', 'opti-behavior' ) . "\n";
@@ -231,9 +233,9 @@ if ( ! empty( $heatmap ) ) {
 			$title  = mb_strimwidth( $clicked['title'], 0, 40, '...' );
 			$clicks = number_format( $clicked['clicks'] );
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-			echo sprintf(
+			printf(
 				/* translators: 1: rank number, 2: page title, 3: click count */
-				__( '    %1$d. %2$s (%3$s clicks)', 'opti-behavior' ) . "\n",
+				esc_html__( '    %1$d. %2$s (%3$s clicks)', 'opti-behavior' ) . "\n",
 				intval( $i + 1 ),
 				esc_html( $title ),
 				esc_html( $clicks )
@@ -248,7 +250,8 @@ if ( ! empty( $funnels ) && ! empty( $funnels['total_funnels'] ) ) {
 	echo esc_html( strtoupper( __( 'Funnel Performance', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 18 ) ) . "\n\n";
 
-	echo sprintf( '  ' . __( 'Active Funnels: %s', 'opti-behavior' ) . "\n\n", esc_html( $funnels['total_funnels'] ) );
+	/* translators: %s: number of active funnels */
+	printf( '  ' . esc_html__( 'Active Funnels: %s', 'opti-behavior' ) . "\n\n", esc_html( $funnels['total_funnels'] ) );
 
 	if ( ! empty( $funnels['funnels'] ) ) {
 		// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
@@ -259,10 +262,10 @@ if ( ! empty( $funnels ) && ! empty( $funnels['total_funnels'] ) ) {
 			$rate    = number_format( $funnel['conversion_rate'] ?? 0, 1 ) . '%';
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
-			echo sprintf( "  %d. %-35s\n", intval( $i + 1 ), esc_html( $name ) );
-			echo sprintf(
+			printf( "  %d. %-35s\n", intval( $i + 1 ), esc_html( $name ) );
+			printf(
 				/* translators: 1: funnel entries, 2: funnel completions, 3: conversion rate */
-				'     ' . __( 'Entries: %1$s | Completions: %2$s | Conv: %3$s', 'opti-behavior' ) . "\n\n",
+				'     ' . esc_html__( 'Entries: %1$s | Completions: %2$s | Conv: %3$s', 'opti-behavior' ) . "\n\n",
 				esc_html( $entries ),
 				esc_html( $compl ),
 				esc_html( $rate )
@@ -276,10 +279,14 @@ if ( $report['is_pro'] && ! empty( $recordings ) ) {
 	echo esc_html( strtoupper( __( 'Session Recordings (Pro)', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 24 ) ) . "\n\n";
 
-	echo sprintf( '  ' . __( 'Total Recordings: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $recordings['total'] ) ) );
-	echo sprintf( '  ' . __( 'Watched: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $recordings['watched'] ) ) );
-	echo sprintf( '  ' . __( 'Unwatched: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $recordings['unwatched'] ) ) );
-	echo sprintf( '  ' . __( 'Avg. Duration: %s', 'opti-behavior' ) . "\n", esc_html( $recordings['avg_duration_formatted'] ) );
+	/* translators: %s: total number of recordings */
+	printf( '  ' . esc_html__( 'Total Recordings: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $recordings['total'] ) ) );
+	/* translators: %s: number of watched recordings */
+	printf( '  ' . esc_html__( 'Watched: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $recordings['watched'] ) ) );
+	/* translators: %s: number of unwatched recordings */
+	printf( '  ' . esc_html__( 'Unwatched: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $recordings['unwatched'] ) ) );
+	/* translators: %s: average recording duration */
+	printf( '  ' . esc_html__( 'Avg. Duration: %s', 'opti-behavior' ) . "\n", esc_html( $recordings['avg_duration_formatted'] ) );
 	echo "\n";
 }
 
@@ -289,8 +296,10 @@ if ( $report['is_pro'] && ! empty( $errors ) ) {
 	echo esc_html( strtoupper( __( 'JavaScript Errors (Pro)', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 23 ) ) . "\n\n";
 
-	echo sprintf( '  ' . __( 'Total Errors: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $errors['total'] ) ) );
-	echo sprintf( '  ' . __( 'Unresolved: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $errors['unresolved'] ) ) );
+	/* translators: %s: total number of JavaScript errors */
+	printf( '  ' . esc_html__( 'Total Errors: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $errors['total'] ) ) );
+	/* translators: %s: number of unresolved errors */
+	printf( '  ' . esc_html__( 'Unresolved: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $errors['unresolved'] ) ) );
 	echo "\n";
 }
 
@@ -313,7 +322,7 @@ if ( $report['is_pro'] && ! empty( $performance ) ) {
 		if ( isset( $performance[ $key ] ) ) {
 			$value = $performance[ $key ] . $config['suffix'];
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-			echo sprintf( "  %-35s %s\n", esc_html( $config['label'] ), esc_html( $value ) );
+			printf( "  %-35s %s\n", esc_html( $config['label'] ), esc_html( $value ) );
 		}
 	}
 	echo "\n";
@@ -325,9 +334,12 @@ if ( $report['is_pro'] && ! empty( $friction ) ) {
 	echo esc_html( strtoupper( __( 'Friction Events (Pro)', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 21 ) ) . "\n\n";
 
-	echo sprintf( '  ' . __( 'Total Events: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $friction['total'] ) ) );
-	echo sprintf( '  ' . __( 'Rage Clicks: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $friction['rage_clicks'] ) ) );
-	echo sprintf( '  ' . __( 'Dead Clicks: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $friction['dead_clicks'] ) ) );
+	/* translators: %s: total number of friction events */
+	printf( '  ' . esc_html__( 'Total Events: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $friction['total'] ) ) );
+	/* translators: %s: number of rage clicks */
+	printf( '  ' . esc_html__( 'Rage Clicks: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $friction['rage_clicks'] ) ) );
+	/* translators: %s: number of dead clicks */
+	printf( '  ' . esc_html__( 'Dead Clicks: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $friction['dead_clicks'] ) ) );
 	echo "\n";
 }
 
@@ -337,9 +349,12 @@ if ( $report['is_pro'] && ! empty( $broken_links ) ) {
 	echo esc_html( strtoupper( __( 'Broken Links Report (Pro)', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 25 ) ) . "\n\n";
 
-	echo sprintf( '  ' . __( 'Total Found: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $broken_links['total'] ) ) );
-	echo sprintf( '  ' . __( 'Open: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $broken_links['open'] ) ) );
-	echo sprintf( '  ' . __( 'Fixed: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $broken_links['fixed'] ) ) );
+	/* translators: %s: total number of broken links found */
+	printf( '  ' . esc_html__( 'Total Found: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $broken_links['total'] ) ) );
+	/* translators: %s: number of open broken links */
+	printf( '  ' . esc_html__( 'Open: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $broken_links['open'] ) ) );
+	/* translators: %s: number of fixed broken links */
+	printf( '  ' . esc_html__( 'Fixed: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $broken_links['fixed'] ) ) );
 
 	if ( ! empty( $broken_links['top_links'] ) ) {
 		echo "\n  " . esc_html__( 'Top Broken Links:', 'opti-behavior' ) . "\n";
@@ -349,9 +364,9 @@ if ( $report['is_pro'] && ! empty( $broken_links ) ) {
 			$status = $link['http_status'];
 			$hits  = number_format( $link['occurrence_count'] );
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-			echo sprintf(
+			printf(
 				/* translators: 1: rank number, 2: broken URL, 3: HTTP status code, 4: occurrence count */
-				__( '    %1$d. %2$s (HTTP %3$s, %4$s hits)', 'opti-behavior' ) . "\n",
+				esc_html__( '    %1$d. %2$s (HTTP %3$s, %4$s hits)', 'opti-behavior' ) . "\n",
 				intval( $i + 1 ),
 				esc_html( $url ),
 				esc_html( $status ),
@@ -368,17 +383,22 @@ if ( $report['is_pro'] && ! empty( $user_journeys ) ) {
 	echo esc_html( strtoupper( __( 'User Journeys (Pro)', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 19 ) ) . "\n\n";
 
-	echo sprintf( '  ' . __( 'Sessions Analyzed: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $user_journeys['total_sessions'] ?? 0 ) ) );
-	echo sprintf( '  ' . __( 'Avg. Pages/Session: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $user_journeys['avg_path_length'] ?? 0, 1 ) ) );
+	/* translators: %s: number of sessions analyzed */
+	printf( '  ' . esc_html__( 'Sessions Analyzed: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $user_journeys['total_sessions'] ?? 0 ) ) );
+	/* translators: %s: average number of pages per session */
+	printf( '  ' . esc_html__( 'Avg. Pages/Session: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $user_journeys['avg_path_length'] ?? 0, 1 ) ) );
 
 	// Depth distribution
 	// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 	$depth = $user_journeys['depth'] ?? array();
 	if ( ! empty( $depth ) ) {
 		echo "\n  " . esc_html__( 'Session Depth:', 'opti-behavior' ) . "\n";
-		echo sprintf( '    ' . __( '1 Page: %s sessions', 'opti-behavior' ) . "\n", esc_html( number_format( $depth['1_page'] ?? 0 ) ) );
-		echo sprintf( '    ' . __( '2-3 Pages: %s sessions', 'opti-behavior' ) . "\n", esc_html( number_format( $depth['2_3_pages'] ?? 0 ) ) );
-		echo sprintf( '    ' . __( '4+ Pages: %s sessions', 'opti-behavior' ) . "\n", esc_html( number_format( $depth['4_plus_pages'] ?? 0 ) ) );
+		/* translators: %s: number of single-page sessions */
+		printf( '    ' . esc_html__( '1 Page: %s sessions', 'opti-behavior' ) . "\n", esc_html( number_format( $depth['1_page'] ?? 0 ) ) );
+		/* translators: %s: number of 2-3 page sessions */
+		printf( '    ' . esc_html__( '2-3 Pages: %s sessions', 'opti-behavior' ) . "\n", esc_html( number_format( $depth['2_3_pages'] ?? 0 ) ) );
+		/* translators: %s: number of 4+ page sessions */
+		printf( '    ' . esc_html__( '4+ Pages: %s sessions', 'opti-behavior' ) . "\n", esc_html( number_format( $depth['4_plus_pages'] ?? 0 ) ) );
 	}
 
 	// Top entry pages
@@ -389,9 +409,9 @@ if ( $report['is_pro'] && ! empty( $user_journeys ) ) {
 			$url      = mb_strimwidth( $page['url'] ?? '', 0, 40, '...' );
 			$sessions = number_format( $page['sessions'] ?? 0 );
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-			echo sprintf(
+			printf(
 				/* translators: 1: rank number, 2: page URL, 3: session count */
-				__( '    %1$d. %2$-40s %3$s sessions', 'opti-behavior' ) . "\n",
+				esc_html__( '    %1$d. %2$-40s %3$s sessions', 'opti-behavior' ) . "\n",
 				intval( $i + 1 ),
 				esc_html( $url ),
 				esc_html( $sessions )
@@ -408,9 +428,9 @@ if ( $report['is_pro'] && ! empty( $user_journeys ) ) {
 			$sessions  = number_format( $page['sessions'] ?? 0 );
 			$exit_rate = number_format( $page['exit_rate'] ?? 0, 1 ) . '%';
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-			echo sprintf(
+			printf(
 				/* translators: 1: rank number, 2: page URL, 3: session count, 4: exit rate percentage */
-				__( '    %1$d. %2$-35s %3$s sessions (%4$s exit)', 'opti-behavior' ) . "\n",
+				esc_html__( '    %1$d. %2$-35s %3$s sessions (%4$s exit)', 'opti-behavior' ) . "\n",
 				intval( $i + 1 ),
 				esc_html( $url ),
 				esc_html( $sessions ),
@@ -427,11 +447,16 @@ if ( $report['is_pro'] && ! empty( $form_analytics ) ) {
 	echo esc_html( strtoupper( __( 'Form Analytics (Pro)', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 20 ) ) . "\n\n";
 
-	echo sprintf( '  ' . __( 'Form Views: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $form_analytics['form_views'] ?? 0 ) ) );
-	echo sprintf( '  ' . __( 'Submissions: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $form_analytics['submissions'] ?? 0 ) ) );
-	echo sprintf( '  ' . __( 'Abandonments: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $form_analytics['abandonments'] ?? 0 ) ) );
-	echo sprintf( '  ' . __( 'Conversion Rate: %s%%', 'opti-behavior' ) . "\n", esc_html( number_format( $form_analytics['conversion_rate'] ?? 0, 1 ) ) );
-	echo sprintf( '  ' . __( 'Avg. Comp. Time: %s', 'opti-behavior' ) . "\n", esc_html( $form_analytics['avg_completion_time_formatted'] ?? '—' ) );
+	/* translators: %s: number of form views */
+	printf( '  ' . esc_html__( 'Form Views: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $form_analytics['form_views'] ?? 0 ) ) );
+	/* translators: %s: number of form submissions */
+	printf( '  ' . esc_html__( 'Submissions: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $form_analytics['submissions'] ?? 0 ) ) );
+	/* translators: %s: number of form abandonments */
+	printf( '  ' . esc_html__( 'Abandonments: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $form_analytics['abandonments'] ?? 0 ) ) );
+	/* translators: %s: form conversion rate percentage */
+	printf( '  ' . esc_html__( 'Conversion Rate: %s%%', 'opti-behavior' ) . "\n", esc_html( number_format( $form_analytics['conversion_rate'] ?? 0, 1 ) ) );
+	/* translators: %s: average form completion time */
+	printf( '  ' . esc_html__( 'Avg. Comp. Time: %s', 'opti-behavior' ) . "\n", esc_html( $form_analytics['avg_completion_time_formatted'] ?? '—' ) );
 
 	if ( ! empty( $form_analytics['top_forms'] ) ) {
 		echo "\n  " . esc_html__( 'Top Forms by Conversion:', 'opti-behavior' ) . "\n";
@@ -441,9 +466,9 @@ if ( $report['is_pro'] && ! empty( $form_analytics ) ) {
 			$views      = number_format( $form['form_views'] ?? 0 );
 			$conv_rate  = number_format( $form['conversion_rate'] ?? 0, 1 ) . '%';
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-			echo sprintf(
+			printf(
 				/* translators: 1: rank number, 2: form name, 3: view count, 4: conversion rate */
-				__( '    %1$d. %2$-30s %3$s views, %4$s conv.', 'opti-behavior' ) . "\n",
+				esc_html__( '    %1$d. %2$-30s %3$s views, %4$s conv.', 'opti-behavior' ) . "\n",
 				intval( $i + 1 ),
 				esc_html( $name ),
 				esc_html( $views ),

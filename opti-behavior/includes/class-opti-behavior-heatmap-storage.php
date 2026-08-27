@@ -1366,7 +1366,7 @@ class Opti_Behavior_Heatmap_Storage {
 
 		// @rename is atomic on the same filesystem; suppress the warning and
 		// fall back to a copy+delete only if it fails.
-		if ( @rename( $src, $dest ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		if ( @rename( $src, $dest ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename -- Atomic same-filesystem move; WP_Filesystem::move is non-atomic and unavailable on cron. Falls back to copy+delete below on failure.
 			return true;
 		}
 
@@ -1489,7 +1489,7 @@ class Opti_Behavior_Heatmap_Storage {
 		}
 
 		// @rename is atomic on the same filesystem; suppress the warning.
-		if ( @rename( $file_path, $dest ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		if ( @rename( $file_path, $dest ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename -- Atomic same-filesystem move; WP_Filesystem::move is non-atomic and unavailable on cron. Falls back to copy+delete below on failure.
 			return true;
 		}
 
@@ -2880,6 +2880,17 @@ class Opti_Behavior_Heatmap_Storage {
 
 			$data = json_decode( $content, true );
 			if ( $data && isset( $data['data'] ) ) {
+				// Thread the session id (parsed from the filename) into the file
+				// data so session-aware aggregators (scroll reach) can dedup the
+				// many files ONE visitor session emits — periodic flushes plus
+				// multiple pageviews across aggregated page_ids. Without this the
+				// scroll-reach denominator counts raw files, not distinct sessions.
+				if ( empty( $data['session_id'] ) ) {
+					$meta = $this->parse_filename_metadata( basename( $filepath ) );
+					if ( $meta && ! empty( $meta['session_id'] ) ) {
+						$data['session_id'] = $meta['session_id'];
+					}
+				}
 				$results[] = $data;
 			}
 		}
@@ -2888,13 +2899,59 @@ class Opti_Behavior_Heatmap_Storage {
 	}
 
 	/**
+	 * Compute the reference (CSS) width for a heatmap render scope.
+	 *
+	 * The desktop scope is special: unknown/empty device capture files normalize
+	 * into the desktop bucket (see normalize_device()), and their often-narrow
+	 * phone/tablet widths drag the arithmetic mean below a real desktop
+	 * breakpoint, so the preview iframe lays the page out in a MOBILE layout.
+	 * For the desktop scope we therefore (a) drop clearly non-desktop widths
+	 * (< 1024px) from the average, and (b) floor the result at 1280px — mirroring
+	 * the existing reference_height floor. Mobile / tablet / all scopes keep their
+	 * real measured widths untouched (never floored to 1280).
+	 *
+	 * @param array  $viewport_widths Collected viewport.width values.
+	 * @param string $device          Device filter scope ('desktop','mobile','tablet','all','').
+	 * @return int Reference width in CSS px.
+	 */
+	private function compute_reference_width( $viewport_widths, $device = '' ) {
+		$is_desktop = ( 'desktop' === strtolower( (string) $device ) );
+
+		if ( $is_desktop && ! empty( $viewport_widths ) ) {
+			// Exclude clearly non-desktop captures (unknown-device pollution)
+			// from the desktop width average so they can't drag it down.
+			$desktop_widths = array_filter(
+				$viewport_widths,
+				static function ( $w ) {
+					return (int) $w >= 1024;
+				}
+			);
+			if ( ! empty( $desktop_widths ) ) {
+				$viewport_widths = $desktop_widths;
+			}
+		}
+
+		$reference_width = ! empty( $viewport_widths )
+			? (int) round( array_sum( $viewport_widths ) / count( $viewport_widths ) )
+			: 1920;
+
+		if ( $is_desktop ) {
+			// Desktop must never render below a real desktop breakpoint.
+			$reference_width = max( $reference_width, 1280 );
+		}
+
+		return $reference_width;
+	}
+
+	/**
 	 * Aggregate heatmap data from multiple files
 	 *
 	 * @param array  $files_data Array of file data.
 	 * @param string $type       Data type (clicks, moves, scrolls).
+	 * @param string $device     Device filter scope (desktop floors width at 1280).
 	 * @return array Aggregated data.
 	 */
-	public function aggregate_heatmap_data( $files_data, $type = 'clicks' ) {
+	public function aggregate_heatmap_data( $files_data, $type = 'clicks', $device = '' ) {
 		if ( empty( $files_data ) ) {
 			return array(
 				'coordinates'     => array(),
@@ -2964,8 +3021,9 @@ class Opti_Behavior_Heatmap_Storage {
 			}
 		}
 
-		// Calculate reference width (average of viewport widths)
-		$reference_width = ! empty( $viewport_widths ) ? round( array_sum( $viewport_widths ) / count( $viewport_widths ) ) : 1920;
+		// Calculate reference width (average of viewport widths). Desktop scope
+		// drops non-desktop pollution and floors at a real desktop breakpoint.
+		$reference_width = $this->compute_reference_width( $viewport_widths, $device );
 
 		// Calculate reference height for coordinate scaling:
 		// Priority 1: Use page heights from event data (vh field contains scrollHeight)
@@ -3032,10 +3090,11 @@ class Opti_Behavior_Heatmap_Storage {
 	 * coordinates[].value is the final percentage (0-100). No grid sampling and
 	 * no coordinate normalization are applied (either would corrupt monotonicity).
 	 *
-	 * @param array $files_data Array of session file data (each = one session).
+	 * @param array  $files_data Array of session file data (each = one session).
+	 * @param string $device     Device filter scope (desktop floors width at 1280).
 	 * @return array Aggregated reach envelope.
 	 */
-	public function aggregate_scroll_reach_data( $files_data ) {
+	public function aggregate_scroll_reach_data( $files_data, $device = '' ) {
 		if ( empty( $files_data ) ) {
 			return array(
 				'coordinates'      => array(),
@@ -3052,11 +3111,17 @@ class Opti_Behavior_Heatmap_Storage {
 			);
 		}
 
-		$session_max_y    = array();
-		$viewport_widths  = array();
-		$viewport_heights = array();
-		$page_heights     = array();
-		$max_y_coord      = 0;
+		// Map of session_id => deepest reached Y for that session. Keyed dedup so
+		// the reach denominator counts DISTINCT sessions, not raw files: one
+		// visitor session emits many scroll files (periodic flushes + multiple
+		// pageviews across aggregated page_ids), which would otherwise inflate the
+		// "N views" tooltip far past the header Views KPI (distinct session_id).
+		$session_max_y_map = array();
+		$viewport_widths   = array();
+		$viewport_heights  = array();
+		$page_heights      = array();
+		$max_y_coord       = 0;
+		$fallback_index    = 0;
 
 		foreach ( $files_data as $file_data ) {
 			// Collect viewport dimensions (viewport.width/height from metadata).
@@ -3067,7 +3132,7 @@ class Opti_Behavior_Heatmap_Storage {
 				$viewport_heights[] = $file_data['viewport']['height'];
 			}
 
-			// Reduce this session to its deepest reached Y. Default 0 = saw top only.
+			// Reduce this file to its deepest reached Y. Default 0 = saw top only.
 			$session_y = 0;
 			if ( isset( $file_data['data'] ) && is_array( $file_data['data'] ) ) {
 				foreach ( $file_data['data'] as $coord ) {
@@ -3085,15 +3150,26 @@ class Opti_Behavior_Heatmap_Storage {
 			if ( $session_y > $max_y_coord ) {
 				$max_y_coord = $session_y;
 			}
-			$session_max_y[] = $session_y;
+
+			// Group by session_id, keeping the DEEPEST reach across that session's
+			// files. Files with no parseable session_id fall back to a unique key
+			// so each still counts once (legacy / untagged files).
+			$session_key = ( isset( $file_data['session_id'] ) && '' !== $file_data['session_id'] )
+				? (string) $file_data['session_id']
+				: '__opti_no_sid_' . ( $fallback_index++ );
+
+			if ( ! isset( $session_max_y_map[ $session_key ] ) || $session_y > $session_max_y_map[ $session_key ] ) {
+				$session_max_y_map[ $session_key ] = $session_y;
+			}
 		}
 
+		// Collapse to one max-reach entry per distinct session.
+		$session_max_y  = array_values( $session_max_y_map );
 		$total_sessions = count( $session_max_y );
 
-		// Reference width (average of viewport widths).
-		$reference_width = ! empty( $viewport_widths )
-			? round( array_sum( $viewport_widths ) / count( $viewport_widths ) )
-			: 1920;
+		// Reference width (average of viewport widths). Desktop scope drops
+		// non-desktop pollution and floors at a real desktop breakpoint.
+		$reference_width = $this->compute_reference_width( $viewport_widths, $device );
 
 		// Reference height ladder (mirrors aggregate_heatmap_data):
 		// 1) page heights (vh = scrollHeight), 2) max Y + 20%, 3) viewport heights, 4) default.
@@ -3234,6 +3310,112 @@ class Opti_Behavior_Heatmap_Storage {
 		}
 
 		return $out;
+	}
+
+	/**
+	 * Count the DEDUPED click points of one clicks/*.json file — the same click
+	 * universe the renderer/tooltip shows — and optionally tally them by element
+	 * XPath anchor.
+	 *
+	 * The header "Clicks" KPI must count the same points the heatmap draws. The
+	 * render path (aggregate_heatmap_data) drops Pro session-recording (rrweb)
+	 * "twin" copies of anchored tracker clicks via dedupe_recording_click_twins()
+	 * BEFORE counting, but the KPI historically trusted the filename `count` token
+	 * (raw body, twins included) and so double-counted when Pro recording was
+	 * active. Counting the file body AFTER the exact same dedupe makes the KPI
+	 * equal the rendered volume by construction, with no data migration.
+	 *
+	 * Free-only / twin-free files are unaffected: dedupe_recording_click_twins()
+	 * only removes anchor-free coords that pair with an anchored click, so a body
+	 * with no rrweb twins passes through unchanged (result == count($data), i.e.
+	 * the old filename token).
+	 *
+	 * Returns null when the body cannot be read/decoded or carries no `data`
+	 * array, so callers can fall back to the legacy filename `count` token and
+	 * preserve today's behavior on missing/corrupt files. A present-but-empty
+	 * `data` array legitimately yields 0.
+	 *
+	 * Results are memoized per request keyed by path + mtime, so the second scan
+	 * the Top Clicked Elements panel triggers reuses the first read.
+	 *
+	 * @param string     $file  Absolute path to a clicks/*.json file.
+	 * @param array|null $tally Opt-in by-ref accumulator: xp string => click
+	 *                          count (key '' = unanchored residual). Only touched
+	 *                          when an array is passed.
+	 * @return int|null Deduped click-point count, or null if the body is
+	 *                  unreadable / has no `data` array.
+	 */
+	public function count_click_file_deduped( $file, &$tally = null ) {
+		static $cache = array();
+
+		$mtime = @filemtime( $file );
+		$ckey  = $file . '|' . ( false === $mtime ? '0' : $mtime );
+
+		if ( ! array_key_exists( $ckey, $cache ) ) {
+			$cache[ $ckey ] = $this->compute_click_file_deduped( $file );
+		}
+		$result = $cache[ $ckey ];
+
+		if ( null === $result ) {
+			return null;
+		}
+
+		if ( is_array( $tally ) ) {
+			foreach ( $result['tally'] as $xp => $n ) {
+				if ( ! isset( $tally[ $xp ] ) ) {
+					$tally[ $xp ] = 0;
+				}
+				$tally[ $xp ] += $n;
+			}
+		}
+
+		return $result['count'];
+	}
+
+	/**
+	 * Read + dedupe one clicks file body, returning its deduped point count and a
+	 * per-XPath tally. Split from count_click_file_deduped() so the result can be
+	 * memoized once and reused for both the count and any element tally.
+	 *
+	 * @param string $file Absolute path to a clicks/*.json file.
+	 * @return array|null { count:int, tally:array<string,int> } or null when the
+	 *                    body is unreadable / carries no `data` array.
+	 */
+	private function compute_click_file_deduped( $file ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Reading a local heatmap data file, not a remote URL.
+		$raw = @file_get_contents( $file );
+		if ( false === $raw || '' === $raw ) {
+			return null;
+		}
+
+		$decoded = json_decode( $raw, true );
+		// A missing `data` key means the body cannot be trusted for counting —
+		// signal a fallback to the filename token. A present-but-empty array is a
+		// valid zero-click file and must count as 0, not fall back.
+		if ( ! is_array( $decoded ) || ! isset( $decoded['data'] ) || ! is_array( $decoded['data'] ) ) {
+			return null;
+		}
+
+		$coords = $this->dedupe_recording_click_twins( $decoded['data'] );
+
+		$count = 0;
+		$tally = array();
+		foreach ( $coords as $point ) {
+			if ( ! is_array( $point ) ) {
+				continue;
+			}
+			++$count;
+			$xp = isset( $point['xp'] ) ? (string) $point['xp'] : '';
+			if ( ! isset( $tally[ $xp ] ) ) {
+				$tally[ $xp ] = 0;
+			}
+			++$tally[ $xp ];
+		}
+
+		return array(
+			'count' => $count,
+			'tally' => $tally,
+		);
 	}
 
 	/**

@@ -1896,17 +1896,83 @@ class Opti_Behavior_Heatmap_Core {
 	}
 
 	/**
+	 * Complete list of every WP-Cron hook the free plugin schedules.
+	 *
+	 * Single source of truth for deactivation cleanup (and any other code
+	 * that needs to reason about the plugin's cron footprint). Hook names
+	 * are intentionally string literals — deactivation must never fatal on
+	 * a class that happens not to be loaded; the comment next to each entry
+	 * names the constant that owns the value where one exists.
+	 *
+	 * Keep this list in sync with every wp_schedule_event() /
+	 * wp_schedule_single_event() call in the plugin.
+	 *
+	 * @since 1.9.x
+	 * @return string[] Cron hook names (recurring and one-off).
+	 */
+	public static function get_all_cron_hooks() {
+		$hooks = array(
+			// --- Recurring events -------------------------------------------------
+			'opti_behavior_heatmap_cron_daily',              // Daily heatmap maintenance (database).
+			'opti_behavior_aggregate_daily_stats',           // Daily stats aggregation (database).
+			'opti_behavior_send_scheduled_reports',          // Opti_Behavior_Basename_Migration::REPORT_CRON_HOOK (every 15 min reports worker).
+			'opti_behavior_scheduled_smart_cleanup',         // Scheduled smart cleanup (daily/weekly).
+			'opti_behavior_heatmap_auto_repair',             // Opti_Behavior_Heatmap_Dashboard::HEATMAP_AUTO_REPAIR_CRON_HOOK (daily + one-off continuations).
+			'opti_behavior_smart_insights_generate_daily',   // Opti_Behavior_Smart_Insights_Generator::CRON_HOOK.
+			'opti_behavior_heatmap_sync_reconcile',          // Opti_Behavior_Heatmap_Dashboard::HEATMAP_SYNC_CRON_HOOK (every 15 min).
+			'opti_behavior_heatmap_reconcile',               // Opti_Behavior_Heatmap_Dashboard::HEATMAP_RECONCILE_CRON_HOOK (hourly + one-off continuations).
+			'opti_behavior_heatmap_registry_backfill',       // Opti_Behavior_Heatmap_Dashboard::HEATMAP_BACKFILL_CRON_HOOK (daily + one-off continuations).
+			'opti_behavior_heatmap_orphan_purge_daily',      // Opti_Behavior_Heatmap_Dashboard::HEATMAP_ORPHAN_PURGE_CRON_HOOK (daily + one-off continuations).
+			'opti_behavior_finalize_stale_sessions',         // Opti_Behavior_Heatmap_Database::FINALIZE_STALE_CRON_HOOK (hourly + one-off continuations).
+			'opti_behavior_ab_aggregate_daily',              // A/B Testing daily aggregation.
+			'opti_behavior_ab_auto_winner_check',            // A/B Testing hourly auto-winner check.
+			'opti_behavior_ab_cleanup',                      // A/B Testing daily cleanup.
+			'opti_behavior_daily_heartbeat',                 // Free tracker daily heartbeat.
+			// --- One-off events ---------------------------------------------------
+			'opti_behavior_debug_auto_disable',              // Opti_Behavior_Heatmap_Debug_Manager::AUTO_DISABLE_CRON_HOOK.
+			'opti_behavior_smart_insights_scheduler_batch',  // Opti_Behavior_Smart_Insights_Scheduler::BATCH_HOOK.
+			'opti_behavior_heatmap_agg_sync',                // Aggregate-index sync worker.
+			'opti_behavior_heatmap_daily_sync',              // Daily-index sync worker.
+			'opti_behavior_heatmap_stats_warm',              // Opti_Behavior_Heatmap_Dashboard::HEATMAP_STATS_WARM_CRON_HOOK (scheduled WITH args).
+			'opti_behavior_heatmap_registry_rebuild_files',  // Opti_Behavior_Heatmap_Dashboard::HEATMAP_REBUILD_CRON_HOOK.
+			'opti_behavior_heatmap_orphan_report_scan',      // Opti_Behavior_Heatmap_Dashboard::HEATMAP_ORPHAN_REPORT_CRON_HOOK.
+			'opti_behavior_canonlist_refresh',               // Opti_Behavior_Heatmap_Dashboard::CANONLIST_REFRESH_CRON_HOOK (scheduled WITH args).
+			'opti_behavior_heatmap_canon_sync',              // Opti_Behavior_Heatmap_Dashboard::CANONICAL_SESSIONS_SYNC_CRON_HOOK.
+			'opti_behavior_reclassify_spam_batch',           // Opti_Behavior_Heatmap_Database::RECLASSIFY_SPAM_CRON_HOOK.
+			'opti_behavior_heavy_migrations',                // Opti_Behavior_Heatmap_Database::HEAVY_MIGRATIONS_CRON_HOOK.
+			'opti_behavior_dimension_backfill',              // Opti_Behavior_Dimension_Aggregates::BACKFILL_HOOK.
+			'opti_behavior_deep_integrity_check',            // Opti_Behavior_Heatmap_Data_Protection::DEEP_CHECK_CRON_HOOK.
+		);
+
+		/**
+		 * Filter the list of cron hooks cleared on plugin deactivation.
+		 *
+		 * Allows the Pro plugin or third parties to append their own hooks so
+		 * they are unscheduled together with the free plugin's events.
+		 *
+		 * @since 1.9.x
+		 * @param string[] $hooks Cron hook names.
+		 */
+		return apply_filters( 'opti_behavior_cron_hooks', $hooks );
+	}
+
+	/**
 	 * Static deactivation hook
+	 *
+	 * Clears every WP-Cron event the plugin ever schedules (recurring and
+	 * one-off). wp_unschedule_hook() (WP 4.9+) removes ALL events for a hook
+	 * regardless of args — required for args-keyed hooks such as
+	 * `opti_behavior_heatmap_stats_warm` and `opti_behavior_canonlist_refresh`,
+	 * which wp_clear_scheduled_hook() without args would miss.
 	 */
 	public static function deactivation() {
-		wp_clear_scheduled_hook( 'opti_behavior_heatmap_cron_daily' );
-		wp_clear_scheduled_hook( 'opti_behavior_aggregate_daily_stats' );
-		wp_clear_scheduled_hook( 'opti_behavior_send_scheduled_reports' );
-		wp_clear_scheduled_hook( 'opti_behavior_scheduled_smart_cleanup' );
-		wp_clear_scheduled_hook( 'opti_behavior_heatmap_auto_repair' );
-		wp_clear_scheduled_hook( 'opti_behavior_debug_auto_disable' );
-		wp_clear_scheduled_hook( Opti_Behavior_Smart_Insights_Generator::CRON_HOOK );
-		wp_clear_scheduled_hook( Opti_Behavior_Smart_Insights_Scheduler::BATCH_HOOK );
+		foreach ( self::get_all_cron_hooks() as $hook ) {
+			if ( function_exists( 'wp_unschedule_hook' ) ) {
+				wp_unschedule_hook( $hook );
+			} else {
+				wp_clear_scheduled_hook( $hook );
+			}
+		}
 	}
 
 	/**

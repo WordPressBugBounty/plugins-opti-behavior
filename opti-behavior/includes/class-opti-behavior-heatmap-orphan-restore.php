@@ -390,7 +390,7 @@ class Opti_Behavior_Heatmap_Orphan_Restore {
 
 		if ( ! is_dir( $dest ) && ! is_link( $dest ) ) {
 			// Fast path: no live dir — atomic whole-dir move back.
-			if ( @rename( $src, $dest ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Atomic same-filesystem move; failure falls through to 'failed'.
+			if ( @rename( $src, $dest ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename -- Atomic same-filesystem move required for crash-safe restore; WP_Filesystem::move is non-atomic and unavailable on cron. Failure falls through to 'failed'.
 				$outcome['status'] = 'restored';
 			}
 			return $outcome;
@@ -424,7 +424,7 @@ class Opti_Behavior_Heatmap_Orphan_Restore {
 					continue;
 				}
 
-				if ( @rename( $file, $target ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Atomic same-filesystem move; failure counted as skipped.
+				if ( @rename( $file, $target ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename -- Atomic same-filesystem move required for crash-safe restore; WP_Filesystem::move is non-atomic and unavailable on cron. Failure counted as skipped.
 					++$outcome['files_restored'];
 				} else {
 					++$outcome['files_skipped'];
@@ -432,11 +432,11 @@ class Opti_Behavior_Heatmap_Orphan_Restore {
 			}
 
 			// Drop the archive folder only when fully emptied.
-			@rmdir( $src_folder ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Fails harmlessly when leftovers remain.
+			@rmdir( $src_folder ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- Plugin-owned archive folder; fails harmlessly when leftovers remain and WP_Filesystem is not guaranteed on cron.
 		}
 
 		// Drop the archive dir only when fully emptied (never deletes files).
-		@rmdir( $src ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Fails harmlessly when leftovers remain.
+		@rmdir( $src ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- Plugin-owned archive dir; fails harmlessly when leftovers remain and WP_Filesystem is not guaranteed on cron.
 
 		$outcome['status'] = 'merged';
 		return $outcome;

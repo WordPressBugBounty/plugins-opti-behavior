@@ -324,10 +324,14 @@ window.optiBehaviorBrowserIconSVG = window.optiBehaviorBrowserIconSVG || functio
 				return span;
 			}
 
-			function enhanceIconSelect(selectId, kind) {
+			function enhanceIconSelect(selectId, kind, opts) {
 				const select = document.getElementById(selectId);
 				if (!select || select.dataset.obIconized === '1') return;
 				select.dataset.obIconized = '1';
+				// Opt-in live keyword search: ONLY dropdowns that pass
+				// { searchable: true } (or carry data-searchable="1") get a search
+				// box; browser/country/device/os stay unchanged.
+				const searchable = !!(opts && opts.searchable) || select.getAttribute('data-searchable') === '1';
 				// Multi-select: several values of the same field combine with OR
 				// (e.g. Chrome + Firefox). The hidden native select carries the
 				// state via option.selected; Apply reads selectedOptions.
@@ -351,6 +355,39 @@ window.optiBehaviorBrowserIconSVG = window.optiBehaviorBrowserIconSVG || functio
 
 				wrap.appendChild(btn);
 				wrap.appendChild(menu);
+
+				// When searchable, a text input is pinned at the top of the menu and
+				// the option rows live in a separate scrolling list below it, so the
+				// input keeps focus/value across menu rebuilds. Non-searchable menus
+				// render option rows straight into the menu (listEl === menu).
+				let listEl = menu;
+				let searchInput = null;
+				let searchQuery = '';
+				if (searchable) {
+					const searchWrap = document.createElement('div');
+					searchWrap.className = 'ob-icon-select-search';
+					searchInput = document.createElement('input');
+					searchInput.type = 'text';
+					searchInput.className = 'ob-icon-select-search-input';
+					searchInput.setAttribute('placeholder', 'Search pages\u2026');
+					searchInput.setAttribute('aria-label', 'Search pages');
+					searchWrap.appendChild(searchInput);
+					menu.appendChild(searchWrap);
+					listEl = document.createElement('div');
+					listEl.className = 'ob-icon-select-list';
+					menu.appendChild(listEl);
+					searchInput.addEventListener('input', function() {
+						searchQuery = searchInput.value;
+						buildMenu();
+					});
+					// Keep clicks/keys inside the field from bubbling to the
+					// menu-toggle / document handlers (Escape still closes).
+					searchInput.addEventListener('click', function(e) { e.stopPropagation(); });
+					searchInput.addEventListener('keydown', function(e) {
+						if (e.key === 'Escape') { closeMenu(); return; }
+						e.stopPropagation();
+					});
+				}
 
 				function selectedValueOptions() {
 					return Array.prototype.filter.call(select.options, function(o) {
@@ -398,9 +435,52 @@ window.optiBehaviorBrowserIconSVG = window.optiBehaviorBrowserIconSVG || functio
 				// Menu is rebuilt on every open so options populated asynchronously
 				// (loadFilterOptions) are always reflected without extra wiring.
 				function buildMenu() {
-					menu.innerHTML = '';
+					listEl.innerHTML = '';
 					const anyPicked = selectedValueOptions().length > 0;
-					Array.prototype.forEach.call(select.options, function(opt) {
+					const q = searchable ? String(searchQuery || '').trim().toLowerCase() : '';
+					// Filter the enumerated options by case-insensitive substring
+					// (name or raw value). The "All ..." placeholder always stays.
+					const visible = Array.prototype.filter.call(select.options, function(opt) {
+						if (!q || opt.value === '') return true;
+						const parsed = splitCountSuffix(opt.textContent);
+						return parsed.name.toLowerCase().indexOf(q) !== -1 || String(opt.value).toLowerCase().indexOf(q) !== -1;
+					});
+					// Synthetic "contains" row: injects the raw keyword as a selected
+					// value so the server-side contains-LIKE matches EVERY url with the
+					// word, even ones missing from the capped enumerated list.
+					if (searchable && q !== '') {
+						const kw = String(searchQuery).trim();
+						const matchN = visible.filter(function(o) { return o.value !== ''; }).length;
+						const synth = document.createElement('button');
+						synth.type = 'button';
+						synth.className = 'ob-icon-select-option ob-icon-select-contains';
+						synth.setAttribute('role', 'option');
+						const synthLabel = document.createElement('span');
+						synthLabel.className = 'ob-icon-select-label';
+						synthLabel.textContent = 'Match pages containing "' + kw + '"';
+						synthLabel.title = synthLabel.textContent;
+						synth.appendChild(synthLabel);
+						const synthCnt = document.createElement('span');
+						synthCnt.className = 'ob-suggest-count';
+						synthCnt.textContent = '(' + matchN + ')';
+						synth.appendChild(synthCnt);
+						synth.addEventListener('click', function(e) {
+							e.stopPropagation();
+							let existing = null;
+							Array.prototype.forEach.call(select.options, function(o) { if (o.value === kw) existing = o; });
+							if (!existing) {
+								existing = document.createElement('option');
+								existing.value = kw;
+								existing.textContent = kw;
+								select.appendChild(existing);
+							}
+							existing.selected = true;
+							syncButton();
+							buildMenu();
+						});
+						listEl.appendChild(synth);
+					}
+					visible.forEach(function(opt) {
 						const item = document.createElement('button');
 						item.type = 'button';
 						const isSelected = opt.value === '' ? !anyPicked : opt.selected;
@@ -441,7 +521,7 @@ window.optiBehaviorBrowserIconSVG = window.optiBehaviorBrowserIconSVG || functio
 							syncButton();
 							buildMenu();
 						});
-						menu.appendChild(item);
+						listEl.appendChild(item);
 					});
 				}
 
@@ -449,6 +529,7 @@ window.optiBehaviorBrowserIconSVG = window.optiBehaviorBrowserIconSVG || functio
 					buildMenu();
 					menu.style.display = '';
 					btn.setAttribute('aria-expanded', 'true');
+					if (searchInput) { searchInput.focus(); }
 				}
 
 				function closeMenu() {

@@ -32,38 +32,74 @@
     }
 
     // -------------------------------------------------------------------------
-    // Nonce refresh — one refresh per page load to handle cached-page expiry
+    // Nonce refresh — ONE network refresh per page load to heal cached-page
+    // nonce expiry. A full-page-cache TTL can outlive the WordPress nonce
+    // lifetime, so cached HTML ships a nonce the ingest endpoints reject with
+    // HTTP 403. On that 403 the tracker refreshes the nonce and RE-SENDS its
+    // own payload (page-view / click events), so no visit is dropped.
+    //
+    // This is a small state machine, NOT a single boolean latch. The old latch
+    // (`_nonceRefreshed = true` set at refresh start) caused a race: any send
+    // that 403'd WHILE the refresh was in flight saw the latch already set and
+    // silently dropped its payload instead of re-sending it. Here the network
+    // refresh still runs at most once, but EVERY caller that 403s — before,
+    // during, or after the refresh — registers a callback that fires once the
+    // fresh nonce is available, so each caller re-sends/re-queues its own
+    // payload. A failed refresh notifies waiters with ok=false so they give up
+    // (bounded — no retry loop).
     // -------------------------------------------------------------------------
-    var _nonceRefreshed = false;
+    var _nonceRefreshStarted = false; // network refresh launched (at most once)
+    var _nonceRefreshDone = false;    // refresh settled (success OR failure)
+    var _nonceRefreshOk = false;      // refresh settled successfully
+    var _nonceWaiters = [];           // callbacks awaiting the fresh nonce
 
     /**
-     * Request fresh nonces from server, update the tracker config, and re-queue
-     * any events that failed due to the stale nonce.
+     * Run the server nonce refresh at most once per page load and notify every
+     * caller when the fresh nonce is ready.
      *
-     * @param {Object}   trackerConfig   The HeatmapTracker instance's config object.
-     * @param {Array}    eventsToRequeue Events to put back into the tracker's queue.
-     * @param {Object}   trackerInstance The HeatmapTracker instance.
+     * The callback is invoked exactly once with a boolean `ok` (true when a
+     * fresh nonce was obtained and written to trackerConfig.nonce):
+     *   - immediately, if a refresh already settled this page load;
+     *   - on completion, if a refresh is currently in flight;
+     *   - after launching a new refresh, otherwise.
+     * Callers perform their own re-send / re-queue inside the callback, so a
+     * 403 that lands during an in-flight refresh is never dropped.
+     *
+     * @param {Object}   trackerConfig The HeatmapTracker instance's config object.
+     * @param {Function} cb            Called once with (ok) when the nonce is fresh.
      */
-    function refreshNonceAndRequeue( trackerConfig, eventsToRequeue, trackerInstance ) {
-        if ( _nonceRefreshed ) { return; }
-        _nonceRefreshed = true;
+    function ensureFreshNonce( trackerConfig, cb ) {
+        if ( _nonceRefreshDone ) {
+            if ( cb ) { cb( _nonceRefreshOk ); }
+            return;
+        }
+        if ( cb ) { _nonceWaiters.push( cb ); }
+        if ( _nonceRefreshStarted ) { return; } // refresh already in flight
+        _nonceRefreshStarted = true;
+
+        var settle = function( ok ) {
+            _nonceRefreshOk = ok;
+            _nonceRefreshDone = true;
+            var waiters = _nonceWaiters;
+            _nonceWaiters = [];
+            for ( var i = 0; i < waiters.length; i++ ) {
+                try { waiters[ i ]( ok ); } catch ( e ) {}
+            }
+        };
 
         var xhr = new XMLHttpRequest();
         xhr.open( 'POST', trackerConfig.ajax_url );
         xhr.setRequestHeader( 'Content-Type', 'application/x-www-form-urlencoded' );
         xhr.onload = function() {
+            var ok = false;
             if ( xhr.status === 200 ) {
                 try {
                     var resp = JSON.parse( xhr.responseText );
                     if ( resp.success && resp.data && resp.data.nonce_heatmap ) {
                         trackerConfig.nonce = resp.data.nonce_heatmap;
-                        // Re-add the unsent events to the front of the queue
-                        // so the next periodic timer interval re-sends them.
-                        if ( eventsToRequeue && eventsToRequeue.length > 0 ) {
-                            Array.prototype.unshift.apply( trackerInstance.eventQueue, eventsToRequeue );
-                        }
+                        ok = true;
                         if ( window.OptiBehaviorDebug ) {
-                            window.OptiBehaviorDebug.debug( 'Nonce refreshed; re-queued ' + ( eventsToRequeue ? eventsToRequeue.length : 0 ) + ' events', 'heatmap-simple' );
+                            window.OptiBehaviorDebug.debug( 'Nonce refreshed on cached page', 'heatmap-simple' );
                         }
                     }
                 } catch ( e ) {
@@ -72,7 +108,9 @@
                     }
                 }
             }
+            settle( ok );
         };
+        xhr.onerror = function() { settle( false ); };
         xhr.send( 'action=opti_behavior_refresh_nonces' );
     }
 
@@ -1786,11 +1824,26 @@
             keepalive: isUnload
         }).then(function(response) {
             if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('Server response status:', 'heatmap-simple', response.status);
-            // Handle nonce expiry on cached pages: refresh nonce and re-queue events
-            if ( response.status === 403 && !_nonceRefreshed ) {
+            // Handle nonce expiry on cached pages: refresh nonce and re-queue
+            // events. Re-queue runs inside the ensureFreshNonce callback so a
+            // click batch that 403s WHILE a page-view refresh is already in
+            // flight is preserved (not dropped) — it is put back on the next
+            // fresh nonce and re-sent by the next periodic timer interval.
+            if ( response.status === 403 ) {
                 if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug( 'Nonce expired (403), refreshing nonce and re-queuing events', 'heatmap-simple' );
-                refreshNonceAndRequeue( this.config, eventsToSend, this );
-                return null; // Skip JSON parsing
+                var _selfReq = this;
+                ensureFreshNonce( this.config, function( ok ) {
+                    if ( ok && eventsToSend && eventsToSend.length > 0 ) {
+                        // Re-add the unsent events to the front of the queue so
+                        // the next periodic timer interval re-sends them with
+                        // the fresh nonce.
+                        Array.prototype.unshift.apply( _selfReq.eventQueue, eventsToSend );
+                        if ( window.OptiBehaviorDebug ) {
+                            window.OptiBehaviorDebug.debug( 'Nonce refreshed; re-queued ' + eventsToSend.length + ' events', 'heatmap-simple' );
+                        }
+                    }
+                } );
+                return null; // Skip JSON parsing; events re-sent on next interval
             }
             // Permanent dead endpoint (handler unregistered on a cached page):
             // HTTP 400 + body exactly "0". Stop the tracker, no retry.
@@ -2186,10 +2239,26 @@
             cache: 'no-cache'
         }).then(function(response) {
             if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('Session start response status:', 'heatmap-simple', response.status);
-            // Handle nonce expiry on cached pages: refresh nonce (no events to requeue here)
-            if ( response.status === 403 && !_nonceRefreshed ) {
-                if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug( 'Nonce expired (403) on session start, refreshing nonce', 'heatmap-simple' );
-                refreshNonceAndRequeue( self.config, null, self );
+            // Handle nonce expiry on cached pages. This is the session-start /
+            // page-view send — the record that creates the session row the
+            // customer's traffic count is built from. On a stale-nonce 403 we
+            // MUST re-send this exact payload after the refresh, otherwise a
+            // bounce visitor (one page, no click) is never recorded and the
+            // traffic number craters. Guard with a single-shot flag so the
+            // re-send cannot loop if the fresh nonce is also rejected.
+            if ( response.status === 403 ) {
+                if ( !self._pageViewNonceRetried ) {
+                    self._pageViewNonceRetried = true;
+                    if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug( 'Nonce expired (403) on session start, refreshing nonce and re-sending page view', 'heatmap-simple' );
+                    ensureFreshNonce( self.config, function( ok ) {
+                        if ( ok ) {
+                            // Re-send the page view once with the fresh nonce.
+                            // track_session_start() dedups by session_id, so a
+                            // retry cannot create a duplicate session.
+                            self.sendPageView();
+                        }
+                    } );
+                }
                 return null;
             }
             // Permanent dead endpoint (handler unregistered on a cached page):
@@ -2233,10 +2302,42 @@
                     }
                 }
             }
+            // Cache-safe session id convergence (spec §2.3). On a full-page-cached
+            // page the localized anon_sid_seed is frozen, so the session-start
+            // ingest recomputes the per-visitor session id server-side and returns
+            // it here. Adopt it so every subsequent event (clicks, heartbeats,
+            // outbound beacons) and every other tracker on the page (funnel, Pro
+            // recorder/errors/forms via the shared broker) key to the same
+            // authoritative session as the DB row just created.
+            if ( responseData.success && responseData.data && responseData.data.session_id ) {
+                var serverSessionId = responseData.data.session_id;
+                if ( serverSessionId !== self.sessionId ) {
+                    if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('Updating sessionId with server-authoritative value:', 'heatmap-simple', serverSessionId);
+                    self.sessionId = serverSessionId;
+                }
+                // Push the authoritative sid into the shared cookieless broker so
+                // subscribed trackers converge in-memory (no cookie, no storage).
+                if ( isAnonymous && window.OptiBehaviorAnonBroker
+                    && typeof window.OptiBehaviorAnonBroker.setSessionId === 'function' ) {
+                    window.OptiBehaviorAnonBroker.setSessionId( serverSessionId );
+                }
+            }
         }).catch(function(error) {
             if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.error('Session start error:', 'heatmap-simple', error);
         });
     };
+
+    // Test hook (part 2) — exposed AFTER the HeatmapTracker prototype methods
+    // are assigned so QA harnesses can construct a tracker and drive the
+    // page-view / click nonce-refresh-and-retry paths without booting init().
+    // Not a public API. See tests/pageview-nonce-403-retry-test.js.
+    if ( typeof window !== 'undefined' ) {
+        window.__optiBehaviorTestables = window.__optiBehaviorTestables || {};
+        window.__optiBehaviorTestables.HeatmapTracker = HeatmapTracker;
+        window.__optiBehaviorTestables.ensureFreshNonce = ensureFreshNonce;
+        window.__optiBehaviorTestables.isHeatmapNonceRefreshStarted = function() { return _nonceRefreshStarted; };
+        window.__optiBehaviorTestables.isHeatmapNonceRefreshDone = function() { return _nonceRefreshDone; };
+    }
 
 })();
 

@@ -167,6 +167,50 @@ class Opti_Behavior_Heatmap_Session {
 	}
 
 	/**
+	 * Server-authoritative anonymous identity for the CURRENT request.
+	 *
+	 * Cache-immune single source of truth for the (visitor_id, session_id) pair
+	 * used by every cacheable ingest path in Anonymous Mode. Recomputed per
+	 * request from IP + UA + daily salt, so a full-page cache that freezes the
+	 * first visitor's anon_vid / anon_sid_seed into the HTML cannot merge two
+	 * distinct visitors: admin-ajax is never full-page cached, so this method
+	 * always sees the real per-visitor IP/UA at ingest time.
+	 *
+	 * Shapes mirror the values localized by the frontend (anon_vid / anon_sid_seed)
+	 * and the JS broker's computeFallbackSeed() so the client and server converge
+	 * on byte-identical ids for the same (visitor, 30-min bucket):
+	 *   - visitor_id : logged-in  -> 'wp_user_<id>'
+	 *                  guest       -> get_anonymous_hash() ('anon_<sha256…>')
+	 *   - session_id : 'sess_<hash40>_<intdiv(time(),1800)>' (current 30-min UTC
+	 *                  bucket), where hash40 = substr( anon_daily_hash, 0, 40 );
+	 *                  '' when no hash is resolvable.
+	 *
+	 * No PII, no cookies, no client storage: the IP is used in memory only and
+	 * the salt rotates at UTC midnight.
+	 *
+	 * @since 1.0.8
+	 * @return array{visitor_id:string, session_id:string}
+	 */
+	public function get_anonymous_identity() {
+		$anon_hash = $this->get_anonymous_daily_hash();
+
+		$user_id    = get_current_user_id();
+		$visitor_id = $user_id > 0 ? 'wp_user_' . $user_id : $anon_hash;
+
+		// Deterministic 30-minute UTC session bucket. MUST match the frontend
+		// $anon_sid_seed (class-opti-behavior-heatmap-frontend.php) and the JS
+		// broker's computeFallbackSeed(): 'sess_' + hash(0,40) + '_' + bucket.
+		$session_id = ( '' !== $anon_hash )
+			? 'sess_' . substr( $anon_hash, 0, 40 ) . '_' . intdiv( time(), 1800 )
+			: '';
+
+		return array(
+			'visitor_id' => $visitor_id,
+			'session_id' => $session_id,
+		);
+	}
+
+	/**
 	 * Build an anonymous daily rotating visitor hash.
 	 *
 	 * The IP address is used only in memory to compute the hash and is never

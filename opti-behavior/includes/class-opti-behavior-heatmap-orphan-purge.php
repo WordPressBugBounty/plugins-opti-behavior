@@ -456,7 +456,7 @@ class Opti_Behavior_Heatmap_Orphan_Purge {
 		}
 		closedir( $handle );
 
-		return $ok && @rmdir( $dir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Plugin-owned archive tree.
+		return $ok && @rmdir( $dir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- Plugin-owned archive tree; boolean result drives recursive-delete success and WP_Filesystem is not guaranteed on cron.
 	}
 
 	/**

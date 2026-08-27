@@ -757,6 +757,13 @@ class Opti_Behavior_Smart_Cleanup_Service {
 	 * @since 1.9.1 (Tiered Retention)
 	 * @since 2026-08-16 Mass-delete circuit breaker: aborts when spam-typed
 	 *                   sessions exceed the safety share of the whole table.
+	 * @since 2026-08-24 Aged-spam trickle: while the breaker is tripped, spam
+	 *                   sessions older than a minimum age (default 30 days)
+	 *                   are still purged oldest-first within the nightly cap,
+	 *                   so a permanently-tripped breaker cannot grow the
+	 *                   database without bound. Recent sessions stay untouched
+	 *                   (a misclassification incident only mislabels RECENT
+	 *                   engaged sessions), preserving the incident guardrail.
 	 * @param int $max_sessions Per-run session cap (0 = use filtered default).
 	 * @return array{sessions_deleted:int,batches:int,capped:bool,aborted:bool,warning?:string}
 	 */
@@ -808,8 +815,90 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$breaker = $this->evaluate_mass_delete_circuit_breaker( $matched_spam, 'spam_daily_tier' );
 		if ( $breaker['tripped'] ) {
-			$result['aborted'] = true;
+			// Aged-spam trickle (breaker fallback): a tripped breaker must not
+			// stall the spam tier forever — flagged rows would accumulate until
+			// the database and disk fill up. Deleting ONLY old spam rows is
+			// safe even during a misclassification incident (incidents
+			// mislabel RECENT engaged sessions), so age out the oldest rows
+			// within the normal per-run cap and leave recent rows untouched.
+
+			/**
+			 * Minimum age (days) a spam-typed session must reach before the
+			 * aged-spam trickle may delete it while the mass-delete circuit
+			 * breaker is tripped. 0 disables the trickle entirely (hard-abort
+			 * behavior of 2026-08-16).
+			 *
+			 * @since 2026-08-24
+			 * @param int $min_age_days Default 30.
+			 */
+			$trickle_min_age_days = absint( apply_filters( 'opti_behavior_spam_trickle_min_age_days', 30 ) );
+
+			$trickle_deleted = 0;
+			if ( $trickle_min_age_days > 0 ) {
+				$aged_cutoff = gmdate( 'Y-m-d H:i:s', time() - ( $trickle_min_age_days * DAY_IN_SECONDS ) );
+
+				while ( $result['sessions_deleted'] < $max_sessions ) {
+					$batch_size = min( self::DEFAULT_BATCH_SIZE, $max_sessions - $result['sessions_deleted'] );
+					$args       = array_merge( $traffic_types, array( $aged_cutoff, $batch_size ) );
+					// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Fixed plugin table; values prepared.
+					$session_ids = $wpdb->get_col(
+						$wpdb->prepare(
+							'SELECT id FROM ' . $sessions_table . ' WHERE traffic_type IN (' . $placeholders . ') AND start_time < %s ORDER BY start_time ASC LIMIT %d',
+							...$args
+						)
+					);
+					// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+					if ( empty( $session_ids ) ) {
+						break;
+					}
+
+					$deleted = $this->cascade_delete_sessions( $session_ids );
+					++$result['batches'];
+					$result['sessions_deleted'] += $deleted;
+					$trickle_deleted            += $deleted;
+
+					$cascade       = $this->get_last_cascade_result();
+					$rows_by_table = $this->merge_row_count_maps( $rows_by_table, isset( $cascade['rows_deleted_by_table'] ) ? (array) $cascade['rows_deleted_by_table'] : array() );
+
+					if ( $deleted < 1 ) {
+						break; // Defensive: avoid a spin when nothing is deletable.
+					}
+				}
+			}
+
 			$result['warning'] = $breaker['message'];
+
+			if ( $trickle_deleted > 0 ) {
+				$result['capped'] = $result['sessions_deleted'] >= $max_sessions;
+
+				$trickle_note = sprintf(
+					/* translators: 1: deleted sessions, 2: minimum age in days. */
+					__( 'Aged-spam trickle: %1$d spam session(s) older than %2$d day(s) were still purged within the nightly cap; recent sessions were left untouched pending review.', 'opti-behavior' ),
+					$trickle_deleted,
+					$trickle_min_age_days
+				);
+
+				$this->clear_analytics_caches();
+				$this->add_cleanup_log(
+					'auto',
+					$trickle_deleted,
+					0,
+					0,
+					array(
+						'rows_by_table' => $rows_by_table,
+						'trigger'       => 'spam_daily_tier_trickle',
+						'capped'        => $result['capped'],
+						'status'        => 'completed',
+						'warnings'      => array( $breaker['message'], $trickle_note ),
+					)
+				);
+
+				return $result;
+			}
+
+			$result['aborted'] = true;
 
 			$this->add_cleanup_log(
 				'auto',
@@ -828,6 +917,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		while ( $result['sessions_deleted'] < $max_sessions ) {
 			$batch_size = min( self::DEFAULT_BATCH_SIZE, $max_sessions - $result['sessions_deleted'] );
 			$args       = array_merge( $traffic_types, array( $batch_size ) );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Fixed plugin table; values prepared.
 			$session_ids = $wpdb->get_col(
 				$wpdb->prepare(
@@ -835,6 +925,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 					...$args
 				)
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 			if ( empty( $session_ids ) ) {
 				break;
@@ -853,6 +944,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		}
 
 		if ( $result['sessions_deleted'] >= $max_sessions ) {
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Fixed plugin table; values prepared.
 			$remaining        = (int) $wpdb->get_var(
 				$wpdb->prepare(
@@ -860,6 +952,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 					...$traffic_types
 				)
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$result['capped'] = $remaining > 0;
 		}
 
@@ -1031,23 +1124,27 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			}
 
 			$table   = esc_sql( $wpdb->prefix . $table_suffix );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$deleted = $wpdb->query(
 				$wpdb->prepare(
 					"DELETE FROM " . $table . " WHERE " . esc_sql( $column ) . " IN (" . $placeholders . ")",
 					...$session_ids
 				)
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 			$rows_deleted_by_table[ $table_suffix ] = false !== $deleted ? absint( $deleted ) : 0;
 		}
 
 		$sessions_table = esc_sql( $wpdb->prefix . 'optibehavior_sessions' );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$deleted        = $wpdb->query(
 			$wpdb->prepare(
 				"DELETE FROM " . $sessions_table . " WHERE id IN (" . $placeholders . ")",
 				...$session_ids
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$session_count  = false !== $deleted ? absint( $deleted ) : 0;
 
 		// The JSON files/rows backing a page's heatmap data may now be gone,
@@ -1302,11 +1399,13 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$visitors_table = esc_sql( $wpdb->prefix . 'optibehavior_visitors' );
 		$sessions_table = esc_sql( $wpdb->prefix . 'optibehavior_sessions' );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$deleted        = $wpdb->query(
 			"DELETE v FROM " . $visitors_table . " v
 			 LEFT JOIN " . $sessions_table . " s ON s.visitor_id = v.id
 			 WHERE s.id IS NULL"
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return false !== $deleted ? absint( $deleted ) : 0;
 	}
@@ -1320,14 +1419,17 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		global $wpdb;
 		$options_table = esc_sql( $wpdb->prefix . 'options' );
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$wpdb->query( "DELETE FROM " . $options_table . " WHERE option_name LIKE '_transient_optibehavior_%'" );
 		$wpdb->query( "DELETE FROM " . $options_table . " WHERE option_name LIKE '_transient_timeout_optibehavior_%'" );
 		$wpdb->query( "DELETE FROM " . $options_table . " WHERE option_name LIKE '_transient_opti_behavior_%'" );
 		$wpdb->query( "DELETE FROM " . $options_table . " WHERE option_name LIKE '_transient_timeout_opti_behavior_%'" );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( $this->table_exists( 'optibehavior_visitor_daily_stats' ) && $this->table_exists( 'optibehavior_sessions' ) ) {
 			$summary_table  = esc_sql( $wpdb->prefix . 'optibehavior_visitor_daily_stats' );
 			$sessions_table = esc_sql( $wpdb->prefix . 'optibehavior_sessions' );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$wpdb->query(
 				"DELETE vds FROM " . $summary_table . " vds
 				 LEFT JOIN " . $sessions_table . " s
@@ -1335,6 +1437,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 				   AND DATE(s.start_time) = vds.stat_date
 				 WHERE s.id IS NULL"
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		}
 
 		if ( function_exists( 'wp_cache_flush' ) ) {
@@ -1372,8 +1475,10 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$sessions_table = esc_sql( $wpdb->prefix . 'optibehavior_sessions' );
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Fixed plugin table; fresh count required for the safety check.
 		return absint( $wpdb->get_var( 'SELECT COUNT(*) FROM ' . $sessions_table ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 	}
 
 	/**
@@ -1732,6 +1837,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		$spam_min_scrolls_threshold = isset( $settings['spam_min_scrolls_threshold'] ) ? max( 0, intval( $settings['spam_min_scrolls_threshold'] ) ) : 0;
 		$spam_min_clicks_threshold  = isset( $settings['spam_min_clicks_threshold'] ) ? max( 0, intval( $settings['spam_min_clicks_threshold'] ) ) : 1;
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$sessions = $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT id FROM " . $sessions_table . "
@@ -1741,6 +1847,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 				$limit
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( empty( $sessions ) ) {
 			return $result;
@@ -1748,7 +1855,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$result['processed'] = count( $sessions );
 		$session_ids_placeholder = implode( ',', array_fill( 0, count( $sessions ), '%s' ) );
-		// phpcs:disable WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- Session ID placeholders are generated from the selected ID batch and supplied via a variadic array.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Session ID placeholders are generated from the selected ID batch and supplied via a variadic array; table names from $wpdb->prefix, all values bound via prepare().
 		$query = $wpdb->prepare(
 			"UPDATE " . $sessions_table . " s
 			 LEFT JOIN (
@@ -1794,8 +1901,9 @@ class Opti_Behavior_Smart_Cleanup_Service {
 				array( $spam_duration_threshold, $spam_min_scrolls_threshold, $spam_min_clicks_threshold )
 			)
 		);
-		// phpcs:enable WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Custom analytics table bulk update; $query already bound via $wpdb->prepare() above, per-request caching not applicable.
 		$updated = $wpdb->query( $query );
 		$result['updated'] = false !== $updated ? absint( $updated ) : 0;
 
@@ -1834,6 +1942,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			'optimized_tables'          => isset( $details['optimized_tables'] ) && is_array( $details['optimized_tables'] ) ? array_values( array_map( 'sanitize_text_field', $details['optimized_tables'] ) ) : array(),
 			'estimated_bytes_reclaimed' => isset( $details['estimated_bytes_reclaimed'] ) ? absint( $details['estimated_bytes_reclaimed'] ) : 0,
 			'status'                    => isset( $details['status'] ) ? sanitize_key( $details['status'] ) : 'completed',
+			'trigger'                   => isset( $details['trigger'] ) ? sanitize_key( $details['trigger'] ) : '',
 			'warnings'                  => isset( $details['warnings'] ) && is_array( $details['warnings'] ) ? array_values( array_map( 'sanitize_text_field', $details['warnings'] ) ) : array(),
 		);
 
@@ -1874,6 +1983,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$sessions_table = esc_sql( $wpdb->prefix . 'optibehavior_sessions' );
 		$breakdown      = array();
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$rows           = $wpdb->get_results(
 			"SELECT COALESCE(NULLIF(traffic_type, ''), 'unknown') AS traffic_type, COUNT(*) AS total
 			 FROM " . $sessions_table . "
@@ -1881,6 +1991,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			 GROUP BY COALESCE(NULLIF(traffic_type, ''), 'unknown')",
 			defined( 'ARRAY_A' ) ? ARRAY_A : 'ARRAY_A'
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		foreach ( (array) $rows as $row ) {
 			$key               = isset( $row['traffic_type'] ) ? sanitize_key( $row['traffic_type'] ) : 'unknown';
@@ -1905,6 +2016,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		}
 
 		$sessions_table = esc_sql( $wpdb->prefix . 'optibehavior_sessions' );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$count          = $wpdb->get_var(
 			"SELECT COUNT(DISTINCT deleting.visitor_id)
 			 FROM " . $sessions_table . " deleting
@@ -1918,6 +2030,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 				     AND remaining.id NOT IN (" . $session_sql . ")
 			   )"
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return absint( $count );
 	}
@@ -2040,7 +2153,9 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			}
 
 			$full_table = esc_sql( $wpdb->prefix . $table_suffix );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$ok         = $wpdb->query( "OPTIMIZE TABLE `" . $full_table . "`" );
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			if ( false === $ok ) {
 				$warnings[] = sprintf(
 					/* translators: %s: table name */
@@ -2124,6 +2239,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		}
 
 		$placeholders = implode( ',', array_fill( 0, count( $full_names ), '%s' ) );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$rows         = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT TABLE_NAME, COALESCE(DATA_LENGTH, 0) AS data_length, COALESCE(INDEX_LENGTH, 0) AS index_length, COALESCE(DATA_FREE, 0) AS data_free
@@ -2134,6 +2250,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			),
 			defined( 'ARRAY_A' ) ? ARRAY_A : 'ARRAY_A'
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$metadata = array();
 		foreach ( (array) $rows as $row ) {
@@ -2182,7 +2299,9 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$table = esc_sql( $wpdb->prefix . $table_suffix );
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		return absint( $wpdb->get_var( "SELECT COUNT(*) FROM " . $table ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 	}
 
 	/**
@@ -2331,12 +2450,14 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$placeholders     = implode( ',', array_fill( 0, count( $session_ids ), '%s' ) );
 		$recordings_table = esc_sql( $wpdb->prefix . 'optibehavior_recordings' );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$file_paths       = $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT file_path FROM " . $recordings_table . " WHERE session_id IN (" . $placeholders . ") AND file_path IS NOT NULL AND file_path != ''",
 				...$session_ids
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return $this->delete_recording_files( $file_paths );
 	}
@@ -2437,6 +2558,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$placeholders  = implode( ',', array_fill( 0, count( $session_ids ), '%s' ) );
 		$session_pages = esc_sql( $wpdb->prefix . 'optibehavior_session_pages' );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$rows          = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT DISTINCT session_id, page_id FROM " . $session_pages . " WHERE session_id IN (" . $placeholders . ')',
@@ -2444,6 +2566,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			),
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( empty( $rows ) ) {
 			return $empty_result;
@@ -2581,6 +2704,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$placeholders   = implode( ',', array_fill( 0, count( $session_ids ), '%s' ) );
 		$sessions_table = esc_sql( $wpdb->prefix . 'optibehavior_sessions' );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$rows           = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT id, start_time, end_time, duration FROM " . $sessions_table . ' WHERE id IN (' . $placeholders . ')',
@@ -2588,6 +2712,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			),
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$windows = array();
 		foreach ( (array) $rows as $row ) {
@@ -2645,7 +2770,9 @@ class Opti_Behavior_Smart_Cleanup_Service {
 	 */
 	private function table_exists( $table_suffix ) {
 		global $wpdb;
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->prefix . $table_suffix ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return ! empty( $exists );
 	}

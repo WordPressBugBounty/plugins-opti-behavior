@@ -12,6 +12,16 @@
  * Rules were moved verbatim from dashboard_styles.css (unchanged selectors,
  * still scoped to .opti-behavior-dashboard-page) so the dashboard renders
  * identically.
+ *
+ * SCOPE: every rule is scoped to the three surfaces that render the shared
+ * advanced-filters panel — the Analytics Dashboard
+ * (.opti-behavior-dashboard-page), the Session Recordings page
+ * (.opti-behavior-recordings-page) and the Funnels page
+ * (.opti-behavior-funnels-page, which also carries
+ * .opti-behavior-funnel-detail-page on the per-funnel detail view). All three
+ * MUST stay in the selector group of every rule so the icon dropdowns /
+ * suggestion menus look identical across surfaces; adding a new surface = add
+ * its wrapper class to each group below.
  */
 
 /* Icon dropdowns (Browser / Country / Device / OS in the advanced-filters
@@ -19,18 +29,24 @@
    toggle button + menu replicate it with colored icons (flagcdn flags,
    branded browser SVGs, device/OS glyphs). */
 .opti-behavior-dashboard-page .ob-icon-select,
-.opti-behavior-recordings-page .ob-icon-select {
+.opti-behavior-recordings-page .ob-icon-select,
+.opti-behavior-funnels-page .ob-icon-select,
+.opti-behavior-errors-wrap .ob-icon-select {
 	position: relative;
 	width: 100%;
 }
 
 .opti-behavior-dashboard-page .ob-icon-select > select,
-.opti-behavior-recordings-page .ob-icon-select > select {
+.opti-behavior-recordings-page .ob-icon-select > select,
+.opti-behavior-funnels-page .ob-icon-select > select,
+.opti-behavior-errors-wrap .ob-icon-select > select {
 	display: none;
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-toggle,
-.opti-behavior-recordings-page .ob-icon-select-toggle {
+.opti-behavior-recordings-page .ob-icon-select-toggle,
+.opti-behavior-funnels-page .ob-icon-select-toggle,
+.opti-behavior-errors-wrap .ob-icon-select-toggle {
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -39,7 +55,9 @@
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-label,
-.opti-behavior-recordings-page .ob-icon-select-label {
+.opti-behavior-recordings-page .ob-icon-select-label,
+.opti-behavior-funnels-page .ob-icon-select-label,
+.opti-behavior-errors-wrap .ob-icon-select-label {
 	flex: 1;
 	min-width: 0;
 	overflow: hidden;
@@ -48,7 +66,9 @@
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-caret,
-.opti-behavior-recordings-page .ob-icon-select-caret {
+.opti-behavior-recordings-page .ob-icon-select-caret,
+.opti-behavior-funnels-page .ob-icon-select-caret,
+.opti-behavior-errors-wrap .ob-icon-select-caret {
 	margin-left: auto;
 	color: #6b7280;
 	font-size: 11px;
@@ -56,7 +76,9 @@
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-icon,
-.opti-behavior-recordings-page .ob-icon-select-icon {
+.opti-behavior-recordings-page .ob-icon-select-icon,
+.opti-behavior-funnels-page .ob-icon-select-icon,
+.opti-behavior-errors-wrap .ob-icon-select-icon {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -66,12 +88,16 @@
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-icon svg,
-.opti-behavior-recordings-page .ob-icon-select-icon svg {
+.opti-behavior-recordings-page .ob-icon-select-icon svg,
+.opti-behavior-funnels-page .ob-icon-select-icon svg,
+.opti-behavior-errors-wrap .ob-icon-select-icon svg {
 	display: block;
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-flag,
-.opti-behavior-recordings-page .ob-icon-select-flag {
+.opti-behavior-recordings-page .ob-icon-select-flag,
+.opti-behavior-funnels-page .ob-icon-select-flag,
+.opti-behavior-errors-wrap .ob-icon-select-flag {
 	width: 20px;
 	height: 14px;
 	border-radius: 2px;
@@ -80,7 +106,9 @@
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-menu,
-.opti-behavior-recordings-page .ob-icon-select-menu {
+.opti-behavior-recordings-page .ob-icon-select-menu,
+.opti-behavior-funnels-page .ob-icon-select-menu,
+.opti-behavior-errors-wrap .ob-icon-select-menu {
 	position: absolute;
 	top: calc(100% + 4px);
 	left: 0;
@@ -97,7 +125,9 @@
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-option,
-.opti-behavior-recordings-page .ob-icon-select-option {
+.opti-behavior-recordings-page .ob-icon-select-option,
+.opti-behavior-funnels-page .ob-icon-select-option,
+.opti-behavior-errors-wrap .ob-icon-select-option {
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -115,12 +145,16 @@
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-option:hover,
-.opti-behavior-recordings-page .ob-icon-select-option:hover {
+.opti-behavior-recordings-page .ob-icon-select-option:hover,
+.opti-behavior-funnels-page .ob-icon-select-option:hover,
+.opti-behavior-errors-wrap .ob-icon-select-option:hover {
 	background: #f3f4f6;
 }
 
 .opti-behavior-dashboard-page .ob-icon-select-option.is-selected,
-.opti-behavior-recordings-page .ob-icon-select-option.is-selected {
+.opti-behavior-recordings-page .ob-icon-select-option.is-selected,
+.opti-behavior-funnels-page .ob-icon-select-option.is-selected,
+.opti-behavior-errors-wrap .ob-icon-select-option.is-selected {
 	background: #ede9fe;
 	color: #5b21b6;
 	font-weight: 600;
@@ -128,7 +162,9 @@
 
 /* Fixed-width checkmark column keeps icons aligned in multi-select menus. */
 .opti-behavior-dashboard-page .ob-icon-select-check,
-.opti-behavior-recordings-page .ob-icon-select-check {
+.opti-behavior-recordings-page .ob-icon-select-check,
+.opti-behavior-funnels-page .ob-icon-select-check,
+.opti-behavior-errors-wrap .ob-icon-select-check {
 	display: inline-block;
 	width: 14px;
 	flex: 0 0 auto;
@@ -142,19 +178,25 @@
    reuses .ob-icon-select-menu styling) directly under the input, replacing
    the browser-positioned native <datalist> popup. */
 .opti-behavior-dashboard-page .ob-suggest,
-.opti-behavior-recordings-page .ob-suggest {
+.opti-behavior-recordings-page .ob-suggest,
+.opti-behavior-funnels-page .ob-suggest,
+.opti-behavior-errors-wrap .ob-suggest {
 	position: relative;
 	width: 100%;
 }
 
 .opti-behavior-dashboard-page .ob-suggest .advanced-filter-input,
-.opti-behavior-recordings-page .ob-suggest .advanced-filter-input {
+.opti-behavior-recordings-page .ob-suggest .advanced-filter-input,
+.opti-behavior-funnels-page .ob-suggest .advanced-filter-input,
+.opti-behavior-errors-wrap .ob-suggest .advanced-filter-input {
 	width: 100%;
 	box-sizing: border-box;
 }
 
 .opti-behavior-dashboard-page .ob-suggest-option .ob-icon-select-label,
-.opti-behavior-recordings-page .ob-suggest-option .ob-icon-select-label {
+.opti-behavior-recordings-page .ob-suggest-option .ob-icon-select-label,
+.opti-behavior-funnels-page .ob-suggest-option .ob-icon-select-label,
+.opti-behavior-errors-wrap .ob-suggest-option .ob-icon-select-label {
 	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
@@ -163,7 +205,9 @@
 }
 
 .opti-behavior-dashboard-page .ob-suggest-count,
-.opti-behavior-recordings-page .ob-suggest-count {
+.opti-behavior-recordings-page .ob-suggest-count,
+.opti-behavior-funnels-page .ob-suggest-count,
+.opti-behavior-errors-wrap .ob-suggest-count {
 	flex: 0 0 auto;
 	margin-left: auto;
 	font-size: 12px;

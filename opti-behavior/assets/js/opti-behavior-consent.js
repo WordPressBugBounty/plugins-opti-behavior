@@ -658,16 +658,25 @@
             document.body.appendChild( _bannerEl );
         }
 
-        // Trigger transition: next tick removes hidden class
+        // Trigger transition: next tick removes hidden class.
+        // Capture a local ref: hideBanner() may null out _bannerEl (and start
+        // removing the node) before this double-rAF fires — a fast consent action
+        // or re-entrant show/hide. Dereferencing the shared _bannerEl then throws
+        // "Cannot read properties of null (reading 'classList')". Guard on the
+        // local ref + isConnected so a superseded animation is a no-op. Mirrors
+        // the local-ref pattern in hideBanner().
+        var bannerEl  = _bannerEl;
+        var overlayEl = _overlayEl;
         requestAnimationFrame( function () {
             requestAnimationFrame( function () {
-                _bannerEl.classList.remove( 'ob-consent-banner--hidden' );
-                _bannerEl.classList.add( 'ob-consent-banner--visible' );
-                if ( _overlayEl ) {
-                    _overlayEl.classList.add( 'ob-consent-overlay--visible' );
+                if ( ! bannerEl || ! bannerEl.isConnected ) { return; }
+                bannerEl.classList.remove( 'ob-consent-banner--hidden' );
+                bannerEl.classList.add( 'ob-consent-banner--visible' );
+                if ( overlayEl && overlayEl.isConnected ) {
+                    overlayEl.classList.add( 'ob-consent-overlay--visible' );
                 }
                 // Move focus into the dialog
-                _bannerEl.focus();
+                bannerEl.focus();
             } );
         } );
     }

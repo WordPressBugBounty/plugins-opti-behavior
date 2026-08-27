@@ -2574,3 +2574,169 @@
 .opti-funnel-row.is-suspended .opti-funnel-row__badges {
 	opacity: 0.7;
 }
+
+/* =========================================================================
+   Funnel detail page (spec.md §4.1 / §4.2)
+   ========================================================================= */
+
+.opti-funnel-detail-back {
+	margin: 0 0 12px;
+}
+
+.opti-funnel-back-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: #4b5563;
+	text-decoration: none;
+	font-weight: 600;
+	font-size: 13px;
+}
+
+.opti-funnel-back-link:hover {
+	color: #111827;
+}
+
+.opti-funnel-back-link i,
+.opti-funnel-back-link svg {
+	width: 16px;
+	height: 16px;
+}
+
+/* Header controls cluster: period control + advanced-filters toggle. */
+.opti-funnel-detail-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+/* "Back to Funnels" as a pill button inside the purple detail header
+   (translucent white, matches .refresh-btn control styling). */
+.opti-behavior-funnel-detail-page .heatmaps-header .opti-funnel-back-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 12px;
+	padding: 6px 12px;
+	border: 1px solid rgba(255, 255, 255, 0.3);
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.15);
+	color: #fff;
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 1;
+	text-decoration: none;
+	transition: all 0.2s;
+}
+
+.opti-behavior-funnel-detail-page .heatmaps-header .opti-funnel-back-btn:hover {
+	background: rgba(255, 255, 255, 0.25);
+	border-color: rgba(255, 255, 255, 0.5);
+	color: #fff;
+}
+
+.opti-behavior-funnel-detail-page .heatmaps-header .opti-funnel-back-btn i,
+.opti-behavior-funnel-detail-page .heatmaps-header .opti-funnel-back-btn svg {
+	width: 16px;
+	height: 16px;
+}
+
+/* Period select width parity with dashboard's .period-selector. */
+.opti-funnel-detail-controls .period-selector {
+	min-width: 120px;
+}
+
+/* Match dashboard control height (.dashboard-controls input[type="date"] = 36px). */
+.opti-funnel-detail-date {
+	height: 36px;
+}
+
+/* PRO lock glyph on the Filters toggle (free users). */
+.opti-funnel-pro-lock {
+	display: inline-flex;
+	align-items: center;
+	margin-left: 4px;
+	color: #b45309;
+}
+
+.opti-funnel-pro-lock i,
+.opti-funnel-pro-lock svg {
+	width: 14px;
+	height: 14px;
+}
+
+.opti-funnel-detail {
+	margin-top: 16px;
+}
+
+/* Advanced-filters panel positioned below the detail header. The grid /
+   column / field styling itself is inherited from dashboard_styles.css (a
+   declared dependency of funnels.css). */
+.opti-behavior-funnel-detail-page .advanced-filters-panel {
+	position: relative;
+	margin: 12px 0 0;
+}
+
+/* Locked (free) variant: blur + disable the field grid, float an upsell card. */
+.advanced-filters-panel.is-locked {
+	overflow: hidden;
+}
+
+.advanced-filters-panel.is-locked .advanced-filters-grid {
+	filter: blur(3px);
+	opacity: 0.55;
+	pointer-events: none;
+	user-select: none;
+}
+
+.advanced-filters-locked-overlay {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(255, 255, 255, 0.55);
+	z-index: 2;
+}
+
+.advanced-filters-locked-card {
+	max-width: 420px;
+	text-align: center;
+	background: #fff;
+	border: 1px solid #e5e7eb;
+	border-radius: 12px;
+	padding: 24px 28px;
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+}
+
+.advanced-filters-locked-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	border-radius: 50%;
+	background: #fef3c7;
+	color: #b45309;
+	margin-bottom: 10px;
+}
+
+.advanced-filters-locked-icon i,
+.advanced-filters-locked-icon svg {
+	width: 22px;
+	height: 22px;
+}
+
+.advanced-filters-locked-card h3 {
+	margin: 0 0 6px;
+	font-size: 16px;
+	color: #111827;
+}
+
+.advanced-filters-locked-card p {
+	margin: 0 0 14px;
+	color: #6b7280;
+	font-size: 13px;
+	line-height: 1.5;
+}

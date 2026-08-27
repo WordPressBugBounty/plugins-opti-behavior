@@ -20849,6 +20849,548 @@ msgstr ""
 msgid "Other / unidentified elements"
 msgstr "Outros elementos / não identificados"
 
+#: opti-behavior/includes/tooltip-helper.php:1502
+msgid "Dashboard Tab"
+msgstr "Aba Painel"
+
+#: opti-behavior/includes/tooltip-helper.php:1503
+msgid ""
+"Overview of all error tracking: summary KPIs, trends over the selected date "
+"range, top errors, and recent activity across JS errors, friction, "
+"performance, and broken links."
+msgstr ""
+"Visão geral de todo o rastreamento de erros: KPIs resumidos, tendências no "
+"período selecionado, principais erros e atividade recente em erros JS, "
+"fricção, desempenho e links quebrados."
+
+#: opti-behavior/includes/tooltip-helper.php:1504
+msgid "Your at-a-glance summary of everything on this page."
+msgstr "Seu resumo rápido de tudo o que há nesta página."
+
+#: opti-behavior/includes/tooltip-helper.php:1508
+msgid "JS Errors Tab"
+msgstr "Aba Erros JS"
+
+#: opti-behavior/includes/tooltip-helper.php:1509
+msgid ""
+"Lists JavaScript errors visitors hit on your site, grouped by error, with "
+"counts and details (file, line, affected pages and browsers). Filter by "
+"component, severity, and status to prioritize fixes."
+msgstr ""
+"Lista os erros de JavaScript que os visitantes encontraram no seu site, "
+"agrupados por erro, com contagens e detalhes (arquivo, linha, páginas e "
+"navegadores afetados). Filtre por componente, gravidade e status para "
+"priorizar as correções."
+
+#: opti-behavior/includes/tooltip-helper.php:1510
+msgid "Shows code problems visitors ran into."
+msgstr "Mostra os problemas de código que os visitantes encontraram."
+
+#: opti-behavior/includes/tooltip-helper.php:1514
+msgid "Friction Events Tab"
+msgstr "Aba Eventos de Fricção"
+
+#: opti-behavior/includes/tooltip-helper.php:1515
+msgid ""
+"Shows moments visitors struggled: rage clicks, dead clicks, error clicks, "
+"and thrashed cursors, with the element, page, and how often each happened."
+msgstr ""
+"Mostra os momentos em que os visitantes tiveram dificuldades: cliques de "
+"raiva, cliques mortos, cliques de erro e cursores agitados, com o elemento, "
+"a página e a frequência de cada um."
+
+#: opti-behavior/includes/tooltip-helper.php:1516
+msgid "Shows where people got frustrated on your site."
+msgstr "Mostra onde as pessoas ficaram frustradas no seu site."
+
+#: opti-behavior/includes/tooltip-helper.php:1520
+msgid "Performance Tab"
+msgstr "Aba Desempenho"
+
+#: opti-behavior/includes/tooltip-helper.php:1521
+msgid ""
+"Real-visitor page speed per page: performance score, load time, and Core Web"
+" Vitals (LCP, responsiveness, CLS) so you can spot slow pages that lose "
+"visitors."
+msgstr ""
+"Velocidade das páginas medida com visitantes reais, página por página: "
+"pontuação de desempenho, tempo de carregamento e Core Web Vitals (LCP, "
+"responsividade, CLS) para identificar páginas lentas que perdem visitantes."
+
+#: opti-behavior/includes/tooltip-helper.php:1522
+msgid "Shows how fast your pages load for real visitors."
+msgstr "Mostra a rapidez com que suas páginas carregam para visitantes reais."
+
+#: opti-behavior/includes/tooltip-helper.php:1526
+msgid "Broken Links Tab"
+msgstr "Aba Links Quebrados"
+
+#: opti-behavior/includes/tooltip-helper.php:1527
+msgid ""
+"Links on your site that lead to missing pages (404s), aggregated by URL with"
+" open/fixed/ignored status and re-check tools, so you can fix them for "
+"better UX and SEO."
+msgstr ""
+"Links do seu site que levam a páginas inexistentes (404), agregados por URL "
+"com status aberto/corrigido/ignorado e ferramentas de reverificação, para "
+"você corrigi-los e melhorar a UX e o SEO."
+
+#: opti-behavior/includes/tooltip-helper.php:1528
+msgid "Shows links that don't work anymore."
+msgstr "Mostra os links que não funcionam mais."
+
+#: opti-behavior/includes/tooltip-helper.php:1535
+msgid ""
+"A computed priority score for the error group, based on severity, how often "
+"it occurs, how many sessions it affects, and how recent it is. Higher means "
+"fix it first."
+msgstr ""
+"Uma pontuação de prioridade calculada para o grupo de erros, com base na "
+"gravidade, na frequência, em quantas sessões afeta e em quão recente é. "
+"Quanto mais alta, mais urgente é a correção."
+
+#: opti-behavior/includes/tooltip-helper.php:1536
+msgid "Which bugs to fix first."
+msgstr "Quais bugs corrigir primeiro."
+
+#: opti-behavior/includes/tooltip-helper.php:1540
+msgid "Error Message"
+msgstr "Mensagem de erro"
+
+#: opti-behavior/includes/tooltip-helper.php:1541
+msgid ""
+"The error's source script or component with a representative error message, "
+"the number of error variants, and the file/line location when known."
+msgstr ""
+"O script ou componente de origem do erro com uma mensagem de erro "
+"representativa, o número de variantes do erro e a localização de "
+"arquivo/linha quando conhecida."
+
+#: opti-behavior/includes/tooltip-helper.php:1542
+msgid "What went wrong and where in the code."
+msgstr "O que deu errado e onde no código."
+
+#: opti-behavior/includes/tooltip-helper.php:1547
+msgid ""
+"The kind of JavaScript error, such as a runtime error, promise rejection, "
+"network/fetch failure, or console error."
+msgstr ""
+"O tipo de erro de JavaScript, como um erro de execução, uma promise "
+"rejeitada, uma falha de rede/fetch ou um erro de console."
+
+#: opti-behavior/includes/tooltip-helper.php:1548
+msgid "What kind of problem it is."
+msgstr "Que tipo de problema é."
+
+#: opti-behavior/includes/tooltip-helper.php:1553
+msgid ""
+"How serious the error is: Critical, Error, Warning, or Info. Critical errors"
+" likely break functionality and should be fixed first."
+msgstr ""
+"Quão grave é o erro: Crítico, Erro, Aviso ou Info. Erros críticos "
+"provavelmente quebram funcionalidades e devem ser corrigidos primeiro."
+
+#: opti-behavior/includes/tooltip-helper.php:1554
+msgid "How bad the problem is."
+msgstr "Quão grave é o problema."
+
+#: opti-behavior/includes/tooltip-helper.php:1558
+msgid "Count"
+msgstr "Contagem"
+
+#: opti-behavior/includes/tooltip-helper.php:1559
+msgid "How many times this error occurred in the selected date range."
+msgstr "Quantas vezes este erro ocorreu no período selecionado."
+
+#: opti-behavior/includes/tooltip-helper.php:1560
+msgid "How often it happened."
+msgstr "Com que frequência aconteceu."
+
+#: opti-behavior/includes/tooltip-helper.php:1565
+msgid ""
+"The number of visitor sessions that hit this error. More sessions means more"
+" visitors are affected."
+msgstr ""
+"O número de sessões de visitantes que encontraram este erro. Mais sessões "
+"significam mais visitantes afetados."
+
+#: opti-behavior/includes/tooltip-helper.php:1566
+msgid "How many visits ran into it."
+msgstr "Quantas visitas o encontraram."
+
+#: opti-behavior/includes/tooltip-helper.php:1571
+msgid ""
+"The pages where this error occurred. Use the Breakdown action for the full "
+"per-page detail."
+msgstr ""
+"As páginas onde este erro ocorreu. Use a ação Detalhamento para ver o "
+"detalhe completo por página."
+
+#: opti-behavior/includes/tooltip-helper.php:1572
+msgid "Where on your site it happened."
+msgstr "Onde aconteceu no seu site."
+
+#: opti-behavior/includes/tooltip-helper.php:1577
+msgid ""
+"When this error last occurred. Recent errors are more likely to still be "
+"present."
+msgstr ""
+"Quando este erro ocorreu pela última vez. Erros recentes provavelmente ainda"
+" estão presentes."
+
+#: opti-behavior/includes/tooltip-helper.php:1578
+msgid "The last time it happened."
+msgstr "A última vez que aconteceu."
+
+#: opti-behavior/includes/tooltip-helper.php:1583
+msgid ""
+"Your workflow status for the error: Open, Investigating, Resolved, or "
+"Ignored."
+msgstr ""
+"Seu status de tratamento do erro: Aberto, Investigando, Resolvido ou "
+"Ignorado."
+
+#: opti-behavior/includes/tooltip-helper.php:1584
+msgid "Where you are with fixing it."
+msgstr "Em que ponto você está na correção."
+
+#: opti-behavior/includes/tooltip-helper.php:1589
+msgid ""
+"Mark the error resolved or ignored, or expand its per-page breakdown with "
+"recent occurrences."
+msgstr ""
+"Marque o erro como resolvido ou ignorado, ou expanda o detalhamento por "
+"página com as ocorrências recentes."
+
+#: opti-behavior/includes/tooltip-helper.php:1590
+msgid "Things you can do with this error."
+msgstr "O que você pode fazer com este erro."
+
+#: opti-behavior/includes/tooltip-helper.php:1597
+msgid ""
+"The kind of friction: rage click, dead click, error click, or thrashed "
+"cursor. An auto-triage verdict (bug / review / visitor) is shown when "
+"available."
+msgstr ""
+"O tipo de fricção: clique de raiva, clique morto, clique de erro ou cursor "
+"agitado. Um veredito de triagem automática (bug / revisar / visitante) é "
+"exibido quando disponível."
+
+#: opti-behavior/includes/tooltip-helper.php:1598
+msgid "What kind of frustration signal it is."
+msgstr "Que tipo de sinal de frustração é."
+
+#: opti-behavior/includes/tooltip-helper.php:1602
+msgid "Target / Area"
+msgstr "Alvo / Área"
+
+#: opti-behavior/includes/tooltip-helper.php:1603
+msgid ""
+"The element visitors struggled with. For error clicks, the triggering error "
+"is shown first with the clicked element(s) below it."
+msgstr ""
+"O elemento com o qual os visitantes tiveram dificuldades. Para cliques de "
+"erro, o erro desencadeador é mostrado primeiro, com o(s) elemento(s) "
+"clicado(s) abaixo."
+
+#: opti-behavior/includes/tooltip-helper.php:1604
+msgid "What visitors were clicking on."
+msgstr "Onde os visitantes estavam clicando."
+
+#: opti-behavior/includes/tooltip-helper.php:1609
+msgid "The pages where this friction happened."
+msgstr "As páginas onde esta fricção ocorreu."
+
+#: opti-behavior/includes/tooltip-helper.php:1615
+msgid ""
+"The strength of the friction signal: total clicks (or movement events for "
+"thrashed cursors) plus the number of sessions affected."
+msgstr ""
+"A intensidade do sinal de fricção: total de cliques (ou eventos de movimento"
+" para cursores agitados) mais o número de sessões afetadas."
+
+#: opti-behavior/includes/tooltip-helper.php:1616
+msgid "How strong the frustration was."
+msgstr "Quão forte foi a frustração."
+
+#: opti-behavior/includes/tooltip-helper.php:1621
+msgid ""
+"When this friction last happened. Hover the value to see when it was first "
+"seen."
+msgstr ""
+"Quando esta fricção ocorreu pela última vez. Passe o mouse sobre o valor "
+"para ver quando foi vista pela primeira vez."
+
+#: opti-behavior/includes/tooltip-helper.php:1627
+msgid ""
+"The devices, browsers, and countries of the affected visitors — helps spot "
+"device- or browser-specific issues."
+msgstr ""
+"Os dispositivos, navegadores e países dos visitantes afetados — ajuda a "
+"identificar problemas específicos de dispositivo ou navegador."
+
+#: opti-behavior/includes/tooltip-helper.php:1628
+msgid "Who ran into it and on what device."
+msgstr "Quem o encontrou e em qual dispositivo."
+
+#: opti-behavior/includes/tooltip-helper.php:1633
+msgid ""
+"Open the event details, or expand the per-page breakdown for grouped events."
+msgstr ""
+"Abra os detalhes do evento ou expanda o detalhamento por página para eventos"
+" agrupados."
+
+#: opti-behavior/includes/tooltip-helper.php:1634
+msgid "Things you can do with this event."
+msgstr "O que você pode fazer com este evento."
+
+#: opti-behavior/includes/tooltip-helper.php:1641
+msgid "The page these speed metrics were measured on."
+msgstr "A página em que essas métricas de velocidade foram medidas."
+
+#: opti-behavior/includes/tooltip-helper.php:1642
+msgid "Which page the numbers belong to."
+msgstr "A qual página os números pertencem."
+
+#: opti-behavior/includes/tooltip-helper.php:1646
+msgid "Score"
+msgstr "Pontuação"
+
+#: opti-behavior/includes/tooltip-helper.php:1647
+msgid ""
+"An overall performance score from 0 to 100 based on real visitor timings. "
+"Higher is better; below 50 signals significant problems."
+msgstr ""
+"Uma pontuação geral de desempenho de 0 a 100 baseada em medições de "
+"visitantes reais. Quanto mais alta, melhor; abaixo de 50 indica problemas "
+"significativos."
+
+#: opti-behavior/includes/tooltip-helper.php:1648
+msgid "Overall speed grade. Higher = faster!"
+msgstr "Nota geral de velocidade. Mais alta = mais rápida!"
+
+#: opti-behavior/includes/tooltip-helper.php:1652
+msgid "Load Time"
+msgstr "Tempo de carregamento"
+
+#: opti-behavior/includes/tooltip-helper.php:1653
+msgid ""
+"The average full page load time for real visitors. Aim for under 3 seconds —"
+" longer times lose visitors."
+msgstr ""
+"O tempo médio de carregamento completo da página para visitantes reais. "
+"Busque menos de 3 segundos — tempos maiores perdem visitantes."
+
+#: opti-behavior/includes/tooltip-helper.php:1654
+msgid "How long the page takes to load."
+msgstr "Quanto tempo a página leva para carregar."
+
+#: opti-behavior/includes/tooltip-helper.php:1658
+msgid "LCP"
+msgstr "LCP"
+
+#: opti-behavior/includes/tooltip-helper.php:1659
+msgid ""
+"Largest Contentful Paint — how long until the page's main content becomes "
+"visible. Good: under 2.5s."
+msgstr ""
+"Largest Contentful Paint — quanto tempo até o conteúdo principal da página "
+"ficar visível. Bom: abaixo de 2,5s."
+
+#: opti-behavior/includes/tooltip-helper.php:1660
+msgid "How fast the main content shows up."
+msgstr "Com que rapidez o conteúdo principal aparece."
+
+#: opti-behavior/includes/tooltip-helper.php:1664
+msgid "Responsiveness"
+msgstr "Responsividade"
+
+#: opti-behavior/includes/tooltip-helper.php:1665
+msgid ""
+"Interaction to Next Paint (INP; legacy FID as fallback) — how quickly the "
+"page reacts to clicks and typing. Good: 200ms or less."
+msgstr ""
+"Interaction to Next Paint (INP; FID legado como alternativa) — com que "
+"rapidez a página reage a cliques e digitação. Bom: 200ms ou menos."
+
+#: opti-behavior/includes/tooltip-helper.php:1666
+msgid "How fast the page reacts when you click."
+msgstr "Com que rapidez a página reage quando você clica."
+
+#: opti-behavior/includes/tooltip-helper.php:1670
+msgid "CLS"
+msgstr "CLS"
+
+#: opti-behavior/includes/tooltip-helper.php:1671
+msgid ""
+"Cumulative Layout Shift — how much the page content jumps around while "
+"loading. Good: under 0.1."
+msgstr ""
+"Cumulative Layout Shift — o quanto o conteúdo da página se desloca durante o"
+" carregamento. Bom: abaixo de 0,1."
+
+#: opti-behavior/includes/tooltip-helper.php:1672
+msgid "How much the page jumps while loading."
+msgstr "O quanto a página pula durante o carregamento."
+
+#: opti-behavior/includes/tooltip-helper.php:1677
+msgid ""
+"The number of visitor sessions the metrics were measured from. More sessions"
+" means more reliable numbers."
+msgstr ""
+"O número de sessões de visitantes a partir das quais as métricas foram "
+"medidas. Mais sessões significam números mais confiáveis."
+
+#: opti-behavior/includes/tooltip-helper.php:1678
+msgid "How many visits the numbers come from."
+msgstr "De quantas visitas os números vêm."
+
+#: opti-behavior/includes/tooltip-helper.php:1684
+msgid "Reported URL"
+msgstr "URL Reportada"
+
+#: opti-behavior/includes/tooltip-helper.php:1685
+msgid ""
+"The broken destination URL visitors hit, with its resource type and status "
+"badges and the link text when available."
+msgstr ""
+"A URL de destino quebrada que os visitantes encontraram, com seus selos de "
+"tipo de recurso e status e o texto do link quando disponível."
+
+#: opti-behavior/includes/tooltip-helper.php:1686
+msgid "The address that doesn't work."
+msgstr "O endereço que não funciona."
+
+#: opti-behavior/includes/tooltip-helper.php:1690
+msgid "Source Page"
+msgstr "Página de Origem"
+
+#: opti-behavior/includes/tooltip-helper.php:1691
+msgid ""
+"The page on your site that contains the broken link — where to go to fix it."
+msgstr ""
+"A página do seu site que contém o link quebrado — onde ir para corrigi-lo."
+
+#: opti-behavior/includes/tooltip-helper.php:1692
+msgid "The page the bad link lives on."
+msgstr "A página onde o link com problema está."
+
+#: opti-behavior/includes/tooltip-helper.php:1696
+msgid "HTTP"
+msgstr "HTTP"
+
+#: opti-behavior/includes/tooltip-helper.php:1697
+msgid ""
+"The HTTP status returned when the link was verified (e.g. 404 = not found). "
+"Hover the badge for verification details."
+msgstr ""
+"O status HTTP retornado quando o link foi verificado (ex.: 404 = não "
+"encontrado). Passe o mouse sobre o selo para ver os detalhes da verificação."
+
+#: opti-behavior/includes/tooltip-helper.php:1698
+msgid "The error code the link returns."
+msgstr "O código de erro que o link retorna."
+
+#: opti-behavior/includes/tooltip-helper.php:1703
+msgid ""
+"The number of visitor sessions that hit this broken link (the primary "
+"metric), with total occurrences shown below it."
+msgstr ""
+"O número de sessões de visitantes que encontraram este link quebrado (a "
+"métrica principal), com o total de ocorrências abaixo."
+
+#: opti-behavior/includes/tooltip-helper.php:1704
+msgid "How many visits hit the bad link."
+msgstr "Quantas visitas encontraram o link com problema."
+
+#: opti-behavior/includes/tooltip-helper.php:1708
+msgid "Last Detected"
+msgstr "Última Detecção"
+
+#: opti-behavior/includes/tooltip-helper.php:1709
+msgid "When this broken link was last detected on your site."
+msgstr "Quando este link quebrado foi detectado pela última vez no seu site."
+
+#: opti-behavior/includes/tooltip-helper.php:1710
+msgid "The last time it was seen broken."
+msgstr "A última vez que foi visto quebrado."
+
+#: opti-behavior/includes/tooltip-helper.php:1715
+msgid ""
+"Recheck the link now, mark it as fixed, or reopen a fixed/ignored link."
+msgstr ""
+"Verifique o link novamente agora, marque-o como corrigido ou reabra um link "
+"corrigido/ignorado."
+
+#: opti-behavior/includes/tooltip-helper.php:1716
+msgid "Things you can do with this link."
+msgstr "O que você pode fazer com este link."
+
+#. translators: 1: deleted sessions, 2: minimum age in days.
+#: opti-behavior/includes/class-opti-behavior-smart-cleanup-service.php:876
+msgid ""
+"Aged-spam trickle: %1$d spam session(s) older than %2$d day(s) were still "
+"purged within the nightly cap; recent sessions were left untouched pending "
+"review."
+msgstr ""
+"Limpeza gradual de spam antigo: %1$d sessão(ões) de spam com mais de %2$d "
+"dia(s) ainda foram removidas dentro do limite noturno; as sessões recentes "
+"foram mantidas intactas aguardando revisão."
+
+#: opti-behavior/includes/class-opti-behavior-cron-health.php:139
+msgid ""
+"Opti Behavior: WP-Cron does not appear to be firing on this site. Scheduled "
+"background tasks (reports, aggregation, cleanup) are overdue. Low-traffic "
+"sites or a misconfigured cron setup are common causes."
+msgstr ""
+"Opti Behavior: o WP-Cron não parece estar sendo executado neste site. As "
+"tarefas agendadas em segundo plano (relatórios, agregação, limpeza) estão "
+"atrasadas. Sites com pouco tráfego ou uma configuração de cron incorreta são"
+" causas comuns."
+
+#: opti-behavior/includes/class-opti-behavior-cron-health.php:142
+msgid ""
+"DISABLE_WP_CRON is set to true in wp-config.php — make sure a real (system) "
+"cron job requests wp-cron.php regularly."
+msgstr ""
+"DISABLE_WP_CRON está definido como true no wp-config.php — garanta que um "
+"cron job real (do sistema) acesse wp-cron.php regularmente."
+
+#: opti-behavior/includes/class-opti-behavior-cron-health.php:149
+msgid "Dismiss for one week"
+msgstr "Dispensar por uma semana"
+
+#: opti-behavior/includes/trait-opti-behavior-settings-views.php:1524
+#: opti-behavior/includes/trait-opti-behavior-settings-views.php:1532
+msgid "Purge cache after funnel modification"
+msgstr "Limpar o cache após modificação de funil"
+
+#: opti-behavior/includes/trait-opti-behavior-settings-views.php:1527
+msgid ""
+"With \"Never purge automatically\", pages still served from an existing "
+"cache keep the old funnel tracking configuration until the cache expires or "
+"is refreshed — how long that takes depends on the caching plugin's "
+"configuration and cache lifespan. New or changed funnels will not collect "
+"data on those cached pages until then."
+msgstr ""
+"Com \"Nunca limpar automaticamente\", as páginas ainda servidas a partir de "
+"um cache existente mantêm a configuração antiga de rastreamento de funis até"
+" que o cache expire ou seja atualizado — o tempo depende da configuração e "
+"da vida útil do cache do plugin de cache. Funis novos ou alterados não "
+"coletarão dados nessas páginas em cache até lá."
+
+#: opti-behavior/includes/trait-opti-behavior-settings-views.php:1534
+msgid "Purge all page caches (default)"
+msgstr "Limpar todos os caches de página (padrão)"
+
+#: opti-behavior/includes/trait-opti-behavior-settings-views.php:1535
+msgid "Never purge automatically"
+msgstr "Nunca limpar automaticamente"
+
+#: opti-behavior/includes/trait-opti-behavior-settings-views.php:1541
+msgid "Save cache purge setting"
+msgstr "Salvar configuração de limpeza de cache"
+
 #~ msgid "How many clicks come from phones and tablets vs computers."
 #~ msgstr "Quantos cliques vêm de celulares e tablets vs computadores."
 

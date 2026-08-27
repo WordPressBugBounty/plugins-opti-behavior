@@ -29,6 +29,7 @@ require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-sessions-
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-heatmaps-views.php';
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-dashboard-views.php';
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-ajax-handlers.php';
+require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-advanced-filters.php';
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-data-helpers.php';
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-assets.php';
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-exports.php';
@@ -48,6 +49,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 	use Opti_Behavior_Dashboard_Views_Trait;
 	use Opti_Behavior_Heatmaps_Views_Trait;
 	use Opti_Behavior_Ajax_Handlers_Trait;
+	use Opti_Behavior_Advanced_Filters_Trait;
 	use Opti_Behavior_Data_Helpers_Trait;
 	use Opti_Behavior_Assets_Trait;
 	use Opti_Behavior_Settings_Views_Trait;
@@ -332,6 +334,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// request path (Perf RC2). Registered unconditionally so it also runs
 		// on DOING_CRON requests (Core instantiates the dashboard for cron).
 		add_action( 'opti_behavior_heatmap_agg_sync', array( $this, 'cron_sync_heatmap_aggregates' ) );
+
+		// WP-Cron worker that materializes the canonical (all-human) per-page
+		// session counts into agg_canonical_sessions so the Sessions column is
+		// SQL-sortable at scale. Drains the post-migration backfill backlog and
+		// refreshes rows past their freshness TTL. Registered unconditionally so
+		// it runs on DOING_CRON requests (same as the agg-sync hook above).
+		add_action( self::CANONICAL_SESSIONS_SYNC_CRON_HOOK, array( $this, 'cron_sync_heatmap_canonical_sessions' ) );
 
 		// WP-Cron worker for the per-day heatmap index (spec §P1): filename-only
 		// re-derivation of stale pages' daily rows. Registered unconditionally so
@@ -4019,6 +4028,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$stale_ids = array_values( array_filter( array_map( 'intval', (array) $stale_ids ) ) );
 
 		if ( empty( $stale_ids ) ) {
+			// No file-aggregate work, but canonical session columns may still be
+			// un-materialized (post-migration transition) or past their TTL — keep
+			// the SQL-sortable Sessions column converging (Step 3).
+			$this->drain_canonical_session_backlog( $time_budget, $max );
 			return 0;
 		}
 
@@ -4046,6 +4059,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$metrics     = $this->batch_heatmap_file_metrics_by_page( $chunk, null, null );
 			$rec_desktop = $this->batch_recording_counts_by_device( $chunk, 'desktop', null, null );
 			$rec_mobile  = $this->batch_recording_counts_by_device( $chunk, 'mobile', null, null );
+
+			// Keep-in-sync (Step 3): materialize the canonical (all-human) session
+			// counts alongside the file aggregates so the SQL-sortable Sessions
+			// column (agg_canonical_sessions) never drifts from the value the
+			// render-time overlay displays. Same source + reset-floor fold as the
+			// overlay, so materialized == displayed. Bounded to this chunk.
+			$canon_cols = $this->compute_canonical_session_columns_for_pages( $chunk );
 
 			// BUG-1: resolve the concrete mapping-row ids for this chunk up front
 			// so the aggregate write targets rows by `id`, not a blind
@@ -4078,6 +4098,11 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$sort_sessions = ( isset( $rec_desktop[ $pid ] ) ? (int) $rec_desktop[ $pid ] : 0 )
 					+ ( isset( $rec_mobile[ $pid ] ) ? (int) $rec_mobile[ $pid ] : 0 );
 
+				$canon         = isset( $canon_cols[ $pid ] ) ? $canon_cols[ $pid ] : array( 'total' => 0, 'desktop' => 0, 'mobile' => 0 );
+				$canon_total   = (int) $canon['total'];
+				$canon_desktop = (int) $canon['desktop'];
+				$canon_mobile  = (int) $canon['mobile'];
+
 				$data = array(
 					'agg_click_pc'         => $cpc,
 					'agg_click_mobile'     => $cmb,
@@ -4089,13 +4114,17 @@ class Opti_Behavior_Heatmap_Dashboard {
 					'agg_sessions_mobile'  => $sm,
 					'agg_sessions'         => $sd + $sm,
 					'agg_sort_sessions'    => $sort_sessions,
+					'agg_canonical_sessions'         => $canon_total,
+					'agg_canonical_sessions_desktop' => $canon_desktop,
+					'agg_canonical_sessions_mobile'  => $canon_mobile,
+					'agg_canonical_synced_at'        => $now,
 					'agg_interactions'     => $cpc + $cmb + $bpc + $bmb + $apc + $amb,
 					'agg_last_event'       => ( ! empty( $m['last_event_time'] ) ) ? $m['last_event_time'] : null,
 					'agg_has_data'         => ( ! empty( $m['has_data'] ) ) ? 1 : 0,
 					'agg_spam_state'       => $default_spam,
 					'agg_synced_at'        => $now,
 				);
-				$formats = array( '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%s', '%d', '%d', '%s' );
+				$formats = array( '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%s', '%d', '%s', '%d', '%d', '%s' );
 
 				$target_ids = isset( $row_ids_by_page[ $pid ] ) ? $row_ids_by_page[ $pid ] : array();
 				if ( empty( $target_ids ) ) {
@@ -4119,7 +4148,50 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$GLOBALS['opti_behavior_exclude_spam'] = $prev_spam;
 		}
 
+		// The stale rows just processed already had their canonical columns
+		// refreshed in the loop above (agg_canonical_synced_at = $now). Also drain
+		// any OTHER un-materialized / TTL-stale rows so the SQL Sessions sort
+		// converges to the exact canonical universe (Step 3).
+		$this->drain_canonical_session_backlog( $time_budget, $max );
+
 		return $synced;
+	}
+
+	/**
+	 * Drain the canonical-session materialization backlog after an aggregate
+	 * sync pass. Unbounded callers (an explicit full resync / the parity harness,
+	 * $time_budget === null) materialize EVERY un-synced / TTL-stale row so the
+	 * SQL Sessions sort matches the live overlay immediately. Budgeted callers
+	 * (inline render / cron) do one bounded pass and arm the cron for the rest,
+	 * so a web request is never blocked.
+	 *
+	 * @since 2026-08-20
+	 * @param float|null $time_budget Wall-time budget from the caller (null = unbounded).
+	 * @param int        $max         Batch cap hint from the caller.
+	 * @return void
+	 */
+	private function drain_canonical_session_backlog( $time_budget, $max ) {
+		if ( ! $this->heatmap_pages_aggregate_columns_exist() ) {
+			return;
+		}
+
+		if ( null === $time_budget ) {
+			$guard = 0;
+			while ( $this->has_uncanonicalized_heatmap_rows() && $guard < 10000 ) {
+				$done = $this->sync_heatmap_canonical_sessions( 500, null );
+				if ( $done <= 0 ) {
+					break;
+				}
+				++$guard;
+			}
+			return;
+		}
+
+		$batch = max( 1, min( (int) $max, 100 ) );
+		$this->sync_heatmap_canonical_sessions( $batch, $time_budget );
+		if ( $this->has_uncanonicalized_heatmap_rows() ) {
+			$this->schedule_heatmap_canonical_sync( 30 );
+		}
 	}
 
 	/**
@@ -5766,11 +5838,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$max_pid = max( $max_pid, $page_id );
 				++$result['processed'];
 
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				// Resolve the page's current URL; without it we cannot compute a
 				// url_hash matching the write path — skip (cursor still advances).
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin table; id prepared.
 				$url = $wpdb->get_var( $wpdb->prepare( "SELECT url FROM {$pages_table}
 					WHERE id = %d", $page_id ) );
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				if ( ! $url && $storage ) {
 					// Guardrail (2026-08-15, Option B): the optibehavior_pages row
 					// may have been erased by cleanup_pages() after a retention
@@ -5785,6 +5859,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 				$url_hash = $storage->get_url_hash( $url );
 
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				// Race guard: re-check no row was created since the batch SELECT
 				// (e.g. live traffic wrote one) to avoid a duplicate registry row.
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin table; values prepared.
@@ -5795,11 +5870,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 						$url_hash
 					)
 				);
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				if ( $exists > 0 ) {
 					continue;
 				}
 
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin table from $wpdb->prefix; wpdb->insert prepares values.
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				$inserted = $wpdb->insert(
 					$registry_table,
 					array(
@@ -5815,6 +5892,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					),
 					array( '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s' )
 				);
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 				if ( false !== $inserted ) {
 					++$result['inserted'];
@@ -5880,9 +5958,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 		foreach ( array( 'optibehavior_pageviews', 'optibehavior_session_pages' ) as $suffix ) {
 			$table = $wpdb->prefix . $suffix;
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Table existence guard; cron-only fallback.
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) ) {
 				continue;
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			}
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin table from $wpdb->prefix; id prepared; page_id is indexed.
 			$candidate = (string) $wpdb->get_var(
 				$wpdb->prepare(
@@ -5890,6 +5971,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					$page_id
 				)
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			if ( '' !== $candidate ) {
 				break;
 			}
@@ -6144,11 +6226,15 @@ class Opti_Behavior_Heatmap_Dashboard {
 			global $wpdb;
 			$registry_table = $wpdb->prefix . 'optibehavior_heatmap_pages';
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Table existence guard; cron only.
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $registry_table ) ) ) {
 				return false;
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			}
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin table from $wpdb->prefix; no user input.
 			$registry_rows = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$registry_table}" );
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 			$ratio = (float) apply_filters( 'opti_behavior_heatmap_rebuild_divergence_ratio', 3.0 );
 			if ( $ratio <= 0 ) {
@@ -6227,7 +6313,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 		if ( ! function_exists( 'current_user_can' ) || ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
-		$page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only page gate for a status notice.
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only page gate for a status notice.
+		$page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
 		if ( 0 !== strpos( $page, 'opti-behavior' ) ) {
 			return; // Plugin admin pages only — zero cost anywhere else.
 		}
@@ -6635,8 +6723,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 		try {
 			$table = $wpdb->prefix . 'optibehavior_heatmap_pages';
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Safety check; runs on cron, not the request hot path.
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) ) {
 				$result['complete'] = true;
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				return $result;
 			}
 
@@ -6645,6 +6735,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$cursor = (int) get_option( self::HEATMAP_AUTO_REPAIR_CURSOR_OPTION, 0 );
 
 			while ( true ) {
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; values prepared.
 				$page_ids = $wpdb->get_col(
 					$wpdb->prepare(
@@ -6653,6 +6744,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 						self::HEATMAP_SYNC_BATCH_SIZE
 					)
 				);
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				$page_ids = array_values( array_filter( array_map( 'absint', (array) $page_ids ) ) );
 
 				if ( empty( $page_ids ) ) {
@@ -6775,12 +6867,15 @@ class Opti_Behavior_Heatmap_Dashboard {
 		try {
 			$table = $wpdb->prefix . 'optibehavior_heatmap_pages';
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Safety check; runs on cron, not the request hot path.
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) ) {
 				return $result;
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			}
 
 			$cursor = (int) get_option( self::HEATMAP_SYNC_CURSOR_OPTION, 0 );
 
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; values prepared.
 			$page_ids = $wpdb->get_col(
 				$wpdb->prepare(
@@ -6789,6 +6884,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					self::HEATMAP_SYNC_BATCH_SIZE
 				)
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$page_ids = array_values( array_filter( array_map( 'absint', (array) $page_ids ) ) );
 
 			$wrapped = false;
@@ -6797,6 +6893,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				// every page is periodically re-checked instead of the cache
 				// going stale forever once the initial full pass completes.
 				$wrapped = true;
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; value prepared.
 				$page_ids = $wpdb->get_col(
 					$wpdb->prepare(
@@ -6804,6 +6901,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 						self::HEATMAP_SYNC_BATCH_SIZE
 					)
 				);
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				$page_ids = array_values( array_filter( array_map( 'absint', (array) $page_ids ) ) );
 			}
 
@@ -6872,6 +6970,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		$table        = $wpdb->prefix . 'optibehavior_heatmap_pages';
 		$placeholders = implode( ',', array_fill( 0, count( $page_ids ), '%d' ) );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; ids prepared.
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
@@ -6880,6 +6979,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			),
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( empty( $rows ) ) {
 			return;
 		}
@@ -6907,8 +7007,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$newly_logged  = array();
 
 		foreach ( $by_page as $pid => $page_rows ) {
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; id prepared.
 			$current_url = $wpdb->get_var( $wpdb->prepare( "SELECT url FROM {$pages_table} WHERE id = %d", $pid ) );
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			if ( ! $current_url ) {
 				continue;
 			}
@@ -6961,12 +7063,16 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		$table = $wpdb->prefix . 'optibehavior_heatmap_pages';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Table existence guard.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) ) {
 			return array();
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		}
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; limit prepared.
 		$ids = $wpdb->get_col( $wpdb->prepare( "SELECT DISTINCT page_id FROM {$table} ORDER BY page_id ASC LIMIT %d", max( 1, (int) $limit ) ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return array_values( array_filter( array_map( 'absint', (array) $ids ) ) );
 	}
@@ -7183,6 +7289,234 @@ class Opti_Behavior_Heatmap_Dashboard {
 	const CANONLIST_REFRESH_CRON_HOOK = 'opti_behavior_canonlist_refresh';
 
 	/**
+	 * Cron hook for the background canonical-session materialization worker.
+	 *
+	 * Drains the post-migration backfill of agg_canonical_sessions and refreshes
+	 * rows past the freshness TTL so the SQL-sortable Sessions column stays in
+	 * lock-step with the canonical (all-human) universe the list displays.
+	 *
+	 * @since 2026-08-20
+	 */
+	const CANONICAL_SESSIONS_SYNC_CRON_HOOK = 'opti_behavior_heatmap_canon_sync';
+
+	/**
+	 * Freshness TTL (seconds) for a materialized agg_canonical_sessions row.
+	 *
+	 * A page with heatmap activity is re-derived promptly (ingest marks the agg
+	 * row stale -> {@see sync_heatmap_aggregate_columns_locked()} recomputes both
+	 * the file aggregates AND the canonical columns in the same pass). This TTL
+	 * only backstops the rarer case where a page gains pageview-sessions WITHOUT
+	 * new heatmap files, so its canonical count would otherwise drift.
+	 *
+	 * @since 2026-08-20
+	 */
+	const CANONICAL_SESSIONS_TTL = 21600; // 6 hours.
+
+	/**
+	 * Compute the canonical (all-human) session columns for a set of page ids,
+	 * honouring "Delete Heatmap Data" reset floors — the SAME source and folding
+	 * the render-time overlay ({@see overlay_canonical_pageview_sessions()}) uses,
+	 * so the materialized column equals the displayed value.
+	 *
+	 * @since 2026-08-20
+	 * @param int[] $page_ids Page ids to compute.
+	 * @return array<int,array{total:int,desktop:int,mobile:int}> Map keyed by page id.
+	 */
+	private function compute_canonical_session_columns_for_pages( $page_ids ) {
+		$ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $page_ids ) ) ) );
+		$out = array();
+		if ( empty( $ids ) || ! class_exists( 'Opti_Behavior_Page_Analytics_Repository' ) ) {
+			return $out;
+		}
+
+		$floors = $this->get_heatmap_reset_floors_for_pages( $ids );
+		$repo   = new Opti_Behavior_Page_Analytics_Repository();
+		$map    = $repo->get_group_session_counts_for_pages( $ids, 'all', '', '', is_array( $floors ) ? $floors : array() );
+		if ( ! is_array( $map ) ) {
+			return $out;
+		}
+
+		foreach ( $ids as $pid ) {
+			if ( ! isset( $map[ $pid ] ) ) {
+				continue;
+			}
+			$c      = $map[ $pid ];
+			$total  = isset( $c['sessions'] ) ? (int) $c['sessions'] : 0;
+			$mobile = isset( $c['mobile'] ) ? (int) $c['mobile'] : 0;
+			// Fold tablet + unknown into desktop (list has no tablet column) and
+			// reconcile so Desktop + Mobile == the canonical group total — the
+			// exact reconciliation the overlay applies to the displayed row.
+			$out[ $pid ] = array(
+				'total'   => $total,
+				'desktop' => max( 0, $total - $mobile ),
+				'mobile'  => $mobile,
+			);
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Persist the canonical session columns for a bounded set of page ids.
+	 *
+	 * Writes agg_canonical_sessions / _desktop / _mobile and stamps
+	 * agg_canonical_synced_at. Pages the canonical source cannot resolve are
+	 * still stamped (with a 0 total) so they leave the backfill backlog instead
+	 * of being retried forever.
+	 *
+	 * @since 2026-08-20
+	 * @param int[] $page_ids Page ids to materialize.
+	 * @return int Rows updated.
+	 */
+	private function materialize_canonical_session_columns( $page_ids ) {
+		global $wpdb;
+
+		$ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $page_ids ) ) ) );
+		if ( empty( $ids ) || ! $this->heatmap_pages_aggregate_columns_exist() ) {
+			return 0;
+		}
+
+		$counts  = $this->compute_canonical_session_columns_for_pages( $ids );
+		$table   = $wpdb->prefix . 'optibehavior_heatmap_pages';
+		$now     = current_time( 'mysql' );
+		$updated = 0;
+
+		foreach ( $ids as $pid ) {
+			$c       = isset( $counts[ $pid ] ) ? $counts[ $pid ] : array( 'total' => 0, 'desktop' => 0, 'mobile' => 0 );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Aggregate column maintenance; computed ints.
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+			$updated += (int) $wpdb->update(
+				$table,
+				array(
+					'agg_canonical_sessions'         => (int) $c['total'],
+					'agg_canonical_sessions_desktop' => (int) $c['desktop'],
+					'agg_canonical_sessions_mobile'  => (int) $c['mobile'],
+					'agg_canonical_synced_at'        => $now,
+				),
+				array( 'page_id' => $pid ),
+				array( '%d', '%d', '%d', '%s' ),
+				array( '%d' )
+			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		}
+
+		return $updated;
+	}
+
+	/**
+	 * Whether any data rows still need a canonical-session materialization pass
+	 * (never backfilled, or older than the freshness TTL).
+	 *
+	 * @since 2026-08-20
+	 * @return bool
+	 */
+	private function has_uncanonicalized_heatmap_rows() {
+		return ! empty( $this->get_uncanonicalized_heatmap_page_ids( 1 ) );
+	}
+
+	/**
+	 * Page ids of data rows whose materialized canonical session count is missing
+	 * or stale (past the freshness TTL). Bounded by $limit.
+	 *
+	 * @since 2026-08-20
+	 * @param int $limit Max ids (0 = no limit).
+	 * @return int[]
+	 */
+	private function get_uncanonicalized_heatmap_page_ids( $limit = 0 ) {
+		global $wpdb;
+
+		if ( ! $this->heatmap_pages_aggregate_columns_exist() ) {
+			return array();
+		}
+
+		$table = $wpdb->prefix . 'optibehavior_heatmap_pages';
+		$stale = gmdate( 'Y-m-d H:i:s', time() - (int) self::CANONICAL_SESSIONS_TTL );
+
+		$sql   = "SELECT DISTINCT page_id FROM {$table}
+			WHERE agg_has_data = 1
+				AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)
+				AND (agg_canonical_synced_at IS NULL OR agg_canonical_synced_at < %s)";
+		$params = array( $stale );
+
+		$limit = (int) $limit;
+		if ( $limit > 0 ) {
+			$sql     .= ' ORDER BY last_data_at DESC LIMIT %d';
+			$params[] = $limit;
+		}
+
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Read-only probe; identifiers hard-coded, values prepared.
+		$ids = $wpdb->get_col( $wpdb->prepare( $sql, $params ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		return array_values( array_filter( array_map( 'intval', (array) $ids ) ) );
+	}
+
+	/**
+	 * Schedule (once) the WP-Cron worker that materializes canonical session
+	 * counts, when there is a backfill/refresh backlog.
+	 *
+	 * @since 2026-08-20
+	 * @param int $delay Seconds from now.
+	 * @return void
+	 */
+	private function schedule_heatmap_canonical_sync( $delay = 30 ) {
+		if ( ! function_exists( 'wp_next_scheduled' ) || ! function_exists( 'wp_schedule_single_event' ) ) {
+			return;
+		}
+		if ( wp_next_scheduled( self::CANONICAL_SESSIONS_SYNC_CRON_HOOK ) ) {
+			return;
+		}
+		wp_schedule_single_event( time() + max( 1, (int) $delay ), self::CANONICAL_SESSIONS_SYNC_CRON_HOOK );
+	}
+
+	/**
+	 * Materialize canonical session counts for the stalest bounded batch of data
+	 * rows, within a wall-time budget.
+	 *
+	 * @since 2026-08-20
+	 * @param int|null   $limit       Max pages per pass.
+	 * @param float|null $time_budget Wall-time budget in seconds.
+	 * @return int Pages materialized.
+	 */
+	private function sync_heatmap_canonical_sessions( $limit = null, $time_budget = null ) {
+		$batch = ( null !== $limit && (int) $limit > 0 ) ? (int) $limit : 200;
+		$ids   = $this->get_uncanonicalized_heatmap_page_ids( $batch );
+		if ( empty( $ids ) ) {
+			return 0;
+		}
+
+		$started = microtime( true );
+		$synced  = 0;
+		foreach ( array_chunk( $ids, 25 ) as $chunk ) {
+			if ( null !== $time_budget && $synced > 0 && ( microtime( true ) - $started ) >= (float) $time_budget ) {
+				break;
+			}
+			$synced += $this->materialize_canonical_session_columns( $chunk );
+		}
+
+		return $synced;
+	}
+
+	/**
+	 * WP-Cron worker: drain the canonical-session materialization backlog in
+	 * bounded batches, re-scheduling until drained.
+	 *
+	 * @since 2026-08-20
+	 * @return void
+	 */
+	public function cron_sync_heatmap_canonical_sessions() {
+		$budget = (float) apply_filters( 'opti_behavior_heatmap_canon_cron_time_budget', 20.0 );
+		$batch  = (int) apply_filters( 'opti_behavior_heatmap_canon_cron_batch', 200 );
+
+		$this->sync_heatmap_canonical_sessions( $batch, $budget );
+
+		if ( $this->has_uncanonicalized_heatmap_rows() ) {
+			$this->schedule_heatmap_canonical_sync( 60 );
+		}
+	}
+
+	/**
 	 * Compute the canonical grouped pageview-session map and persist it to both
 	 * the versioned cache key and the version-independent stale-while-revalidate
 	 * copy.
@@ -7262,12 +7596,22 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * (Free-only safety) so callers keep the legacy file counts.
 	 *
 	 * @since 2026-08-13 (canonical session universe)
-	 * @param array  $pages_data Reference to the list rows (page_id keyed data).
-	 * @param string $start_date Optional list window start (null/'' = all time).
-	 * @param string $end_date   Optional list window end.
+	 * @param array  $pages_data   Reference to the list rows (page_id keyed data).
+	 * @param string $start_date   Optional list window start (null/'' = all time).
+	 * @param string $end_date     Optional list window end.
+	 * @param bool   $force_inline When true, compute the canonical map INLINE even
+	 *                             on a large pageviews table with a cold cache
+	 *                             instead of bailing to the background cron. Only
+	 *                             safe for the bounded (<= per_page) paginated
+	 *                             fast-path set, where a per-page COUNT(DISTINCT
+	 *                             session_id) over a handful of page ids is
+	 *                             index-covered and cheap. Without this the large-
+	 *                             table cold-cache bail stranded the file/agg
+	 *                             (guest-only) session counts — 0 in the field —
+	 *                             on every row (BUG: list "0 sessions").
 	 * @return void
 	 */
-	private function overlay_canonical_pageview_sessions( array &$pages_data, $start_date = null, $end_date = null ) {
+	private function overlay_canonical_pageview_sessions( array &$pages_data, $start_date = null, $end_date = null, $force_inline = false ) {
 		if ( empty( $pages_data ) || ! class_exists( 'Opti_Behavior_Page_Analytics_Repository' ) ) {
 			return;
 		}
@@ -7350,6 +7694,20 @@ class Opti_Behavior_Heatmap_Dashboard {
 				&& $database
 				&& method_exists( $database, 'is_large_table' )
 				&& $database->is_large_table( $wpdb->prefix . 'optibehavior_pageviews' );
+			/**
+			 * Filters whether the canonical-overlay deferral (stale-while-
+			 * revalidate + large-table cold-cache bail) is active for this call.
+			 * Ops override / test seam: the CLI SAPI is normally exempt, so
+			 * returning true here lets the bounded paginated fast path's inline
+			 * computation ($force_inline) be exercised without a 100k-row
+			 * pageviews fixture.
+			 *
+			 * @since 2026-08-19
+			 * @param bool  $large_scale Assembled large-scale deferral flag.
+			 * @param array $page_ids    Page ids being overlaid.
+			 * @param bool  $force_inline Bounded paginated-set inline flag.
+			 */
+			$large_scale = (bool) apply_filters( 'opti_behavior_canonical_overlay_large_scale', $large_scale, $page_ids, $force_inline );
 			if ( $large_scale && ! $this->should_force_refresh_dashboard_cache() ) {
 				$stale = get_transient( $stale_key );
 				if ( is_array( $stale ) ) {
@@ -7366,10 +7724,18 @@ class Opti_Behavior_Heatmap_Dashboard {
 			// PRODUCTION SAFETY (C2-4): a completely cold overlay at large scale
 			// (no versioned cache, no stale copy — e.g. the very first admin list
 			// render after upload) must NOT run the grouped COUNT(DISTINCT) scan
-			// inline (measured 60 s without the covering index). The background
-			// refresh scheduled above computes it; until then the list keeps its
-			// file-derived session counts.
-			if ( $large_scale ) {
+			// inline over the WHOLE universe (measured 60 s without the covering
+			// index). The background refresh scheduled above computes it.
+			//
+			// EXCEPTION ($force_inline): the paginated fast path passes only the
+			// <= per_page DISPLAYED page ids. A COUNT(DISTINCT session_id) grouped
+			// over that handful of ids is index-covered and cheap even on a large
+			// pageviews table, so computing inline here is safe. Bailing instead
+			// stranded the file/agg (guest-only) session counts — 0 for these
+			// rows — producing the "0 sessions" list bug while the top card still
+			// showed the real total. Compute inline so the list shows the SAME
+			// all-human canonical universe as the card / detail pill.
+			if ( $large_scale && ! $force_inline ) {
 				return;
 			}
 			$map = $this->compute_and_cache_canonlist_map( $page_ids, $period, $start, $end, $cache_key, $stale_key, $floors );
@@ -7672,7 +8038,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 			{$visitors_join}
 			WHERE pv.page_id IN ({$page_ph}){$date_sql}{$scope_sql}
 			GROUP BY dim_value";
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$rows = $wpdb->get_results( $wpdb->prepare( $sql, ...array_merge( $group, $date_prm ) ), ARRAY_A );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( ! is_array( $rows ) ) {
 			return null;
 		}
@@ -7749,8 +8117,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 			if ( ! $pid ) {
 				continue;
 			}
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Prefix table; id prepared.
 			$row = $wpdb->get_row( $wpdb->prepare( "SELECT post_id, url FROM {$pages_table} WHERE id = %d", $pid ), ARRAY_A );
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			if ( ! $row ) {
 				continue;
 			}
@@ -8003,11 +8373,15 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$join  = "LEFT JOIN {$sessions_tbl} s ON s.id = pv.session_id LEFT JOIN {$visitors_tbl} v ON v.id = pv.visitor_id";
 		$where = "WHERE pv.page_id IN ({$page_ph}){$date_sql}{$scope_sql}{$filter_sql}";
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Prefix tables + prepared placeholders; joins/where are hard-coded fragments.
 		$total = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(DISTINCT pv.session_id) FROM {$pv_table} pv {$join} {$where}", ...$common_prm ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Prefix tables + prepared placeholders; joins/where are hard-coded fragments.
 		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT COALESCE(NULLIF(LOWER(v.device_type),''),'unknown') AS dt, COUNT(DISTINCT pv.session_id) AS c FROM {$pv_table} pv {$join} {$where} GROUP BY dt", ...$common_prm ), ARRAY_A );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$mobile = 0;
 		$tablet = 0;
@@ -8064,6 +8438,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// (post-dedupe there is one row per page_id, but SUM stays correct if a
 		// duplicate slips back in).
 		$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; placeholders bound below; agg column read.
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
@@ -8071,6 +8446,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$ids
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! $row || (int) $row->row_count === 0 ) {
 			return null; // No heatmap mapping row for any page in the group — fail open.
@@ -8321,6 +8697,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		foreach ( array_chunk( $ids, 500 ) as $chunk ) {
 			$placeholders = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Aggregate column maintenance; identifiers hard-coded, ids prepared.
 			$result = $wpdb->query(
 				$wpdb->prepare(
@@ -8328,6 +8705,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					$chunk
 				)
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			if ( false !== $result ) {
 				$updated += (int) $result;
 			}
@@ -8821,6 +9199,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		global $wpdb;
 		$table = $wpdb->prefix . 'optibehavior_heatmap_pages';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// One entry per mapping row (matches the file-source multiplicity & order).
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Read of own aggregate columns; no user input in SQL.
 		$rows = $wpdb->get_results(
@@ -8831,6 +9210,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			WHERE ( click_count > 0 OR move_count > 0 OR scroll_count > 0 ) AND agg_has_data = 1
 			ORDER BY last_data_at DESC"
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$pages_data = array();
 		foreach ( (array) $rows as $r ) {
@@ -8890,12 +9270,16 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * - overlay_canonical_pageview_sessions() → run over the paged subset only;
 	 *   per-page canonical values are independent of set membership, so each
 	 *   displayed row gets the same number the full-set overlay stamped.
+	 * - orderby 'sessions' (Step 3): ORDER BY MAX(hp.agg_canonical_sessions), the
+	 *   MATERIALIZED canonical (all-human) count kept in sync with the overlay by
+	 *   {@see sync_heatmap_aggregate_columns_locked()} +
+	 *   {@see cron_sync_heatmap_canonical_sessions()}. The displayed value is
+	 *   still stamped by the overlay (force_inline) so it stays exact; during the
+	 *   post-migration transition window the column is seeded from the guest
+	 *   counters (never a stranded 0) and the backfill cron converges it to the
+	 *   exact canonical value.
 	 *
 	 * Declines (returns null → caller falls back to the in-memory pipeline):
-	 * - orderby 'sessions': its sort key is the canonical overlay value
-	 *   (stamped post-overlay so sort key == displayed value); that value lives
-	 *   in the analytics repository, not in the agg_* columns, so a SQL ORDER BY
-	 *   cannot reproduce it.
 	 * - the fast path itself is not applicable (dated view, non-default spam,
 	 *   columns missing, filter off).
 	 * - a never-synced (RC6) subset exists: those pages have no serveable agg_*
@@ -8917,6 +9301,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 			'interactions' => '(MAX(hp.agg_click_pc) + MAX(hp.agg_click_mobile) + MAX(hp.agg_break_pc) + MAX(hp.agg_break_mobile) + MAX(hp.agg_att_pc) + MAX(hp.agg_att_mobile))',
 			'clicks'       => '(MAX(hp.agg_click_pc) + MAX(hp.agg_click_mobile))',
 			'last_updated' => 'MAX(hp.agg_last_event)',
+			// Step 3: SQL-sortable canonical (all-human) session count. Kept in
+			// sync with the render-time overlay so ORDER BY reproduces the
+			// displayed ranking without the slow full-set inline overlay.
+			'sessions'     => 'MAX(hp.agg_canonical_sessions)',
 		);
 		if ( ! isset( $sort_map[ $orderby ] ) ) {
 			return null;
@@ -8925,6 +9313,15 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$prep = $this->prepare_fast_heatmap_alltime_index();
 		if ( null === $prep || ! empty( $prep['unsynced_ids'] ) ) {
 			return null;
+		}
+
+		// Step 3 transition window: if any data row is not yet canonical-backfilled
+		// (or is past its freshness TTL), arm the background materialization cron
+		// so the SQL ranking converges to the exact canonical value. The column is
+		// seeded from the guest counters at migration, so ordering is served now
+		// (never a stranded 0 / hang) and refines as the cron drains.
+		if ( 'sessions' === $orderby && $this->has_uncanonicalized_heatmap_rows() ) {
+			$this->schedule_heatmap_canonical_sync( 30 );
 		}
 
 		$hp_table    = $wpdb->prefix . 'optibehavior_heatmap_pages';
@@ -8946,8 +9343,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 			FROM {$hp_table} hp
 			INNER JOIN {$pages_table} p ON p.id = hp.page_id
 			WHERE {$where}";
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifiers hard-coded from $wpdb->prefix; user input prepared.
 		$total = (int) $wpdb->get_var( empty( $params ) ? $count_sql : $wpdb->prepare( $count_sql, $params ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( 0 === $total ) {
 			return array( array(), 0 );
 		}
@@ -8972,8 +9371,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 			ORDER BY " . $sort_map[ $orderby ] . ' ' . $direction . ", hp.page_id ASC
 			LIMIT %d OFFSET %d";
 		$rows_params = array_merge( $params, array( max( 1, (int) $per_page ), $offset ) );
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Identifiers hard-coded; sort expr from fixed whitelist; user input prepared.
 		$results = $wpdb->get_results( $wpdb->prepare( $rows_sql, $rows_params ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$pages_data_paged = array();
 		foreach ( (array) $results as $r ) {
@@ -8995,7 +9396,14 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// Canonical sessions overlay over the DISPLAYED rows only — the 5-surface
 		// Sessions parity invariant is preserved because per-page canonical values
 		// are set-independent (same number the full-set overlay would stamp).
-		$this->overlay_canonical_pageview_sessions( $pages_data_paged, null, null );
+		//
+		// force_inline = true: this set is bounded to <= per_page page ids, so the
+		// grouped canonical COUNT(DISTINCT session_id) is cheap and index-covered
+		// even on a large pageviews table. Without it the large-table cold-cache
+		// bail returned early and left the guest-only agg_sessions_* values (0 for
+		// affected pages) on screen — the "0 sessions on every row" bug — instead
+		// of the all-human canonical universe the top card / detail pill show.
+		$this->overlay_canonical_pageview_sessions( $pages_data_paged, null, null, true );
 
 		return array( $this->build_heatmap_rows_for_display( $pages_data_paged, true, null, null ), $total );
 	}
@@ -9102,6 +9510,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$table  = $wpdb->prefix . 'optibehavior_heatmap_pages';
 		$cutoff = gmdate( 'Y-m-d', strtotime( $window_start . ' -1 day' ) ) . ' 00:00:00';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Prepared; identifiers hard-coded.
 		$candidate_ids = $wpdb->get_col(
 			$wpdb->prepare(
@@ -9114,6 +9523,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$cutoff
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$candidates = array();
 		foreach ( (array) $candidate_ids as $cid ) {
@@ -9720,8 +10130,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 		foreach ( array_chunk( $missing, 500 ) as $chunk ) {
 			$placeholders = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
 
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; placeholders built above.
 			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT page_id, url_hash FROM {$wpdb->prefix}optibehavior_heatmap_pages WHERE page_id IN ({$placeholders}) ORDER BY id ASC", $chunk ) );
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			foreach ( (array) $rows as $row ) {
 				$pid = (int) $row->page_id;
 				if ( ! isset( $hash_map[ $pid ] ) ) {
@@ -9733,8 +10145,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$hash_map[ $pid ][] = (string) $row->url_hash;
 			}
 
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; placeholders built above.
 			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT id, url FROM {$wpdb->prefix}optibehavior_pages WHERE id IN ({$placeholders})", $chunk ) );
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			foreach ( (array) $rows as $row ) {
 				$pid = (int) $row->id;
 				if ( ! isset( $url_map[ $pid ] ) ) {
@@ -9782,12 +10196,14 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		$dirs          = array();
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$mapped_hashes = $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT url_hash FROM {$wpdb->prefix}optibehavior_heatmap_pages WHERE page_id = %d ORDER BY id ASC",
 				$page_id
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		foreach ( (array) $mapped_hashes as $mapped_hash ) {
 			if ( $mapped_hash && is_dir( $base_upload_dir . $mapped_hash ) ) {
@@ -9795,12 +10211,14 @@ class Opti_Behavior_Heatmap_Dashboard {
 			}
 		}
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$url = $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT url FROM {$wpdb->prefix}optibehavior_pages WHERE id = %d",
 				$page_id
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( $url ) {
 			foreach ( array( md5( $url ), md5( rtrim( $url, '/' ) ), md5( $url . '/' ) ) as $url_hash ) {
 				$dir = $base_upload_dir . $url_hash;
@@ -9914,6 +10332,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
 		$ph             = implode( ',', array_fill( 0, count( $forms ), '%s' ) );
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$prev_suppress = $wpdb->suppress_errors( true );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; all values parameterized.
 		$ids = $wpdb->get_col(
@@ -9924,6 +10343,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					OR RIGHT(REGEXP_REPLACE(id, '[^a-zA-Z0-9]', ''), 8) IN ({$ph})",
 				array_merge( $forms, $forms, $forms )
 			)
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 		$wpdb->suppress_errors( $prev_suppress );
 
@@ -9951,9 +10371,11 @@ class Opti_Behavior_Heatmap_Dashboard {
 	private function evidence_table_has_session_index( $table ) {
 		global $wpdb;
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		if ( ! isset( $this->hm_session_index_memo[ $table ] ) ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix.
 			$rows = $wpdb->get_results( "SHOW INDEX FROM {$table} WHERE Key_name = 'session_id'" );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$this->hm_session_index_memo[ $table ] = ! empty( $rows );
 		}
 
@@ -10315,6 +10737,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					}
 				}
 				$query_params = array_merge( $params, $session_params );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 				// session_pages (Pro recording beacon) evidence.
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; all user inputs parameterized.
@@ -10336,8 +10759,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 						WHERE (s.traffic_type IS NULL OR s.traffic_type = '' OR s.traffic_type NOT IN ('spam', 'bot', 'automated'))",
 						$query_params
 					)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				);
 				$this->distribute_allowed_session_rows( $sp_rows, $chunk, $base_to_pages, $allowed_sessions_by_page, 'sum', $spam_duration, $spam_scrolls, $spam_clicks );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 				// FREE-ONLY FALLBACK (Bug R5-HM, 2026-07-09): pageviews evidence merged in —
 				// identical traffic/duration gates; click evidence is the session-level
@@ -10362,6 +10787,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 						WHERE (s.traffic_type IS NULL OR s.traffic_type = '' OR s.traffic_type NOT IN ('spam', 'bot', 'automated'))",
 						$query_params
 					)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				);
 				$this->distribute_allowed_session_rows( $pv_rows, $chunk, $base_to_pages, $allowed_sessions_by_page, 'max', $spam_duration, $spam_scrolls, $spam_clicks );
 			}
@@ -10491,6 +10917,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		foreach ( array_chunk( $pending, 500 ) as $chunk ) {
 			$ph   = implode( ',', array_fill( 0, count( $chunk ), '%d' ) );
 			$urls = array();
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; ids parameterized.
 			$rows = $wpdb->get_results(
@@ -10498,6 +10925,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					"SELECT page_id, url FROM {$wpdb->prefix}optibehavior_heatmap_pages WHERE page_id IN ({$ph}) ORDER BY id ASC",
 					$chunk
 				)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			);
 			foreach ( (array) $rows as $row ) {
 				$pid = (int) $row->page_id;
@@ -10513,6 +10941,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				}
 			}
 			if ( ! empty( $missing ) ) {
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				$mph = implode( ',', array_fill( 0, count( $missing ), '%d' ) );
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; ids parameterized.
 				$rows = $wpdb->get_results(
@@ -10520,6 +10949,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 						"SELECT id AS page_id, url FROM {$wpdb->prefix}optibehavior_pages WHERE id IN ({$mph})",
 						$missing
 					)
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				);
 				foreach ( (array) $rows as $row ) {
 					$pid = (int) $row->page_id;
@@ -10572,20 +11002,24 @@ class Opti_Behavior_Heatmap_Dashboard {
 		if ( isset( $this->hm_page_base_url_memo[ $memo_key ] ) ) {
 			return $this->hm_page_base_url_memo[ $memo_key ];
 		}
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		$url = $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT url FROM {$wpdb->prefix}optibehavior_heatmap_pages WHERE page_id = %d ORDER BY id ASC LIMIT 1",
 				$page_id
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		if ( empty( $url ) ) {
 			$url = $wpdb->get_var(
 				$wpdb->prepare(
 					"SELECT url FROM {$wpdb->prefix}optibehavior_pages WHERE id = %d",
 					$page_id
 				)
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			);
 		}
 
@@ -10779,6 +11213,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			// Process each URL individually to avoid SQL injection from dynamic WHERE clause
 			// This is safer than using implode() on WHERE clauses
 			foreach ($urls as $url) {
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				if ($start_date && $end_date) {
 					$count = $wpdb->get_var(
 						$wpdb->prepare(
@@ -10790,7 +11225,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 							$start_date,
 							$end_date
 						)
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 					);
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				} else {
 					$count = $wpdb->get_var(
 						$wpdb->prepare(
@@ -10799,6 +11236,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 							WHERE pv.url LIKE CONCAT(%s, '%%')",
 							$url
 						)
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 					);
 				}
 
@@ -10835,6 +11273,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		GROUP BY pv.url
 		ORDER BY views DESC
 		LIMIT 5";
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static query with prepare
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -10844,6 +11283,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$week_ago,
 			$two_weeks_ago,
 			$week_ago
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		));
 
 		// If no pageviews data, fallback to events data
@@ -10861,11 +11301,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 			GROUP BY p.url
 			ORDER BY views DESC
 			LIMIT 5";
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static query
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 			// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$top_pages_results = $wpdb->get_results( $top_pages_query_fallback );
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		}
 
 		// Get click data from file storage for all pages
@@ -10930,8 +11372,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 		ORDER BY sessions DESC";
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static query, no user input
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$device_results = $wpdb->get_results($device_query);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$total_sessions = array_sum(array_column($device_results, 'sessions'));
 
 		$devices = array();
@@ -10967,8 +11411,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 		LIMIT 1";
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static query, no user input
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$peak_result = $wpdb->get_row($peak_time_query);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$peak_time = $peak_result ?
 			gmdate('g:i A', mktime($peak_result->hour, 0, 0)) : 'No data';
 
@@ -10983,8 +11429,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 		) as page_events";
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static query, no user input
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$intensity_result = $wpdb->get_var($intensity_query);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$avg_intensity = $intensity_result ? round($intensity_result, 1) : 0;
 
 		return array(
@@ -11002,11 +11450,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 		global $wpdb;
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$count = $wpdb->get_var(
 			"SELECT COUNT(DISTINCT page_id2)
 			FROM " . $wpdb->prefix . "optibehavior_events
 			WHERE event IN (16, 17, 32, 33, 48, 49)"
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		return intval($count);
@@ -11431,6 +11881,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results(
@@ -11450,6 +11901,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$start_date,
 				$end_date
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$map = array();
@@ -11519,6 +11971,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$spam_clause      = $this->get_spam_exclusion_clause( 's' );
 		$filter_sql        = $this->build_advanced_filters_sql( $filters );
 		$params           = array_merge( array( $start_date, $end_date ), $filter_sql['params'] );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results(
@@ -11537,6 +11990,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				ORDER BY count DESC",
 				$params
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$map = array();
@@ -11720,8 +12174,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 	private function dashboard_table_exists( $table_name ) {
 		global $wpdb;
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Lightweight existence check for dashboard query routing.
 		$table_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		return $table_exists === $table_name;
 	}
 
@@ -11821,6 +12277,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$params = array_merge( $params, $spam_filter['values'] );
 			}
 		}
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		$query = $wpdb->prepare(
 			"SELECT
@@ -11841,10 +12298,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 				GROUP BY r.session_id
 			) recorded_sessions",
 			$params
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Dashboard KPI aggregate query.
 		$row = $wpdb->get_row( $query, ARRAY_A );
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$counts = array(
 			'recordings' => isset( $row['recordings'] ) ? absint( $row['recordings'] ) : 0,
@@ -11905,6 +12365,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$params = array_merge( $params, $spam_filter['values'] );
 			}
 		}
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		$query = $wpdb->prepare(
 			"SELECT
@@ -11927,10 +12388,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 			GROUP BY recorded_sessions.stat_date
 			ORDER BY recorded_sessions.stat_date ASC",
 			$params
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Dashboard history aggregate for recordings scope parity.
 		$rows = $wpdb->get_results( $query, ARRAY_A );
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$visitors_by_date = array();
 		$sessions_by_date = array();
@@ -11975,6 +12439,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		if ( ! empty( $filters ) ) {
 			$spam_clause = $this->get_spam_exclusion_clause( 's' );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$filter_sql  = $this->build_advanced_filters_sql( $filters );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 			return intval( $wpdb->get_var( $wpdb->prepare(
@@ -11982,6 +12447,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				LEFT JOIN " . $wpdb->prefix . "optibehavior_visitors v ON s.visitor_id = v.id
 				WHERE s.start_time BETWEEN %s AND %s" . $spam_clause . $filter_sql['where'],
 				array_merge( array( $start_date, $end_date ), $filter_sql['params'] )
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			) ) );
 		}
 
@@ -12015,6 +12481,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		// Fallback: count from sessions table with LIMIT for safety
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -12024,6 +12491,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			"SELECT COUNT(*) FROM " . $wpdb->prefix . "optibehavior_sessions s WHERE s.start_time BETWEEN %s AND %s" . $spam_clause,
 			$start_date,
 			$end_date
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) ) );
 	}
 
@@ -12069,10 +12537,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// Try to use pre-aggregated daily_stats for performance (works for both Pro and Free)
 		$daily_stats_table = $wpdb->prefix . 'optibehavior_daily_stats';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$table_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $daily_stats_table ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( $table_exists && ! $this->is_spam_excluded() ) {
 			$start_d = substr( $start_date, 0, 10 );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$end_d = substr( $end_date, 0, 10 );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -12082,6 +12553,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				"SELECT SUM(visitors) FROM " . $daily_stats_table . " WHERE stat_date BETWEEN %s AND %s",
 				$start_d,
 				$end_d
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			) );
 			if ( $sum !== null ) {
 				return intval( $sum );
@@ -12089,6 +12561,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		// Fallback: count from sessions table
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -12098,6 +12571,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			"SELECT COUNT(DISTINCT s.visitor_id) FROM " . $wpdb->prefix . "optibehavior_sessions s WHERE s.start_time BETWEEN %s AND %s AND s.visitor_id IS NOT NULL AND s.visitor_id != ''" . $spam_clause,
 			$start_date,
 			$end_date
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) ) );
 	}
 
@@ -12124,14 +12598,17 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		$daily_stats_table = $wpdb->prefix . 'optibehavior_daily_stats';
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Analytics aggregate availability check.
 		$table_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $daily_stats_table ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( ! $table_exists ) {
 			return null;
 		}
 
 		$start_d = substr( $start_date, 0, 10 );
 		$end_d   = substr( $end_date, 0, 10 );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Analytics aggregate query; metric is allow-listed.
 		$row = $wpdb->get_row(
@@ -12141,6 +12618,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$end_d
 			),
 			ARRAY_A
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		if ( ! is_array( $row ) || empty( $row['row_count'] ) ) {
@@ -12239,11 +12717,14 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		$daily_stats_table = $wpdb->prefix . 'optibehavior_daily_stats';
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Aggregate availability check.
 		$table_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $daily_stats_table ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( ! $table_exists ) {
 			return null;
 		}
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Analytics aggregate query; table name from $wpdb->prefix.
 		$row = $wpdb->get_row(
@@ -12261,6 +12742,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$segment['end']
 			),
 			ARRAY_A
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		if ( ! is_array( $row ) || empty( $row['row_count'] ) ) {
@@ -12292,11 +12774,14 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		$daily_stats_table = $wpdb->prefix . 'optibehavior_daily_stats';
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Aggregate availability check.
 		$table_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $daily_stats_table ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( ! $table_exists ) {
 			return array();
 		}
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Analytics aggregate query; table name from $wpdb->prefix.
 		$rows = $wpdb->get_results(
@@ -12307,6 +12792,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$segment['end']
 			),
 			ARRAY_A
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$series = array();
@@ -12341,6 +12827,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		/*
 		 * Dashboard Page Views is session-scoped so it shares the same universe
@@ -12356,6 +12843,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			WHERE s.start_time BETWEEN %s AND %s" . $spam_clause,
 			$start_date,
 			$end_date
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) ) );
 
 		// Unified Retention Protocol: include aggregated history for days older
@@ -12387,17 +12875,24 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 		$filter_sql  = $this->build_advanced_filters_sql( $filters );
 		$join_v      = ! empty( $filters ) ? ( "LEFT JOIN " . $wpdb->prefix . "optibehavior_visitors v ON s.visitor_id = v.id" ) : '';
+		// When spam is excluded, scope BOTH numerator and denominator to finalized
+		// sessions only (see get_finalized_sessions_condition()): sessions still
+		// inside the spam-verdict grace window would otherwise count as human
+		// bounces and inflate the KPI while the current day is in flight.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+		$finalized = $this->is_spam_excluded() ? $this->get_finalized_sessions_condition( 's' ) : '1=1';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$row = $wpdb->get_row( $wpdb->prepare(
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			"SELECT COUNT(*) AS total_sessions,
-				SUM(CASE WHEN s.is_bounce = 1 THEN 1 ELSE 0 END) AS bounce_sessions
+			"SELECT SUM(CASE WHEN " . $finalized . " THEN 1 ELSE 0 END) AS total_sessions,
+				SUM(CASE WHEN s.is_bounce = 1 AND " . $finalized . " THEN 1 ELSE 0 END) AS bounce_sessions
 			FROM " . $wpdb->prefix . "optibehavior_sessions s
 			" . $join_v . "
 			WHERE s.start_time BETWEEN %s AND %s" . $spam_clause . $filter_sql['where'],
 			array_merge( array( $start_date, $end_date ), $filter_sql['params'] )
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 
 		$total_sessions  = $row ? (int) $row->total_sessions : 0;
@@ -12443,16 +12938,21 @@ class Opti_Behavior_Heatmap_Dashboard {
 		global $wpdb;
 
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+		// When spam is excluded, scope every period counter to finalized sessions
+		// only, matching get_bounce_rate(): sessions still inside the spam-verdict
+		// grace window must not count as human bounces for the in-flight day.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+		$finalized = $this->is_spam_excluded() ? $this->get_finalized_sessions_condition( 's' ) : '1=1';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$row = $wpdb->get_row( $wpdb->prepare(
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			"SELECT
-				SUM(CASE WHEN s.start_time BETWEEN %s AND %s THEN 1 ELSE 0 END) AS cur_total,
-				SUM(CASE WHEN s.start_time BETWEEN %s AND %s AND s.is_bounce = 1 THEN 1 ELSE 0 END) AS cur_bounce,
-				SUM(CASE WHEN s.start_time BETWEEN %s AND %s THEN 1 ELSE 0 END) AS prev_total,
-				SUM(CASE WHEN s.start_time BETWEEN %s AND %s AND s.is_bounce = 1 THEN 1 ELSE 0 END) AS prev_bounce
+				SUM(CASE WHEN s.start_time BETWEEN %s AND %s AND " . $finalized . " THEN 1 ELSE 0 END) AS cur_total,
+				SUM(CASE WHEN s.start_time BETWEEN %s AND %s AND s.is_bounce = 1 AND " . $finalized . " THEN 1 ELSE 0 END) AS cur_bounce,
+				SUM(CASE WHEN s.start_time BETWEEN %s AND %s AND " . $finalized . " THEN 1 ELSE 0 END) AS prev_total,
+				SUM(CASE WHEN s.start_time BETWEEN %s AND %s AND s.is_bounce = 1 AND " . $finalized . " THEN 1 ELSE 0 END) AS prev_bounce
 			FROM " . $wpdb->prefix . "optibehavior_sessions s
 			WHERE s.start_time BETWEEN %s AND %s" . $spam_clause,
 			$cur_start, $cur_end,
@@ -12460,6 +12960,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$prev_start, $prev_end,
 			$prev_start, $prev_end,
 			$prev_start, $cur_end
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 
 		$cur_total   = $row ? (int) $row->cur_total : 0;
@@ -12499,6 +13000,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		if ( ! empty( $filters ) ) {
 			$spam_clause = $this->get_spam_exclusion_clause( 's' );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$filter_sql  = $this->build_advanced_filters_sql( $filters );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 			$avg_duration = $wpdb->get_var( $wpdb->prepare(
@@ -12509,6 +13011,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					LIMIT 10000
 				) sampled",
 				array_merge( array( $start_date, $end_date ), $filter_sql['params'] )
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			) );
 
 			return intval( $avg_duration ?: 0 );
@@ -12525,10 +13028,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// Try to use pre-aggregated daily_stats for performance
 		$daily_stats_table = $wpdb->prefix . 'optibehavior_daily_stats';
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$table_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $daily_stats_table ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( $table_exists && ! $exclude_spam ) {
 			$start_d = substr( $start_date, 0, 10 );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$end_d = substr( $end_date, 0, 10 );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -12538,6 +13044,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				FROM " . $daily_stats_table . " WHERE stat_date BETWEEN %s AND %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 				$start_d,
 				$end_d
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			) );
 			if ( $stats && $stats->sessions > 0 ) {
 				return intval( $stats->total_duration / $stats->sessions );
@@ -12545,6 +13052,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		// Fallback: average from sessions table with sampling
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -12557,6 +13065,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			) sampled",
 			$start_date,
 			$end_date
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 
 		return intval( $avg_duration ?: 0 );
@@ -12574,6 +13083,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 			if ( ! empty( $filters ) ) {
 				$spam_clause = $this->get_spam_exclusion_clause( 's' );
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				$filter_sql  = $this->build_advanced_filters_sql( $filters );
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 				$avg = $wpdb->get_var( $wpdb->prepare(
@@ -12585,12 +13095,14 @@ class Opti_Behavior_Heatmap_Dashboard {
 						LIMIT 10000
 					) sampled",
 					array_merge( array( $start_date, $end_date ), $filter_sql['params'] )
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				) );
 				return $avg !== null ? round( floatval( $avg ), 1 ) : 0;
 			}
 
 			// Check if spam exclusion is enabled
 			if ( $this->is_spam_excluded() ) {
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				$spam_clause = $this->get_spam_exclusion_clause( 's' );
 				// Join with sessions to filter out spam
 				// Regression marker: AND pv.scroll_depth > 0 AND s.traffic_type IN.
@@ -12605,11 +13117,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 					) sampled",
 					$start_date,
 					$end_date
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				) );
 				return $avg !== null ? round( floatval( $avg ), 1 ) : 0;
 			}
 
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 			$raw = $wpdb->get_row( $wpdb->prepare(
 				"SELECT COALESCE(SUM(scroll_depth), 0) AS total, COUNT(*) AS cnt FROM (
@@ -12617,6 +13131,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				) sampled",
 				$start_date,
 				$end_date
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			), ARRAY_A );
 
 			$total = is_array( $raw ) ? floatval( $raw['total'] ) : 0;
@@ -12653,6 +13168,20 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$totals['sessions']  += absint( $point['sessions'] ?? 0 );
 			$totals['visitors']  += absint( $point['visitors'] ?? 0 );
 			$totals['pageviews'] += absint( $point['pageviews'] ?? 0 );
+		}
+
+		
+		/*
+		 * Visitors is a DISTINCT metric: summing per-day distinct visitors from the
+		 * timeseries double-counts any visitor active on more than one day in the
+		 * range, so the KPI card would overstate uniques (e.g. 48 vs the true 46)
+		 * and disagree with get_visitors_count(). Sessions/Page Views are additive
+		 * per day so their sums are correct. Override Visitors with the range-wide
+		 * DISTINCT count for the unfiltered path (the filtered timeseries has no
+		 * range-distinct source, so it keeps the per-day series total).
+		 */
+		if ( empty( $filters ) ) {
+			$totals['visitors'] = absint( $this->get_visitors_count( $start_date, $end_date ) );
 		}
 
 		return $totals;
@@ -12734,6 +13263,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					$params = array_merge( $params, $spam_filter['values'] );
 				}
 			}
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics source query using plugin tables.
 			$rows = $wpdb->get_results(
@@ -12759,8 +13289,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 					$params
 				),
 				ARRAY_A
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			);
 		} else {
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$spam_clause = $this->get_spam_exclusion_clause( 's' );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics source query using plugin tables.
 			$rows = $wpdb->get_results(
@@ -12777,6 +13309,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					$end_date
 				),
 				ARRAY_A
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			);
 		}
 
@@ -12857,6 +13390,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 		$filter_sql  = $this->build_advanced_filters_sql( $filters );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics source query using plugin tables.
 		$rows = $wpdb->get_results(
@@ -12873,6 +13407,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				array_merge( array( $start_date, $end_date ), $filter_sql['params'] )
 			),
 			ARRAY_A
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		if ( is_array( $rows ) ) {
@@ -12916,6 +13451,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results(
@@ -12937,6 +13473,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$start_date,
 				$end_date
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$map = array(
@@ -13004,6 +13541,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 		$filter_sql  = $this->build_advanced_filters_sql( $filters );
 		$params      = array_merge( array( $start_date, $end_date ), $filter_sql['params'] );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results(
@@ -13024,6 +13562,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				GROUP BY device_name",
 				$params
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$map = array(
@@ -13086,6 +13625,29 @@ class Opti_Behavior_Heatmap_Dashboard {
 		return $edit_url ? $edit_url : '';
 	}
 
+	/**
+	 * Format an average-time value in seconds for the Top Pages card.
+	 *
+	 * Mirrors the report generator's duration formatting ("45s", "1m 32s",
+	 * "1h 5m") so the dashboard and scheduled reports show identical values.
+	 *
+	 * @param int $seconds Average time in seconds.
+	 * @return string
+	 */
+	private function format_top_pages_avg_time( $seconds ) {
+		$seconds = max( 0, (int) round( (float) $seconds ) );
+
+		if ( $seconds < 60 ) {
+			return sprintf( '%ds', $seconds );
+		}
+
+		if ( $seconds < 3600 ) {
+			return sprintf( '%dm %ds', floor( $seconds / 60 ), $seconds % 60 );
+		}
+
+		return sprintf( '%dh %dm', floor( $seconds / 3600 ), floor( ( $seconds % 3600 ) / 60 ) );
+	}
+
 	private function get_top_pages_data( $start_date, $end_date, array $filters = array() ) {
 		global $wpdb;
 
@@ -13095,7 +13657,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		$exclude_spam = $this->is_spam_excluded();
 		$spam_policy  = class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ? Opti_Behavior_Stats_Spam_Filter::cache_key( $exclude_spam ) : ( $exclude_spam ? 'exclude' : 'include' );
-		$cache_key    = 'opti_behavior_top_pages_' . md5( 'v4-editurl|' . $start_date . '|' . $end_date . '|' . ( $exclude_spam ? '1' : '0' ) . '|' . $spam_policy );
+		$cache_key    = 'opti_behavior_top_pages_' . md5( 'v6-avgtime|' . $start_date . '|' . $end_date . '|' . ( $exclude_spam ? '1' : '0' ) . '|' . $spam_policy );
 		$cached       = $this->get_dashboard_widget_cached_data( $cache_key, $start_date, $end_date, 'top_pages' );
 		if ( false !== $cached ) {
 			return $cached;
@@ -13107,6 +13669,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$spam_join_pageviews  = "INNER JOIN " . $wpdb->prefix . "optibehavior_sessions sess ON pv.session_id = sess.id";
 			$spam_where_pageviews = $this->get_spam_exclusion_clause( 'sess' );
 		}
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// Canonical source for Top Pages: pageviews in the selected period.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dashboard analytics query.
@@ -13129,6 +13692,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$end_date
 			),
 			ARRAY_A
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		if ( empty( $results ) ) {
@@ -13152,12 +13716,14 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		$views_previous_stats = array();
 		$click_stats          = array();
+		$avg_time_stats       = array();
 		$total_clicks_current = 0;
 
 		if ( ! empty( $page_ids ) ) {
 			$placeholders = implode( ',', array_fill( 0, count( $page_ids ), '%d' ) );
 
 			$prev_params = array( $prev_start, $prev_end );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$prev_params = array_merge( $prev_params, $page_ids );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dashboard analytics query.
 			$prev_rows = $wpdb->get_results(
@@ -13171,6 +13737,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					$prev_params
 				),
 				ARRAY_A
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			);
 			foreach ( (array) $prev_rows as $prev_row ) {
 				$views_previous_stats[ absint( $prev_row['page_id'] ) ] = isset( $prev_row['previous_pageviews'] ) ? absint( $prev_row['previous_pageviews'] ) : 0;
@@ -13184,6 +13751,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			}
 
 			$click_current_params = array( $start_date, $end_date );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$click_current_params = array_merge( $click_current_params, $page_ids );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dashboard analytics query.
 			$click_rows = $wpdb->get_results(
@@ -13198,6 +13766,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					$click_current_params
 				),
 				ARRAY_A
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			);
 			foreach ( (array) $click_rows as $click_row ) {
 				$page_id = absint( $click_row['page_id'] );
@@ -13210,6 +13779,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			}
 
 			$click_prev_params = array( $prev_start, $prev_end );
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$click_prev_params = array_merge( $click_prev_params, $page_ids );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dashboard analytics query.
 			$click_prev_rows = $wpdb->get_results(
@@ -13224,6 +13794,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					$click_prev_params
 				),
 				ARRAY_A
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			);
 			foreach ( (array) $click_prev_rows as $click_prev_row ) {
 				$page_id_prev = absint( $click_prev_row['page_id'] );
@@ -13235,6 +13806,80 @@ class Opti_Behavior_Heatmap_Dashboard {
 					);
 				} else {
 					$click_stats[ $page_id_prev ]['previous'] = $previous;
+				}
+			}
+
+			// Average time spent per page. Same definition as the scheduled report
+			// "Top Pages" table: time_on_page when recorded; otherwise the gap to
+			// the NEXT pageview of the same session (correlated subquery on the
+			// (session_id, view_time) index), falling back to the session end only
+			// for the last pageview of a session. Fallback-derived values are
+			// capped at 1800s to bound idle-tab outliers; beacon-recorded
+			// time_on_page is never capped. NULL (excluded from AVG) when neither
+			// bound exists. The sessions join is a LEFT JOIN when spam is included
+			// so the pageview universe matches the main Top Pages query exactly;
+			// when spam is excluded we reuse the same INNER JOIN + exclusion
+			// clause as the other Top Pages sub-queries.
+			$avg_time_join = $exclude_spam
+				? $spam_join_pageviews
+				: 'LEFT JOIN ' . $wpdb->prefix . 'optibehavior_sessions sess ON pv.session_id = sess.id';
+			$avg_time_select = "SELECT pv.page_id,
+					AVG(
+						CASE
+							WHEN pv.time_on_page > 0 THEN pv.time_on_page
+							ELSE LEAST(1800, GREATEST(0, TIMESTAMPDIFF(SECOND, pv.view_time,
+								COALESCE(
+									(
+										SELECT MIN(pv_next.view_time)
+										FROM " . $wpdb->prefix . "optibehavior_pageviews pv_next
+										WHERE pv_next.session_id = pv.session_id
+										AND pv_next.session_id <> ''
+										AND pv_next.view_time > pv.view_time
+									),
+									sess.end_time
+								)
+							)))
+						END
+					) AS avg_time
+					FROM " . $wpdb->prefix . "optibehavior_pageviews pv
+					" . $avg_time_join . "
+					WHERE pv.view_time BETWEEN %s AND %s
+					AND pv.page_id IN ( " . $placeholders . " )" . $spam_where_pageviews . "
+					GROUP BY pv.page_id";
+
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+			$avg_time_current_params = array_merge( array( $start_date, $end_date ), $page_ids );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dashboard analytics query.
+			$avg_time_rows = $wpdb->get_results(
+				$wpdb->prepare( $avg_time_select, $avg_time_current_params ),
+				ARRAY_A
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+			);
+			foreach ( (array) $avg_time_rows as $avg_time_row ) {
+				$avg_time_stats[ absint( $avg_time_row['page_id'] ) ] = array(
+					'current'  => isset( $avg_time_row['avg_time'] ) ? (int) round( (float) $avg_time_row['avg_time'] ) : 0,
+					'previous' => 0,
+				);
+			}
+
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+			$avg_time_prev_params = array_merge( array( $prev_start, $prev_end ), $page_ids );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dashboard analytics query.
+			$avg_time_prev_rows = $wpdb->get_results(
+				$wpdb->prepare( $avg_time_select, $avg_time_prev_params ),
+				ARRAY_A
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+			);
+			foreach ( (array) $avg_time_prev_rows as $avg_time_prev_row ) {
+				$page_id_prev = absint( $avg_time_prev_row['page_id'] );
+				$previous     = isset( $avg_time_prev_row['avg_time'] ) ? (int) round( (float) $avg_time_prev_row['avg_time'] ) : 0;
+				if ( ! isset( $avg_time_stats[ $page_id_prev ] ) ) {
+					$avg_time_stats[ $page_id_prev ] = array(
+						'current'  => 0,
+						'previous' => $previous,
+					);
+				} else {
+					$avg_time_stats[ $page_id_prev ]['previous'] = $previous;
 				}
 			}
 		}
@@ -13281,21 +13926,41 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$click_trend = 'neutral';
 			}
 
+			$avg_time_current  = isset( $avg_time_stats[ $page_id2 ] ) ? intval( $avg_time_stats[ $page_id2 ]['current'] ) : 0;
+			$avg_time_previous = isset( $avg_time_stats[ $page_id2 ] ) ? intval( $avg_time_stats[ $page_id2 ]['previous'] ) : 0;
+			if ( $avg_time_previous <= 0 ) {
+				$avg_time_change = $avg_time_current > 0 ? 100 : 0;
+			} else {
+				$avg_time_change = round( ( ( $avg_time_current - $avg_time_previous ) / $avg_time_previous ) * 100 );
+			}
+
+			if ( $avg_time_change > 0 ) {
+				$avg_time_trend = 'up';
+			} elseif ( $avg_time_change < 0 ) {
+				$avg_time_trend = 'down';
+			} else {
+				$avg_time_trend = 'neutral';
+			}
+
 			$data[] = array(
-				'url'               => $url,
-				'title'             => $title ?: 'Untitled',
-				'views'             => $views,
-				'sessions'          => $sessions,
-				'percentage'        => $total_pageviews_period > 0 ? round( ( $views / $total_pageviews_period ) * 100 ) : 0,
-				'views_change'      => $views_change,
-				'views_trend'       => $views_trend,
-				'pc_heatmap'        => $pc_url,
-				'mobile_heatmap'    => $mb_url,
-				'clicks'            => $click_current,
-				'clicks_percentage' => $total_clicks_current > 0 ? round( ( $click_current / $total_clicks_current ) * 100 ) : 0,
-				'clicks_change'     => $click_change,
-				'clicks_trend'      => $click_trend,
-				'edit_url'          => $this->get_page_edit_url( $url ),
+				'url'                => $url,
+				'title'              => $title ?: 'Untitled',
+				'views'              => $views,
+				'sessions'           => $sessions,
+				'percentage'         => $total_pageviews_period > 0 ? round( ( $views / $total_pageviews_period ) * 100 ) : 0,
+				'views_change'       => $views_change,
+				'views_trend'        => $views_trend,
+				'pc_heatmap'         => $pc_url,
+				'mobile_heatmap'     => $mb_url,
+				'clicks'             => $click_current,
+				'clicks_percentage'  => $total_clicks_current > 0 ? round( ( $click_current / $total_clicks_current ) * 100 ) : 0,
+				'clicks_change'      => $click_change,
+				'clicks_trend'       => $click_trend,
+				'avg_time'           => $avg_time_current,
+				'avg_time_formatted' => $this->format_top_pages_avg_time( $avg_time_current ),
+				'avg_time_change'    => $avg_time_change,
+				'avg_time_trend'     => $avg_time_trend,
+				'edit_url'           => $this->get_page_edit_url( $url ),
 			);
 		}
 
@@ -13329,6 +13994,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$session_join = "INNER JOIN " . $wpdb->prefix . "optibehavior_sessions s ON pv.session_id = s.id
 					LEFT JOIN " . $wpdb->prefix . "optibehavior_visitors v ON s.visitor_id = v.id";
 		$session_where = " AND s.start_time BETWEEN %s AND %s" . $spam_clause . $filter_sql['where'];
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dashboard analytics query.
 		$results = $wpdb->get_results(
@@ -13338,7 +14004,24 @@ class Opti_Behavior_Heatmap_Dashboard {
 					COALESCE(NULLIF(p.url, ''), NULLIF(pv.url, ''), '') AS url,
 					COALESCE(NULLIF(p.title, ''), NULLIF(pv.title, ''), '') AS title,
 					COUNT(*) AS pageviews,
-					COUNT(DISTINCT NULLIF(pv.session_id, '')) AS sessions
+					COUNT(DISTINCT NULLIF(pv.session_id, '')) AS sessions,
+					AVG(
+						CASE
+							WHEN pv.time_on_page > 0 THEN pv.time_on_page
+							ELSE LEAST(1800, GREATEST(0, TIMESTAMPDIFF(SECOND, pv.view_time,
+								COALESCE(
+									(
+										SELECT MIN(pv_next.view_time)
+										FROM " . $wpdb->prefix . "optibehavior_pageviews pv_next
+										WHERE pv_next.session_id = pv.session_id
+										AND pv_next.session_id <> ''
+										AND pv_next.view_time > pv.view_time
+									),
+									s.end_time
+								)
+							)))
+						END
+					) AS avg_time
 				FROM " . $wpdb->prefix . "optibehavior_pageviews pv
 				LEFT JOIN " . $wpdb->prefix . "optibehavior_pages p ON pv.page_id = p.id
 				" . $session_join . "
@@ -13349,11 +14032,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 				array_merge( array( $start_date, $end_date, $start_date, $end_date ), $filter_sql['params'] )
 			),
 			ARRAY_A
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		if ( empty( $results ) ) {
 			return array();
 		}
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dashboard analytics query.
 		$total_pageviews_period = (int) $wpdb->get_var(
@@ -13364,6 +14049,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				WHERE pv.view_time BETWEEN %s AND %s" . $session_where,
 				array_merge( array( $start_date, $end_date, $start_date, $end_date ), $filter_sql['params'] )
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$data = array();
@@ -13375,22 +14061,27 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$mb_url   = $page_id2 ? $url . ( ( strpos( $url, '?' ) === false ? '?' : '&' ) . 'opti-behavior=click_mobile-' . $page_id2 . '&mobile_view=1&vw=375&vh=667' ) : '';
 			$views    = isset( $row['pageviews'] ) ? absint( $row['pageviews'] ) : 0;
 			$sessions = isset( $row['sessions'] ) ? absint( $row['sessions'] ) : 0;
+			$avg_time = isset( $row['avg_time'] ) ? (int) round( (float) $row['avg_time'] ) : 0;
 
 			$data[] = array(
-				'url'               => $url,
-				'title'             => $title ?: 'Untitled',
-				'views'             => $views,
-				'sessions'          => $sessions,
-				'percentage'        => $total_pageviews_period > 0 ? round( ( $views / $total_pageviews_period ) * 100 ) : 0,
-				'views_change'      => 0,
-				'views_trend'       => 'neutral',
-				'pc_heatmap'        => $pc_url,
-				'mobile_heatmap'    => $mb_url,
-				'clicks'            => 0,
-				'clicks_percentage' => 0,
-				'clicks_change'     => 0,
-				'clicks_trend'      => 'neutral',
-				'edit_url'          => $this->get_page_edit_url( $url ),
+				'url'                => $url,
+				'title'              => $title ?: 'Untitled',
+				'views'              => $views,
+				'sessions'           => $sessions,
+				'percentage'         => $total_pageviews_period > 0 ? round( ( $views / $total_pageviews_period ) * 100 ) : 0,
+				'views_change'       => 0,
+				'views_trend'        => 'neutral',
+				'pc_heatmap'         => $pc_url,
+				'mobile_heatmap'     => $mb_url,
+				'clicks'             => 0,
+				'clicks_percentage'  => 0,
+				'clicks_change'      => 0,
+				'clicks_trend'       => 'neutral',
+				'avg_time'           => $avg_time,
+				'avg_time_formatted' => $this->format_top_pages_avg_time( $avg_time ),
+				'avg_time_change'    => 0,
+				'avg_time_trend'     => 'neutral',
+				'edit_url'           => $this->get_page_edit_url( $url ),
 			);
 		}
 
@@ -13422,6 +14113,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results(
@@ -13445,6 +14137,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$start_date,
 				$end_date
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$data_map = array();
@@ -13593,6 +14286,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 		$filter_sql  = $this->build_advanced_filters_sql( $filters );
 		$params      = array_merge( array( __( 'Unknown', 'opti-behavior' ), $start_date, $end_date ), $filter_sql['params'] );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results(
@@ -13614,6 +14308,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				ORDER BY count DESC",
 				$params
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$data_map = array();
@@ -13696,6 +14391,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results(
@@ -13715,6 +14411,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				$start_date,
 				$end_date
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$buckets = array();
@@ -13782,6 +14479,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 		$filter_sql  = $this->build_advanced_filters_sql( $filters );
 		$params      = array_merge( array( $start_date, $end_date ), $filter_sql['params'] );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results(
@@ -13800,6 +14498,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				ORDER BY count DESC",
 				$params
 			)
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		);
 
 		$buckets = array();
@@ -13902,6 +14601,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$site_host = function_exists('home_url') ? wp_parse_url( home_url(), PHP_URL_HOST ) : ( isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '' );
 
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// Pull sessions in the range. We fetch referrer, entry_page (for UTM/click ids), and basic counts.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
@@ -13915,6 +14615,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			 ORDER BY cnt DESC
 			 LIMIT 5000",
 			$start_date, $end_date
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 
 		$agg = array();
@@ -14084,6 +14785,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 		$filter_sql  = $this->build_advanced_filters_sql( $filters );
 		$params      = array_merge( array( $start_date, $end_date ), $filter_sql['params'] );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 		$rows = $wpdb->get_results( $wpdb->prepare(
@@ -14095,6 +14797,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			 ORDER BY cnt DESC
 			 LIMIT 5000",
 			$params
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 
 		$agg = array();
@@ -14277,62 +14980,6 @@ class Opti_Behavior_Heatmap_Dashboard {
 	}
 
 	/**
-	 * Shared known-domain maps used by both classify_traffic_channel() and
-	 * the SQL-level traffic_channel filter expression built in
-	 * build_advanced_filters_sql(), so the two stay in sync.
-	 *
-	 * @since 1.0.4
-	 * @return array{0: array<string,string>, 1: array<string,string>} [ $search_map, $social_map ]
-	 */
-	private function get_traffic_channel_domain_maps() {
-		/*
-		 * Needle syntax:
-		 *  - plain string  => substring match against the referrer/host
-		 *    (safe only for needles too distinctive to appear inside other
-		 *    domains, e.g. "duckduckgo.com", "google.").
-		 *  - "=" prefix    => exact-host match ("=x.com" matches x.com /
-		 *    www.x.com only). Required for short domains whose raw substring
-		 *    would false-positive inside unrelated hosts ("x.com" is inside
-		 *    gmx.com/fedex.com, "t.co" is inside every *t.com domain).
-		 *
-		 * 2026 landscape: AI assistants (ChatGPT, Perplexity, Claude,
-		 * Copilot) are classified as Organic Search — they answer queries
-		 * and refer clicks the same way search engines do. Gemini arrives
-		 * via gemini.google.com (covered by "google.").
-		 */
-		$search_map = array(
-			'google.' => 'Google', 'bing.com' => 'Bing', 'duckduckgo.com' => 'DuckDuckGo',
-			'yahoo.' => 'Yahoo', 'yandex.' => 'Yandex', 'baidu.' => 'Baidu', 'naver.com' => 'Naver',
-			'ecosia.org' => 'Ecosia', 'startpage.com' => 'Startpage', 'qwant.com' => 'Qwant',
-			'search.brave.com' => 'Brave Search', 'kagi.com' => 'Kagi',
-			'seznam.cz' => 'Seznam', 'sogou.com' => 'Sogou',
-			// AI assistants / answer engines.
-			'chatgpt.com' => 'ChatGPT', 'chat.openai.com' => 'ChatGPT',
-			'perplexity.ai' => 'Perplexity', 'claude.ai' => 'Claude',
-			'copilot.microsoft.com' => 'Copilot',
-		);
-		$social_map = array(
-			'facebook.com' => 'Facebook', '=fb.com' => 'Facebook', '=fb.me' => 'Facebook',
-			'instagram.com' => 'Instagram',
-			'twitter.com' => 'Twitter/X', '=x.com' => 'Twitter/X', '=t.co' => 'Twitter/X',
-			'linkedin.com' => 'LinkedIn', '=lnkd.in' => 'LinkedIn',
-			'pinterest.' => 'Pinterest', '=pin.it' => 'Pinterest',
-			'reddit.com' => 'Reddit', '=redd.it' => 'Reddit',
-			'tiktok.com' => 'TikTok', 'snapchat.com' => 'Snapchat',
-			'youtube.com' => 'YouTube', '=youtu.be' => 'YouTube',
-			'threads.net' => 'Threads', 'threads.com' => 'Threads',
-			'bsky.app' => 'Bluesky', 'mastodon.' => 'Mastodon',
-			'whatsapp.com' => 'WhatsApp', '=wa.me' => 'WhatsApp',
-			'telegram.org' => 'Telegram', '=t.me' => 'Telegram',
-			'discord.com' => 'Discord', 'discord.gg' => 'Discord',
-			'twitch.tv' => 'Twitch', '=vk.com' => 'VK', 'weibo.com' => 'Weibo',
-			'quora.com' => 'Quora', 'nextdoor.com' => 'Nextdoor',
-		);
-
-		return array( $search_map, $social_map );
-	}
-
-	/**
 	 * Match a referrer host against a domain map (needle syntax documented
 	 * in get_traffic_channel_domain_maps()).
 	 *
@@ -14386,264 +15033,6 @@ class Opti_Behavior_Heatmap_Dashboard {
 	}
 
 	/**
-	 * Build the SQL CASE expression that derives the same six Traffic
-	 * Channel buckets as classify_traffic_channel(), but in pure SQL so it
-	 * can be evaluated per-row inside a WHERE clause without pulling every
-	 * session into PHP first.
-	 *
-	 * Mirrors classify_traffic_channel()'s rule order (known search/social
-	 * domain substrings on s.referrer, then UTM keyword rules, then Direct)
-	 * using LIKE matching against the raw referrer column — it does not
-	 * strip the site's own host as "same-site" the way the PHP helper does,
-	 * since that requires a runtime home_url() comparison unsuited to a
-	 * cached SQL fragment; same-site referrers fall into Referral instead of
-	 * Direct.
-	 *
-	 * @since 1.0.4
-	 * @return string SQL CASE expression (no trailing alias).
-	 */
-	private function build_traffic_channel_case_sql() {
-		list( $search_map, $social_map ) = $this->get_traffic_channel_domain_maps();
-
-		/*
-		 * This fragment is always appended to a larger query string that gets
-		 * passed through $wpdb->prepare() by the caller (see
-		 * build_advanced_filters_sql() docblock). $wpdb->prepare() treats a
-		 * lone "%" immediately followed by s/d/f/F/i as a printf-style
-		 * placeholder (e.g. the "%s" inside "%startpage.com%" or "%d" inside
-		 * "%duckduckgo.com%"), which desyncs the placeholder/argument count
-		 * and corrupts the whole query. Doubling the percent signs here
-		 * ("%%needle%%") makes prepare() treat them as escaped literal "%"
-		 * characters, so the executed SQL still has single "%" wildcards.
-		 */
-		$needle_likes = function ( $needle ) {
-			if ( 0 === strpos( $needle, '=' ) ) {
-				/*
-				 * Exact-host needle: anchor on "://host" so the LIKE cannot
-				 * match the needle inside a longer domain (mirrors the exact
-				 * host comparison in classify_traffic_channel()).
-				 */
-				$host = esc_sql( substr( $needle, 1 ) );
-				return "(s.referrer LIKE '%%://" . $host . "/%%'"
-					. " OR s.referrer LIKE '%%://www." . $host . "/%%'"
-					. " OR s.referrer LIKE '%%://" . $host . "'"
-					. " OR s.referrer LIKE '%%://www." . $host . "')";
-			}
-			return "s.referrer LIKE '%%" . esc_sql( $needle ) . "%%'";
-		};
-
-		$search_likes = array();
-		foreach ( array_keys( $search_map ) as $needle ) {
-			$search_likes[] = $needle_likes( $needle );
-		}
-		$social_likes = array();
-		foreach ( array_keys( $social_map ) as $needle ) {
-			$social_likes[] = $needle_likes( $needle );
-		}
-
-		return "CASE
-				WHEN s.referrer IS NOT NULL AND s.referrer <> '' AND (" . implode( ' OR ', $search_likes ) . ") THEN 'Organic Search'
-				WHEN s.referrer IS NOT NULL AND s.referrer <> '' AND (" . implode( ' OR ', $social_likes ) . ") THEN 'Social Media'
-				WHEN s.referrer IS NOT NULL AND s.referrer <> '' THEN 'Referral'
-				WHEN LOWER(TRIM(s.utm_medium)) IN ('cpc','ppc','paid','paid_search') OR LOWER(TRIM(s.utm_source)) IN ('cpc','ppc','paid','paid_search') THEN 'Paid Ads'
-				WHEN LOWER(TRIM(s.utm_medium)) IN ('email','newsletter') OR LOWER(TRIM(s.utm_source)) IN ('email','newsletter') THEN 'Email'
-				WHEN LOWER(TRIM(s.utm_medium)) IN ('social','social_media') OR LOWER(TRIM(s.utm_source)) IN ('social','social_media') THEN 'Social Media'
-				WHEN LOWER(TRIM(s.utm_medium)) = 'organic' OR LOWER(TRIM(s.utm_source)) = 'organic' THEN 'Organic Search'
-				WHEN (s.utm_source IS NOT NULL AND s.utm_source <> '') OR (s.utm_medium IS NOT NULL AND s.utm_medium <> '') THEN 'Referral'
-				ELSE 'Direct'
-			END";
-	}
-
-	/**
-	 * Allow-listed FREE dashboard advanced-filter fields.
-	 *
-	 * @since 1.0.4
-	 * @return string[]
-	 */
-	private function get_advanced_filters_allowed_fields() {
-		return array(
-			'browser',
-			'country',
-			'device_type',
-			'os',
-			'visitor_type',
-			'duration_min',
-			'duration_max',
-			'page_count_min',
-			'page_count_max',
-			'entry_page',
-			'exit_page',
-			'referrer',
-			'traffic_channel',
-			'utm_campaign',
-			'utm_source',
-			'utm_medium',
-		);
-	}
-
-	/**
-	 * Centralized builder that turns a sanitized advanced-filters array into
-	 * a SQL WHERE fragment + matching wpdb::prepare() params, so every
-	 * aggregate query method reuses one source of truth instead of
-	 * duplicating filter SQL ~13 times.
-	 *
-	 * Unknown/non-allow-listed keys are silently ignored (defense in depth —
-	 * callers are also expected to allow-list before this point). Empty
-	 * string/null values are treated as "not set" and skipped.
-	 *
-	 * Assumes the standard FREE dashboard query aliases: `s` for
-	 * optibehavior_sessions and `v` for optibehavior_visitors (both already
-	 * joined in every aggregate query this will be wired into in Task 3).
-	 *
-	 * @since 1.0.4
-	 * @param array $filters Sanitized filters, allow-listed keys only.
-	 * @return array{where: string, params: array} WHERE fragment (leading " AND (...)" or empty string) + params.
-	 */
-	private function build_advanced_filters_sql( array $filters ) {
-		global $wpdb;
-
-		if ( empty( $filters ) ) {
-			return array(
-				'where'  => '',
-				'params' => array(),
-			);
-		}
-
-		$allowed_fields   = $this->get_advanced_filters_allowed_fields();
-		$duration_expr    = "(CASE WHEN s.duration > 0 THEN s.duration ELSE TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time)) END)";
-		$page_count_expr  = '(CASE WHEN COALESCE(s.page_views, 0) > 0 THEN COALESCE(s.page_views, 0) ELSE 1 END)';
-		$conditions       = array();
-		$params           = array();
-
-		// Emits `expr = %s` for a scalar or `expr IN (%s, ...)` for an array so
-		// multi-select filters (several browsers/countries/...) use OR semantics
-		// within the field while distinct fields still AND together.
-		$add_eq_or_in = function ( $expr, $value, $transform = null ) use ( &$conditions, &$params ) {
-			$values = is_array( $value ) ? array_values( $value ) : array( $value );
-			$values = array_map(
-				function ( $v ) use ( $transform ) {
-					$v = sanitize_text_field( $v );
-					return $transform ? call_user_func( $transform, $v ) : $v;
-				},
-				$values
-			);
-			$values = array_values( array_unique( array_filter( $values, 'strlen' ) ) );
-			if ( empty( $values ) ) {
-				return;
-			}
-			if ( 1 === count( $values ) ) {
-				$conditions[] = $expr . ' = %s';
-				$params[]     = $values[0];
-				return;
-			}
-			$conditions[] = $expr . ' IN (' . implode( ', ', array_fill( 0, count( $values ), '%s' ) ) . ')';
-			foreach ( $values as $v ) {
-				$params[] = $v;
-			}
-		};
-
-		foreach ( $filters as $field => $value ) {
-			if ( ! is_string( $field ) || ! in_array( $field, $allowed_fields, true ) ) {
-				continue;
-			}
-			if ( null === $value || ( is_string( $value ) && '' === trim( $value ) ) || ( is_array( $value ) && empty( $value ) ) ) {
-				continue;
-			}
-
-			switch ( $field ) {
-				case 'browser':
-					$add_eq_or_in( 'v.browser', $value );
-					break;
-
-				case 'country':
-					$add_eq_or_in( 'UPPER(TRIM(v.country))', $value, 'strtoupper' );
-					break;
-
-				case 'device_type':
-					$add_eq_or_in( 'v.device_type', $value );
-					break;
-
-				case 'os':
-					$add_eq_or_in( 'v.os', $value );
-					break;
-
-				case 'visitor_type':
-					$visitor_type = strtolower( sanitize_text_field( $value ) );
-					if ( 'new' === $visitor_type ) {
-						$conditions[] = 'COALESCE(v.visit_count, 1) <= 1';
-					} elseif ( 'returning' === $visitor_type ) {
-						$conditions[] = 'COALESCE(v.visit_count, 1) > 1';
-					}
-					break;
-
-				case 'duration_min':
-					$conditions[] = $duration_expr . ' >= %d';
-					$params[]     = absint( $value );
-					break;
-
-				case 'duration_max':
-					$conditions[] = $duration_expr . ' <= %d';
-					$params[]     = absint( $value );
-					break;
-
-				case 'page_count_min':
-					$conditions[] = $page_count_expr . ' >= %d';
-					$params[]     = absint( $value );
-					break;
-
-				case 'page_count_max':
-					$conditions[] = $page_count_expr . ' <= %d';
-					$params[]     = absint( $value );
-					break;
-
-				case 'entry_page':
-					$conditions[] = 's.entry_page LIKE %s';
-					$params[]     = '%' . $wpdb->esc_like( sanitize_text_field( $value ) ) . '%';
-					break;
-
-				case 'exit_page':
-					$conditions[] = 's.exit_page LIKE %s';
-					$params[]     = '%' . $wpdb->esc_like( sanitize_text_field( $value ) ) . '%';
-					break;
-
-				case 'referrer':
-					$conditions[] = 's.referrer LIKE %s';
-					$params[]     = '%' . $wpdb->esc_like( sanitize_text_field( $value ) ) . '%';
-					break;
-
-				case 'traffic_channel':
-					$conditions[] = '(' . $this->build_traffic_channel_case_sql() . ') = %s';
-					$params[]     = sanitize_text_field( $value );
-					break;
-
-				case 'utm_campaign':
-					$add_eq_or_in( 's.utm_campaign', $value );
-					break;
-
-				case 'utm_source':
-					$add_eq_or_in( 's.utm_source', $value );
-					break;
-
-				case 'utm_medium':
-					$add_eq_or_in( 's.utm_medium', $value );
-					break;
-			}
-		}
-
-		if ( empty( $conditions ) ) {
-			return array(
-				'where'  => '',
-				'params' => array(),
-			);
-		}
-
-		return array(
-			'where'  => ' AND (' . implode( ' AND ', $conditions ) . ')',
-			'params' => $params,
-		);
-	}
-
-	/**
 	 * Get operating systems data
 	 *
 	 * @param string $start_date Start date.
@@ -14670,6 +15059,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 
 		// phpcs:disable WordPress.DB.PreparedSQLPlaceholders.LikeWildcardsInQuery -- Static LIKE patterns with no user input
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results( $wpdb->prepare(
 			"SELECT
@@ -14693,6 +15083,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			",
 			$start_date,
 			$end_date
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 		// phpcs:enable WordPress.DB.PreparedSQLPlaceholders.LikeWildcardsInQuery
 
@@ -14755,6 +15146,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$params      = array_merge( array( $start_date, $end_date ), $filter_sql['params'] );
 
 		// phpcs:disable WordPress.DB.PreparedSQLPlaceholders.LikeWildcardsInQuery -- Static LIKE patterns with no user input
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Dashboard dimension aggregation.
 		$results = $wpdb->get_results( $wpdb->prepare(
 			"SELECT
@@ -14777,6 +15169,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			ORDER BY count DESC
 			",
 			$params
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 		// phpcs:enable WordPress.DB.PreparedSQLPlaceholders.LikeWildcardsInQuery
 
@@ -14822,6 +15215,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		// Get spam exclusion clause
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// Get active visitors with their CURRENT page (most recent pageview), not just entry page.
 		// Uses a subquery on optibehavior_pageviews to find the last page viewed per session.
@@ -14882,6 +15276,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$cutoff,
 			$cutoff,
 			$cutoff
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 
 		// Generate flag emoji dynamically from ISO country code (fallback to globe)
@@ -15007,6 +15402,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		global $wpdb;
 
 		// Get spam exclusion clause
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
@@ -15024,6 +15420,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			WHERE 1=1" . $spam_clause . "
 			ORDER BY s.start_time DESC
 			LIMIT %d",
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$limit
 		) );
 

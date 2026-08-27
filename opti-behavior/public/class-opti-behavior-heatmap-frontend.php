@@ -795,7 +795,8 @@ class Opti_Behavior_Heatmap_Frontend {
 		// the frontend tracker fire one AJAX request per click instead of batching
 		// (see Bug #3 investigation).
 		$ajax_bulk_value     = isset( $options['ajax_bulk'] ) && intval( $options['ajax_bulk'] ) > 0 ? intval( $options['ajax_bulk'] ) : 5;
-		$ajax_interval_value = isset( $options['ajax_interval'] ) && intval( $options['ajax_interval'] ) > 0 ? intval( $options['ajax_interval'] ) : 15000;
+		// Perf Fix B (customer report 2026-08): fallback raised 15000ms -> 30000ms to match the options default.
+		$ajax_interval_value = isset( $options['ajax_interval'] ) && intval( $options['ajax_interval'] ) > 0 ? intval( $options['ajax_interval'] ) : 30000;
 
 		// Anonymous-Mode identity exposed to JS (no cookies, no client-side storage).
 		// anon_vid:      logged-in visitors use their WP user id; guests use the

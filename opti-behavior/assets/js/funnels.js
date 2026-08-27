@@ -44,6 +44,14 @@
 	let funnelStateById = {};
 	let selectedCountriesByFunnel = {};
 
+	// Detail-page URL for a funnel (spec.md §4.1): the index list links each row
+	// to its own `&funnel=<id>` detail view instead of expanding inline.
+	function funnelDetailUrl(funnelId) {
+		const base = (window.optiBehaviorFunnels && optiBehaviorFunnels.pageUrl) || 'admin.php?page=opti-behavior-funnels';
+		const sep = base.indexOf('?') === -1 ? '?' : '&';
+		return base + sep + 'funnel=' + encodeURIComponent(funnelId);
+	}
+
 	function getFunnelState(funnelId) {
 		const key = String(funnelId);
 		if (!funnelStateById[key]) {
@@ -469,19 +477,18 @@
 			loadFunnelsSummary();
 		});
 
-		// ---- Row expand / collapse ----
+		// ---- Row → detail navigation (spec.md §4.1) ----
+		// The whole summary row navigates to the funnel's own detail URL; the
+		// actions cluster (kebab menu, edit/delete) is excluded so those still
+		// work in place. The "View details" anchor navigates natively.
 		$(document).on('click', '.opti-funnel-row__summary', function(e) {
-			// Ignore clicks on the actions cluster (menu, buttons).
 			if ($(e.target).closest('.opti-funnel-row__actions, .funnel-more-container').length) {
 				return;
 			}
 			const funnelId = $(this).closest('.funnel-card').data('funnel-id');
-			toggleFunnelDetail(funnelId);
-		});
-		$(document).on('click', '.opti-funnel-row__toggle', function(e) {
-			e.stopPropagation();
-			const funnelId = $(this).closest('.funnel-card').data('funnel-id');
-			toggleFunnelDetail(funnelId);
+			if (funnelId) {
+				window.location.href = funnelDetailUrl(funnelId);
+			}
 		});
 
 		// ---- Per-funnel Country dropdown (Period + Device handled above) ----
@@ -905,7 +912,7 @@
 			html += '    </div>';
 
 			html += '    <div class="opti-funnel-row__actions">';
-			html += '      <button type="button" class="opti-funnel-row__toggle">' + (_s.viewDetails || 'View details') + '</button>';
+			html += '      <a class="opti-funnel-row__toggle" href="' + escapeHtml(funnelDetailUrl(funnel.id)) + '">' + (_s.viewDetails || 'View details') + '</a>';
 			html += '      <div class="funnel-more-container">';
 			html += '        <button class="funnel-control-btn funnel-more-btn" data-funnel-id="' + funnel.id + '"><span class="dashicons dashicons-ellipsis"></span></button>';
 			html += '        <div class="funnel-more-dropdown" data-funnel-id="' + funnel.id + '">';
@@ -922,8 +929,6 @@
 			html += '      </div>';
 			html += '    </div>';
 			html += '  </div>'; // .opti-funnel-row__summary
-
-			html += '  <div class="opti-funnel-row__detail" style="display:none;"></div>';
 			html += '</div>'; // .funnel-card
 		});
 		$container.html(html);
@@ -1885,10 +1890,404 @@
 	}
 
 	// =========================================================================
+	// Funnel detail page (spec.md §4.1 / §4.2)
+	// =========================================================================
+	//
+	// The `&funnel=<id>` URL renders a dedicated detail page (PHP:
+	// render_funnel_detail()). Here we wire its kept period control and the
+	// PRO advanced-filter panel, then load + draw the single funnel's KPIs and
+	// step visualization. The advanced-filters payload is applied SERVER-SIDE
+	// only when the PRO gate passes (ajax_funnel_data re-checks); the
+	// data-advanced-pro flag is cosmetic (live panel vs locked upsell).
+
+	// Advanced-filters payload for the detail page. Field => panel element id,
+	// MUST mirror the funnel allow-list (dashboard's 16 minus exit_page).
+	const FUNNEL_FILTER_FIELD_IDS = {
+		browser: 'filter-browser',
+		country: 'filter-country',
+		device_type: 'filter-device',
+		os: 'filter-os',
+		visitor_type: 'filter-visitor-type',
+		duration_min: 'filter-duration-min',
+		duration_max: 'filter-duration-max',
+		page_count_min: 'filter-page-count-min',
+		page_count_max: 'filter-page-count-max',
+		entry_page: 'filter-entry-page',
+		referrer: 'filter-referrer',
+		traffic_channel: 'filter-traffic-channel',
+		utm_campaign: 'filter-utm-campaign',
+		utm_source: 'filter-utm-source',
+		utm_medium: 'filter-utm-medium'
+	};
+
+	function initFunnelDetailPage() {
+		const $root = $('#opti-funnel-detail');
+		if ($root.length === 0) return false;
+
+		const funnelId = $root.data('funnel-id');
+		const advancedPro = String($root.data('advanced-pro')) === '1';
+		window.optiBehaviorFunnelAdvancedFilters = {};
+
+		// Seed this funnel's period state (detail default = Last 30 Days, matches dashboard).
+		const state = getFunnelState(funnelId);
+		state.period = '30days';
+
+		setupFunnelDetailPeriod(funnelId);
+		if (advancedPro) {
+			setupFunnelDetailAdvancedFilters(funnelId);
+		} else {
+			// Free: the toggle still reveals the (locked) panel for discoverability.
+			$(document).on('click', '#toggle-advanced-filters', function() {
+				const panel = document.getElementById('advanced-filters-panel');
+				if (!panel) return;
+				const open = panel.style.display === 'none' || panel.style.display === '';
+				panel.style.display = open ? 'block' : 'none';
+				this.setAttribute('aria-expanded', open ? 'true' : 'false');
+			});
+		}
+
+		refreshIcons();
+		loadFunnelDetail(funnelId);
+		return true;
+	}
+
+	// Compute explicit start/end dates for a period token and write them into the
+	// detail date inputs (native YYYY-MM-DD value; browser renders locale DD/MM/YYYY).
+	// Mirrors the dashboard's pre-filled #start-date/#end-date. periodDays matches
+	// getReplayDateParams so cohorts stay consistent.
+	function prefillFunnelDetailDates(state) {
+		const periodDays = { '7days': 6, '30days': 29, '90days': 89 };
+		let startStr = '';
+		let endStr = '';
+		if (state.period === 'custom') {
+			startStr = state.customStart || '';
+			endStr = state.customEnd || '';
+		} else if (Object.prototype.hasOwnProperty.call(periodDays, state.period)) {
+			const end = new Date();
+			const start = new Date();
+			start.setDate(end.getDate() - periodDays[state.period]);
+			startStr = formatLocalDate(start);
+			endStr = formatLocalDate(end);
+		}
+		$('#funnel-detail-start').val(startStr);
+		$('#funnel-detail-end').val(endStr);
+	}
+
+	function setupFunnelDetailPeriod(funnelId) {
+		const state = getFunnelState(funnelId);
+		const $period = $('#funnel-detail-period');
+		const $start = $('#funnel-detail-start');
+		const $end = $('#funnel-detail-end');
+		const $apply = $('#funnel-detail-apply-range');
+
+		// Pre-fill the date pickers for the seeded period on first render (like dashboard).
+		prefillFunnelDetailDates(state);
+
+		// Date pickers + Apply stay ALWAYS visible (matches dashboard control bar).
+		// Non-custom period → reload immediately; custom → wait for Apply.
+		$period.on('change', function() {
+			const val = $(this).val();
+			if (val === 'custom') {
+				return;
+			}
+			state.period = val;
+			state.customStart = '';
+			state.customEnd = '';
+			prefillFunnelDetailDates(state);
+			loadFunnelDetail(funnelId);
+		});
+
+		// Refresh re-runs the current funnel/period/filter state (mirrors dashboard Refresh).
+		$('#funnel-detail-refresh').on('click', function() {
+			loadFunnelDetail(funnelId);
+		});
+
+		$apply.on('click', function() {
+			const s = $start.val();
+			const e = $end.val();
+			if (!s || !e) {
+				alert(_s.customRangeBothRequired || 'Please select both start and end dates');
+				return;
+			}
+			if (new Date(s) > new Date(e)) {
+				alert(_s.customRangeStartBeforeEnd || 'Start date must be before end date');
+				return;
+			}
+			state.period = 'custom';
+			state.customStart = s;
+			state.customEnd = e;
+			state.customStartDateTime = '';
+			state.customEndDateTime = '';
+			loadFunnelDetail(funnelId);
+		});
+
+		refreshIcons();
+	}
+
+	// Wire the PRO advanced-filters panel. Mirrors the dashboard wiring
+	// (dashboard.js) but reloads THIS funnel instead of the dashboard widgets.
+	function setupFunnelDetailAdvancedFilters(funnelId) {
+		const panel = document.getElementById('advanced-filters-panel');
+		const toggleBtn = document.getElementById('toggle-advanced-filters');
+		if (!panel || !toggleBtn) return;
+
+		const FUI = window.OptiBehaviorFilterUI;
+		if (!FUI) {
+			if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.error('OptiBehaviorFilterUI module missing - funnel advanced filters disabled', 'funnels');
+			return;
+		}
+
+		// Icon multi-selects + free-text suggestion inputs (exit_page dropped).
+		FUI.enhanceIconSelect('filter-browser', 'browser');
+		FUI.enhanceIconSelect('filter-country', 'country');
+		FUI.enhanceIconSelect('filter-device', 'device');
+		FUI.enhanceIconSelect('filter-os', 'os');
+		FUI.enhanceIconSelect('filter-utm-campaign', 'utm');
+		FUI.enhanceIconSelect('filter-utm-source', 'utm');
+		FUI.enhanceIconSelect('filter-utm-medium', 'utm');
+		const suggestInputs = {
+			entry_pages: FUI.enhanceSuggestInput('filter-entry-page'),
+			referrers: FUI.enhanceSuggestInput('filter-referrer')
+		};
+
+		let optionsSig = '';
+		function loadFilterOptions() {
+			const state = getFunnelState(funnelId);
+			const sig = state.period + '|' + (state.customStart || '') + '|' + (state.customEnd || '') + '|' + getExcludeSpamFlag();
+			if (optionsSig === sig) return;
+			optionsSig = sig;
+			const ajaxUrl = (window.optiBehaviorFunnels && optiBehaviorFunnels.ajaxUrl) || window.ajaxurl || '/wp-admin/admin-ajax.php';
+			// Funnel-scoped options: counts reflect only sessions that entered THIS
+			// funnel (max = Total Entries), not site-wide sessions.
+			const nonce = (window.optiBehaviorFunnels && optiBehaviorFunnels.nonce) || '';
+			const qs = new URLSearchParams({
+				action: 'optibehavior_funnel_filter_options',
+				nonce: nonce,
+				funnel_id: funnelId,
+				period: state.period,
+				exclude_spam: getExcludeSpamFlag()
+			});
+			if (state.period === 'custom' && state.customStart) qs.set('start_date', state.customStart);
+			if (state.period === 'custom' && state.customEnd) qs.set('end_date', state.customEnd);
+			fetch(ajaxUrl + '?' + qs.toString(), { method: 'GET', credentials: 'same-origin' })
+				.then(function(r) { return r.json(); })
+				.then(function(result) {
+					if (optionsSig !== sig) return;
+					if (!result || !result.success || !result.data) return;
+					const data = result.data;
+					const withCount = FUI.withCount;
+					const vc = function(item) {
+						if (item && typeof item === 'object') {
+							return { value: item.value, label: withCount(item.value, item.count) };
+						}
+						return { value: item, label: item };
+					};
+					FUI.populateSelect('filter-browser', data.browsers, vc);
+					FUI.populateSelect('filter-country', data.countries, function(c) {
+						if (!c) return null;
+						return { value: c.country, label: withCount(c.country_name || c.country, c.count) };
+					});
+					FUI.populateSelect('filter-device', data.devices, vc);
+					FUI.populateSelect('filter-os', data.os, vc);
+					FUI.populateSelect('filter-utm-campaign', data.utm_campaigns, vc);
+					FUI.populateSelect('filter-utm-source', data.utm_sources, vc);
+					FUI.populateSelect('filter-utm-medium', data.utm_mediums, vc);
+					FUI.annotateStaticSelect('filter-visitor-type', data.visitor_types, 'value');
+					FUI.annotateStaticSelect('filter-traffic-channel', data.traffic_channels, 'value');
+					if (suggestInputs.entry_pages) suggestInputs.entry_pages.setItems(data.entry_pages);
+					if (suggestInputs.referrers) suggestInputs.referrers.setItems(data.referrers);
+				})
+				.catch(function() {
+					if (optionsSig === sig) optionsSig = '';
+				});
+		}
+
+		function isPanelOpen() { return panel.style.display !== 'none' && panel.style.display !== ''; }
+		function setPanelOpen(open) {
+			panel.style.display = open ? 'block' : 'none';
+			toggleBtn.classList.toggle('active', open);
+			toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+			if (open) loadFilterOptions();
+		}
+		toggleBtn.addEventListener('click', function() { setPanelOpen(!isPanelOpen()); });
+
+		function updateToggleBadge(count) {
+			let badge = toggleBtn.querySelector('.filter-active-badge');
+			if (count > 0) {
+				if (!badge) {
+					badge = document.createElement('span');
+					badge.className = 'filter-active-badge';
+					toggleBtn.appendChild(badge);
+				}
+				badge.textContent = String(count);
+			} else if (badge) {
+				badge.remove();
+			}
+		}
+
+		const applyBtn = document.getElementById('apply-advanced-filters');
+		if (applyBtn) {
+			applyBtn.addEventListener('click', function() {
+				const filters = {};
+				Object.keys(FUNNEL_FILTER_FIELD_IDS).forEach(function(field) {
+					const el = document.getElementById(FUNNEL_FILTER_FIELD_IDS[field]);
+					if (!el) return;
+					if (el.tagName === 'SELECT' && el.multiple) {
+						const vals = Array.prototype.filter.call(el.options, function(o) {
+							return o.selected && ('' + o.value).trim() !== '';
+						}).map(function(o) { return ('' + o.value).trim(); });
+						if (vals.length === 1) { filters[field] = vals[0]; }
+						else if (vals.length > 1) { filters[field] = vals; }
+						return;
+					}
+					const val = ('' + (el.value || '')).trim();
+					if (val !== '') filters[field] = val;
+				});
+				window.optiBehaviorFunnelAdvancedFilters = filters;
+				updateToggleBadge(Object.keys(filters).length);
+				loadFunnelDetail(funnelId);
+				setPanelOpen(false);
+			});
+		}
+
+		const resetBtn = document.getElementById('reset-advanced-filters');
+		if (resetBtn) {
+			resetBtn.addEventListener('click', function() {
+				Object.keys(FUNNEL_FILTER_FIELD_IDS).forEach(function(field) {
+					const el = document.getElementById(FUNNEL_FILTER_FIELD_IDS[field]);
+					if (!el) return;
+					if (el.tagName === 'SELECT' && el.multiple) {
+						Array.prototype.forEach.call(el.options, function(o) { o.selected = false; });
+					} else {
+						el.value = '';
+					}
+					if (typeof el._obIconSync === 'function') el._obIconSync();
+				});
+				window.optiBehaviorFunnelAdvancedFilters = {};
+				updateToggleBadge(0);
+				loadFunnelDetail(funnelId);
+			});
+		}
+
+		// ---- Filter Profiles cluster wiring -----------------------------
+		// This function only runs on the non-locked (PRO) detail panel, so the
+		// profile controls are wired ONLY where the cluster markup renders. On
+		// the free/locked upsell panel setupFunnelDetailAdvancedFilters() is
+		// never called and the shared trait omits the cluster, so nothing to
+		// wire - the controls stay hidden.
+		function collectFunnelAdvancedFiltersPayload() {
+			const filters = {};
+			Object.keys(FUNNEL_FILTER_FIELD_IDS).forEach(function(field) {
+				const el = document.getElementById(FUNNEL_FILTER_FIELD_IDS[field]);
+				if (!el) return;
+				if (el.tagName === 'SELECT' && el.multiple) {
+					const vals = Array.prototype.filter.call(el.options, function(o) {
+						return o.selected && ('' + o.value).trim() !== '';
+					}).map(function(o) { return ('' + o.value).trim(); });
+					if (vals.length === 1) { filters[field] = vals[0]; }
+					else if (vals.length > 1) { filters[field] = vals; }
+					return;
+				}
+				const val = ('' + (el.value || '')).trim();
+				if (val !== '') filters[field] = val;
+			});
+			return filters;
+		}
+
+		if (window.OptiBehaviorFilterProfiles && typeof window.OptiBehaviorFilterProfiles.init === 'function') {
+			// Profile-key => { id, type } map for the module's default populate.
+			// exit_page is intentionally absent from the funnel allow-list.
+			const PROFILE_FIELD_TYPES = {
+				browser: 'multi', country: 'multi', device_type: 'multi', os: 'multi',
+				utm_campaign: 'multi', utm_source: 'multi', utm_medium: 'multi',
+				visitor_type: 'static', traffic_channel: 'static',
+				duration_min: 'numeric', duration_max: 'numeric',
+				page_count_min: 'numeric', page_count_max: 'numeric',
+				entry_page: 'text', referrer: 'text'
+			};
+			const profileFieldIds = {};
+			Object.keys(FUNNEL_FILTER_FIELD_IDS).forEach(function(field) {
+				profileFieldIds[field] = { id: FUNNEL_FILTER_FIELD_IDS[field], type: PROFILE_FIELD_TYPES[field] || 'text' };
+			});
+			// Options load lazily on first panel-open; prime the fetch so a profile
+			// load's injected picks backfill their counts on the next refetch.
+			loadFilterOptions();
+			window.OptiBehaviorFilterProfiles.init({
+				fieldIds: profileFieldIds,
+				collect: collectFunnelAdvancedFiltersPayload,
+				onLoaded: function(payload) {
+					// Store as the applied filter set + reuse the existing reload path
+					// (mirrors the Apply button behavior on the detail page).
+					window.optiBehaviorFunnelAdvancedFilters = payload || {};
+					updateToggleBadge(Object.keys(window.optiBehaviorFunnelAdvancedFilters).length);
+					loadFunnelDetail(funnelId);
+					setPanelOpen(false);
+				}
+			});
+		}
+	}
+
+	function loadFunnelDetail(funnelId) {
+		const state = getFunnelState(funnelId);
+		const ajaxData = {
+			action: 'optibehavior_funnel_data',
+			nonce: optiBehaviorFunnels.nonce,
+			funnel_id: funnelId,
+			period: state.period,
+			filter: 'all',
+			country: 'all',
+			exclude_spam: getExcludeSpamFlag()
+		};
+		if (state.period === 'custom') {
+			ajaxData.start_date = state.customStart;
+			ajaxData.end_date = state.customEnd;
+		}
+		const adv = window.optiBehaviorFunnelAdvancedFilters || {};
+		if (Object.keys(adv).length > 0) {
+			ajaxData.advanced_filters = JSON.stringify(adv);
+		}
+
+		$('.funnel-steps-container[data-funnel-id="' + funnelId + '"]').html('<div class="funnel-loading"><span class="loading-spinner"></span><span>' + (_s.loading || 'Loading...') + '</span></div>');
+
+		$.ajax({
+			url: optiBehaviorFunnels.ajaxUrl,
+			type: 'POST',
+			data: ajaxData,
+			success: function(response) {
+				if (response.success && response.data) {
+					updateFunnelDetailKpis(response.data);
+					renderFunnelAnalytics(funnelId, response.data);
+				} else {
+					showFunnelError(funnelId);
+				}
+			},
+			error: function() {
+				showFunnelError(funnelId);
+			}
+		});
+	}
+
+	function updateFunnelDetailKpis(data) {
+		const conv = parseFloat(data.conversion_rate) || 0;
+		const drop = parseFloat(data.dropoff_rate) || 0;
+		$('#funnel-detail-entries').text(formatNumberShort(data.total_entries || 0));
+		$('#funnel-detail-completions').text(formatNumberShort(data.completed || 0));
+		$('#funnel-detail-rate').text(conv + '%')
+			.removeClass(KPI_COLOR_CLASSES).addClass(conversionColorClass(conv));
+		$('#funnel-detail-dropoff').text(drop + '%')
+			.removeClass(KPI_COLOR_CLASSES).addClass(dropoffColorClass(drop));
+	}
+
+	// =========================================================================
 	// Bootstrap
 	// =========================================================================
 
 	$(document).ready(function() {
+		if ($('#opti-funnel-detail').length > 0) {
+			// Single-funnel detail page (spec.md §4.1).
+			initFunnelDetailPage();
+			return;
+		}
 		if ($('.opti-behavior-funnels-page').length > 0) {
 			initFunnelAnalytics();
 			initFunnelBuilder();

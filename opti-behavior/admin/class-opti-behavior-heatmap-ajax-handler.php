@@ -1923,7 +1923,25 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	}
 
 	/**
-	 * AJAX handler for backfilling pageview times
+	 * AJAX handler for backfilling pageview times.
+	 *
+	 * For pageviews without a beacon-recorded time_on_page (= 0), derives the
+	 * time spent using the standard analytics definition (same as the Top
+	 * Pages dashboard card and the scheduled report):
+	 *   - gap from the pageview's view_time to the NEXT pageview of the SAME
+	 *     session (by view_time);
+	 *   - only for the LAST pageview of a session, the session end_time is
+	 *     used as the fallback bound;
+	 *   - derived values are capped at 1800 seconds (30 min) to bound
+	 *     idle-tab outliers.
+	 * Rows where no positive value is derivable (no next pageview and no
+	 * usable session end, or a zero/negative gap) are left untouched
+	 * (time_on_page stays 0) — no 0-second or negative artifacts are written.
+	 *
+	 * The UPDATE self-references the pageviews table through a materialized
+	 * derived table (UPDATE ... JOIN (SELECT ...) x) to avoid MySQL's
+	 * same-table update restriction (error 1093); no window functions, so it
+	 * runs on WordPress's whole supported MySQL/MariaDB range.
 	 */
 	public function ajax_backfill_pageview_times() {
 		// Verify nonce
@@ -1935,13 +1953,31 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 
 		global $wpdb;
 
-		// Backfill missing pageview times based on session data
+		// Backfill missing pageview times: next-pageview gap, session-end
+		// fallback for the last pageview only, 1800s cap, positive values only.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table names from $wpdb->prefix, no user input
 		$wpdb->query(
 			"UPDATE {$wpdb->prefix}optibehavior_pageviews pv
-			JOIN {$wpdb->prefix}optibehavior_sessions s ON pv.session_id = s.id
-			SET pv.time_on_page = GREATEST(0, TIMESTAMPDIFF(SECOND, pv.view_time, s.end_time))
-			WHERE pv.time_on_page = 0 AND s.end_time IS NOT NULL"
+			JOIN (
+				SELECT p.id,
+					LEAST(1800, TIMESTAMPDIFF(SECOND, p.view_time,
+						COALESCE(
+							(
+								SELECT MIN(n.view_time)
+								FROM {$wpdb->prefix}optibehavior_pageviews n
+								WHERE n.session_id = p.session_id
+								AND n.session_id <> ''
+								AND n.view_time > p.view_time
+							),
+							s.end_time
+						)
+					)) AS derived_time
+				FROM {$wpdb->prefix}optibehavior_pageviews p
+				LEFT JOIN {$wpdb->prefix}optibehavior_sessions s ON p.session_id = s.id
+				WHERE p.time_on_page = 0 AND p.session_id <> ''
+			) x ON x.id = pv.id
+			SET pv.time_on_page = x.derived_time
+			WHERE x.derived_time > 0"
 		);
 
 		$affected_rows = $wpdb->rows_affected;
@@ -1983,33 +2019,32 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	/**
 	 * Resolve the canonical visitor_id for an "effectively anonymous" request.
 	 *
-	 * Priority:
-	 *   1. The visitor_id passed in the POST body (caller already pulled it from
-	 *      $_POST or $_REQUEST and validated it with sanitize_text_field()) — if
-	 *      it starts with 'anon_' it is a client-reported anonymous id and is
-	 *      preserved verbatim. In cookieless Anonymous Mode the tracker sources
-	 *      this from optiBehaviorHeatmapConfig.anon_vid (the server daily hash),
-	 *      so it already matches the server-side value below.
-	 *   2. Server daily hash (anon_<sha256(IP + UA + site_url + daily_salt)>)
-	 *      — used when the client supplied nothing (curl, very old browsers,
-	 *      blocked storage). No cookie is read: Anonymous Mode is cookieless and
-	 *      the optibehavior_anon_vid cookie is no longer written.
+	 * Cache-safe identity (decision D1): ALWAYS recompute the server daily hash
+	 * (anon_<sha256(IP + UA + site_url + daily_salt)>). The client-supplied
+	 * 'anon_' id is NOT trusted, because a full-page cache (WP Rocket, LiteSpeed,
+	 * WP Super Cache, W3TC, hosting/edge, Cloudflare APO) freezes the FIRST
+	 * visitor's anon_vid into the cached HTML and serves it to every subsequent
+	 * visitor who lands on the cached URL — collapsing all direct/organic traffic
+	 * into one visitor. admin-ajax is never full-page cached, so recomputing here
+	 * yields the correct per-visitor id from the real request IP/UA.
 	 *
-	 * Bug #R4 — replaces the previous unconditional override that collapsed
-	 * every private-browser session on the same machine + same UA + same UTC
-	 * day into the same visitor_id, blocking new rows in
-	 * wp_optibehavior_ab_impressions via the UNIQUE KEY (test_id, visitor_id)
-	 * and freezing the dashboard's "Total Visitors" counter.
+	 * Only the empty-client fallback chain is preserved: when no server hash is
+	 * resolvable (get_anonymous_hash / get_visitor_id absent) the pre-sanitized
+	 * client value is returned so behaviour never regresses to empty. No cookie
+	 * is read: Anonymous Mode is cookieless.
+	 *
+	 * D1 reverses the earlier Bug #R4 "preserve client anon_*" fix: two
+	 * incognito windows on the same machine + UA + UTC day now merge into one
+	 * anonymous visitor — accepted, because the shipping anon-broker already
+	 * sends the identical deterministic daily hash for both windows, so real
+	 * traffic on uncached pages is unchanged while cached pages are fixed.
 	 *
 	 * @since 1.0.7
+	 * @since 1.0.8 Always recomputes the server hash in anon mode (D1).
 	 * @param string $client_visitor_id Pre-sanitized visitor_id pulled from the request payload.
 	 * @return string Canonical visitor_id for downstream storage.
 	 */
 	private function resolve_anon_visitor_id( $client_visitor_id ) {
-		if ( ! empty( $client_visitor_id ) && 0 === strpos( $client_visitor_id, 'anon_' ) ) {
-			return $client_visitor_id;
-		}
-
 		$session_handler = $this->core->get_session();
 		if ( $session_handler && method_exists( $session_handler, 'get_anonymous_hash' ) ) {
 			return $session_handler->get_anonymous_hash();
@@ -2469,6 +2504,25 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		);
 		if ( $is_effectively_anon ) {
 			$visitor_id = $this->resolve_anon_visitor_id( $visitor_id );
+
+			// Cache-safe session id (D1 / leak #1 — the primary count source).
+			// A full-page cache also freezes anon_sid_seed into the HTML, so a
+			// DISTINCT visitor B who lands on the cached URL would otherwise POST
+			// visitor A's frozen session_id and collide on the sessions.id primary
+			// key below — the existing-session branch would UPDATE A's row and
+			// silently merge B's visit into A's session (the crater). Recompute the
+			// per-visitor 30-min session id server-side from the real request IP/UA
+			// so each real visitor gets their own session row. The multi-tab dedup
+			// query below then canonicalizes repeat requests within the 30-min
+			// window. The authoritative session_id is returned to the reporter
+			// (see wp_send_json_success at the end) and adopted via the broker.
+			$session_handler = $this->core->get_session();
+			if ( $session_handler && method_exists( $session_handler, 'get_anonymous_identity' ) ) {
+				$server_identity = $session_handler->get_anonymous_identity();
+				if ( ! empty( $server_identity['session_id'] ) ) {
+					$session_id = $server_identity['session_id'];
+				}
+			}
 		}
 
 		// -----------------------------------------------------------------------

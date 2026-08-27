@@ -2563,6 +2563,10 @@
     color: #0f766e; /* clicks */
 }
 
+.top-pages .metric-avg-time .metric-icon {
+    color: #6366f1; /* avg time spent */
+}
+
 .top-pages .metric-value {
     font-weight: 600;
     min-width: 30px; /* Ensure consistent width for alignment */
@@ -6834,10 +6838,13 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 
 .opti-behavior-dashboard-page .pages-widget .top-pages .page-metrics {
 	display: flex;
-	flex-wrap: wrap;
+	/* Three badges (sessions, clicks, avg time) must stay on one line; wide
+	   values ("1m 52s" + trend) used to push the clock badge onto a second
+	   row. Badges are compacted below instead of wrapping. */
+	flex-wrap: nowrap;
 	align-items: center;
 	justify-content: flex-start;
-	gap: 8px;
+	gap: 6px;
 	margin-left: 30px;
 	width: auto;
 	max-width: 100%;
@@ -6848,8 +6855,12 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 .opti-behavior-dashboard-page .pages-widget .top-pages .metric {
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
+	gap: 3px;
+	padding: 4px 6px;
 	white-space: nowrap;
+	min-width: 0;
+	flex: 0 1 auto;
+	overflow: hidden;
 }
 
 .opti-behavior-dashboard-page .pages-widget .top-pages .metric-icon {
@@ -6861,10 +6872,17 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 
 .opti-behavior-dashboard-page .pages-widget .top-pages .metric-value {
 	white-space: nowrap;
+	/* Base rule reserves min-width: 30px; drop it so short values ("6s")
+	   don't waste horizontal space needed by the third badge. */
+	min-width: 0;
+	text-align: left;
 }
 
 .opti-behavior-dashboard-page .pages-widget .top-pages .metric-change {
 	white-space: nowrap;
+	gap: 1px;
+	padding: 2px 4px;
+	flex-shrink: 0;
 }
 
 .opti-behavior-dashboard-page .realtime-map,
@@ -7218,18 +7236,21 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
    Adapted from opti-behavior-pro/assets/css/pro-admin.css (.advanced-filters-panel)
    ========================================================================== */
 
-.opti-behavior-dashboard-page #toggle-advanced-filters.active {
+.opti-behavior-dashboard-page #toggle-advanced-filters.active,
+.opti-behavior-funnels-page #toggle-advanced-filters.active {
 	background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
 	color: #fff;
 	border-color: #7c3aed;
 	box-shadow: 0 2px 8px rgba(124, 58, 237, 0.4);
 }
 
-.opti-behavior-dashboard-page #toggle-advanced-filters.active:hover {
+.opti-behavior-dashboard-page #toggle-advanced-filters.active:hover,
+.opti-behavior-funnels-page #toggle-advanced-filters.active:hover {
 	background: linear-gradient(135deg, #6d28d9 0%, #5b21b6 100%);
 }
 
-.opti-behavior-dashboard-page .filter-active-badge {
+.opti-behavior-dashboard-page .filter-active-badge,
+.opti-behavior-funnels-page .filter-active-badge {
 	display: inline-block;
 	background: #fff;
 	color: #6d28d9;
@@ -7241,7 +7262,8 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	line-height: 1.5;
 }
 
-.opti-behavior-dashboard-page .advanced-filters-panel {
+.opti-behavior-dashboard-page .advanced-filters-panel,
+.opti-behavior-funnels-page .advanced-filters-panel {
 	background: #ffffff;
 	border: 1px solid #dcdcde;
 	border-radius: 8px;
@@ -7258,14 +7280,16 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	to { opacity: 1; transform: translateY(0); }
 }
 
-.opti-behavior-dashboard-page .advanced-filters-grid {
+.opti-behavior-dashboard-page .advanced-filters-grid,
+.opti-behavior-funnels-page .advanced-filters-grid {
 	display: grid;
 	grid-template-columns: repeat(4, 1fr);
 	gap: 28px;
 	margin-bottom: 24px;
 }
 
-.opti-behavior-dashboard-page .filter-column {
+.opti-behavior-dashboard-page .filter-column,
+.opti-behavior-funnels-page .filter-column {
 	background: #f9fafb;
 	padding: 24px;
 	border-radius: 8px;
@@ -7275,12 +7299,14 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	flex-direction: column;
 }
 
-.opti-behavior-dashboard-page .filter-column:hover {
+.opti-behavior-dashboard-page .filter-column:hover,
+.opti-behavior-funnels-page .filter-column:hover {
 	border-color: #7c3aed;
 	box-shadow: 0 2px 8px rgba(124, 58, 237, 0.1);
 }
 
-.opti-behavior-dashboard-page .filter-column-title {
+.opti-behavior-dashboard-page .filter-column-title,
+.opti-behavior-funnels-page .filter-column-title {
 	margin: 0 0 20px 0;
 	font-size: 13px;
 	font-weight: 700;
@@ -7294,7 +7320,8 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	gap: 8px;
 }
 
-.opti-behavior-dashboard-page .filter-column-title::before {
+.opti-behavior-dashboard-page .filter-column-title::before,
+.opti-behavior-funnels-page .filter-column-title::before {
 	content: '';
 	width: 4px;
 	height: 16px;
@@ -7302,18 +7329,21 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	border-radius: 2px;
 }
 
-.opti-behavior-dashboard-page .advanced-filters-panel .filter-group {
+.opti-behavior-dashboard-page .advanced-filters-panel .filter-group,
+.opti-behavior-funnels-page .advanced-filters-panel .filter-group {
 	margin-bottom: 12px;
 	display: flex;
 	flex-direction: column;
 	width: 100%;
 }
 
-.opti-behavior-dashboard-page .advanced-filters-panel .filter-group:last-child {
+.opti-behavior-dashboard-page .advanced-filters-panel .filter-group:last-child,
+.opti-behavior-funnels-page .advanced-filters-panel .filter-group:last-child {
 	margin-bottom: 0;
 }
 
-.opti-behavior-dashboard-page .advanced-filters-panel .filter-group label {
+.opti-behavior-dashboard-page .advanced-filters-panel .filter-group label,
+.opti-behavior-funnels-page .advanced-filters-panel .filter-group label {
 	display: block;
 	margin-bottom: 4px;
 	font-size: 12px;
@@ -7324,7 +7354,9 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 }
 
 .opti-behavior-dashboard-page .advanced-filter-select,
-.opti-behavior-dashboard-page .advanced-filter-input {
+.opti-behavior-dashboard-page .advanced-filter-input,
+.opti-behavior-funnels-page .advanced-filter-select,
+.opti-behavior-funnels-page .advanced-filter-input {
 	width: 100% !important;
 	max-width: 100% !important;
 	padding: 8px 12px;
@@ -7339,24 +7371,30 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 }
 
 .opti-behavior-dashboard-page .advanced-filter-select:hover,
-.opti-behavior-dashboard-page .advanced-filter-input:hover {
+.opti-behavior-dashboard-page .advanced-filter-input:hover,
+.opti-behavior-funnels-page .advanced-filter-select:hover,
+.opti-behavior-funnels-page .advanced-filter-input:hover {
 	border-color: #9ca3af;
 }
 
 .opti-behavior-dashboard-page .advanced-filter-select:focus,
-.opti-behavior-dashboard-page .advanced-filter-input:focus {
+.opti-behavior-dashboard-page .advanced-filter-input:focus,
+.opti-behavior-funnels-page .advanced-filter-select:focus,
+.opti-behavior-funnels-page .advanced-filter-input:focus {
 	outline: none;
 	border-color: #7c3aed;
 	box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
 	background: #ffffff;
 }
 
-.opti-behavior-dashboard-page .advanced-filter-input::placeholder {
+.opti-behavior-dashboard-page .advanced-filter-input::placeholder,
+.opti-behavior-funnels-page .advanced-filter-input::placeholder {
 	color: #9ca3af;
 	font-size: 13px;
 }
 
-.opti-behavior-dashboard-page .advanced-filters-actions {
+.opti-behavior-dashboard-page .advanced-filters-actions,
+.opti-behavior-funnels-page .advanced-filters-actions {
 	display: flex;
 	gap: 12px;
 	justify-content: flex-end;
@@ -7364,12 +7402,66 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	border-top: 1px solid #e2e8f0;
 }
 
-.opti-behavior-dashboard-page .advanced-filters-actions .button {
+.opti-behavior-dashboard-page .advanced-filters-actions .button,
+.opti-behavior-funnels-page .advanced-filters-actions .button {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
 	padding: 10px 20px;
 	font-size: 14px;
+}
+
+/* Filter Profiles cluster — sits left of Apply/Reset in the panel footer.
+   Wrapper-scoped so it never leaks to other admin surfaces. */
+.opti-behavior-dashboard-page .advanced-filters-profiles,
+.opti-behavior-funnels-page .advanced-filters-profiles {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-right: auto;
+	position: relative;
+}
+
+.opti-behavior-dashboard-page .advanced-filters-profiles #filter-profile-select,
+.opti-behavior-funnels-page .advanced-filters-profiles #filter-profile-select {
+	min-width: 160px;
+	max-width: 220px;
+}
+
+.opti-behavior-dashboard-page .ob-profile-popover,
+.opti-behavior-funnels-page .ob-profile-popover {
+	left: auto;
+	right: auto;
+	min-width: 220px;
+	padding: 10px;
+}
+
+.opti-behavior-dashboard-page .ob-profile-popover-input,
+.opti-behavior-funnels-page .ob-profile-popover-input {
+	width: 100%;
+	box-sizing: border-box;
+	padding: 6px 8px;
+	font-size: 13px;
+	margin-bottom: 8px;
+}
+
+.opti-behavior-dashboard-page .ob-profile-popover-actions,
+.opti-behavior-funnels-page .ob-profile-popover-actions {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+}
+
+.opti-behavior-dashboard-page .ob-profile-popover-error,
+.opti-behavior-funnels-page .ob-profile-popover-error {
+	margin-top: 8px;
+	color: #b91c1c;
+	font-size: 12px;
+}
+
+.opti-behavior-dashboard-page .ob-icon-select-option.ob-profile-danger,
+.opti-behavior-funnels-page .ob-icon-select-option.ob-profile-danger {
+	color: #b91c1c;
 }
 
 
@@ -7381,21 +7473,25 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 }
 
 @media (max-width: 1200px) {
-	.opti-behavior-dashboard-page .advanced-filters-grid {
+	.opti-behavior-dashboard-page .advanced-filters-grid,
+	.opti-behavior-funnels-page .advanced-filters-grid {
 		grid-template-columns: repeat(2, 1fr);
 	}
 }
 
 @media (max-width: 768px) {
-	.opti-behavior-dashboard-page .advanced-filters-grid {
+	.opti-behavior-dashboard-page .advanced-filters-grid,
+	.opti-behavior-funnels-page .advanced-filters-grid {
 		grid-template-columns: 1fr;
 	}
 
-	.opti-behavior-dashboard-page .advanced-filters-actions {
+	.opti-behavior-dashboard-page .advanced-filters-actions,
+	.opti-behavior-funnels-page .advanced-filters-actions {
 		flex-direction: column;
 	}
 
-	.opti-behavior-dashboard-page .advanced-filters-actions .button {
+	.opti-behavior-dashboard-page .advanced-filters-actions .button,
+	.opti-behavior-funnels-page .advanced-filters-actions .button {
 		width: 100%;
 		justify-content: center;
 	}

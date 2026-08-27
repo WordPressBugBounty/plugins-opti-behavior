@@ -1454,22 +1454,29 @@
 /* Top Pages metrics row (below title/URL, wraps as pills) */
 .opti-behavior-dashboard .top-pages .page-metrics {
 	display: flex;
-	flex-wrap: wrap;
+	/* Keep all three badges (sessions, clicks, avg time) on one line; compact
+	   sizing below absorbs wide values like "1m 52s" + trend. */
+	flex-wrap: nowrap;
 	align-items: center;
 	justify-content: flex-start;
-	gap: 8px;
+	gap: 6px;
 	margin-left: 30px;
+	min-width: 0;
 }
 
 .opti-behavior-dashboard .top-pages .metric {
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
+	gap: 3px;
 	font-size: 11px;
 	color: #0f172a;
-	padding: 4px 8px;
+	padding: 4px 6px;
 	border-radius: 8px;
 	background: #f8fafc;
+	white-space: nowrap;
+	min-width: 0;
+	flex: 0 1 auto;
+	overflow: hidden;
 }
 
 .opti-behavior-dashboard .top-pages .metric-icon {
@@ -1485,6 +1492,10 @@
 	color: #0f766e; /* clicks */
 }
 
+.opti-behavior-dashboard .top-pages .metric-avg-time .metric-icon {
+	color: #6366f1; /* avg time spent */
+}
+
 .opti-behavior-dashboard .top-pages .metric-value {
 	font-weight: 600;
 }
@@ -1492,11 +1503,13 @@
 .opti-behavior-dashboard .top-pages .metric-change {
 	display: inline-flex;
 	align-items: center;
-	gap: 2px;
+	gap: 1px;
 	font-size: 10px;
 	font-weight: 600;
-	padding: 2px 6px;
+	padding: 2px 4px;
 	border-radius: 999px;
+	flex-shrink: 0;
+	white-space: nowrap;
 }
 
 .opti-behavior-dashboard .top-pages .metric-arrow {

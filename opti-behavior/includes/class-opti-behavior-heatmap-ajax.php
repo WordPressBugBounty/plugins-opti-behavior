@@ -426,11 +426,16 @@ class Opti_Behavior_Heatmap_Ajax {
 		$recordings_table    = $wpdb->prefix . 'optibehavior_recordings';
 		$page_clause         = $this->build_page_ids_clause( 'sp.page_id', $page_ids );
 
+		$allowed = array();
+
+		// Path A: recording-backed sessions passing the Pro spam thresholds (Pro only; no rows on free).
 		if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) && method_exists( 'Opti_Behavior_Stats_Spam_Filter', 'recordings_threshold_sql' ) && $this->heatmap_table_exists( $recordings_table ) ) {
 			$spam_filter = Opti_Behavior_Stats_Spam_Filter::recordings_threshold_sql( 'r', 's', 'hm_allowed_spam_counts', true );
 			$spam_where  = ! empty( $spam_filter['where'] ) ? ' AND ' . $spam_filter['where'] : '';
 
-			return $wpdb->get_col(
+			// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- Table names from $wpdb->prefix; WHERE built from prepared placeholders bound via array.
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+			$allowed = $wpdb->get_col(
 				$wpdb->prepare(
 					"SELECT DISTINCT r.session_id
 					FROM {$recordings_table} r
@@ -441,11 +446,15 @@ class Opti_Behavior_Heatmap_Ajax {
 					array_merge( $page_ids, $spam_filter['values'] )
 				)
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		}
 
+		// Path B: session_pages-backed sessions passing duration/scroll/click thresholds.
+		// Always run so legit human sessions without a Pro recording are admitted; union with Path A.
 		$params = array_merge( $page_ids, array( $spam_duration, $spam_scrolls, $spam_clicks ) );
 
-		return $wpdb->get_col(
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
+		$allowed_pages = $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT sp.session_id
 				FROM {$session_pages_table} sp
@@ -463,6 +472,27 @@ class Opti_Behavior_Heatmap_Ajax {
 				$params
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
+
+		// Path C (Free fallback): the Free build records rows in the `sessions`
+		// table but writes NO `session_pages` rows, so Path A/B both come back
+		// empty and the file-only heatmap gets wrongly nuked by the spam gate.
+		// When both prior paths are empty, derive the allow-list straight from
+		// the `sessions` table (every session not classified spam/bot/automated).
+		// The downstream gate still intersects this against the page's actual
+		// files, so admitting non-spam session IDs here can't leak other pages.
+		$allowed_sessions = array();
+		if ( empty( $allowed ) && empty( $allowed_pages ) && $this->heatmap_table_exists( $sessions_table ) ) {
+			// phpcs:disable
+			$allowed_sessions = $wpdb->get_col(
+				"SELECT id FROM {$sessions_table}
+				WHERE (traffic_type IS NULL OR traffic_type = '' OR traffic_type NOT IN ('spam','bot','automated'))"
+			);
+			// phpcs:enable
+		}
+
+		return array_values( array_unique( array_merge( (array) $allowed, (array) $allowed_pages, (array) $allowed_sessions ) ) );
 	}
 
 	/**
@@ -597,6 +627,51 @@ class Opti_Behavior_Heatmap_Ajax {
 	}
 
 	/**
+	 * Direct DB "known session" lookup, used when the Pro->Free bridge is
+	 * unavailable (bridge-less Free build: get_known_db_session_lookup_via_bridge()
+	 * returns null). Reads session tokens straight from the session_pages table
+	 * for the given pages so orphan admission still works without the bridge.
+	 * A session with a DB row is "known"; a file token absent here is an orphan
+	 * (its JSON file is the only evidence, so it must count).
+	 *
+	 * @param array $page_ids Canonical page IDs.
+	 * @return array|true 3-form lookup map (session_id => true), or `true`
+	 *                    fail-safe when the table is missing / query fails.
+	 */
+	private function get_known_db_session_lookup_direct( $page_ids ) {
+		global $wpdb;
+
+		$page_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $page_ids ) ) ) );
+		if ( empty( $page_ids ) ) {
+			return array();
+		}
+
+		$session_pages_table = $wpdb->prefix . 'optibehavior_session_pages';
+		if ( ! $this->heatmap_table_exists( $session_pages_table ) ) {
+			// Cannot restrict safely -> fail safe (no orphan admission).
+			return true;
+		}
+
+		$page_clause = $this->build_page_ids_clause( 'page_id', $page_ids );
+
+		// phpcs:disable
+		$ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT DISTINCT session_id FROM {$session_pages_table} WHERE {$page_clause}",
+				$page_ids
+			)
+		);
+		// phpcs:enable
+
+		if ( null === $ids ) {
+			// Query error -> fail safe.
+			return true;
+		}
+
+		return $this->build_session_lookup_map( $ids );
+	}
+
+	/**
 	 * Orphan file-session tokens for a page group's file universe (RC-C, spec
 	 * §3.2): tokens found in the heatmap file storage with NO trace in the DB
 	 * at all, per the known-session bridge. Used to admit orphan sessions into
@@ -656,7 +731,13 @@ class Opti_Behavior_Heatmap_Ajax {
 		}
 
 		$known_lookup = $this->get_known_db_session_lookup_via_bridge( $page_ids );
-		if ( null === $known_lookup || true === $known_lookup ) {
+		if ( null === $known_lookup ) {
+			// Bridge-less Free build: consult the DB tables directly so orphan
+			// admission still works (else every file session with no DB row is
+			// wrongly dropped by the spam gate, e.g. Free file-only heatmaps).
+			$known_lookup = $this->get_known_db_session_lookup_direct( $page_ids );
+		}
+		if ( true === $known_lookup ) {
 			return array();
 		}
 
@@ -967,7 +1048,9 @@ class Opti_Behavior_Heatmap_Ajax {
 		";
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Fragments built from $wpdb->prefix + prepared placeholders; params supplied below.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$ids    = $wpdb->get_col( $wpdb->prepare( $query, $scope['params'] ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$lookup = is_array( $ids ) ? $this->build_session_lookup_map( $ids ) : array();
 
 		$this->hm_covered_lookup_memo[ $memo_key ] = $lookup;
@@ -1362,7 +1445,7 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		// Verify permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
 		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
@@ -1400,12 +1483,106 @@ class Opti_Behavior_Heatmap_Ajax {
 		}
 
 		if ( ! $page_id ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior' ) ) );
 		}
 
 		// Advanced filters (OS / UTM / duration / pages & traffic).
 		$filters = array_merge( $filters, $this->collect_advanced_filter_params() );
 		$filters = $this->apply_advanced_session_filters( $filters );
+
+		// TEMP DEBUG: gated by ob_debug=1. Runs BEFORE cache so never served stale. Remove after diagnosis.
+		if ( ! empty( $_POST['ob_debug'] ) ) {
+			global $wpdb;
+			$dbg = array( 'ob_debug' => 'v7-filters', 'page_ids' => $page_ids, 'exclude_spam' => $filters['exclude_spam'] );
+			$dbg['filter_keys']       = array_keys( $filters );
+			$dbg['pre_session_ids']   = isset( $filters['session_ids'] ) ? $filters['session_ids'] : '(unset)';
+			$dbg['adv_dim_suffixes']  = isset( $filters['adv_dim_suffixes'] ) ? $filters['adv_dim_suffixes'] : '(unset)';
+
+			// (1) DB allow-list (Path A/B/C union).
+			$dbg_allowed          = $this->get_spam_allowed_session_ids( $page_ids );
+			$dbg['allowed_count'] = count( (array) $dbg_allowed );
+			$dbg['allowed_sample'] = array_slice( (array) $dbg_allowed, 0, 10 );
+			// Dump full sessions table id+token columns to see the real key shape.
+			// phpcs:disable
+			$dbg['sessions_dump'] = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}optibehavior_sessions LIMIT 5", ARRAY_A );
+			// phpcs:enable
+
+			// (2) session_pages raw rows for these pages.
+			$sessions_table      = $wpdb->prefix . 'optibehavior_sessions';
+			$session_pages_table = $wpdb->prefix . 'optibehavior_session_pages';
+			$sp_clause           = $this->build_page_ids_clause( 'page_id', $page_ids );
+			// phpcs:disable
+			$dbg['sp_row_count']  = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$session_pages_table} WHERE {$sp_clause}", $page_ids ) );
+			$dbg['sp_total_rows'] = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$session_pages_table}" );
+			$dbg['sess_total']    = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$sessions_table}" );
+			// phpcs:enable
+
+			// (3) heatmap storage + url hashes + files + parsed tokens.
+			$hs = class_exists( 'Opti_Behavior_Heatmap_Storage' ) ? Opti_Behavior_Heatmap_Storage::get_instance() : null;
+			$dbg['has_storage'] = (bool) $hs;
+			$url_hashes = array();
+			if ( $hs ) {
+				foreach ( $page_ids as $pid ) {
+					foreach ( (array) $hs->get_url_hashes_for_page( $pid ) as $h ) {
+						if ( $h ) { $url_hashes[] = $h; }
+					}
+				}
+			}
+			$url_hashes            = array_values( array_unique( $url_hashes ) );
+			$dbg['url_hashes']     = $url_hashes;
+			$upload_dir            = wp_upload_dir();
+			$files_found           = array();
+			$parsed_tokens         = array();
+			if ( $hs && method_exists( $hs, 'parse_filename_metadata' ) ) {
+				foreach ( $url_hashes as $h ) {
+					foreach ( array( 'clicks', 'moves', 'scrolls' ) as $folder ) {
+						$dir = $upload_dir['basedir'] . '/opti-behavior-data/' . $h . '/' . $folder;
+						foreach ( (array) glob( $dir . '/*.json' ) as $f ) {
+							$files_found[] = $folder . '/' . basename( $f );
+							$m = $hs->parse_filename_metadata( basename( $f ) );
+							if ( $m && ! empty( $m['session_id'] ) ) { $parsed_tokens[ (string) $m['session_id'] ] = true; }
+						}
+					}
+				}
+			}
+			$dbg['files_found']    = array_slice( $files_found, 0, 20 );
+			$dbg['file_count']     = count( $files_found );
+			$dbg['parsed_tokens']  = array_keys( $parsed_tokens );
+
+			// (4) bridge + direct known-lookup + orphan tokens.
+			$bridge = $this->get_known_db_session_lookup_via_bridge( $page_ids );
+			$dbg['bridge_type']    = ( null === $bridge ) ? 'null' : ( ( true === $bridge ) ? 'true(failsafe)' : 'array(' . count( (array) $bridge ) . ')' );
+			$direct = $this->get_known_db_session_lookup_direct( $page_ids );
+			$dbg['direct_type']    = ( true === $direct ) ? 'true(failsafe)' : 'array(' . count( (array) $direct ) . ')';
+			if ( $hs ) {
+				$orphan_tokens = $this->get_orphan_session_tokens_via_bridge( $page_ids, $url_hashes, $hs );
+				$dbg['orphan_token_count'] = count( (array) $orphan_tokens );
+				$dbg['orphan_tokens']      = array_slice( (array) $orphan_tokens, 0, 20 );
+			}
+
+			// (5) match test: does the allow-list lookup admit the file tokens?
+			$lookup = $this->build_session_lookup_map( (array) $dbg_allowed );
+			$match  = array();
+			foreach ( array_keys( $parsed_tokens ) as $tok ) {
+				$match[ (string) $tok ] = $this->is_session_allowed_by_lookup( $tok, $lookup ) ? 'ADMIT' : 'DROP';
+			}
+			$dbg['token_match'] = $match;
+
+			// (6) run the actual fast path with the real filters and report.
+			$fast_res = $this->generate_heatmap_data_fast( $page_id, $device, $type, $date_range, $filters );
+			if ( false === $fast_res ) {
+				$dbg['fast_result'] = 'FALSE (falls back to recordings)';
+			} elseif ( is_array( $fast_res ) ) {
+				$dbg['fast_result']        = 'array';
+				$dbg['fast_coords']        = count( $fast_res['coordinates'] ?? array() );
+				$dbg['fast_total_files']   = $fast_res['total_files'] ?? null;
+				$dbg['fast_session_ids']   = $fast_res['_debug_session_ids'] ?? '(n/a)';
+			} else {
+				$dbg['fast_result'] = var_export( $fast_res, true );
+			}
+
+			wp_send_json_success( $dbg );
+		}
 
 		// Create cache key that includes filters
 		$cache_key = $this->build_cache_key( $page_id, $device, $type, $date_range, $filters );
@@ -1868,7 +2045,7 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		// Verify permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
 		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
@@ -1906,7 +2083,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		}
 
 		if ( ! $page_id ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior' ) ) );
 		}
 
 		// Advanced filters (OS / UTM / duration / pages & traffic).
@@ -1917,8 +2094,9 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		// Generate statistics with filters. Wrapped in error handler to catch any PHP errors
 		// that would otherwise kill the AJAX response silently (e.g., foreach(null) TypeError in PHP 8.0+).
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_set_error_handler -- Scoped, restored immediately after the try/catch below; converts PHP warnings into catchable exceptions so a stats-generation error returns a clean JSON error instead of a silent 500.
 		set_error_handler( function( $errno, $errstr, $errfile, $errline ) {
-			throw new \ErrorException( $errstr, 0, $errno, $errfile, $errline );
+			throw new \ErrorException( esc_html( $errstr ), 0, (int) $errno, esc_html( $errfile ), (int) $errline );
 		} );
 
 		try {
@@ -2138,7 +2316,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$xp_ph        = implode( ',', array_fill( 0, count( $xpaths ), '%s' ) );
 		$params       = array_merge( $page_ids, $xpaths );
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; WHERE built from prepared placeholders.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; WHERE built from prepared placeholders.
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT e.element_xpath AS xp,
@@ -2157,6 +2335,7 @@ class Opti_Behavior_Heatmap_Ajax {
 			),
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$map = array();
 		foreach ( (array) $rows as $row ) {
@@ -2286,7 +2465,9 @@ class Opti_Behavior_Heatmap_Ajax {
 				LEFT JOIN {$wpdb->prefix}optibehavior_visitors v ON s.visitor_id = v.id{$where_sql} LIMIT 20000";
 
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static column/table names from $wpdb->prefix; WHERE built from prepared placeholders.
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$rows = ! empty( $params ) ? $wpdb->get_results( $wpdb->prepare( $sql, $params ) ) : $wpdb->get_results( $sql ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 			$allowed = array();
 			foreach ( (array) $rows as $row ) {
@@ -2394,7 +2575,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		}
 
 		$placeholders = implode( ',', array_fill( 0, count( $page_ids ), '%d' ) );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; IN() built from prepared placeholders.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; IN() built from prepared placeholders.
 		$ids = $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT DISTINCT e.session_id FROM {$wpdb->prefix}optibehavior_events e
@@ -2402,6 +2583,7 @@ class Opti_Behavior_Heatmap_Ajax {
 				$page_ids
 			)
 		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return is_array( $ids ) ? $ids : array();
 	}
@@ -2415,7 +2597,7 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		// Verify permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
 		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
@@ -2427,7 +2609,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$page_ids = $this->get_request_page_ids( $_POST, $page_id );
 
 		if ( ! $page_id ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior' ) ) );
 		}
 
 		// Clear cache for every page in the canonical group.
@@ -2448,7 +2630,7 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		// Verify permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
 		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
@@ -2471,7 +2653,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$variant_id   = isset( $_POST['variant_id'] ) ? absint( $_POST['variant_id'] ) : 0;
 
 		if ( ! $page_id ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior' ) ) );
 		}
 
 		// Build filters array.
@@ -2534,7 +2716,7 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		// Verify permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
 		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
@@ -2557,7 +2739,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$period_end   = isset( $custom_dates['end_date'] ) ? $custom_dates['end_date'] : '';
 
 		if ( ! $page_id ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior' ) ) );
 		}
 
 		// X — sessions with recorded heatmap events (all visitor types), and
@@ -2610,7 +2792,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$reset_scope_tooltip = '';
 		if ( null !== $reset_all_time ) {
 			// translators: %1$s: sessions counted since the heatmap data deletion, %2$s: total sessions recorded all time.
-			$reset_scope_tooltip = sprintf( __( '%1$s sessions with heatmap data (counted since this page\'s heatmap data was deleted) / %2$s total sessions recorded all time. Analytics keeps all sessions; heatmaps restart from the deletion.', 'opti-behavior-pro' ), number_format_i18n( (int) $all_sessions ), number_format_i18n( $reset_all_time ) );
+			$reset_scope_tooltip = sprintf( __( '%1$s sessions with heatmap data (counted since this page\'s heatmap data was deleted) / %2$s total sessions recorded all time. Analytics keeps all sessions; heatmaps restart from the deletion.', 'opti-behavior' ), number_format_i18n( (int) $all_sessions ), number_format_i18n( $reset_all_time ) );
 		}
 
 		wp_send_json_success(
@@ -2772,7 +2954,9 @@ class Opti_Behavior_Heatmap_Ajax {
 		$this->debug_log( "[Opti-Behavior-Heatmap] Recording IDs: " . implode( ', ', array_map( function( $r ) { return $r->id; }, $recordings ) ) );
 
 		// Get the page URL for filtering multi-page recordings
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$page_url = $wpdb->get_var( $wpdb->prepare( "SELECT url FROM {$wpdb->prefix}optibehavior_pages WHERE id = %d", $page_id ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$this->debug_log( "[Opti-Behavior-Heatmap] Filtering events for page URL: {$page_url}" );
 
 		$all_parsed_data = array();
@@ -3332,7 +3516,7 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		// Verify permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
 		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
@@ -3358,7 +3542,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$variant_id = isset( $_POST['variant_id'] ) ? absint( $_POST['variant_id'] ) : 0;
 
 		if ( ! $page_id ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior' ) ) );
 		}
 
 		// Build filters - country and browser can be comma-separated for multi-select
@@ -3411,7 +3595,7 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		// Verify permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
 		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
@@ -3435,7 +3619,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$visitor_type = isset( $_POST['visitor_type'] ) ? sanitize_text_field( wp_unslash( $_POST['visitor_type'] ) ) : '';
 
 		if ( ! $page_id ) {
-			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior-pro' ) ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid page ID', 'opti-behavior' ) ) );
 		}
 
 		// Check if heatmap storage is available.
@@ -3918,19 +4102,21 @@ class Opti_Behavior_Heatmap_Ajax {
 		// Entry / exit page suggestions (session-count basis).
 		foreach ( array( 'entry_page' => 'entry_pages', 'exit_page' => 'exit_pages' ) as $column => $result_key ) {
 			if ( $scoped ) {
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
 				$rows = $wpdb->get_results( $wpdb->prepare(
 					"SELECT s.id AS sid, s.{$column} AS value {$session_base} AND s.{$column} IS NOT NULL AND s.{$column} != '' LIMIT 20000",
 					$page_ids
 				) );
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				$result[ $result_key ] = $aggregate( $rows );
 				continue;
 			}
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
 			$rows = $wpdb->get_results( $wpdb->prepare(
 				"SELECT s.{$column} AS value, COUNT(*) AS count {$session_base} AND s.{$column} IS NOT NULL AND s.{$column} != '' GROUP BY s.{$column} ORDER BY count DESC LIMIT 50",
 				$page_ids
 			) );
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$result[ $result_key ] = $to_value_count( $rows );
 		}
 
@@ -3940,11 +4126,12 @@ class Opti_Behavior_Heatmap_Ajax {
 		$site_host = wp_parse_url( home_url(), PHP_URL_HOST );
 		$site_host = $site_host ? preg_replace( '/^www\./i', '', $site_host ) : '';
 		if ( $scoped ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Tables from $wpdb->prefix; page IDs prepared below.
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Tables from $wpdb->prefix; page IDs prepared below.
 			$rows = $wpdb->get_results( $wpdb->prepare(
 				"SELECT s.id AS sid, s.referrer AS value {$session_base} AND s.referrer IS NOT NULL AND s.referrer != '' LIMIT 20000",
 				$page_ids
 			) );
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			// Normalize to a bare domain (PHP mirror of the SQL expression below).
 			foreach ( (array) $rows as $row ) {
 				$domain = str_ireplace( array( 'https://', 'http://' ), '', trim( (string) $row->value ) );
@@ -3955,7 +4142,7 @@ class Opti_Behavior_Heatmap_Ajax {
 			}
 			$result['referrers'] = $aggregate( $rows );
 		} else {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Tables from $wpdb->prefix, host esc_sql()-escaped; page IDs prepared below.
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Tables from $wpdb->prefix, host esc_sql()-escaped; page IDs prepared below.
 			$rows = $wpdb->get_results( $wpdb->prepare(
 				"SELECT REPLACE(SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(REPLACE(s.referrer, 'https://', ''), 'http://', ''), '/', 1), '?', 1), 'www.', '') AS value,
 						COUNT(*) AS count
@@ -3967,6 +4154,7 @@ class Opti_Behavior_Heatmap_Ajax {
 				 LIMIT 50",
 				$page_ids
 			) );
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$result['referrers'] = $to_value_count( $rows );
 		}
 
@@ -3976,14 +4164,15 @@ class Opti_Behavior_Heatmap_Ajax {
 		// and filter results can never disagree. Unique sessions per channel.
 		$channel_case = $this->get_traffic_channel_case_sql();
 		if ( $scoped ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
 			$rows = $wpdb->get_results( $wpdb->prepare(
 				"SELECT s.id AS sid, ( {$channel_case} ) AS value {$session_base} LIMIT 20000",
 				$page_ids
 			) );
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$result['traffic_channels'] = $aggregate( $rows );
 		} else {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
 			$rows = $wpdb->get_results( $wpdb->prepare(
 				"SELECT ( {$channel_case} ) AS value, COUNT(DISTINCT s.id) AS count
 				 {$session_base}
@@ -3991,6 +4180,7 @@ class Opti_Behavior_Heatmap_Ajax {
 				 ORDER BY count DESC",
 				$page_ids
 			) );
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$result['traffic_channels'] = $to_value_count( $rows );
 		}
 
@@ -4104,7 +4294,7 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		foreach ( $dimensions as $result_key => $dim ) {
 			list( $column, $join ) = $dim;
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix; page IDs prepared below.
 			$rows = $wpdb->get_results( $wpdb->prepare(
 				"SELECT TRIM({$column}) AS value, COUNT(DISTINCT s.id) AS count
 				 FROM {$sessions_table} s {$join}
@@ -4115,6 +4305,7 @@ class Opti_Behavior_Heatmap_Ajax {
 				 LIMIT 100",
 				$page_ids
 			) );
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			foreach ( (array) $rows as $row ) {
 				$value = trim( (string) $row->value );
 				if ( '' !== $value && strtolower( $value ) !== 'unknown' ) {
@@ -4315,7 +4506,9 @@ class Opti_Behavior_Heatmap_Ajax {
 			}
 
 			// Fallback / legacy: compute from raw URL with variations.
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$url = $wpdb->get_var( $wpdb->prepare( "SELECT url FROM {$wpdb->prefix}optibehavior_pages WHERE id = %d", $canonical_page_id ) );
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			if ( $url ) {
 				$page_url_hashes[] = md5( $url );
 				$page_url_hashes[] = md5( rtrim( $url, '/' ) );
@@ -4539,13 +4732,29 @@ class Opti_Behavior_Heatmap_Ajax {
 				// Accumulate interaction counts by folder type
 				switch ( $folder_name ) {
 					case 'clicks':
-						$total_clicks += $count;
-						// Element-level tally (Top Clicked Elements panel): read the
-						// file body and bucket each click point by its XPath anchor.
-						// Only runs when a caller opted in — the hot stats path
-						// passes null and skips the extra file read.
-						if ( is_array( $element_click_tally ) ) {
-							$this->accumulate_click_file_element_tally( $file, $element_click_tally );
+						// Count the DEDUPED click universe — the same points the
+						// renderer/tooltip draw — instead of the raw filename
+						// `count` token, which double-counts Pro session-recording
+						// (rrweb) "twin" copies of anchored tracker clicks. The
+						// storage helper reads the body once, drops the twins via
+						// the exact routine aggregate_heatmap_data() uses, and (when
+						// opted in) buckets the surviving points by XPath for the
+						// Top Clicked Elements panel — so KPI, tooltip and Top
+						// Elements share one deduped source of truth.
+						$deduped_clicks = null;
+						if ( class_exists( 'Opti_Behavior_Heatmap_Storage' ) ) {
+							$deduped_clicks = Opti_Behavior_Heatmap_Storage::get_instance()
+								->count_click_file_deduped( $file, $element_click_tally );
+						}
+						if ( null === $deduped_clicks ) {
+							// Body unreadable/corrupt or storage unavailable: keep
+							// today's behavior (filename token + legacy tally).
+							$total_clicks += $count;
+							if ( is_array( $element_click_tally ) ) {
+								$this->accumulate_click_file_element_tally( $file, $element_click_tally );
+							}
+						} else {
+							$total_clicks += $deduped_clicks;
 						}
 						break;
 					case 'moves':
@@ -4642,7 +4851,9 @@ class Opti_Behavior_Heatmap_Ajax {
 		$this->debug_log( "[DEBUG count_sessions_for_stats] Filters: " . wp_json_encode( $filters ), 'info' );
 
 		// Get URL hash for this page
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$url = $wpdb->get_var( $wpdb->prepare( "SELECT url FROM {$wpdb->prefix}optibehavior_pages WHERE id = %d", $page_id ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( ! $url ) {
 			$this->debug_log( "[DEBUG count_sessions_for_stats] No URL found for page_id: $page_id", 'info' );
 			return 0;
@@ -4985,7 +5196,10 @@ class Opti_Behavior_Heatmap_Ajax {
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Query is built dynamically with proper placeholders
 		$prepared_query = $wpdb->prepare( $query, $query_params );
 
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- Already prepared above with proper placeholders.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$results = $wpdb->get_results( $prepared_query );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return $results;
 	}
@@ -5062,7 +5276,9 @@ class Opti_Behavior_Heatmap_Ajax {
 		";
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Fragments built from $wpdb->prefix + prepared placeholders; params supplied below.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$rows = $wpdb->get_results( $wpdb->prepare( $query, $scope['params'] ), ARRAY_A );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( ! is_array( $rows ) ) {
 			return null;
 		}
@@ -5174,7 +5390,9 @@ class Opti_Behavior_Heatmap_Ajax {
 		";
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Fragments built from $wpdb->prefix + prepared placeholders; params supplied below.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$rows = $wpdb->get_results( $wpdb->prepare( $query, $scope['params'] ), ARRAY_A );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( ! is_array( $rows ) ) {
 			return null;
 		}
@@ -5288,7 +5506,10 @@ class Opti_Behavior_Heatmap_Ajax {
 		// If the recordings table exists, require the same recording-backed
 		// session universe used by the frontend stats bar. If not, the scope
 		// falls back to session_pages date filtering.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- Table/column identifiers from $wpdb->prefix; values bound via $scope['params'] placeholders.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$rows = $wpdb->get_results( $wpdb->prepare( $query, $scope['params'] ), ARRAY_A );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( ! is_array( $rows ) ) {
 			return null;
 		}
@@ -5369,7 +5590,9 @@ class Opti_Behavior_Heatmap_Ajax {
 		";
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Fragments built from $wpdb->prefix + prepared placeholders; params supplied below.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$rows = $wpdb->get_results( $wpdb->prepare( $query, $scope['params'] ), ARRAY_A );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( ! is_array( $rows ) ) {
 			return null;
 		}
@@ -5669,6 +5892,8 @@ class Opti_Behavior_Heatmap_Ajax {
 			$real_click_sum_sql = 'COALESCE(SUM(COALESCE(hm_click_events.click_count, 0)), 0)';
 		}
 
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- Table/column identifiers from $wpdb->prefix; values bound via $scope['params'] placeholders.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
 				"SELECT
@@ -5691,6 +5916,8 @@ class Opti_Behavior_Heatmap_Ajax {
 			),
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
 
 		if ( ! is_array( $row ) ) {
 			return null;
@@ -5862,7 +6089,9 @@ class Opti_Behavior_Heatmap_Ajax {
 	private function heatmap_table_exists( $table ) {
 		global $wpdb;
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		return (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 	}
 
 	/**
@@ -6708,6 +6937,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$playable_where = " AND ( ( r.file_path IS NOT NULL AND r.file_path != '' ) OR ( r.recording_data IS NOT NULL AND r.recording_data != '' ) )";
 
 		// Use same logic as get_recordings() - join with visitors table for device info.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- Table identifiers from $wpdb->prefix; values bound via prepared placeholders array.
 		$query = $wpdb->prepare(
 			"SELECT COUNT(DISTINCT r.id)
 			FROM {$table_recordings} r
@@ -6724,7 +6954,10 @@ class Opti_Behavior_Heatmap_Ajax {
 			array_merge( $page_ids, $device_params, $spam_values )
 		);
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		return (int) $wpdb->get_var( $query );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
 	}
 
 	/**
@@ -6831,7 +7064,8 @@ class Opti_Behavior_Heatmap_Ajax {
 		global $wpdb;
 		$table = $wpdb->prefix . 'optibehavior_ab_impressions';
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- Table name from $wpdb->prefix; values bound via %d placeholders.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		return $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT DISTINCT session_id FROM " . $table . " WHERE test_id = %d AND variant_id = %d AND session_id IS NOT NULL AND session_id != ''",
@@ -6839,5 +7073,7 @@ class Opti_Behavior_Heatmap_Ajax {
 				$variant_id
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
 	}
 }

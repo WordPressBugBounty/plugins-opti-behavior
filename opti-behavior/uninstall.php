@@ -54,6 +54,8 @@ delete_option( 'opti_behavior_admin_language' );
 delete_option( 'opti_behavior_i18n_migrated_1815' );
 delete_option( 'opti_behavior_traffic_settings' );
 delete_option( 'opti_behavior_intent_rules' );
+// Site-wide saved advanced-filter profiles (FREE-owned; PRO must never delete it).
+delete_option( 'opti_behavior_filter_profiles' );
 delete_option( 'opti_behavior_form_analytics_settings' );
 // Free tracker options
 delete_option( 'opti_behavior_tracker_last_heartbeat' );

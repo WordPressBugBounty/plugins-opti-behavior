@@ -23,6 +23,14 @@
     var _deadEndpoint = false;
     var _disabledFunnels = {};
 
+    // Latest server-authoritative / broker-converged session id (spec §2.3).
+    // On a full-page-cached page the localized session seed can be frozen; the
+    // heatmap session-start ingest recomputes the per-visitor session id server
+    // side and pushes it into the shared broker, which notifies subscribers here.
+    // Later (click-triggered) funnel sends use this converged value so they key
+    // to the same session the server created. null until init resolves a sid.
+    var _latestSessionId = null;
+
     /**
      * True only for WordPress core's "no such action" reply: HTTP 400 + body
      * exactly "0".
@@ -36,30 +44,80 @@
     }
 
     // -------------------------------------------------------------------------
-    // Nonce refresh — one refresh per page load to handle cached-page expiry
+    // Nonce refresh — ONE network refresh per page load to heal cached-page
+    // nonce expiry, modelled as a small state machine (NOT a single boolean
+    // latch). A full-page-cache TTL can outlive the WordPress nonce lifetime,
+    // so cached HTML ships a nonce the funnel-track endpoint rejects with HTTP
+    // 403.
+    //
+    // The old single latch (`_nonceRefreshed = true` set at refresh start)
+    // dropped every funnel step that 403'd WHILE the refresh was in flight:
+    // with two or more active funnels (or the download-click tracker firing
+    // alongside init), their trackFunnelStep() calls 403 near-simultaneously —
+    // the first started the refresh and flipped the latch, so every other
+    // caller saw the latch already set and silently dropped its own step
+    // instead of re-sending it. On a cached page that silently under-counted
+    // every funnel beyond the first. Mirrors the heatmap page-view fix
+    // (opti-behavior-heatmap-simple.js ensureFreshNonce): the network refresh
+    // still runs at most once, but EVERY caller that 403s — before, during, or
+    // after the refresh — registers a callback that fires once the fresh nonce
+    // is available and re-sends its own step. A failed refresh notifies waiters
+    // with ok=false so they give up (bounded — no retry loop).
     // -------------------------------------------------------------------------
-    var _nonceRefreshed = false;
+    var _nonceRefreshStarted = false; // network refresh launched (at most once)
+    var _nonceRefreshDone = false;    // refresh settled (success OR failure)
+    var _nonceRefreshOk = false;      // refresh settled successfully
+    var _nonceWaiters = [];           // callbacks awaiting the fresh nonce
 
     /**
-     * Request fresh nonces from the server (admin-ajax.php is never cached),
-     * update the shared config nonce, and invoke retryFn with the fresh value.
+     * Run the server nonce refresh at most once per page load and notify every
+     * caller when the fresh nonce is ready.
      *
-     * @param {string}   ajaxUrl  WordPress admin-ajax.php URL from config.
-     * @param {Function} retryFn  Called with the fresh nonce_funnels string.
+     * The callback is invoked exactly once with a boolean `ok` (true when a
+     * fresh nonce was obtained and written to config.nonce):
+     *   - immediately, if a refresh already settled this page load;
+     *   - on completion, if a refresh is currently in flight;
+     *   - after launching a new refresh, otherwise.
+     * Callers perform their own re-send inside the callback, so a 403 that
+     * lands during an in-flight refresh is never dropped.
+     *
+     * @param {Object}   config The optiBehaviorFunnelTracker config object
+     *                          (reads .ajaxUrl, writes the fresh .nonce).
+     * @param {Function} cb     Called once with (ok) when the nonce is fresh.
      */
-    function refreshNonceAndRetry( ajaxUrl, retryFn ) {
-        if ( _nonceRefreshed ) { return; } // Guard: only one refresh per page load
-        _nonceRefreshed = true;
+    function ensureFreshNonce( config, cb ) {
+        if ( _nonceRefreshDone ) {
+            if ( cb ) { cb( _nonceRefreshOk ); }
+            return;
+        }
+        if ( cb ) { _nonceWaiters.push( cb ); }
+        if ( _nonceRefreshStarted ) { return; } // refresh already in flight
+        _nonceRefreshStarted = true;
+
+        var settle = function( ok ) {
+            _nonceRefreshOk = ok;
+            _nonceRefreshDone = true;
+            var waiters = _nonceWaiters;
+            _nonceWaiters = [];
+            for ( var i = 0; i < waiters.length; i++ ) {
+                try { waiters[ i ]( ok ); } catch ( e ) {}
+            }
+        };
 
         var xhr = new XMLHttpRequest();
-        xhr.open( 'POST', ajaxUrl );
+        xhr.open( 'POST', config.ajaxUrl );
         xhr.setRequestHeader( 'Content-Type', 'application/x-www-form-urlencoded' );
         xhr.onload = function() {
+            var ok = false;
             if ( xhr.status === 200 ) {
                 try {
                     var resp = JSON.parse( xhr.responseText );
                     if ( resp.success && resp.data && resp.data.nonce_funnels ) {
-                        retryFn( resp.data.nonce_funnels );
+                        config.nonce = resp.data.nonce_funnels;
+                        ok = true;
+                        if ( window.OptiBehaviorDebug ) {
+                            window.OptiBehaviorDebug.debug( 'Nonce refreshed on cached page', 'funnel-tracker' );
+                        }
                     }
                 } catch ( e ) {
                     if ( window.OptiBehaviorDebug ) {
@@ -67,7 +125,9 @@
                     }
                 }
             }
+            settle( ok );
         };
+        xhr.onerror = function() { settle( false ); };
         xhr.send( 'action=opti_behavior_refresh_nonces' );
     }
 
@@ -134,6 +194,18 @@
         }
 
         if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('Session ID:', 'funnel-tracker', sessionId);
+
+        // Seed the converged sid and subscribe to broker updates so a
+        // server-authoritative sid (adopted after the heatmap session-start
+        // response) is used for subsequent click-triggered funnel sends.
+        _latestSessionId = sessionId;
+        try {
+            if (window.OptiBehaviorAnonBroker && typeof window.OptiBehaviorAnonBroker.onSessionId === 'function') {
+                window.OptiBehaviorAnonBroker.onSessionId(function(newSid) {
+                    if (newSid) { _latestSessionId = newSid; }
+                });
+            }
+        } catch (e) {}
 
         // Get current URL
         const currentUrl = window.location.href;
@@ -295,9 +367,23 @@
     }
 
     /**
-     * Send tracking data to server
+     * Send tracking data to server.
+     *
+     * @param {number}  funnelId   Funnel id.
+     * @param {string}  sessionId  Visitor session id.
+     * @param {string}  currentUrl URL being reported.
+     * @param {string}  ajaxUrl    admin-ajax.php URL.
+     * @param {string}  nonce      Nonce to send with this attempt.
+     * @param {boolean} [retried]  True when this is the post-refresh re-send.
+     *                             Bounds recovery to a single retry so a fresh
+     *                             nonce that STILL 403s can never loop.
+     * @param {boolean} [viaBeacon] True when the send is triggered by a click that
+     *                             is about to navigate away (download/outbound
+     *                             link). Uses navigator.sendBeacon (falling back to
+     *                             a keepalive fetch) so the request survives page
+     *                             unload instead of being aborted → "Failed to fetch".
      */
-    function trackFunnelStep(funnelId, sessionId, currentUrl, ajaxUrl, nonce) {
+    function trackFunnelStep(funnelId, sessionId, currentUrl, ajaxUrl, nonce, retried, viaBeacon) {
         // Endpoint is permanently unavailable this page load (handler unregistered
         // on a cached page) — send nothing.
         if (_deadEndpoint) { return; }
@@ -315,23 +401,55 @@
         data.append('current_url', currentUrl);
         data.append('nonce', nonce);
 
+        // Click-triggered send right before navigation: use a transport that is
+        // NOT tied to the document's lifetime, so the request completes after the
+        // page unloads. A plain fetch() would be aborted by the unload and reject
+        // with "TypeError: Failed to fetch". Mirrors the outbound-click send in
+        // opti-behavior-heatmap-simple.js. Fire-and-forget: the response-handling
+        // (403 nonce refresh / 400 dead endpoint) only matters for the pageview
+        // path and is left intact below.
+        if ( viaBeacon ) {
+            if ( navigator.sendBeacon ) {
+                try {
+                    var sent = navigator.sendBeacon(ajaxUrl, data);
+                    if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('Funnel step sent via sendBeacon:', 'funnel-tracker', sent);
+                    if ( sent ) { return; }
+                    // Queue full / rejected — fall through to keepalive fetch.
+                } catch(e) {
+                    if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('sendBeacon failed, falling back to keepalive fetch:', 'funnel-tracker', e);
+                }
+            }
+            fetch(ajaxUrl, {
+                method: 'POST',
+                body: data,
+                credentials: 'same-origin',
+                keepalive: true
+            }).catch(function(error) {
+                if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('Funnel step keepalive fetch failed:', 'funnel-tracker', error);
+            });
+            return;
+        }
+
         fetch(ajaxUrl, {
             method: 'POST',
             body: data,
-            credentials: 'same-origin'
+            credentials: 'same-origin',
+            keepalive: true
         })
         .then(function(response) {
-            // Handle nonce expiry on cached pages: refresh once and retry
-            if ( response.status === 403 && !_nonceRefreshed ) {
+            // Handle nonce expiry on cached pages: refresh once and re-send.
+            // The re-send happens inside the ensureFreshNonce callback so that
+            // a step which 403s WHILE the refresh is already in flight (another
+            // funnel started it) is preserved and re-sent on completion instead
+            // of being dropped. `retried` bounds recovery to a single re-send.
+            if ( response.status === 403 && !retried ) {
                 if ( window.OptiBehaviorDebug ) {
                     window.OptiBehaviorDebug.debug( 'Nonce expired (403), refreshing and retrying', 'funnel-tracker' );
                 }
-                refreshNonceAndRetry( ajaxUrl, function( freshNonce ) {
-                    nonce = freshNonce; // update local param used by FormData
-                    if ( window.optiBehaviorFunnelTracker ) {
-                        window.optiBehaviorFunnelTracker.nonce = freshNonce;
-                    }
-                    trackFunnelStep( funnelId, sessionId, currentUrl, ajaxUrl, freshNonce );
+                var _cfg = window.optiBehaviorFunnelTracker || { ajaxUrl: ajaxUrl, nonce: nonce };
+                ensureFreshNonce( _cfg, function( ok ) {
+                    if ( ! ok ) { return; } // Refresh failed — give up (no loop).
+                    trackFunnelStep( funnelId, sessionId, currentUrl, ajaxUrl, _cfg.nonce, true );
                 } );
                 return null; // Skip JSON parsing for this expired-nonce response
             }
@@ -403,8 +521,11 @@
                     if (urlMatchesPattern(targetUrl, step.url_pattern, step.match_type)) {
                         // console.log('%c[Opti-Behavior Funnel] 🎯 Download link matches step ' + (index + 1) + '!', 'color: #FF9800; font-weight: bold;');
 
-                        // Track this funnel step immediately (before redirect)
-                        trackFunnelStep(funnel.id, sessionId, targetUrl, config.ajaxUrl, config.nonce);
+                        // Track this funnel step immediately (before redirect).
+                        // Use the latest broker-converged sid when available so a
+                        // click after the server corrected the session id keys to
+                        // the authoritative session.
+                        trackFunnelStep(funnel.id, _latestSessionId || sessionId, targetUrl, config.ajaxUrl, config.nonce, false, true);
                     }
                 });
             });
@@ -431,8 +552,11 @@
         window.__optiBehaviorTestables.funnelTracker = {
             isDeadEndpoint: isDeadEndpoint,
             trackFunnelStep: trackFunnelStep,
+            ensureFreshNonce: ensureFreshNonce,
             isDeadEndpointTripped: function() { return _deadEndpoint; },
-            isFunnelDisabled: function( id ) { return !!_disabledFunnels[ id ]; }
+            isFunnelDisabled: function( id ) { return !!_disabledFunnels[ id ]; },
+            isNonceRefreshStarted: function() { return _nonceRefreshStarted; },
+            isNonceRefreshDone: function() { return _nonceRefreshDone; }
         };
     }
 })();

@@ -4,9 +4,9 @@ Donate link: https://optiuser.com/
 Tags: heatmap, ab testing, Insights , session recording, funnel
 
 Requires at least: 5.8
-Tested up to: 7.0
+Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.8.2
+Stable tag: 1.8.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -318,6 +318,15 @@ This plugin may connect to external services in limited circumstances:
 31. Notification Smart Insights
 
 == Changelog ==
+
+= 1.8.3 - 2026-08-27 =
+* Added: Filter Profiles — save a named set of advanced-filter values (Visitor, Session, Pages & Traffic, UTM) and reuse it across the Analytics Dashboard, Funnels, and Pro screens. Save / Edit control sits next to Apply / Reset; date range is never stored.
+* Added: configurable cache purge after funnel modification. New Funnels setting to purge all page caches on every save/delete/status change (default) or never. With "Never", cached pages keep the old funnel config until the cache expires. Per-mutation override via the new `opti_behavior_should_purge_cache` filter (receives the action and funnel ID).
+* Added: schema parity for Pro's Error Tracking visitor filters. Error, friction, and performance tables now store visitor country; friction and performance also store OS. Existing rows are backfilled. Data-model change only — no free-side behavior change.
+* Fixed: cached-page visitor merging — anonymous visitor and session IDs baked into cached HTML made every direct visitor count as one visitor in one session. Identity is now recomputed server-side on each (uncached) tracking request, preserving cookieless privacy.
+* Fixed: cached-page traffic under-counting — a stale baked nonce caused bounce visits to go unrecorded. The page-view/session-start request now re-sends once with the fresh nonce, and click batches queued during a refresh are preserved.
+* Fixed: cached-page funnel under-counting — with two or more active funnels, a stale nonce silently dropped every step past the first. Funnel tracking now refreshes the nonce once and re-sends each step.
+* Changed: lockstep release keeping free and Pro version numbers in sync with Pro's Error Tracking filter enhancement. Free-side change is limited to a shared filter-ui stylesheet sync.
 
 = 1.8.2 - 2026-08-16 =
 

@@ -448,6 +448,19 @@ class Opti_Behavior_Stats_Spam_Filter {
 			(int) $row->recording_click_count
 		);
 
+		// Extension point for click evidence that lives outside the core session
+		// tables. A form engagement (field focus/typing/select + submission) is
+		// proof of a real click, but that evidence lives in PRO-only form tables
+		// this FREE filter must not hard-reference. PRO hooks this to admit form
+		// sessions as human, keyed on the session's OWN unique id. Combined with
+		// max() it is monotonic upward like the source fan-in above: it can only
+		// ADMIT more sessions as human, never newly flag one as spam — so a
+		// session that touched a form can never be classified `few_clicks`.
+		$click_count = max(
+			$click_count,
+			(int) apply_filters( 'opti_behavior_session_click_evidence', 0, $session_id )
+		);
+
 		return array(
 			'traffic_type' => (string) $row->traffic_type,
 			'spam_reason'  => $row->spam_reason,

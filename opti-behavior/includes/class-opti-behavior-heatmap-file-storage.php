@@ -30,6 +30,28 @@ if ( class_exists( 'Opti_Behavior_Heatmap_File_Storage', false ) ) {
 class Opti_Behavior_Heatmap_File_Storage {
 
 	/**
+	 * Append-only sidecar suffixes (perf Fix A, customer report 2026-08).
+	 *
+	 * The base recording file (`session_..._TS.json[.gz]`) is written ONCE by
+	 * save_recording(). Every subsequent update appends its new events as one
+	 * NDJSON line to the `.oblog` sidecar instead of the old
+	 * read-whole-file -> gzuncompress -> array_merge -> usort-all ->
+	 * gzcompress(9) -> rewrite-whole-file cycle (which was O(N^2) per session).
+	 * A tiny `.obidx` sidecar tracks running counters (event count + duration)
+	 * so the size/event caps stay enforceable in O(1) without re-reading the
+	 * base file on every save. read_recording() merges base + sidecar and sorts
+	 * once at read (playback/list) time. Old recordings have no sidecar and read
+	 * back unchanged.
+	 *
+	 * NOTE: this free-plugin copy of the class is the one that actually loads
+	 * when both plugins are active (the free plugin require_once's it before the
+	 * pro autoloader fires and the class_exists guard makes the pro copy a
+	 * no-op), so Fix A must live here as well as in the pro copy.
+	 */
+	const APPEND_SUFFIX = '.oblog';
+	const INDEX_SUFFIX  = '.obidx';
+
+	/**
 	 * Storage base directory
 	 *
 	 * @var string
@@ -241,155 +263,228 @@ class Opti_Behavior_Heatmap_File_Storage {
 			return array( 'error' => 'File does not exist: ' . $file_path );
 		}
 
-		// Big-file guard (spec §G.4): never read-merge-usort-rewrite an
-		// oversized recording — the read/decompress alone can exhaust PHP
-		// memory. Above the cap the append is refused and the existing file is
-		// left intact; callers keep the recording pointed at it (the
-		// `file_too_large` marker tells them NOT to fall back to database
-		// storage). NOTE: this free-plugin copy of the class is the one that
-		// actually loads when both plugins are active (the free plugin
-		// require_once's it before the pro autoloader can fire), so the guard
-		// must live here as well as in the pro copy.
-		$max_bytes_cap = (int) apply_filters( 'opti_behavior_recording_max_file_bytes', 50 * MB_IN_BYTES );
-		$current_size  = (int) @filesize( $full_path );
-		if ( $max_bytes_cap > 0 && $current_size > $max_bytes_cap ) {
+		// Append-only update (perf Fix A). Instead of the old
+		// read-whole-file -> merge -> usort-all -> gzcompress(9) -> rewrite
+		// cycle (O(N^2) per session), append the new events to the `.oblog`
+		// sidecar and bump the `.obidx` counters. The base file is never
+		// rewritten. Caps are enforced up front so an oversized recording is
+		// left intact and the append is refused (never falls back to DB).
+		$log_path = $full_path . self::APPEND_SUFFIX;
+		$idx_path = $full_path . self::INDEX_SUFFIX;
+
+		// Running counters (event count + duration). Cheap read; lazily
+		// initialised from the base file once for legacy files with no sidecar.
+		$idx = $this->read_recording_index( $idx_path );
+		if ( null === $idx ) {
+			$idx = $this->init_recording_index( $full_path, $file_path );
+			$this->write_recording_index( $idx_path, $idx );
+		}
+
+		$new_events   = isset( $data['events'] ) && is_array( $data['events'] ) ? array_values( $data['events'] ) : array();
+		$new_duration = isset( $data['duration'] ) ? (int) $data['duration'] : 0;
+
+		// Size cap (spec §G.4): combined on-disk bytes of base + append sidecar.
+		$max_bytes     = (int) apply_filters( 'opti_behavior_recording_max_file_bytes', 50 * MB_IN_BYTES );
+		$combined_size = (int) @filesize( $full_path ) + ( is_file( $log_path ) ? (int) @filesize( $log_path ) : 0 );
+		if ( $max_bytes > 0 && $combined_size > $max_bytes ) {
 			static $size_cap_logged = array();
 			if ( ! isset( $size_cap_logged[ $file_path ] ) ) {
 				$size_cap_logged[ $file_path ] = true;
-				$this->log( 'Recording file exceeds the size cap (' . $current_size . ' > ' . $max_bytes_cap . ' bytes) - append refused: ' . $file_path, 'warning' );
+				$this->log( 'Recording exceeds the size cap (' . $combined_size . ' > ' . $max_bytes . ' bytes) - append refused: ' . $file_path, 'warning' );
 			}
 			return array(
 				'error'          => 'Recording file exceeds the size cap - append refused',
 				'file_too_large' => true,
 				'file_path'      => $file_path,
-				'file_size'      => $current_size,
+				'file_size'      => $combined_size,
 			);
 		}
 
-		// Read existing file data
-		$existing_data = $this->read_recording( $file_path );
-
-		// Growth cap (spec §G.4): once a recording holds this many events,
-		// refuse further merges so the file can never grow unbounded via the
-		// merge-usort-rewrite cycle.
-		if ( $existing_data && isset( $existing_data['events'] ) && is_array( $existing_data['events'] ) ) {
-			$max_events_cap = (int) apply_filters( 'opti_behavior_recording_max_events_per_file', 50000 );
-			if ( $max_events_cap > 0 && count( $existing_data['events'] ) >= $max_events_cap ) {
-				static $event_cap_logged = array();
-				if ( ! isset( $event_cap_logged[ $file_path ] ) ) {
-					$event_cap_logged[ $file_path ] = true;
-					$this->log( 'Recording already holds ' . count( $existing_data['events'] ) . ' events (cap ' . $max_events_cap . ') - append refused: ' . $file_path, 'warning' );
-				}
-				return array(
-					'error'          => 'Recording event count exceeds the cap - append refused',
-					'file_too_large' => true,
-					'file_path'      => $file_path,
-					'file_size'      => $current_size,
-				);
+		// Event cap (spec §G.4): running total across base + sidecar.
+		$max_events = (int) apply_filters( 'opti_behavior_recording_max_events_per_file', 50000 );
+		if ( $max_events > 0 && (int) $idx['events'] >= $max_events ) {
+			static $event_cap_logged = array();
+			if ( ! isset( $event_cap_logged[ $file_path ] ) ) {
+				$event_cap_logged[ $file_path ] = true;
+				$this->log( 'Recording already holds ' . $idx['events'] . ' events (cap ' . $max_events . ') - append refused: ' . $file_path, 'warning' );
 			}
+			return array(
+				'error'          => 'Recording event count exceeds the cap - append refused',
+				'file_too_large' => true,
+				'file_path'      => $file_path,
+				'file_size'      => $combined_size,
+			);
 		}
 
-		if ( ! $existing_data || ! isset( $existing_data['events'] ) ) {
-			$this->log( 'Failed to read existing recording, will overwrite: ' . $file_path, 'warning' );
-			$merged_data = $data;
-		} else {
-			// Merge events from existing file with new events
-			$existing_events = $existing_data['events'];
-			$new_events = isset( $data['events'] ) ? $data['events'] : array();
-
-			// Combine events and sort by timestamp
-			$merged_events = array_merge( $existing_events, $new_events );
-
-			// Sort events by timestamp (rrweb events have a 'timestamp' property)
-			usort( $merged_events, function( $a, $b ) {
-				$time_a = isset( $a['timestamp'] ) ? $a['timestamp'] : 0;
-				$time_b = isset( $b['timestamp'] ) ? $b['timestamp'] : 0;
-				return $time_a - $time_b;
-			});
-
-			// Merge other data (use new data, but keep events merged)
-			$merged_data = array_merge( $existing_data, $data );
-			$merged_data['events'] = $merged_events;
-
-			// Use the duration from the new data (sent from frontend)
-			// The frontend calculates duration from actual elapsed time (Date.now() - pageStartTime)
-			// This is more accurate than calculating from event timestamps, which only shows
-			// when interactions happened, not the total time user spent on page
-			// For multi-page sessions, the frontend sends cumulative duration
-			if ( isset( $data['duration'] ) && $data['duration'] > 0 ) {
-				$merged_data['duration'] = (int) $data['duration'];
-				$this->log( 'Using duration from frontend: ' . $merged_data['duration'] . 's', 'debug' );
-			} else {
-				// Fallback: calculate from event timestamps if no duration provided
-				if ( count( $merged_events ) > 0 ) {
-					$first_event = $merged_events[0];
-					$last_event = $merged_events[ count( $merged_events ) - 1 ];
-					$first_timestamp = isset( $first_event['timestamp'] ) ? $first_event['timestamp'] : 0;
-					$last_timestamp = isset( $last_event['timestamp'] ) ? $last_event['timestamp'] : 0;
-					$merged_data['duration'] = (int) floor( ( $last_timestamp - $first_timestamp ) / 1000 );
-					$this->log( 'Fallback: Calculated duration from event timestamps: ' . $merged_data['duration'] . 's', 'debug' );
-				}
+		// No new events: nothing to append. Bump the duration in the index if it
+		// grew, but never write an empty append line or rewrite the base file.
+		if ( empty( $new_events ) ) {
+			if ( $new_duration > (int) $idx['duration'] ) {
+				$idx['duration'] = $new_duration;
+				$this->write_recording_index( $idx_path, $idx );
 			}
-
-			$this->log( 'Merged events: ' . count( $existing_events ) . ' existing + ' . count( $new_events ) . ' new = ' . count( $merged_events ) . ' total', 'info' );
+			return array(
+				'success'   => true,
+				'file_path' => $file_path,
+				'file_size' => $combined_size,
+				'timestamp' => current_time( 'timestamp' ),
+				'duration'  => (int) $idx['duration'],
+			);
 		}
 
-		// Payload-size guard. A stuck/looping client (e.g. Pro trackers on a
-		// cached page repeatedly replaying a growing pending payload) can merge an
-		// unbounded event array, and gzcompress()/wp_json_encode() on a multi-MB
-		// string is what exhausts PHP memory (Fatal: Allowed memory size, 02-Jul).
-		// Cap the retained events to the most recent window before encoding, then
-		// hard-cap the encoded byte size so one giant recording can never OOM.
-		if ( isset( $merged_data['events'] ) && is_array( $merged_data['events'] ) ) {
-			$max_events = 20000; // generous: a normal recording is well under this
-			$event_count = count( $merged_data['events'] );
-			if ( $event_count > $max_events ) {
-				// Keep the most recent events (array is sorted oldest-first).
-				$merged_data['events'] = array_slice( $merged_data['events'], -$max_events );
-				$this->log( 'Payload guard: trimmed events ' . $event_count . ' -> ' . $max_events, 'warning' );
-			}
-		}
-
-		// Prepare merged data
-		$json_data = wp_json_encode( $merged_data );
-
-		// Byte-size guard: refuse to compress/write a payload large enough to
-		// risk OOM. Drop the oldest events until it fits; bail cleanly if a single
-		// snapshot is still too large (better a skipped update than a fatal error).
-		$max_bytes = 8 * 1024 * 1024; // 8 MB encoded
-		if ( false !== $json_data && strlen( $json_data ) > $max_bytes
-			&& isset( $merged_data['events'] ) && is_array( $merged_data['events'] ) ) {
-			while ( strlen( $json_data ) > $max_bytes && count( $merged_data['events'] ) > 1 ) {
-				// Drop the oldest ~10% of events per pass to converge quickly.
-				$drop = max( 1, (int) floor( count( $merged_data['events'] ) * 0.1 ) );
-				$merged_data['events'] = array_slice( $merged_data['events'], $drop );
-				$json_data = wp_json_encode( $merged_data );
-			}
-			$this->log( 'Payload guard: byte-capped recording to ' . strlen( (string) $json_data ) . ' bytes', 'warning' );
-			if ( false === $json_data || strlen( $json_data ) > $max_bytes ) {
-				return array( 'error' => 'Recording payload exceeds size limit' );
-			}
-		}
-
-		// Compress if enabled (check if original file was compressed)
-		if ( substr( $file_path, -3 ) === '.gz' ) {
-			$compressed = gzcompress( $json_data, 9 );
-			$written = file_put_contents( $full_path, $compressed );
-		} else {
-			$written = file_put_contents( $full_path, $json_data );
-		}
-
+		// Append the batch as one NDJSON line (a JSON array of events).
+		$written = @file_put_contents( $log_path, wp_json_encode( $new_events ) . "\n", FILE_APPEND | LOCK_EX );
 		if ( false === $written ) {
-			return array( 'error' => 'Failed to write file' );
+			$this->log( 'Append write failed for: ' . $log_path, 'warning' );
+			return array( 'error' => 'Failed to write file - append failed' );
 		}
+
+		$idx['events']  += count( $new_events );
+		$idx['duration'] = max( (int) $idx['duration'], $new_duration );
+		$this->write_recording_index( $idx_path, $idx );
+
+		$combined_size = (int) @filesize( $full_path ) + (int) @filesize( $log_path );
 
 		return array(
 			'success'   => true,
 			'file_path' => $file_path,
-			'file_size' => filesize( $full_path ),
+			'file_size' => $combined_size,
 			'timestamp' => current_time( 'timestamp' ),
-			'duration'  => isset( $merged_data['duration'] ) ? $merged_data['duration'] : 0,
+			'duration'  => (int) $idx['duration'],
 		);
+	}
+
+	/**
+	 * Read the running-counter sidecar (`.obidx`) for a recording.
+	 *
+	 * @param string $idx_path Absolute path to the `.obidx` file.
+	 * @return array|null array( 'events' => int, 'duration' => int ) or null if absent/unreadable.
+	 */
+	private function read_recording_index( $idx_path ) {
+		if ( ! is_file( $idx_path ) ) {
+			return null;
+		}
+		$raw = @file_get_contents( $idx_path );
+		if ( false === $raw ) {
+			return null;
+		}
+		$decoded = json_decode( $raw, true );
+		if ( ! is_array( $decoded ) || ! isset( $decoded['events'] ) ) {
+			return null;
+		}
+		return array(
+			'events'   => (int) $decoded['events'],
+			'duration' => isset( $decoded['duration'] ) ? (int) $decoded['duration'] : 0,
+		);
+	}
+
+	/**
+	 * Write the running-counter sidecar (`.obidx`). Tiny, O(1) overwrite.
+	 *
+	 * @param string $idx_path Absolute path to the `.obidx` file.
+	 * @param array  $idx      array( 'events' => int, 'duration' => int ).
+	 * @return void
+	 */
+	private function write_recording_index( $idx_path, $idx ) {
+		@file_put_contents(
+			$idx_path,
+			wp_json_encode( array(
+				'events'   => (int) $idx['events'],
+				'duration' => (int) $idx['duration'],
+			) ),
+			LOCK_EX
+		);
+	}
+
+	/**
+	 * Initialise the running counters from the base recording file.
+	 *
+	 * Runs at most once per recording (the first append after the base file was
+	 * created, or the first append to a legacy merged file). After that the
+	 * `.obidx` sidecar is authoritative and the base file is never re-read on
+	 * the write path.
+	 *
+	 * @param string $full_path Absolute path to the base recording file.
+	 * @param string $file_path Relative file path (used to detect .gz).
+	 * @return array array( 'events' => int, 'duration' => int ).
+	 */
+	private function init_recording_index( $full_path, $file_path ) {
+		$idx = array( 'events' => 0, 'duration' => 0 );
+
+		$file_contents = @file_get_contents( $full_path );
+		if ( false === $file_contents ) {
+			return $idx;
+		}
+
+		if ( substr( $file_path, -3 ) === '.gz' ) {
+			$decompressed = @gzuncompress( $file_contents );
+			if ( false === $decompressed ) {
+				return $idx;
+			}
+			$file_contents = $decompressed;
+		}
+
+		$decoded = json_decode( $file_contents, true );
+		if ( is_array( $decoded ) ) {
+			if ( isset( $decoded['events'] ) && is_array( $decoded['events'] ) ) {
+				$idx['events'] = count( $decoded['events'] );
+			}
+			if ( isset( $decoded['duration'] ) ) {
+				$idx['duration'] = (int) $decoded['duration'];
+			}
+		}
+
+		return $idx;
+	}
+
+	/**
+	 * Merge the append-only sidecar events into the base recording data.
+	 *
+	 * Each sidecar line is a JSON array of events appended by update_recording().
+	 * Events are concatenated onto the base events and sorted once by timestamp,
+	 * reproducing the chronological order the old rewrite-every-save code kept.
+	 *
+	 * @param array  $data     Base recording data (decoded).
+	 * @param string $log_path Absolute path to the `.oblog` sidecar.
+	 * @return array Recording data with merged, time-ordered events.
+	 */
+	private function merge_append_log( $data, $log_path ) {
+		if ( ! isset( $data['events'] ) || ! is_array( $data['events'] ) ) {
+			$data['events'] = array();
+		}
+
+		// Streaming line-by-line read of the append-only sidecar log; WP_Filesystem has no streaming reader and loading the whole file at once defeats the memory-bounded parse. Sidecar may be absent/locked under concurrent writes.
+		$handle = @fopen( $log_path, 'rb' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_system_operations_fopen
+		if ( false === $handle ) {
+			return $data;
+		}
+
+		$appended = array();
+		while ( ( $line = fgets( $handle ) ) !== false ) {
+			$line = trim( $line );
+			if ( '' === $line ) {
+				continue;
+			}
+			$batch = json_decode( $line, true );
+			if ( is_array( $batch ) ) {
+				foreach ( $batch as $evt ) {
+					$appended[] = $evt;
+				}
+			}
+		}
+		// Closing the streaming read handle opened above; handle guaranteed valid here.
+		@fclose( $handle ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+
+		if ( ! empty( $appended ) ) {
+			$data['events'] = array_merge( $data['events'], $appended );
+			usort( $data['events'], function( $a, $b ) {
+				$ts_a = isset( $a['timestamp'] ) ? $a['timestamp'] : 0;
+				$ts_b = isset( $b['timestamp'] ) ? $b['timestamp'] : 0;
+				return $ts_a <=> $ts_b;
+			} );
+		}
+
+		return $data;
 	}
 
 	/**
@@ -470,9 +565,31 @@ class Opti_Behavior_Heatmap_File_Storage {
 		// Decompress if needed
 		if ( substr( $file_path, -3 ) === '.gz' ) {
 			$content = gzuncompress( $content );
+			if ( false === $content ) {
+				return false;
+			}
 		}
 
-		return json_decode( $content, true );
+		$data = json_decode( $content, true );
+		if ( ! is_array( $data ) ) {
+			return $data;
+		}
+
+		// Merge the append-only sidecar (perf Fix A). Legacy recordings have no
+		// `.oblog` sidecar and read back byte-for-byte unchanged. New recordings
+		// carry their incremental events here; sort once, at read time.
+		$log_path = $full_path . self::APPEND_SUFFIX;
+		if ( is_file( $log_path ) ) {
+			$data = $this->merge_append_log( $data, $log_path );
+		}
+
+		// Prefer the running duration from the counter sidecar when higher.
+		$idx = $this->read_recording_index( $full_path . self::INDEX_SUFFIX );
+		if ( null !== $idx && $idx['duration'] > ( isset( $data['duration'] ) ? (int) $data['duration'] : 0 ) ) {
+			$data['duration'] = $idx['duration'];
+		}
+
+		return $data;
 	}
 
 	/**
@@ -550,6 +667,57 @@ class Opti_Behavior_Heatmap_File_Storage {
 		}
 
 		return $count;
+	}
+
+	/**
+	 * Delete all files for a specific session (base recording + append sidecars).
+	 *
+	 * The Pro deletion path prefers this method (via method_exists) over its
+	 * manual unlink fallback, so having it here — in the free copy that actually
+	 * loads — guarantees the `.oblog`/`.obidx` sidecars are removed alongside the
+	 * base file (they share the `session_{id}_` filename prefix). Fix A.
+	 *
+	 * @param string $session_id Session ID to delete files for.
+	 * @return bool True if any files were deleted, false otherwise.
+	 */
+	public function delete_session_files( $session_id ) {
+		$recordings_dir = $this->base_dir . 'recordings/';
+
+		if ( ! file_exists( $recordings_dir ) ) {
+			return false;
+		}
+
+		$files_deleted = false;
+
+		try {
+			$iterator = new RecursiveIteratorIterator(
+				new RecursiveDirectoryIterator( $recordings_dir, RecursiveDirectoryIterator::SKIP_DOTS )
+			);
+		} catch ( Exception $e ) {
+			$this->log( 'Error creating directory iterator for deletion: ' . $e->getMessage(), 'warning' );
+			return false;
+		}
+
+		foreach ( $iterator as $file ) {
+			if ( ! $file->isFile() || $file->getFilename() === 'index.php' || $file->getFilename() === '.htaccess' ) {
+				continue;
+			}
+
+			// Matches base recording (session_{id}_{ts}.json[.gz]) AND its
+			// append-only sidecars (…json.gz.oblog / .obidx), which share the
+			// same session_{id}_ prefix.
+			$filename = $file->getFilename();
+			$pattern  = 'session_' . $session_id . '_';
+			if ( strpos( $filename, $pattern ) === 0 ) {
+				$path = $file->getPathname();
+				wp_delete_file( $path );
+				if ( ! file_exists( $path ) ) {
+					$files_deleted = true;
+				}
+			}
+		}
+
+		return $files_deleted;
 	}
 
 	/**

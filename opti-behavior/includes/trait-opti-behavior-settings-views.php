@@ -102,6 +102,17 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 update_option('opti_behavior_delete_on_uninstall', $delete_on_uninstall);
                 add_settings_error('opti_behavior_settings', 'settings_updated', esc_html__( 'Uninstall settings saved successfully.', 'opti-behavior' ), 'success');
             }
+            // Handle Funnel Cache Purge Settings Save (Danger Zone → Smart Data Cleanup)
+            if (isset($_POST['opti_behavior_funnel_purge_submit'])) {
+                if (!isset($_POST['opti_behavior_funnel_purge_nonce']) || !wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['opti_behavior_funnel_purge_nonce'] ) ), 'opti_behavior_funnel_purge_settings')) { wp_die( esc_html__( 'Security check failed', 'opti-behavior' ) ); }
+                if (!current_user_can('manage_options')) { wp_die( esc_html__( 'Insufficient permissions', 'opti-behavior' ) ); }
+                $purge_mode = isset($_POST['opti_behavior_funnel_purge_mode']) ? sanitize_text_field( wp_unslash( $_POST['opti_behavior_funnel_purge_mode'] ) ) : 'all';
+                if ( ! in_array( $purge_mode, array( 'all', 'none' ), true ) ) {
+                    $purge_mode = 'all'; // Fail-open on write: unknown values become the purging default.
+                }
+                update_option('opti_behavior_funnel_purge_mode', $purge_mode);
+                add_settings_error('opti_behavior_settings', 'funnel_purge_updated', esc_html__( 'Cache purge settings saved.', 'opti-behavior' ), 'success');
+            }
             // Handle File Storage Settings Save
             if (isset($_POST['opti_behavior_file_storage_submit'])) {
                 if (!isset($_POST['opti_behavior_file_storage_nonce']) || !wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['opti_behavior_file_storage_nonce'] ) ), 'opti_behavior_file_storage_settings')) { wp_die( esc_html__( 'Security check failed', 'opti-behavior' ) ); }
@@ -1499,6 +1510,39 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                       // not a repair tool. Same option + AJAX save path, same element IDs. ?>
 
                 </details><!-- /#opti-behavior-repair-archive-card -->
+
+                <!-- Card: Funnel Cache Purge (opti_behavior_funnel_purge_mode, fail-open) -->
+                <?php
+                $funnel_purge_mode = get_option( 'opti_behavior_funnel_purge_mode', 'all' );
+                if ( 'none' !== $funnel_purge_mode ) {
+                    $funnel_purge_mode = 'all'; // Fail-open display: anything but exactly 'none' shows as 'all'.
+                }
+                ?>
+                <div class="smart-cleanup-subsection" id="opti-behavior-funnel-purge-card">
+                    <h4 class="danger-subtitle">
+                        <i data-lucide="refresh-cw"></i>
+                        <?php esc_html_e( 'Purge cache after funnel modification', 'opti-behavior' ); ?>
+                    </h4>
+                    <p class="smart-cleanup-description">
+                        <?php esc_html_e( 'With "Never purge automatically", pages still served from an existing cache keep the old funnel tracking configuration until the cache expires or is refreshed — how long that takes depends on the caching plugin\'s configuration and cache lifespan. New or changed funnels will not collect data on those cached pages until then.', 'opti-behavior' ); ?>
+                    </p>
+                    <form method="post" action="">
+                        <?php wp_nonce_field( 'opti_behavior_funnel_purge_settings', 'opti_behavior_funnel_purge_nonce' ); ?>
+                        <label class="condition-row" for="opti-behavior-funnel-purge-mode">
+                            <span class="condition-label"><?php esc_html_e( 'Purge cache after funnel modification', 'opti-behavior' ); ?></span>
+                            <select name="opti_behavior_funnel_purge_mode" id="opti-behavior-funnel-purge-mode" class="condition-input">
+                                <option value="all" <?php selected( $funnel_purge_mode, 'all' ); ?>><?php esc_html_e( 'Purge all page caches (default)', 'opti-behavior' ); ?></option>
+                                <option value="none" <?php selected( $funnel_purge_mode, 'none' ); ?>><?php esc_html_e( 'Never purge automatically', 'opti-behavior' ); ?></option>
+                            </select>
+                        </label>
+                        <div class="smart-cleanup-actions">
+                            <button type="submit" name="opti_behavior_funnel_purge_submit" class="btn-secondary">
+                                <span class="btn-icon"><i data-lucide="save"></i></span>
+                                <?php esc_html_e( 'Save cache purge setting', 'opti-behavior' ); ?>
+                            </button>
+                        </div>
+                    </form>
+                </div>
 
             </div>
             </div><!-- /.danger-tab-panel smart-cleanup -->
@@ -3818,7 +3862,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                         printf(
                                             /* translators: %d: number of days from the master data retention setting */
                                             esc_html__( 'Currently: %d days', 'opti-behavior' ),
-                                            $master_retention_days
+                                            absint( $master_retention_days )
                                         );
                                     } else {
                                         esc_html_e( 'Currently: keep forever', 'opti-behavior' );

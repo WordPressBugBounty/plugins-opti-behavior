@@ -3,7 +3,7 @@
  * Plugin Name: Opti-Behavior – Self-Hosted Heatmaps, Session Recordings, Funnels, A/B Testing & Smart Insights
  * Plugin URI:  https://optiuser.com/
  * Description: Self-hosted heatmaps, funnels, A/B WooCommerce testing, behavior analytics & Smart Insights for WordPress. Own your data and optimize what users do.
- * Version:     1.8.2
+ * Version:     1.8.3
  * Author:      OptiUser
  * Author URI:  https://optiuser.com/
  * License:     GPLv2 or later
@@ -15,7 +15,7 @@
  *
  * @package opti-behavior
  * @copyright 2025-2026 OptiUser
- * @version 1.8.2
+ * @version 1.8.2.11
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -81,7 +81,7 @@ if ( defined( 'OPTI_BEHAVIOR_HEATMAP' ) ) {
 }
 
 // Define plugin constants.
-define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.8.2' );
+define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.8.3' );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR', OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'includes/' );
@@ -138,10 +138,18 @@ require_once __DIR__ . '/includes/class-opti-behavior-review-banner.php';
 require_once __DIR__ . '/includes/class-opti-behavior-pro-shim.php';
 add_action( 'init', array( 'Opti_Behavior_Pro_Ajax_Shim', 'maybe_register' ), 999 );
 
+// Load Filter Profiles: FREE-owned site-wide storage + CRUD AJAX for saved
+// advanced-filter sets, shared across every FREE + PRO filter surface. The class
+// name falls outside the autoloader's prefix map, so require it explicitly.
+require_once __DIR__ . '/includes/class-opti-behavior-filter-profiles.php';
+add_action( 'init', array( 'Opti_Behavior_Filter_Profiles', 'init' ) );
+
 // Register plugin hooks.
 register_activation_hook( __FILE__, 'Opti_Behavior_Heatmap_Core::activation' );
 register_activation_hook( __FILE__, array( 'Opti_Behavior_Welcome', 'on_activation' ) );
 register_activation_hook( __FILE__, array( 'Opti_Behavior_Review_Banner', 'on_activation' ) );
+// Seed the FREE-owned filter-profiles option on activation (no-op if present).
+register_activation_hook( __FILE__, array( 'Opti_Behavior_Filter_Profiles', 'seed' ) );
 register_deactivation_hook( __FILE__, 'Opti_Behavior_Heatmap_Core::deactivation' );
 
 if ( ! function_exists( 'opti_behavior_purge_all_page_caches' ) ) {
@@ -328,8 +336,9 @@ function opti_behavior_load_textdomain() {
 	$languages_rel = dirname( plugin_basename( __FILE__ ) ) . '/languages';
 
 	// Registers the search path for just-in-time loading. Harmless when an
-	// override follows, and required on WordPress < 6.7.
-	load_plugin_textdomain( 'opti-behavior', false, $languages_rel );
+	// override follows, and required on WordPress < 6.7 (plugin supports 5.8+)
+	// so bundled /languages/*.mo catalogs resolve before WP auto-registers them.
+	load_plugin_textdomain( 'opti-behavior', false, $languages_rel ); // phpcs:ignore PluginCheck.CodeAnalysis.DiscouragedFunctions.load_plugin_textdomainFound -- Required for bundled translations on WordPress 5.8-6.6 (min supported 5.8); WP only auto-registers plugin language dirs from 6.7.
 
 	if ( ! is_admin() || ! opti_behavior_is_plugin_admin_context() ) {
 		return;
@@ -390,6 +399,11 @@ function opti_behavior_migrate_admin_language_option() {
 }
 add_action( 'admin_init', 'opti_behavior_migrate_admin_language_option' );
 
+// Idempotent, presence-keyed re-seed of the FREE-owned filter-profiles option.
+// Guarantees the row exists on sites that upgraded (no re-activation) without
+// ever clobbering saved profiles — add_option() is a no-op when the row exists.
+add_action( 'admin_init', array( 'Opti_Behavior_Filter_Profiles', 'seed' ) );
+
 /**
  * Initialize plugin core and performance optimizer.
  *
@@ -443,6 +457,11 @@ add_action(
 
 		// Initialize deactivation survey AJAX relay (plugins.php flow).
 		Opti_Behavior_Heatmap_Deactivation_Survey::init();
+
+		// Initialize cron health watchdog (admin-only notice when WP-Cron is
+		// not firing; throttled hourly, no auto-repair, zero front-end cost).
+		require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-cron-health.php';
+		Opti_Behavior_Cron_Health::init();
 
 		// Session recording is now a PRO feature
 		// It will be initialized by opti-behavior-pro plugin if active

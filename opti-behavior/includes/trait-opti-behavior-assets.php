@@ -889,6 +889,31 @@ trait Opti_Behavior_Assets_Trait {
                     : OPTI_BEHAVIOR_HEATMAP_VERSION
             );
 
+            // Filter Profiles module (site-wide saved advanced-filter sets).
+            // Depends on the shared filter-UI module: repopulating icon
+            // multi-selects on profile load calls select._obIconSync(), which
+            // that module installs. Config carries the AJAX URL + the dedicated
+            // nonce for the FREE CRUD endpoints.
+            $opti_behavior_filter_profiles_js = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/opti-behavior-filter-profiles.js';
+            wp_enqueue_script(
+                'opti-behavior-filter-profiles',
+                OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/opti-behavior-filter-profiles.js',
+                array( 'opti-behavior-filter-ui' ),
+                file_exists( $opti_behavior_filter_profiles_js )
+                    ? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $opti_behavior_filter_profiles_js )
+                    : OPTI_BEHAVIOR_HEATMAP_VERSION,
+                true
+            );
+
+            wp_localize_script(
+                'opti-behavior-filter-profiles',
+                'OptiBehaviorProfilesConfig',
+                array(
+                    'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+                    'nonce'   => wp_create_nonce( 'opti_behavior_filter_profiles' ),
+                )
+            );
+
             // Enqueue dashboard page scripts from external file
             // Version 1.0.4: Top Pages now uses heatmap sessions count consistently (server + JS)
             $opti_behavior_dashboard_js = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/dashboard.js';
@@ -899,7 +924,7 @@ trait Opti_Behavior_Assets_Trait {
             wp_enqueue_script(
                 'opti-behavior-dashboard-scripts',
                 OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/dashboard.js',
-                array( 'chart-js', 'opti-behavior-filter-ui' ), // Chart.js + shared filter-UI module
+                array( 'chart-js', 'opti-behavior-filter-ui', 'opti-behavior-filter-profiles' ), // Chart.js + shared filter-UI + profiles modules
                 $opti_behavior_dashboard_ver,
                 true
             );
@@ -944,6 +969,7 @@ trait Opti_Behavior_Assets_Trait {
                         'includeSpam'             => __( 'Include Spam', 'opti-behavior' ),
                         'interactions'            => __( 'Heatmap sessions', 'opti-behavior' ),
                         'clicks'                  => __( 'Clicks', 'opti-behavior' ),
+                        'avgTimeSpent'            => __( 'Average time spent', 'opti-behavior' ),
                         'editPage'                => __( 'Edit this page', 'opti-behavior' ),
                         'directNone'              => __( 'Direct / None', 'opti-behavior' ),
                         'unknown'                 => __( 'Unknown', 'opti-behavior' ),

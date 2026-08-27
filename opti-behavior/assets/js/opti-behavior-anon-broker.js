@@ -33,7 +33,11 @@
  *   getVisitorId() -> string       Current in-memory visitor id.
  *   getSessionId() -> string       Current in-memory session id.
  *   onSessionId( cb )              Subscribe to sid changes (fires when a
- *                                  sibling tab's sid is adopted after init).
+ *                                  sibling tab's sid is adopted after init, or a
+ *                                  server-authoritative sid is set).
+ *   setSessionId( sid )            Adopt a server-authoritative sid returned from
+ *                                  a cacheable ingest endpoint (cache-safe
+ *                                  identity). Idempotent; notifies onSessionId.
  *   isInitialized() -> boolean
  *   cleanupStaleCookies()          Expire legacy optibehavior_anon_sid / _vid
  *                                  cookies (max-age=0). Deleting != storing.
@@ -323,6 +327,35 @@
     }
 
     /**
+     * Adopt a server-authoritative session id (spec §2.3 — cache-safe identity).
+     *
+     * When a cacheable ingest endpoint recomputes the per-visitor 30-min session
+     * id server-side (because a full-page cache froze anon_sid_seed into the
+     * HTML), it returns that authoritative sid in the ingest response. The
+     * reporter calls this so the corrected sid is adopted in-memory and pushed to
+     * every subscribed tracker (funnel, Pro recorder/errors/forms) on the same
+     * page — no extra request. Server-driven analogue of BroadcastChannel sibling
+     * adoption. Idempotent: a no-op when the sid is empty or unchanged; otherwise
+     * marks the sid adopted (so a late sibling reply cannot overwrite the
+     * authoritative value) and notifies onSessionId subscribers exactly once.
+     *
+     * @param {string} sid Server-authoritative session id.
+     */
+    function setSessionId( sid ) {
+        if ( ! sid || sid === state.sid ) {
+            return;
+        }
+        // The server value is authoritative — stop adopting sibling replies so a
+        // BroadcastChannel 'sid' message arriving inside the window cannot revert
+        // us to a frozen/stale seed.
+        state.adopted = true;
+        setSid( sid );
+        // Propagate to sibling tabs so the whole browser converges on the
+        // server-authoritative sid (best-effort; ignored where unsupported).
+        postMessage( { type: 'sid', from: state.tabId, sid: state.sid } );
+    }
+
+    /**
      * @return {boolean} Whether init() has run.
      */
     function isInitialized() {
@@ -375,6 +408,7 @@
         getVisitorId: getVisitorId,
         getSessionId: getSessionId,
         onSessionId: onSessionId,
+        setSessionId: setSessionId,
         isInitialized: isInitialized,
         cleanupStaleCookies: cleanupStaleCookies,
         reset: reset

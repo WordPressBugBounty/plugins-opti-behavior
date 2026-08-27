@@ -15,6 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // Load funnel views trait and database class.
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-funnels-views.php';
+require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-advanced-filters.php';
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-funnel-database.php';
 
 /**
@@ -29,6 +30,7 @@ require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-funnel-da
 // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
 class Opti_Behavior_Funnel_Page {
 	use Opti_Behavior_Funnels_Views_Trait;
+	use Opti_Behavior_Advanced_Filters_Trait;
 
 	/**
 	 * opti-behavior Heatmap instance
@@ -61,6 +63,7 @@ class Opti_Behavior_Funnel_Page {
 	private function init_hooks() {
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_funnel_assets' ) );
 		add_action( 'wp_ajax_optibehavior_funnel_data', array( $this, 'ajax_funnel_data' ) );
+		add_action( 'wp_ajax_optibehavior_funnel_filter_options', array( $this, 'ajax_funnel_filter_options' ) );
 		add_action( 'wp_ajax_optibehavior_get_funnels', array( $this, 'ajax_get_funnels' ) );
 		add_action( 'wp_ajax_optibehavior_get_funnels_summary', array( $this, 'ajax_get_funnels_summary' ) );
 		add_action( 'wp_ajax_optibehavior_get_funnel_kpi', array( $this, 'ajax_get_funnel_kpi' ) );
@@ -82,6 +85,41 @@ class Opti_Behavior_Funnel_Page {
 		// Optimizer/cache exclusion filters for funnel-tracker.js are registered
 		// centrally by Opti_Behavior_Optimizer_Compat (Phase A refactor). Its file
 		// and handle live in the central registry defaults.
+	}
+
+	/**
+	 * Whether the PRO-gated funnel advanced filter is available.
+	 *
+	 * v1 uses the coarse ENV gate (spec.md §4.3-b): any valid PRO entitlement
+	 * unlocks it. Wrapped in ONE helper so switching to a dedicated feature key
+	 * (spec.md §4.3-a: Opti_Behavior_Pro_Feature_Guard::can_access('funnel_advanced_filter'))
+	 * later is a single-spot change. This is the AUTHORITATIVE gate: the AJAX
+	 * handler consults it before applying any client-supplied advanced_filters,
+	 * so a forged POST from a free site is ignored (the client flag is cosmetic).
+	 *
+	 * @since 1.0.5
+	 * @return bool
+	 */
+	public function funnel_advanced_filter_available() {
+		return function_exists( 'opti_behavior_pro_active' )
+			&& function_exists( 'opti_behavior_pro_validate_env' )
+			&& opti_behavior_pro_active()
+			&& opti_behavior_pro_validate_env();
+	}
+
+	/**
+	 * Funnel advanced-filter allow-list: the 15 kept fields (dashboard's 16
+	 * minus `exit_page`, which conflicts with funnel completion/abandonment —
+	 * spec.md §3-6). Used to strip `exit_page` from a sanitized filters array
+	 * before it reaches build_advanced_filters_sql().
+	 *
+	 * @since 1.0.5
+	 * @param array $filters Sanitized filters (dashboard shape).
+	 * @return array Filters with any funnel-disallowed keys removed.
+	 */
+	private function restrict_funnel_advanced_filters( array $filters ) {
+		unset( $filters['exit_page'] );
+		return $filters;
 	}
 
 	/**
@@ -114,19 +152,73 @@ class Opti_Behavior_Funnel_Page {
 			OPTI_BEHAVIOR_HEATMAP_VERSION
 		);
 
+		// Shared dashboard design primitives (control-bar: .dashboard-controls,
+		// .period-selector, .refresh-btn purple pills) — the detail-page header
+		// reuses the dashboard control bar, so its base styling must load here.
+		$dashboard_styles_path = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/dashboard_styles.css';
+		wp_enqueue_style(
+			'opti-behavior-dashboard-styles',
+			plugins_url( 'assets/css/dashboard_styles.css', dirname( __FILE__ ) ),
+			array( 'opti-behavior-dashboard' ),
+			file_exists( $dashboard_styles_path )
+				? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $dashboard_styles_path )
+				: OPTI_BEHAVIOR_HEATMAP_VERSION
+		);
+
+		// Shared advanced-filters UI stylesheet (icon dropdowns, suggestion menus)
+		// — the detail-page advanced filter reuses the dashboard filter panel.
+		wp_enqueue_style(
+			'opti-behavior-filter-ui',
+			plugins_url( 'assets/css/filter-ui.css', dirname( __FILE__ ) ),
+			array( 'opti-behavior-dashboard-styles' ),
+			OPTI_BEHAVIOR_HEATMAP_VERSION
+		);
+
 		// Enqueue funnel CSS.
 		wp_enqueue_style(
 			'opti-behavior-funnels',
 			plugins_url( 'assets/css/funnels.css', dirname( __FILE__ ) ),
-			array( 'opti-behavior-dashboard', 'opti-behavior-heatmaps' ),
+			array( 'opti-behavior-dashboard', 'opti-behavior-dashboard-styles', 'opti-behavior-heatmaps', 'opti-behavior-filter-ui' ),
 			OPTI_BEHAVIOR_HEATMAP_VERSION
+		);
+
+		// Shared filter-UI module (window.OptiBehaviorFilterUI) — dependency-free,
+		// powers the detail-page advanced filter's icon multi-selects + suggestions.
+		wp_enqueue_script(
+			'opti-behavior-filter-ui',
+			plugins_url( 'assets/js/opti-behavior-filter-ui.js', dirname( __FILE__ ) ),
+			array(),
+			OPTI_BEHAVIOR_HEATMAP_VERSION,
+			true
+		);
+
+		// Filter Profiles module (site-wide saved advanced-filter sets). Funnels
+		// enqueues its own assets (not the shared assets trait), so the module +
+		// its config must be registered here too. Depends on the shared filter-UI
+		// module: repopulating icon multi-selects on profile load calls
+		// select._obIconSync(), which that module installs.
+		wp_enqueue_script(
+			'opti-behavior-filter-profiles',
+			plugins_url( 'assets/js/opti-behavior-filter-profiles.js', dirname( __FILE__ ) ),
+			array( 'opti-behavior-filter-ui' ),
+			OPTI_BEHAVIOR_HEATMAP_VERSION,
+			true
+		);
+
+		wp_localize_script(
+			'opti-behavior-filter-profiles',
+			'OptiBehaviorProfilesConfig',
+			array(
+				'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+				'nonce'   => wp_create_nonce( 'opti_behavior_filter_profiles' ),
+			)
 		);
 
 		// Enqueue funnel JavaScript.
 		wp_enqueue_script(
 			'opti-behavior-funnels',
 			plugins_url( 'assets/js/funnels.js', dirname( __FILE__ ) ),
-			array( 'jquery', 'chart-js' ),
+			array( 'jquery', 'chart-js', 'opti-behavior-filter-ui', 'opti-behavior-filter-profiles' ),
 			OPTI_BEHAVIOR_HEATMAP_VERSION,
 			true
 		);
@@ -138,6 +230,17 @@ class Opti_Behavior_Funnel_Page {
 			array(
 				'ajaxUrl' => admin_url( 'admin-ajax.php' ),
 				'nonce'   => wp_create_nonce( 'opti_behavior_funnels' ),
+				// Base URL of the funnels index (used by list rows to link to each
+				// funnel's own detail page: &funnel=<id>).
+				'pageUrl' => admin_url( 'admin.php?page=opti-behavior-funnels' ),
+				// PRO gate flag for the detail-page advanced filter. Cosmetic only —
+				// the server (ajax_funnel_data) re-checks funnel_advanced_filter_available()
+				// before applying any advanced_filters, so a forged flag changes nothing.
+				'advancedFilterPro' => $this->funnel_advanced_filter_available() ? 1 : 0,
+				// Nonce for the shared dashboard filter-options endpoint
+				// (opti_behavior_get_dashboard_filter_options) reused to populate the
+				// detail-page advanced filter's browser/country/os/utm option lists.
+				'filterOptionsNonce' => wp_create_nonce( 'opti_behavior_dashboard_nonce' ),
 				// Recordings deep-link base. Pro registers this filter and returns a
 				// non-empty URL only when the recordings gate is open; empty
 				// otherwise (the funnel step icon then routes to the upsell page).
@@ -353,12 +456,24 @@ class Opti_Behavior_Funnel_Page {
 			$country = map_deep( wp_unslash( $_POST['country'] ), 'sanitize_text_field' );
 		}
 
+		// PRO advanced filters (spec.md §4.3). SERVER-AUTHORITATIVE gate: parse the
+		// client-supplied advanced_filters ONLY when the PRO gate passes, then strip
+		// the funnel-disallowed `exit_page` field. A forged POST from a free site
+		// yields an empty array here, so it changes nothing (defense in depth).
+		$advanced_filters = array();
+		if ( $this->funnel_advanced_filter_available() ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Nonce verified above via check_ajax_referer().
+			$advanced_filters = $this->restrict_funnel_advanced_filters(
+				$this->sanitize_advanced_filters_from_request( $_POST )
+			);
+		}
+
 		// Calculate date range.
 		$date_range = $this->calculate_date_range( $period, $start_date, $end_date );
 
 		// Get funnel data based on user-defined funnel.
 		if ( $funnel_id > 0 ) {
-			$funnel_data = $this->get_user_funnel_analytics( $funnel_id, $date_range['start'], $date_range['end'], $filter, $country );
+			$funnel_data = $this->get_user_funnel_analytics( $funnel_id, $date_range['start'], $date_range['end'], $filter, $country, $advanced_filters );
 		} else {
 			// Get first active funnel as default.
 			global $wpdb;
@@ -370,7 +485,7 @@ class Opti_Behavior_Funnel_Page {
 			);
 
 			if ( $default_funnel ) {
-				$funnel_data = $this->get_user_funnel_analytics( $default_funnel->id, $date_range['start'], $date_range['end'], $filter, $country );
+				$funnel_data = $this->get_user_funnel_analytics( $default_funnel->id, $date_range['start'], $date_range['end'], $filter, $country, $advanced_filters );
 			} else {
 				// No funnels defined, return empty data.
 				$funnel_data = array(
@@ -386,6 +501,181 @@ class Opti_Behavior_Funnel_Page {
 		}
 
 		wp_send_json_success( $funnel_data );
+	}
+
+	/**
+	 * AJAX: funnel-scoped advanced-filter option lists.
+	 *
+	 * The detail-page advanced filter previously reused the site-wide dashboard
+	 * options endpoint, so its browser/country/os/utm dropdowns showed GLOBAL
+	 * session counts (e.g. Chrome 26) instead of counts scoped to the sessions
+	 * that actually entered THIS funnel in the current period (max = total
+	 * entries). This endpoint aggregates the same dimensions but joined through
+	 * wp_opti_behavior_funnel_tracking, so every option count reflects only the
+	 * funnel's own entries and can never exceed Total Entries.
+	 *
+	 * @since 1.8.2.8
+	 */
+	public function ajax_funnel_filter_options() {
+		check_ajax_referer( 'opti_behavior_funnels', 'nonce' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+		}
+
+		global $wpdb;
+
+		$funnel_id = isset( $_REQUEST['funnel_id'] ) ? intval( $_REQUEST['funnel_id'] ) : 0;
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Nonce verified above.
+		$period = isset( $_REQUEST['period'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['period'] ) ) : '30days';
+		$start  = isset( $_REQUEST['start_date'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['start_date'] ) ) : '';
+		$end    = isset( $_REQUEST['end_date'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['end_date'] ) ) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		$empty_payload = array(
+			'browsers'         => array(),
+			'countries'        => array(),
+			'devices'          => array(),
+			'os'               => array(),
+			'visitor_types'    => array(),
+			'traffic_channels' => array(),
+			'entry_pages'      => array(),
+			'exit_pages'       => array(),
+			'referrers'        => array(),
+			'utm_campaigns'    => array(),
+			'utm_sources'      => array(),
+			'utm_mediums'      => array(),
+		);
+
+		// PRO gate (parity with ajax_funnel_data): the advanced filter is a PRO
+		// feature. A forged request from a free site returns empty option lists
+		// so no funnel-scoped aggregates leak through a locked panel.
+		if ( $funnel_id <= 0 || ! $this->funnel_advanced_filter_available() ) {
+			wp_send_json_success( $empty_payload );
+		}
+
+		$date_range = $this->calculate_date_range( $period, $start, $end );
+		$start_date = $date_range['start'];
+		$end_date   = $date_range['end'];
+
+		$exclude_spam = $this->resolve_spam_exclusion_from_request( $_REQUEST );
+
+		$tracking_table = $wpdb->prefix . 'opti_behavior_funnel_tracking';
+		$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
+		$visitors_table = $wpdb->prefix . 'optibehavior_visitors';
+
+		$spam_condition = $exclude_spam ? $this->get_spam_session_condition( 's' ) : '';
+		$spam_clause    = ( '' !== $spam_condition ) ? ' AND ' . $spam_condition : '';
+
+		// Funnel-scoped bases. entry_time uses the same half-open [start, end)
+		// bounds as get_user_funnel_analytics(), and every count is
+		// COUNT(DISTINCT t.session_id) so option totals track Total Entries.
+		$session_scope = "FROM {$tracking_table} t INNER JOIN {$sessions_table} s ON t.session_id = s.id WHERE t.funnel_id = %d AND t.entry_time >= %s AND t.entry_time < %s" . $spam_clause;
+		$join_scope    = "FROM {$tracking_table} t INNER JOIN {$sessions_table} s ON t.session_id = s.id INNER JOIN {$visitors_table} v ON s.visitor_id = v.id WHERE t.funnel_id = %d AND t.entry_time >= %s AND t.entry_time < %s" . $spam_clause;
+		$range_params  = array( $funnel_id, $start_date, $end_date );
+
+		$visitor_dim = function ( $column, $limit ) use ( $wpdb, $join_scope, $range_params ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix.
+			return $wpdb->get_results( $wpdb->prepare(
+				"SELECT v.{$column} AS value, COUNT(DISTINCT t.session_id) AS count {$join_scope} AND v.{$column} IS NOT NULL AND v.{$column} != '' GROUP BY v.{$column} ORDER BY count DESC LIMIT {$limit}",
+				$range_params
+			) );
+		};
+
+		$session_dim = function ( $column, $limit ) use ( $wpdb, $session_scope, $range_params ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded column/table names from $wpdb->prefix.
+			return $wpdb->get_results( $wpdb->prepare(
+				"SELECT s.{$column} AS value, COUNT(DISTINCT t.session_id) AS count {$session_scope} AND s.{$column} IS NOT NULL AND s.{$column} != '' GROUP BY s.{$column} ORDER BY count DESC LIMIT {$limit}",
+				$range_params
+			) );
+		};
+
+		$browsers = $visitor_dim( 'browser', 50 );
+		$devices  = $visitor_dim( 'device_type', 10 );
+		$os_list  = $visitor_dim( 'os', 30 );
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded table names from $wpdb->prefix.
+		$countries = $wpdb->get_results( $wpdb->prepare(
+			"SELECT v.country, v.country_name, COUNT(DISTINCT t.session_id) AS count {$join_scope} AND v.country IS NOT NULL AND v.country != '' GROUP BY v.country, v.country_name ORDER BY count DESC LIMIT 100",
+			$range_params
+		) );
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Hard-coded table names from $wpdb->prefix.
+		$visitor_type_row = $wpdb->get_row( $wpdb->prepare(
+			"SELECT COUNT(DISTINCT CASE WHEN COALESCE(v.visit_count, 1) <= 1 THEN t.session_id END) AS new_count,
+			        COUNT(DISTINCT CASE WHEN COALESCE(v.visit_count, 1) > 1 THEN t.session_id END) AS returning_count
+			 {$join_scope}",
+			$range_params
+		) );
+		$visitor_types = array(
+			array( 'value' => 'new', 'count' => $visitor_type_row ? (int) $visitor_type_row->new_count : 0 ),
+			array( 'value' => 'returning', 'count' => $visitor_type_row ? (int) $visitor_type_row->returning_count : 0 ),
+		);
+
+		$channel_case     = method_exists( $this, 'build_traffic_channel_case_sql' ) ? $this->build_traffic_channel_case_sql() : '';
+		$traffic_channels = array();
+		if ( '' !== $channel_case ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Static CASE fragment + tables from $wpdb->prefix.
+			$traffic_channels = $wpdb->get_results( $wpdb->prepare(
+				"SELECT ({$channel_case}) AS value, COUNT(DISTINCT t.session_id) AS count {$session_scope} GROUP BY value ORDER BY count DESC",
+				$range_params
+			) );
+		}
+
+		$utm_campaigns = $session_dim( 'utm_campaign', 50 );
+		$utm_sources   = $session_dim( 'utm_source', 50 );
+		$utm_mediums   = $session_dim( 'utm_medium', 50 );
+		$entry_pages   = $session_dim( 'entry_page', 50 );
+
+		$site_host = wp_parse_url( home_url(), PHP_URL_HOST );
+		$site_host = $site_host ? preg_replace( '/^www\./i', '', $site_host ) : '';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Tables from $wpdb->prefix, host esc_sql()-escaped.
+		$referrers = $wpdb->get_results( $wpdb->prepare(
+			"SELECT REPLACE(SUBSTRING_INDEX(SUBSTRING_INDEX(REPLACE(REPLACE(s.referrer, 'https://', ''), 'http://', ''), '/', 1), '?', 1), 'www.', '') AS value,
+			        COUNT(DISTINCT t.session_id) AS count
+			 {$session_scope}
+			 AND s.referrer IS NOT NULL AND s.referrer != ''
+			 GROUP BY value
+			 HAVING value != '' AND value != '" . esc_sql( $site_host ) . "'
+			 ORDER BY count DESC
+			 LIMIT 50",
+			$range_params
+		) );
+
+		$to_value_count = function ( $rows ) {
+			$out = array();
+			foreach ( (array) $rows as $row ) {
+				$out[] = array(
+					'value' => (string) $row->value,
+					'count' => (int) $row->count,
+				);
+			}
+			return $out;
+		};
+
+		$country_list = array();
+		foreach ( (array) $countries as $row ) {
+			$country_list[] = array(
+				'country'      => (string) $row->country,
+				'country_name' => (string) $row->country_name,
+				'count'        => (int) $row->count,
+			);
+		}
+
+		wp_send_json_success( array(
+			'browsers'         => $to_value_count( $browsers ),
+			'countries'        => $country_list,
+			'devices'          => $to_value_count( $devices ),
+			'os'               => $to_value_count( $os_list ),
+			'visitor_types'    => $visitor_types,
+			'traffic_channels' => $to_value_count( $traffic_channels ),
+			'entry_pages'      => $to_value_count( $entry_pages ),
+			'exit_pages'       => array(),
+			'referrers'        => $to_value_count( $referrers ),
+			'utm_campaigns'    => $to_value_count( $utm_campaigns ),
+			'utm_sources'      => $to_value_count( $utm_sources ),
+			'utm_mediums'      => $to_value_count( $utm_mediums ),
+		) );
 	}
 
 	/**
@@ -477,9 +767,10 @@ class Opti_Behavior_Funnel_Page {
 	 * @param string $end_date End date.
 	 * @param string $filter Device filter (all, desktop, mobile, tablet).
 	 * @param mixed  $country Country filter (all, country code, comma-separated codes, or array of codes).
+	 * @param array  $advanced_filters PRO advanced filters (already sanitized + gated + exit_page-stripped).
 	 * @return array Funnel data.
 	 */
-	private function get_user_funnel_analytics( $funnel_id, $start_date, $end_date, $filter = 'all', $country = 'all' ) {
+	private function get_user_funnel_analytics( $funnel_id, $start_date, $end_date, $filter = 'all', $country = 'all', array $advanced_filters = array() ) {
 		global $wpdb;
 		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
 		$table_tracking = $wpdb->prefix . 'opti_behavior_funnel_tracking';
@@ -515,8 +806,21 @@ class Opti_Behavior_Funnel_Page {
 		// Only JOIN to sessions/visitors tables when device or country filtering is actually needed.
 		// An unconditional INNER JOIN would silently drop all funnel records whose session_id
 		// has no matching row in optibehavior_sessions (e.g. anonymous/pre-consent sessions).
+		// PRO advanced filters (spec.md §4.4). Reuse the SHARED SQL builder — its
+		// documented aliases (`s`=sessions, `v`=visitors) are exactly the JOIN
+		// aliases below, so the WHERE fragment drops straight in. $advanced_filters
+		// is already sanitized + PRO-gated + exit_page-stripped by the caller;
+		// build_advanced_filters_sql() re-checks the allow-list independently.
+		$advanced_sql    = $this->build_advanced_filters_sql( $advanced_filters );
+		$advanced_where  = $advanced_sql['where'];   // ' AND (...)' with %s/%d placeholders, or ''.
+		$advanced_params = $advanced_sql['params'];  // Positional params for the placeholders above.
+		$has_advanced    = ( '' !== $advanced_where );
+
 		$exclude_spam  = $this->resolve_spam_exclusion_from_request();
-		$needs_join    = ( $filter !== 'all' || ! empty( $country_codes ) || $exclude_spam );
+		// Any active filter forces the sessions/visitors JOIN; an unconditional
+		// INNER JOIN would silently drop funnel records whose session has no row
+		// in optibehavior_sessions (anonymous/pre-consent hits).
+		$needs_join    = ( $filter !== 'all' || ! empty( $country_codes ) || $exclude_spam || $has_advanced );
 		$filter_join   = $needs_join
 			? "INNER JOIN {$table_sessions} s ON t.session_id = s.id
 			   INNER JOIN {$table_visitors} v ON s.visitor_id = v.id"
@@ -549,6 +853,7 @@ class Opti_Behavior_Funnel_Page {
 			$filter_where = 'AND ' . implode( ' AND ', $filters_applied );
 		}
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// Get all tracking records in date range.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -560,12 +865,12 @@ class Opti_Behavior_Funnel_Page {
 				WHERE t.funnel_id = %d
 					AND t.entry_time >= %s
 					AND t.entry_time < %s
-					{$filter_where}",
-				$funnel_id,
-				$start_date,
-				$end_date
+					{$filter_where}
+					{$advanced_where}",
+				array_merge( array( $funnel_id, $start_date, $end_date ), $advanced_params )
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! $total_entries ) {
 			$total_entries = 0;
@@ -578,6 +883,7 @@ class Opti_Behavior_Funnel_Page {
 		foreach ( $steps_definitions as $index => $step_def ) {
 			$step_number = $index + 1;
 
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// Count sessions that reached this step or beyond.
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 			// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -590,13 +896,12 @@ class Opti_Behavior_Funnel_Page {
 						AND t.entry_time >= %s
 						AND t.entry_time < %s
 						AND t.max_step_reached >= %d
-						{$filter_where}",
-					$funnel_id,
-					$start_date,
-					$end_date,
-					$step_number
+						{$filter_where}
+						{$advanced_where}",
+					array_merge( array( $funnel_id, $start_date, $end_date, $step_number ), $advanced_params )
 				)
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 			if ( ! $completed ) {
 				$completed = 0;
@@ -618,6 +923,7 @@ class Opti_Behavior_Funnel_Page {
 			);
 		}
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// Get completed count (sessions that completed all steps).
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -630,12 +936,12 @@ class Opti_Behavior_Funnel_Page {
 					AND t.entry_time >= %s
 					AND t.entry_time < %s
 					AND t.completed = 1
-					{$filter_where}",
-				$funnel_id,
-				$start_date,
-				$end_date
+					{$filter_where}
+					{$advanced_where}",
+				array_merge( array( $funnel_id, $start_date, $end_date ), $advanced_params )
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! $completed ) {
 			$completed = 0;
@@ -721,6 +1027,7 @@ class Opti_Behavior_Funnel_Page {
 		$table_sessions = $wpdb->prefix . 'optibehavior_sessions';
 		$table_events = $wpdb->prefix . 'opti_behavior_events';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// Get all sessions in date range.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -733,6 +1040,7 @@ class Opti_Behavior_Funnel_Page {
 				$end_date
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! $total_sessions ) {
 			$total_sessions = 0;
@@ -774,6 +1082,7 @@ class Opti_Behavior_Funnel_Page {
 		global $wpdb;
 		$table_sessions = $wpdb->prefix . 'optibehavior_sessions';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// Get session page counts distribution.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -791,6 +1100,7 @@ class Opti_Behavior_Funnel_Page {
 			),
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		// Define funnel steps: Entry, 2+ pages, 3+ pages, 4+ pages, 5+ pages, 6+ pages.
 		$steps = array(
@@ -855,6 +1165,7 @@ class Opti_Behavior_Funnel_Page {
 		global $wpdb;
 		$table_sessions = $wpdb->prefix . 'optibehavior_sessions';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$results = $wpdb->get_results(
@@ -876,6 +1187,7 @@ class Opti_Behavior_Funnel_Page {
 			),
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return array_map(
 			function( $row ) {
@@ -901,6 +1213,7 @@ class Opti_Behavior_Funnel_Page {
 		global $wpdb;
 		$table_sessions = $wpdb->prefix . 'optibehavior_sessions';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$results = $wpdb->get_results(
@@ -922,6 +1235,7 @@ class Opti_Behavior_Funnel_Page {
 			),
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return array_map(
 			function( $row ) {
@@ -966,7 +1280,9 @@ class Opti_Behavior_Funnel_Page {
 	 */
 	public function resolve_spam_exclusion_from_request( $source = null ) {
 		if ( null === $source ) {
-			$source = $_REQUEST; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter state.
+			// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only filter state; no state change, nonce not required.
+			$source = $_REQUEST;
+			// phpcs:enable WordPress.Security.NonceVerification.Recommended
 		}
 
 		if ( is_array( $source ) && array_key_exists( 'exclude_spam', $source ) ) {
@@ -1014,6 +1330,7 @@ class Opti_Behavior_Funnel_Page {
 		global $wpdb;
 		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$funnels = $wpdb->get_results(
@@ -1023,6 +1340,7 @@ class Opti_Behavior_Funnel_Page {
 			ORDER BY created_at DESC",
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		// Decode steps JSON for each funnel.
 		foreach ( $funnels as &$funnel ) {
@@ -1066,6 +1384,7 @@ class Opti_Behavior_Funnel_Page {
 		global $wpdb;
 		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$funnels = $wpdb->get_results(
@@ -1075,6 +1394,7 @@ class Opti_Behavior_Funnel_Page {
 			ORDER BY created_at DESC",
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$rows               = array();
 		$total_entries      = 0;
@@ -1212,6 +1532,7 @@ class Opti_Behavior_Funnel_Page {
 		global $wpdb;
 		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$funnel = $wpdb->get_row(
@@ -1223,6 +1544,7 @@ class Opti_Behavior_Funnel_Page {
 			),
 			ARRAY_A
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! $funnel ) {
 			wp_send_json_error( array( 'message' => 'Funnel not found' ) );
@@ -1274,6 +1596,7 @@ class Opti_Behavior_Funnel_Page {
 		);
 
 		if ( $funnel_id > 0 ) {
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// Update existing funnel.
 			$wpdb->update(
 				$table_funnels,
@@ -1282,13 +1605,16 @@ class Opti_Behavior_Funnel_Page {
 				array( '%s', '%s', '%s', '%s' ),
 				array( '%d' )
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		} else {
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// Insert new funnel.
 			$wpdb->insert(
 				$table_funnels,
 				$data,
 				array( '%s', '%s', '%s', '%s' )
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$funnel_id = $wpdb->insert_id;
 		}
 
@@ -1296,7 +1622,12 @@ class Opti_Behavior_Funnel_Page {
 		// inline optiBehaviorFunnelTracker config; stale cached HTML would keep
 		// serving the OLD funnel definitions (0 entries for a new funnel until
 		// the cache expires — WP Rocket default lifespan is 10 h).
-		$this->purge_page_caches();
+		$this->purge_page_caches(
+			array(
+				'action'    => 'save',
+				'funnel_id' => $funnel_id,
+			)
+		);
 
 		wp_send_json_success( array( 'funnel_id' => $funnel_id, 'message' => 'Funnel saved successfully' ) );
 	}
@@ -1311,10 +1642,47 @@ class Opti_Behavior_Funnel_Page {
 	 * Funnel steps can match any URL on the site, so the domain-wide helper
 	 * is used. Data-only mutations (reset of tracking rows) do NOT need this.
 	 *
+	 * The purge can be disabled via the `opti_behavior_funnel_purge_mode`
+	 * option ('all' = purge, 'none' = skip) and/or the
+	 * `opti_behavior_should_purge_cache` filter. The gate is fail-open: the
+	 * purge runs unless the stored option value is exactly the string 'none'
+	 * (missing, false, corrupt or unknown values all behave as 'all').
+	 * Trade-off when disabled: cached HTML keeps serving the OLD inline
+	 * optiBehaviorFunnelTracker config until natural cache expiry (WP Rocket
+	 * default lifespan is 10 h), so new/changed funnels collect no data from
+	 * those pages in the meantime.
+	 *
 	 * @since 1.7.1
+	 * @since 1.8.3 Added the purge-mode option gate, the
+	 *              `opti_behavior_should_purge_cache` filter and `$context`.
+	 *
+	 * @param array $context {
+	 *     Mutation context passed to the filter.
+	 *
+	 *     @type string $action    One of 'save', 'delete', 'status'.
+	 *     @type int    $funnel_id The funnel being mutated.
+	 * }
 	 * @return void
 	 */
-	private function purge_page_caches() {
+	private function purge_page_caches( array $context = array() ) {
+		// Fail-open: purge unless the option is exactly 'none'.
+		$should_purge = ( 'none' !== get_option( 'opti_behavior_funnel_purge_mode', 'all' ) );
+
+		/**
+		 * Filter whether a funnel mutation should purge full-page caches.
+		 *
+		 * @since 1.8.3
+		 *
+		 * @param bool  $should_purge Setting-derived decision (true unless the
+		 *                            `opti_behavior_funnel_purge_mode` option is 'none').
+		 * @param array $context      { 'action' => 'save'|'delete'|'status', 'funnel_id' => int }
+		 */
+		$should_purge = apply_filters( 'opti_behavior_should_purge_cache', $should_purge, $context );
+
+		if ( ! $should_purge ) {
+			return;
+		}
+
 		if ( function_exists( 'opti_behavior_purge_all_page_caches' ) ) {
 			opti_behavior_purge_all_page_caches();
 		}
@@ -1341,6 +1709,7 @@ class Opti_Behavior_Funnel_Page {
 		global $wpdb;
 		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// Soft delete by setting status to 'deleted'.
 		$wpdb->update(
 			$table_funnels,
@@ -1349,9 +1718,15 @@ class Opti_Behavior_Funnel_Page {
 			array( '%s' ),
 			array( '%d' )
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		// Deleted funnel must disappear from the cached inline tracker config.
-		$this->purge_page_caches();
+		$this->purge_page_caches(
+			array(
+				'action'    => 'delete',
+				'funnel_id' => $funnel_id,
+			)
+		);
 
 		wp_send_json_success( array( 'message' => 'Funnel deleted successfully' ) );
 	}
@@ -1389,6 +1764,7 @@ class Opti_Behavior_Funnel_Page {
 		global $wpdb;
 		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$updated = $wpdb->update(
 			$table_funnels,
 			array( 'status' => $status ),
@@ -1396,6 +1772,7 @@ class Opti_Behavior_Funnel_Page {
 			array( '%s' ),
 			array( '%d' )
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( false === $updated ) {
 			wp_send_json_error( array( 'message' => 'Error updating funnel status' ) );
@@ -1403,7 +1780,12 @@ class Opti_Behavior_Funnel_Page {
 
 		// Active/suspended state changes which funnels the cached inline
 		// tracker config contains (only 'active' funnels are embedded).
-		$this->purge_page_caches();
+		$this->purge_page_caches(
+			array(
+				'action'    => 'status',
+				'funnel_id' => $funnel_id,
+			)
+		);
 
 		wp_send_json_success(
 			array(
@@ -1435,12 +1817,14 @@ class Opti_Behavior_Funnel_Page {
 		global $wpdb;
 		$table_tracking = $wpdb->prefix . 'opti_behavior_funnel_tracking';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// Delete all tracking data for this funnel (but keep the funnel configuration)
 		$deleted = $wpdb->delete(
 			$table_tracking,
 			array( 'funnel_id' => $funnel_id ),
 			array( '%d' )
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( $deleted === false ) {
 			wp_send_json_error( array( 'message' => 'Error resetting funnel data' ) );
@@ -1470,6 +1854,16 @@ class Opti_Behavior_Funnel_Page {
 		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
 		$current_url = isset( $_POST['current_url'] ) ? esc_url_raw( wp_unslash( $_POST['current_url'] ) ) : '';
 
+		// Cache-safe funnel identity (D1 / leak #3). Under full-page caching the
+		// client session_id (broker seed) is frozen into the cached HTML, so two
+		// DISTINCT direct visitors would report the SAME funnel session_id and be
+		// counted as one funnel session. For effectively-anon guests with no real
+		// (full-consent) session cookie, recompute the per-visitor 30-min session
+		// id server-side at ingest — identical to the value the heatmap/session
+		// path stores — so funnel rows key to the correct per-visitor session.
+		// admin-ajax is never full-page cached, so the server sees the real IP/UA.
+		$session_id = $this->resolve_anon_funnel_session_id( $session_id );
+
 		if ( empty( $session_id ) || $funnel_id <= 0 || empty( $current_url ) ) {
 			wp_send_json_error( array( 'message' => 'Invalid tracking data' ) );
 		}
@@ -1478,6 +1872,7 @@ class Opti_Behavior_Funnel_Page {
 		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
 		$table_tracking = $wpdb->prefix . 'opti_behavior_funnel_tracking';
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// Get funnel definition.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -1487,6 +1882,7 @@ class Opti_Behavior_Funnel_Page {
 				$funnel_id
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! $funnel ) {
 			wp_send_json_error( array( 'message' => 'Funnel not found' ) );
@@ -1540,6 +1936,66 @@ class Opti_Behavior_Funnel_Page {
 	}
 
 	/**
+	 * Resolve the cache-safe funnel session id for an effectively-anonymous guest.
+	 *
+	 * Cache-safe identity (decision D1 / leak #3): a full-page cache freezes the
+	 * first visitor's session seed into the HTML, so the client-supplied
+	 * session_id cannot be trusted to distinguish visitors. When the request is
+	 * from an effectively-anonymous guest (anonymous privacy mode, or full mode
+	 * without consent) and carries no real full-consent session cookie, this
+	 * recomputes the deterministic per-visitor 30-min session id server-side via
+	 * Opti_Behavior_Heatmap_Session::get_anonymous_identity() — the SAME value the
+	 * heatmap/session-start path stores — so funnel rows key to the correct
+	 * session. Logged-in users and full-consent visitors (with a real
+	 * optibehavior_sid cookie) keep their client session id unchanged.
+	 *
+	 * Degrades gracefully: returns the original client session id whenever the
+	 * gate does not apply or the server identity is unavailable (older Free
+	 * without get_anonymous_identity(), unresolvable hash) — never empties it.
+	 *
+	 * @since 1.0.8
+	 * @param string $client_session_id Pre-sanitized session id from the POST body.
+	 * @return string Cache-safe session id for downstream funnel storage.
+	 */
+	private function resolve_anon_funnel_session_id( $client_session_id ) {
+		// Logged-in users are identified by a stable server id and are never
+		// served frozen cached identity — leave their session id untouched.
+		if ( is_user_logged_in() ) {
+			return $client_session_id;
+		}
+
+		// A real full-consent session cookie means the client id is cache-safe
+		// (set per-browser by JS, not baked into cached HTML) — do not override.
+		if ( ! empty( $_COOKIE['optibehavior_sid'] ) || ! empty( $_COOKIE['opti_behavior_session_id'] ) ) {
+			return $client_session_id;
+		}
+
+		if ( ! $this->heatmap || ! method_exists( $this->heatmap, 'get_options' ) ) {
+			return $client_session_id;
+		}
+
+		$options      = $this->heatmap->get_options();
+		$privacy_mode = ( is_array( $options ) && isset( $options['privacy_mode'] ) && 'full' === $options['privacy_mode'] ) ? 'full' : 'anonymous';
+		$has_consent  = isset( $_COOKIE['optibehavior_consent'] )
+			&& 'granted' === sanitize_text_field( wp_unslash( $_COOKIE['optibehavior_consent'] ) );
+
+		$is_effectively_anon = ( 'anonymous' === $privacy_mode ) || ( 'full' === $privacy_mode && ! $has_consent );
+		if ( ! $is_effectively_anon ) {
+			return $client_session_id;
+		}
+
+		$session_obj = method_exists( $this->heatmap, 'get_session' ) ? $this->heatmap->get_session() : null;
+		if ( $session_obj && method_exists( $session_obj, 'get_anonymous_identity' ) ) {
+			$identity = $session_obj->get_anonymous_identity();
+			if ( ! empty( $identity['session_id'] ) ) {
+				return $identity['session_id'];
+			}
+		}
+
+		return $client_session_id;
+	}
+
+	/**
 	 * Universal request tracker - OPTIMIZED for millions of users
 	 * Uses caching and deferred writes for maximum performance
 	 */
@@ -1577,11 +2033,13 @@ class Opti_Behavior_Funnel_Page {
 
 		if ( $active_funnels === null || ( time() - $cache_time ) > 300 ) {
 			global $wpdb;
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 			$active_funnels = $wpdb->get_results(
 				"SELECT id, steps FROM {$wpdb->prefix}opti_behavior_funnels WHERE status = 'active' LIMIT 50",
 				ARRAY_A
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$cache_time = time();
 		}
 
@@ -1691,6 +2149,7 @@ class Opti_Behavior_Funnel_Page {
 			return null;
 		}
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		// Check if tracking already exists for this session and funnel.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -1701,6 +2160,7 @@ class Opti_Behavior_Funnel_Page {
 				$funnel_id
 			)
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( $tracking ) {
 			// The session is already in the funnel. Advance only if the CURRENT
@@ -1722,6 +2182,7 @@ class Opti_Behavior_Funnel_Page {
 			$advanced_step = $next_index + 1;
 			$is_completed  = ( $advanced_step === count( $steps ) ) ? 1 : 0;
 
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$wpdb->update(
 				$table_tracking,
 				array(
@@ -1734,6 +2195,7 @@ class Opti_Behavior_Funnel_Page {
 				array( '%d', '%d', '%d', '%s' ),
 				array( '%d' )
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 			return array( 'advanced' => true, 'step' => $advanced_step, 'completed' => $is_completed );
 		}
@@ -1748,6 +2210,7 @@ class Opti_Behavior_Funnel_Page {
 
 		$is_completed = ( 1 === count( $steps ) ) ? 1 : 0;
 
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$wpdb->insert(
 			$table_tracking,
 			array(
@@ -1761,6 +2224,7 @@ class Opti_Behavior_Funnel_Page {
 			),
 			array( '%s', '%d', '%d', '%d', '%d', '%s', '%s' )
 		);
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return array( 'advanced' => true, 'step' => 1, 'completed' => $is_completed );
 	}
@@ -1973,6 +2437,7 @@ class Opti_Behavior_Funnel_Page {
 
 		// Get unique countries from visitors who have data for the specific funnel
 		if ( $funnel_id > 0 ) {
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// Only get countries that have tracking data for this specific funnel in the date range
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 			// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -1996,7 +2461,9 @@ class Opti_Behavior_Funnel_Page {
 				),
 				ARRAY_A
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		} else {
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// Fallback: get all countries with any session data
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 			// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -2011,6 +2478,7 @@ class Opti_Behavior_Funnel_Page {
 				ORDER BY v.country_name ASC",
 				ARRAY_A
 			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		}
 
 		$country_list = array();

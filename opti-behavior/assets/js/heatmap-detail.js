@@ -208,6 +208,7 @@
 			// only populated for scroll_metric === 'reach' data.
 			this._scrollDepthBands = null;               // sorted [{y: referencePx, value: 0-100}]
 			this._scrollDepthTotalSessions = 0;          // denominator behind the reach %
+			this._statsTotalViews = 0;                   // canonical Views KPI (stats.total_views); preferred tooltip denominator
 			this._scrollDepthIndicatorInstalled = false; // guard: install handlers once
 			this._scrollDepthLineEl = null;              // horizontal indicator line element
 			this._scrollDepthTooltipEl = null;           // tooltip bubble element
@@ -6315,6 +6316,12 @@
 			// Update quick stats bar
 			$("#stat-views").text(stats.total_views || 0);
 
+			// Remember the canonical Views KPI so the scroll-depth tooltip can
+			// use the same denominator as the visible "Views" stat (keeps the
+			// hover "N views" number consistent with the KPI; reach % and the
+			// rendered gradient stay based on the scroll-file universe).
+			this._statsTotalViews = parseInt(stats.total_views, 10) || 0;
+
 			// Show/hide appropriate stats based on heatmap type
 			// Attention heatmap uses scroll data, so show scroll stats for both scroll and attention types
 			if (this.currentType === 'scroll' || this.currentType === 'attention') {
@@ -7661,7 +7668,15 @@
 				this._hideScrollDepthIndicator();
 				return;
 			}
-			const views = Math.round((this._scrollDepthTotalSessions || 0) * pct / 100);
+			// Denominator: prefer the canonical Views KPI (stats.total_views)
+			// so the absolute "N views" matches the header/KPI numbers; fall
+			// back to the scroll-file session count while stats are still
+			// loading (or if canonical views are 0 with orphan-only files).
+			// The reach % itself always comes from the scroll-file universe.
+			const scrollDepthDenominator = (this._statsTotalViews > 0)
+				? this._statsTotalViews
+				: (this._scrollDepthTotalSessions || 0);
+			const views = Math.round(scrollDepthDenominator * pct / 100);
 
 			// Lazily create the line/tooltip, re-appending if a re-render replaced
 			// the container's children (elements are cheap; container itself is

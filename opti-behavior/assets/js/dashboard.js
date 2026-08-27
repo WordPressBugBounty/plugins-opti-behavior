@@ -3678,6 +3678,59 @@ x = Math.min(x, maxX);
 					reloadFilteredWidgets();
 				});
 			}
+
+			// ---- Filter Profiles cluster wiring ---------------------------------
+			// Read the panel into the scalar/array payload contract (single
+			// multi-select pick collapses to a string), matching the Apply build.
+			function collectAdvancedFiltersPayload() {
+				const filters = {};
+				Object.keys(FIELD_IDS).forEach(function(field) {
+					const el = document.getElementById(FIELD_IDS[field]);
+					if (!el) return;
+					if (el.tagName === 'SELECT' && el.multiple) {
+						const vals = Array.prototype.filter.call(el.options, function(o) {
+							return o.selected && ('' + o.value).trim() !== '';
+						}).map(function(o) { return ('' + o.value).trim(); });
+						if (vals.length === 1) {
+							filters[field] = vals[0];
+						} else if (vals.length > 1) {
+							filters[field] = vals;
+						}
+						return;
+					}
+					const val = ('' + (el.value || '')).trim();
+					if (val !== '') filters[field] = val;
+				});
+				return filters;
+			}
+
+			if (window.OptiBehaviorFilterProfiles && typeof window.OptiBehaviorFilterProfiles.init === 'function') {
+				// Profile-key => { id, type } map for the module's default populate.
+				const PROFILE_FIELD_TYPES = {
+					browser: 'multi', country: 'multi', device_type: 'multi', os: 'multi',
+					utm_campaign: 'multi', utm_source: 'multi', utm_medium: 'multi',
+					visitor_type: 'static', traffic_channel: 'static',
+					duration_min: 'numeric', duration_max: 'numeric',
+					page_count_min: 'numeric', page_count_max: 'numeric',
+					entry_page: 'text', exit_page: 'text', referrer: 'text'
+				};
+				const profileFieldIds = {};
+				Object.keys(FIELD_IDS).forEach(function(field) {
+					profileFieldIds[field] = { id: FIELD_IDS[field], type: PROFILE_FIELD_TYPES[field] || 'text' };
+				});
+				window.OptiBehaviorFilterProfiles.init({
+					fieldIds: profileFieldIds,
+					collect: collectAdvancedFiltersPayload,
+					onLoaded: function(payload) {
+						// Store as the applied filter set + reuse the existing reload
+						// path (no new reload). Mirrors the Apply button behavior.
+						window.optiBehaviorAdvancedFilters = payload || {};
+						updateToggleBadge(Object.keys(window.optiBehaviorAdvancedFilters).length);
+						reloadFilteredWidgets();
+						setPanelOpen(false);
+					}
+				});
+			}
 		})();
 
 		// Safe auto-refresh for real-time visitors every 5 seconds with guards.
@@ -3912,6 +3965,15 @@ x = Math.min(x, maxX);
 				const i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
 				const interactionsLabel = i18n.interactions || 'Heatmap sessions';
 				const clicksLabel = i18n.clicks || 'Clicks';
+				const avgTimeLabel = i18n.avgTimeSpent || 'Average time spent';
+
+				// Mirrors the PHP format_top_pages_avg_time() helper ("45s", "1m 32s", "1h 5m").
+				function formatAvgTime(seconds) {
+					const s = Math.max(0, Math.round(seconds) || 0);
+					if (s < 60) return s + 's';
+					if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+					return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+				}
 
 				let html = '';
 				topPages.forEach((page, pageIndex) => {
@@ -3931,6 +3993,15 @@ x = Math.min(x, maxX);
 					const clicksChange = typeof clicksChangeRaw === 'number' ? clicksChangeRaw : parseInt(clicksChangeRaw, 10) || 0;
 					const viewsTrend = page.views_trend || 'neutral';
 					const clicksTrend = page.clicks_trend || 'neutral';
+
+					const avgTimeRaw = page.avg_time || 0;
+					const avgTime = typeof avgTimeRaw === 'number' ? avgTimeRaw : parseInt(avgTimeRaw, 10) || 0;
+					const avgTimeFormatted = typeof page.avg_time_formatted === 'string' && page.avg_time_formatted
+						? page.avg_time_formatted
+						: formatAvgTime(avgTime);
+					const avgTimeChangeRaw = page.avg_time_change || 0;
+					const avgTimeChange = typeof avgTimeChangeRaw === 'number' ? avgTimeChangeRaw : parseInt(avgTimeChangeRaw, 10) || 0;
+					const avgTimeTrend = page.avg_time_trend || 'neutral';
 
 					let viewsTrendClass = 'neutral';
 					let viewsArrow = '–';
@@ -3952,8 +4023,19 @@ x = Math.min(x, maxX);
 						clicksArrow = '↓';
 					}
 
+					let avgTimeTrendClass = 'neutral';
+					let avgTimeArrow = '–';
+					if (avgTimeTrend === 'up') {
+						avgTimeTrendClass = 'positive';
+						avgTimeArrow = '↑';
+					} else if (avgTimeTrend === 'down') {
+						avgTimeTrendClass = 'negative';
+						avgTimeArrow = '↓';
+					}
+
 					const viewsChangeDisplay = Math.abs(viewsChange);
 					const clicksChangeDisplay = Math.abs(clicksChange);
+					const avgTimeChangeDisplay = Math.abs(avgTimeChange);
 
 					const editUrl = typeof page.edit_url === 'string' ? page.edit_url : '';
 					const editLabel = i18n.editPage || 'Edit this page';
@@ -3990,6 +4072,14 @@ x = Math.min(x, maxX);
 									<span class="metric-change ${clicksTrendClass}">
 										<span class="metric-arrow">${clicksArrow}</span>
 										<span class="metric-percent">${clicksChangeDisplay}%</span>
+									</span>
+								</div>
+								<div class="metric metric-avg-time" title="${avgTimeLabel}">
+									<i class="metric-icon" data-lucide="clock"></i>
+									<span class="metric-value">${escapeHtml(avgTimeFormatted)}</span>
+									<span class="metric-change ${avgTimeTrendClass}">
+										<span class="metric-arrow">${avgTimeArrow}</span>
+										<span class="metric-percent">${avgTimeChangeDisplay}%</span>
 									</span>
 								</div>
 							</div>

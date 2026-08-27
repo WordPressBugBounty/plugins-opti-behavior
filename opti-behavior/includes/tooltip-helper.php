@@ -156,8 +156,8 @@ function opti_behavior_get_dashboard_tooltips() {
 		),
 		'top_pages' => array(
 			'title'   => __( 'Top Pages', 'opti-behavior' ),
-			'content' => __( 'Pageview/session basis: ranks pages by tracked views and related session activity in the selected range, not by unique visitor count.', 'opti-behavior' ),
-			'simple'  => __( 'The pages on your website that people visit the most.', 'opti-behavior' ),
+			'content' => __( 'Pageview/session basis: ranks pages by tracked views and related session activity in the selected range, not by unique visitor count. The clock badge shows the average time visitors spend on each page (time on page, falling back to time until the session ended), computed with the same date range and filters as the other metrics.', 'opti-behavior' ),
+			'simple'  => __( 'The pages on your website that people visit the most, with the average time spent on each.', 'opti-behavior' ),
 		),
 		'visitor_heatmap' => array(
 			'title'   => __( 'Visitor Activity Heatmap', 'opti-behavior' ),
@@ -1494,6 +1494,226 @@ function opti_behavior_get_pro_tooltips() {
 			'title'   => __( 'Average Load Time', 'opti-behavior' ),
 			'content' => __( 'The average time it takes for your pages to fully load for visitors. Aim for under 3 seconds. Longer times lead to higher bounce rates.', 'opti-behavior' ),
 			'simple'  => __( 'How long visitors wait for pages to load.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+
+		// Errors Page Tabs
+		'tab_errors_dashboard' => array(
+			'title'   => __( 'Dashboard Tab', 'opti-behavior' ),
+			'content' => __( 'Overview of all error tracking: summary KPIs, trends over the selected date range, top errors, and recent activity across JS errors, friction, performance, and broken links.', 'opti-behavior' ),
+			'simple'  => __( 'Your at-a-glance summary of everything on this page.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'tab_js_errors' => array(
+			'title'   => __( 'JS Errors Tab', 'opti-behavior' ),
+			'content' => __( 'Lists JavaScript errors visitors hit on your site, grouped by error, with counts and details (file, line, affected pages and browsers). Filter by component, severity, and status to prioritize fixes.', 'opti-behavior' ),
+			'simple'  => __( 'Shows code problems visitors ran into.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'tab_friction' => array(
+			'title'   => __( 'Friction Events Tab', 'opti-behavior' ),
+			'content' => __( 'Shows moments visitors struggled: rage clicks, dead clicks, error clicks, and thrashed cursors, with the element, page, and how often each happened.', 'opti-behavior' ),
+			'simple'  => __( 'Shows where people got frustrated on your site.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'tab_performance' => array(
+			'title'   => __( 'Performance Tab', 'opti-behavior' ),
+			'content' => __( 'Real-visitor page speed per page: performance score, load time, and Core Web Vitals (LCP, responsiveness, CLS) so you can spot slow pages that lose visitors.', 'opti-behavior' ),
+			'simple'  => __( 'Shows how fast your pages load for real visitors.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'tab_broken_links' => array(
+			'title'   => __( 'Broken Links Tab', 'opti-behavior' ),
+			'content' => __( 'Links on your site that lead to missing pages (404s), aggregated by URL with open/fixed/ignored status and re-check tools, so you can fix them for better UX and SEO.', 'opti-behavior' ),
+			'simple'  => __( 'Shows links that don\'t work anymore.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+
+		// Errors Page Table Columns - JS Errors tab
+		'col_err_priority' => array(
+			'title'   => __( 'Priority', 'opti-behavior' ),
+			'content' => __( 'A computed priority score for the error group, based on severity, how often it occurs, how many sessions it affects, and how recent it is. Higher means fix it first.', 'opti-behavior' ),
+			'simple'  => __( 'Which bugs to fix first.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_err_message' => array(
+			'title'   => __( 'Error Message', 'opti-behavior' ),
+			'content' => __( 'The error\'s source script or component with a representative error message, the number of error variants, and the file/line location when known.', 'opti-behavior' ),
+			'simple'  => __( 'What went wrong and where in the code.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_err_type' => array(
+			'title'   => __( 'Type', 'opti-behavior' ),
+			'content' => __( 'The kind of JavaScript error, such as a runtime error, promise rejection, network/fetch failure, or console error.', 'opti-behavior' ),
+			'simple'  => __( 'What kind of problem it is.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_err_severity' => array(
+			'title'   => __( 'Severity', 'opti-behavior' ),
+			'content' => __( 'How serious the error is: Critical, Error, Warning, or Info. Critical errors likely break functionality and should be fixed first.', 'opti-behavior' ),
+			'simple'  => __( 'How bad the problem is.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_err_count' => array(
+			'title'   => __( 'Count', 'opti-behavior' ),
+			'content' => __( 'How many times this error occurred in the selected date range.', 'opti-behavior' ),
+			'simple'  => __( 'How often it happened.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_err_sessions' => array(
+			'title'   => __( 'Sessions', 'opti-behavior' ),
+			'content' => __( 'The number of visitor sessions that hit this error. More sessions means more visitors are affected.', 'opti-behavior' ),
+			'simple'  => __( 'How many visits ran into it.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_err_pages' => array(
+			'title'   => __( 'Pages', 'opti-behavior' ),
+			'content' => __( 'The pages where this error occurred. Use the Breakdown action for the full per-page detail.', 'opti-behavior' ),
+			'simple'  => __( 'Where on your site it happened.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_err_last_seen' => array(
+			'title'   => __( 'Last Seen', 'opti-behavior' ),
+			'content' => __( 'When this error last occurred. Recent errors are more likely to still be present.', 'opti-behavior' ),
+			'simple'  => __( 'The last time it happened.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_err_status' => array(
+			'title'   => __( 'Status', 'opti-behavior' ),
+			'content' => __( 'Your workflow status for the error: Open, Investigating, Resolved, or Ignored.', 'opti-behavior' ),
+			'simple'  => __( 'Where you are with fixing it.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_err_actions' => array(
+			'title'   => __( 'Actions', 'opti-behavior' ),
+			'content' => __( 'Mark the error resolved or ignored, or expand its per-page breakdown with recent occurrences.', 'opti-behavior' ),
+			'simple'  => __( 'Things you can do with this error.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+
+		// Errors Page Table Columns - Friction Events tab
+		'col_fr_type' => array(
+			'title'   => __( 'Type', 'opti-behavior' ),
+			'content' => __( 'The kind of friction: rage click, dead click, error click, or thrashed cursor. An auto-triage verdict (bug / review / visitor) is shown when available.', 'opti-behavior' ),
+			'simple'  => __( 'What kind of frustration signal it is.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_fr_target' => array(
+			'title'   => __( 'Target / Area', 'opti-behavior' ),
+			'content' => __( 'The element visitors struggled with. For error clicks, the triggering error is shown first with the clicked element(s) below it.', 'opti-behavior' ),
+			'simple'  => __( 'What visitors were clicking on.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_fr_pages' => array(
+			'title'   => __( 'Pages', 'opti-behavior' ),
+			'content' => __( 'The pages where this friction happened.', 'opti-behavior' ),
+			'simple'  => __( 'Where on your site it happened.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_fr_signal' => array(
+			'title'   => __( 'Signal', 'opti-behavior' ),
+			'content' => __( 'The strength of the friction signal: total clicks (or movement events for thrashed cursors) plus the number of sessions affected.', 'opti-behavior' ),
+			'simple'  => __( 'How strong the frustration was.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_fr_time' => array(
+			'title'   => __( 'Time', 'opti-behavior' ),
+			'content' => __( 'When this friction last happened. Hover the value to see when it was first seen.', 'opti-behavior' ),
+			'simple'  => __( 'The last time it happened.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_fr_context' => array(
+			'title'   => __( 'Context', 'opti-behavior' ),
+			'content' => __( 'The devices, browsers, and countries of the affected visitors — helps spot device- or browser-specific issues.', 'opti-behavior' ),
+			'simple'  => __( 'Who ran into it and on what device.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_fr_actions' => array(
+			'title'   => __( 'Actions', 'opti-behavior' ),
+			'content' => __( 'Open the event details, or expand the per-page breakdown for grouped events.', 'opti-behavior' ),
+			'simple'  => __( 'Things you can do with this event.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+
+		// Errors Page Table Columns - Performance tab
+		'col_perf_page' => array(
+			'title'   => __( 'Page', 'opti-behavior' ),
+			'content' => __( 'The page these speed metrics were measured on.', 'opti-behavior' ),
+			'simple'  => __( 'Which page the numbers belong to.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_perf_score' => array(
+			'title'   => __( 'Score', 'opti-behavior' ),
+			'content' => __( 'An overall performance score from 0 to 100 based on real visitor timings. Higher is better; below 50 signals significant problems.', 'opti-behavior' ),
+			'simple'  => __( 'Overall speed grade. Higher = faster!', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_perf_load' => array(
+			'title'   => __( 'Load Time', 'opti-behavior' ),
+			'content' => __( 'The average full page load time for real visitors. Aim for under 3 seconds — longer times lose visitors.', 'opti-behavior' ),
+			'simple'  => __( 'How long the page takes to load.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_perf_lcp' => array(
+			'title'   => __( 'LCP', 'opti-behavior' ),
+			'content' => __( 'Largest Contentful Paint — how long until the page\'s main content becomes visible. Good: under 2.5s.', 'opti-behavior' ),
+			'simple'  => __( 'How fast the main content shows up.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_perf_resp' => array(
+			'title'   => __( 'Responsiveness', 'opti-behavior' ),
+			'content' => __( 'Interaction to Next Paint (INP; legacy FID as fallback) — how quickly the page reacts to clicks and typing. Good: 200ms or less.', 'opti-behavior' ),
+			'simple'  => __( 'How fast the page reacts when you click.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_perf_cls' => array(
+			'title'   => __( 'CLS', 'opti-behavior' ),
+			'content' => __( 'Cumulative Layout Shift — how much the page content jumps around while loading. Good: under 0.1.', 'opti-behavior' ),
+			'simple'  => __( 'How much the page jumps while loading.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_perf_sessions' => array(
+			'title'   => __( 'Sessions', 'opti-behavior' ),
+			'content' => __( 'The number of visitor sessions the metrics were measured from. More sessions means more reliable numbers.', 'opti-behavior' ),
+			'simple'  => __( 'How many visits the numbers come from.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+
+		// Errors Page Table Columns - Broken Links tab
+		'col_bl_url' => array(
+			'title'   => __( 'Reported URL', 'opti-behavior' ),
+			'content' => __( 'The broken destination URL visitors hit, with its resource type and status badges and the link text when available.', 'opti-behavior' ),
+			'simple'  => __( 'The address that doesn\'t work.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_bl_source' => array(
+			'title'   => __( 'Source Page', 'opti-behavior' ),
+			'content' => __( 'The page on your site that contains the broken link — where to go to fix it.', 'opti-behavior' ),
+			'simple'  => __( 'The page the bad link lives on.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_bl_http' => array(
+			'title'   => __( 'HTTP', 'opti-behavior' ),
+			'content' => __( 'The HTTP status returned when the link was verified (e.g. 404 = not found). Hover the badge for verification details.', 'opti-behavior' ),
+			'simple'  => __( 'The error code the link returns.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_bl_sessions' => array(
+			'title'   => __( 'Sessions', 'opti-behavior' ),
+			'content' => __( 'The number of visitor sessions that hit this broken link (the primary metric), with total occurrences shown below it.', 'opti-behavior' ),
+			'simple'  => __( 'How many visits hit the bad link.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_bl_last_detected' => array(
+			'title'   => __( 'Last Detected', 'opti-behavior' ),
+			'content' => __( 'When this broken link was last detected on your site.', 'opti-behavior' ),
+			'simple'  => __( 'The last time it was seen broken.', 'opti-behavior' ),
+			'pro'     => true,
+		),
+		'col_bl_actions' => array(
+			'title'   => __( 'Actions', 'opti-behavior' ),
+			'content' => __( 'Recheck the link now, mark it as fixed, or reopen a fixed/ignored link.', 'opti-behavior' ),
+			'simple'  => __( 'Things you can do with this link.', 'opti-behavior' ),
 			'pro'     => true,
 		),
 
