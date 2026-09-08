@@ -470,6 +470,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// Smart Insights AJAX handlers.
 		add_action( 'wp_ajax_optibehavior_smart_insights_list', array( $this, 'ajax_smart_insights_list' ) );
 		add_action( 'wp_ajax_optibehavior_smart_insights_detail', array( $this, 'ajax_smart_insights_detail' ) );
+		add_action( 'wp_ajax_optibehavior_smart_insights_segments', array( $this, 'ajax_smart_insights_segments' ) );
+		add_action( 'wp_ajax_optibehavior_smart_insights_timeseries', array( $this, 'ajax_smart_insights_timeseries' ) );
 		add_action( 'wp_ajax_optibehavior_smart_insights_refresh', array( $this, 'ajax_smart_insights_refresh' ) );
 		add_action( 'wp_ajax_optibehavior_smart_insights_update_status', array( $this, 'ajax_smart_insights_update_status' ) );
 		add_action( 'wp_ajax_optibehavior_smart_insights_summary', array( $this, 'ajax_smart_insights_summary' ) );
@@ -594,10 +596,33 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		// Lucide "lightbulb" icon for Smart Insights (20x20).
 		$smart_insights_icon = '<span style="display:inline-flex;align-items:center;margin-right:6px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5A4.8 4.8 0 0 0 18 8 6 6 0 0 0 6 8c0 1.3.5 2.5 1.5 3.5.8.8 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg></span>';
+		$smart_insights_label = $smart_insights_icon . __( 'Insights', 'opti-behavior' );
+
+		// Opening the Smart Insights screen marks everything as seen *before* the
+		// menu label is built (admin_menu runs before any load-{page} hook), so the
+		// pulse dot never renders on the screen the user is already looking at.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only routing check.
+		$current_admin_page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
+		if ( 'opti-behavior-smart-insights' === $current_admin_page ) {
+			$this->mark_smart_insights_menu_seen();
+		}
+
+		$unseen_insights = $this->get_smart_insights_menu_unseen_count();
+		if ( $unseen_insights > 0 ) {
+			$smart_insights_label .= '<span class="opti-menu-insights-pulse" aria-hidden="true"></span><span class="screen-reader-text">'
+				. esc_html(
+					sprintf(
+						/* translators: %d: number of new Smart Insights not yet reviewed. */
+						_n( '%d new insight not yet reviewed', '%d new insights not yet reviewed', $unseen_insights, 'opti-behavior' ),
+						$unseen_insights
+					)
+				)
+				. '</span>';
+		}
 		add_submenu_page(
 			'opti-behavior-analytics',
 			__( 'Smart Insights', 'opti-behavior' ),
-			$smart_insights_icon . __( 'Insights', 'opti-behavior' ),
+			$smart_insights_label,
 			'manage_options',
 			'opti-behavior-smart-insights',
 			array( $this, 'render_smart_insights' )
@@ -944,6 +969,19 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// Determine initial filter from querystring
 		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- GET parameters for filtering dashboard view (read-only operation)
 		$period = isset($_GET['period']) ? sanitize_text_field( wp_unslash( $_GET['period'] ) ) : 'last30days';
+		// Smart Insights (and every other report) deep-links with the destination-
+		// agnostic `date_range` param, which the dashboard used to ignore: the
+		// period selector stayed on its default and the widgets queried a window
+		// the incoming link never asked for. Honour it as an alias of `period`
+		// when no explicit `period` was supplied, so the toolbar shows -- and the
+		// data uses -- the analysis window the link promised.
+		if ( ! isset( $_GET['period'] ) && isset( $_GET['date_range'] ) ) {
+			$opti_behavior_incoming_range = sanitize_text_field( wp_unslash( $_GET['date_range'] ) );
+			$opti_behavior_allowed_ranges = array( 'today', 'yesterday', 'last7days', 'last14days', 'last30days', 'thismonth', 'custom' );
+			if ( in_array( $opti_behavior_incoming_range, $opti_behavior_allowed_ranges, true ) ) {
+				$period = $opti_behavior_incoming_range;
+			}
+		}
 		$start_q = isset($_GET['start_date']) ? sanitize_text_field( wp_unslash( $_GET['start_date'] ) ) : null;
 		$end_q   = isset($_GET['end_date']) ? sanitize_text_field( wp_unslash( $_GET['end_date'] ) ) : null;
 		$exclude_spam = $this->resolve_spam_exclusion_from_request( $_GET );
@@ -1011,6 +1049,39 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// same numbers.
 		$early_start = ( isset( $date_range['start'] ) && $date_range['start'] ) ? substr( $date_range['start'], 0, 10 ) : '';
 		$early_end   = ( isset( $date_range['end'] ) && $date_range['end'] ) ? substr( $date_range['end'], 0, 10 ) : '';
+
+		// A Smart Insights (or any other) deep link can arrive with an advanced
+		// filter already in the query string; dashboard.js applies it before its
+		// first widget request. The early prefetch below cannot adopt that
+		// request (its signature carries an empty filter hash), so firing it
+		// would only cost one throw-away unfiltered query. Skip it in that case
+		// and let dashboard.js issue the single, correctly scoped request.
+		// Mirrors the incoming-scope map in assets/js/dashboard.js.
+		$early_filter_params = array(
+			'device_type',
+			'device',
+			'browser',
+			'country',
+			'os',
+			'utm_source',
+			'utm_campaign',
+			'utm_medium',
+			'traffic_channel',
+			'visitor_type',
+			'referrer',
+			'entry_page',
+			'exit_page',
+		);
+		$early_prefetch      = true;
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only presence check for view scoping; values sanitized and never persisted.
+		foreach ( $early_filter_params as $early_param ) {
+			$early_value = isset( $_GET[ $early_param ] ) ? sanitize_text_field( wp_unslash( $_GET[ $early_param ] ) ) : '';
+			if ( '' !== trim( $early_value ) ) {
+				$early_prefetch = false;
+				break;
+			}
+		}
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
 		?>
 		<script>
 		/* Opti-Behavior: early Section-1 KPI prefetch (fires before footer JS). */
@@ -1018,6 +1089,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		window.optiBehaviorDeferSmartInsights = true;
 		window.optiBehaviorSection1Ready = false;
 		(function () {
+			<?php if ( $early_prefetch ) : ?>
 			try {
 				// Trailing empty segment matches the advanced-filters-hash slot appended
 				// to the sig by dashboard.js (assets/js/dashboard.js widgetSignature() /
@@ -1043,6 +1115,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				p.catch( function () {} );
 				window.optiBehaviorEarlyKpi = { sig: sig, promise: p, startedAt: ( window.performance && performance.now ) ? performance.now() : Date.now() };
 			} catch ( e ) {}
+			<?php endif; ?>
 			// Safety net: if Section-1 never signals (all widgets error), release the
 			// deferred Section-2+ loaders after a bounded wait so they are not stuck.
 			setTimeout( function () {
@@ -11547,6 +11620,24 @@ class Opti_Behavior_Heatmap_Dashboard {
 	}
 
 	/**
+	 * AJAX handler for the Smart Insight "Who is affected?" segment matrix.
+	 *
+	 * @since 1.3.9
+	 */
+	public function ajax_smart_insights_segments() {
+		return $this->ajax_smart_insights_segments_impl();
+	}
+
+	/**
+	 * AJAX handler for the Smart Insight daily time series.
+	 *
+	 * @since 1.4.0
+	 */
+	public function ajax_smart_insights_timeseries() {
+		return $this->ajax_smart_insights_timeseries_impl();
+	}
+
+	/**
 	 * AJAX handler for Smart Insights refresh.
 	 *
 	 * @since 1.3.3
@@ -11589,6 +11680,27 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 */
 	public function ajax_smart_insights_notification_state() {
 		return $this->ajax_smart_insights_notification_state_impl();
+	}
+
+	/**
+	 * Count newly detected Smart Insights the current user has not seen yet.
+	 *
+	 * Backs the red pulse dot on the "Insights" admin menu item.
+	 *
+	 * @since 1.8.6
+	 * @return int
+	 */
+	public function get_smart_insights_menu_unseen_count() {
+		return $this->get_smart_insights_menu_unseen_count_impl();
+	}
+
+	/**
+	 * Mark Smart Insights as seen for the current user (clears the menu pulse dot).
+	 *
+	 * @since 1.8.6
+	 */
+	public function mark_smart_insights_menu_seen() {
+		$this->mark_smart_insights_menu_seen_impl();
 	}
 
 	/**

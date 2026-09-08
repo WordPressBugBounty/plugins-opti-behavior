@@ -81,6 +81,18 @@ trait Opti_Behavior_Funnels_Views_Trait {
 							<span class="filter-icon"><i data-lucide="<?php echo esc_attr( $exclude_spam ? 'shield-check' : 'shield-off' ); ?>" aria-hidden="true"></i></span>
 							<span class="filter-label"><?php esc_html_e( 'Exclude Spam', 'opti-behavior' ); ?></span>
 						</button>
+						<?php
+						// The header button cannot host a tooltip bubble (it would nest an
+						// interactive element), so the shared `rescan_site` help copy is
+						// reused as its native title instead of a second hard-coded string.
+						$rescan_tip = isset( $tooltips['rescan_site']['content'] )
+							? $tooltips['rescan_site']['content']
+							: __( 'Detect this site again and restore every dismissed suggestion', 'opti-behavior' );
+						?>
+						<button type="button" class="filter-btn opti-funnel-rescan-btn" id="opti-funnel-rescan" aria-label="<?php esc_attr_e( 'Re-scan site', 'opti-behavior' ); ?>" title="<?php echo esc_attr( $rescan_tip ); ?>">
+							<span class="filter-icon"><i data-lucide="radar" aria-hidden="true"></i></span>
+							<span class="filter-label"><?php esc_html_e( 'Re-scan site', 'opti-behavior' ); ?></span>
+						</button>
 						<button type="button" class="btn-build-funnel">
 							<span class="dashicons dashicons-plus-alt"></span>
 							<?php esc_html_e( 'Build New Funnel', 'opti-behavior' ); ?>
@@ -102,6 +114,7 @@ trait Opti_Behavior_Funnels_Views_Trait {
 						<?php esc_html_e( 'Create your first funnel to start tracking user behavior and conversion rates through your website.', 'opti-behavior' ); ?>
 					</p>
 				</div>
+				<?php $this->render_funnel_suggestions_panel( 'empty', $tooltips ); ?>
 			<?php else : ?>
 				<!-- Global KPI Summary Bar -->
 				<div class="opti-funnel-stats-bar" id="opti-funnel-stats-bar">
@@ -150,6 +163,8 @@ trait Opti_Behavior_Funnels_Views_Trait {
 						</div>
 					</div>
 				</div>
+
+				<?php $this->render_funnel_suggestions_panel( 'list', $tooltips ); ?>
 
 				<!-- Funnel List Container -->
 				<div id="opti-funnel-list-container" class="opti-funnel-list">
@@ -229,6 +244,125 @@ trait Opti_Behavior_Funnels_Views_Trait {
 				</div>
 			</div>
 			</div><!-- .funnels-content-wrapper -->
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render the auto-funnel suggestions container (spec.md §2.3).
+	 *
+	 * Locked decision 7: the Funnels page is the ONLY suggestion surface — the
+	 * empty state and the area directly above the funnel list. No dashboard
+	 * admin notice is rendered anywhere.
+	 *
+	 * The container is an empty shell on purpose: site detection is not run
+	 * during the page render (it would add a third-party plugin sweep to every
+	 * page load). `assets/js/funnel-suggestions.js` calls
+	 * `optibehavior_funnel_suggestions` after paint and renders the cards, so
+	 * this markup only has to exist and stay hidden until there is something to
+	 * show.
+	 *
+	 * Two shells, one markup (since 1.8.4.1):
+	 *
+	 * - `$surface === 'empty'` — the onboarding panel, rendered in full. The
+	 *   summary bar stays hidden and the body is never collapsed, so the empty
+	 *   state is byte-for-byte the experience it always was.
+	 * - `$surface === 'list'` — the site already has funnels, so the panel
+	 *   defaults to the collapsed summary bar ("N new · M created") and the body
+	 *   is one click away. Which state is used is a per-user preference
+	 *   (`opti_behavior_funnel_suggestions_ui` user meta) handed to the script
+	 *   through `optiBehaviorFunnelSuggestions.prefs`.
+	 *
+	 * The already-created / similar-flagged cards live in their own sub-group
+	 * behind "Show created (N)". That is user-controlled visibility, NOT the
+	 * dedupe hiding a card (locked decision 8): every flagged card is still in
+	 * the payload, still rendered, one click away.
+	 *
+	 * @since 1.8.4
+	 * @since 1.8.4.1 Collapsible summary bar + "show created" sub-group.
+	 * @param string $surface  Where the panel is rendered: 'empty' | 'list'.
+	 * @param array  $tooltips Funnels tooltip definitions (already loaded by the caller).
+	 */
+	private function render_funnel_suggestions_panel( $surface, $tooltips ) {
+		$tip = isset( $tooltips['suggested_funnels'] ) ? $tooltips['suggested_funnels'] : null;
+		?>
+		<div id="opti-funnel-suggestions"
+			class="opti-funnel-suggestions opti-funnel-suggestions--<?php echo esc_attr( $surface ); ?>"
+			data-surface="<?php echo esc_attr( $surface ); ?>"
+			style="display:none;">
+			<?php
+			// Compact summary bar. Shown by the script on the 'list' surface only;
+			// the counts are filled once the payload arrives.
+			?>
+			<div class="opti-funnel-suggestions__bar" id="opti-funnel-suggestions-bar" style="display:none;">
+				<span class="opti-funnel-suggestions__bar-icon"><i data-lucide="lightbulb" aria-hidden="true"></i></span>
+				<span class="opti-funnel-suggestions__bar-title"><?php esc_html_e( 'Suggested funnels', 'opti-behavior' ); ?></span>
+				<span class="opti-funnel-suggestions__bar-counts" id="opti-funnel-suggestions-bar-counts"></span>
+				<span class="opti-funnel-suggestions__bar-spacer"></span>
+				<button type="button"
+					class="opti-funnel-suggestions__bar-btn opti-funnel-suggestions__bar-btn--primary"
+					id="opti-funnel-suggestions-toggle"
+					aria-expanded="false"
+					aria-controls="opti-funnel-suggestions-body">
+					<span class="opti-funnel-suggestions__bar-btn-label"><?php esc_html_e( 'Show', 'opti-behavior' ); ?></span>
+				</button>
+				<button type="button" class="opti-funnel-suggestions__bar-btn" id="opti-funnel-suggestions-bar-rescan">
+					<i data-lucide="radar" aria-hidden="true"></i>
+					<span><?php esc_html_e( 'Re-scan site', 'opti-behavior' ); ?></span>
+				</button>
+			</div>
+			<?php
+			// Status mirror for the collapsed state: the real status bar lives
+			// inside the body, which is hidden while the panel is collapsed, so a
+			// re-scan started from the bar would otherwise report into the void.
+			// CSS keeps exactly one of the two visible.
+			?>
+			<div class="opti-funnel-suggestions__status opti-funnel-suggestions__bar-status" id="opti-funnel-suggestions-bar-status" role="status" aria-live="polite"></div>
+
+			<div class="opti-funnel-suggestions__body" id="opti-funnel-suggestions-body">
+			<div class="opti-funnel-suggestions__header">
+				<div class="opti-funnel-suggestions__heading">
+					<h2 class="opti-funnel-suggestions__title">
+						<span class="opti-funnel-suggestions__title-icon"><i data-lucide="sparkles" aria-hidden="true"></i></span>
+						<?php esc_html_e( 'Suggested Funnels', 'opti-behavior' ); ?>
+						<?php
+						if ( $tip ) {
+							opti_behavior_tooltip_e(
+								$tip['title'],
+								$tip['content'],
+								isset( $tip['simple'] ) ? $tip['simple'] : '',
+								isset( $tip['example'] ) ? $tip['example'] : '',
+								array( 'position' => 'bottom' )
+							);
+						}
+						?>
+					</h2>
+					<p class="opti-funnel-suggestions__subtitle" id="opti-funnel-suggestions-subtitle"></p>
+					<div class="opti-funnel-suggestions__detection" id="opti-funnel-suggestions-detection"></div>
+				</div>
+				<div class="opti-funnel-suggestions__actions">
+					<button type="button" class="btn-create-recommended" id="opti-funnel-create-recommended" style="display:none;">
+						<i data-lucide="wand-2" aria-hidden="true"></i>
+						<span class="opti-funnel-btn-label"><?php esc_html_e( 'Set up recommended funnels', 'opti-behavior' ); ?></span>
+					</button>
+				</div>
+			</div>
+			<div class="opti-funnel-suggestions__status" id="opti-funnel-suggestions-status" role="status" aria-live="polite"></div>
+			<div class="opti-funnel-suggestions__grid" id="opti-funnel-suggestions-grid"></div>
+			<?php
+			// Already-created / similar-flagged cards. Populated and toggled by
+			// the script on the 'list' surface; on the empty state every card
+			// stays in the main grid above (there is nothing created yet).
+			?>
+			<div class="opti-funnel-suggestions__created" id="opti-funnel-suggestions-created" style="display:none;">
+				<button type="button"
+					class="opti-funnel-suggestions__created-toggle"
+					id="opti-funnel-suggestions-created-toggle"
+					aria-expanded="false"
+					aria-controls="opti-funnel-suggestions-created-grid"></button>
+				<div class="opti-funnel-suggestions__grid opti-funnel-suggestions__grid--created" id="opti-funnel-suggestions-created-grid" style="display:none;"></div>
+			</div>
+			</div><!-- .opti-funnel-suggestions__body -->
 		</div>
 		<?php
 	}

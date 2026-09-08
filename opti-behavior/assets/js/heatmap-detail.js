@@ -1149,6 +1149,42 @@
 			this.loadDeviceCounts();
 			this.loadHeatmap();        // Slower - reads file contents
 			this.loadStats();
+
+			// Name the period the pill was counted over, so a deep-linked
+			// arrival never reads "All time" over a scoped total.
+			this.updateHeroScopeLabel();
+
+			// Paint the "Filters (N)" counter for whatever the URL pre-applied.
+			// Without this a Smart Insights deep link scoped the heatmap while
+			// the toggle still read a bare "Filters".
+			this.updateAdvancedFiltersBadge();
+		}
+
+		/**
+		 * Keep the hero session pill's scope caption truthful.
+		 *
+		 * The caption is rendered server-side as "· All time" because that is
+		 * the page's own default period. Once a period is active - most often
+		 * because a Smart Insights link arrived with the insight's analysis
+		 * window - the caption has to name it, or the header reads as if the
+		 * deep link had been ignored. The preset labels are taken from the
+		 * period select itself so they stay translated.
+		 */
+		updateHeroScopeLabel() {
+			const $label = $('.opti-heatmap-scope-label, .opti-heatmap-pill-scope');
+			if (!$label.length) {
+				return;
+			}
+
+			let scope;
+			if (this.filters.date_range === 'custom' && this.customStartDate && this.customEndDate) {
+				scope = this.customStartDate + ' – ' + this.customEndDate;
+			} else {
+				const $option = $('#filter-date-range').find('option[value="' + this.filters.date_range + '"]');
+				scope = ($option.length ? $option.text() : this.filters.date_range).trim();
+			}
+
+			$label.text('· ' + scope);
 		}
 
 		/**
@@ -1468,6 +1504,30 @@
 				count++;
 			}
 
+			// Scopes that narrow the heatmap but have no control inside the panel:
+			// the device tab, the element a Smart Insights link anchored to, and
+			// the analysis window it carried. Without them the toggle read a bare
+			// "Filters" over an already-scoped heatmap.
+			const FB = window.OptiBehaviorFilterBadge;
+			if (FB) {
+				// Only the device the LINK asked for counts: the page's own
+				// default device tab is not a filter the visitor chose, and the
+				// count self-clears as soon as another tab is picked by hand.
+				const urlDevice = FB.firstParam('device', 'device_type').toLowerCase();
+				const shownDevice = ('' + (this.currentDevice || '')).toLowerCase();
+				if (urlDevice !== '' && urlDevice !== 'all' && urlDevice === shownDevice) {
+					count++;
+				}
+				if (FB.firstParam('cta_selector', 'selector') !== '') {
+					count++;
+				}
+				if (FB.deepLinkDateRangeActive('heatmap-start-date', 'heatmap-end-date')) {
+					count++;
+				}
+				FB.render('#toggle-advanced-filters', count, { badgeClass: 'adv-filter-count' });
+				return;
+			}
+
 			const $btn = $('#toggle-advanced-filters');
 			$btn.toggleClass('has-active-filters', count > 0);
 			let $badge = $btn.find('.adv-filter-count');
@@ -1703,6 +1763,13 @@
 			}
 
 			this.updateAdvancedFiltersBadge();
+
+			// The header pill ignores every filter except the period, so it
+			// only reloads - and relabels - when the period itself changed.
+			if (name === 'date_range') {
+				this.loadTotalRecordingsCount();
+				this.updateHeroScopeLabel();
+			}
 
 			// Reload heatmap and stats with new filters
 			this.loadHeatmap();
@@ -4644,7 +4711,15 @@
 			if (device === 'tablet') {
 				return 768;
 			}
-			// desktop, all, unknown -> keep the full container/reference width.
+			if (device === 'desktop') {
+				// Force a true desktop viewport: never collapse below a real
+				// desktop breakpoint. A data-driven reference width can arrive
+				// narrow (unknown-device capture pollution / DPR-scaled widths),
+				// which would wrongly fire the page's MOBILE/TABLET breakpoints.
+				// Keep a wider real desktop capture when present.
+				return Math.max(fallback, 1280);
+			}
+			// all, unknown -> keep the full container/reference width.
 			return fallback;
 		}
 

@@ -45,14 +45,14 @@ trait Opti_Behavior_Assets_Trait {
                 'opti-behavior-smart-insights-notifications',
                 OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/smart-insights-notifications.css',
                 array(),
-                OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-notifications-v9'
+                OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-notifications-v10'
             );
 
             wp_enqueue_script(
                 'opti-behavior-smart-insights-notifications',
                 OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/smart-insights-notifications.js',
                 array(),
-                OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-notifications-v9',
+                OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-notifications-v10',
                 true
             );
 
@@ -94,6 +94,7 @@ trait Opti_Behavior_Assets_Trait {
                         'loadingBody'    => __( 'Your notification list is loading. You can still collapse or restore the launcher now.', 'opti-behavior' ),
                         'error'          => __( 'Unable to load Smart Insights notifications.', 'opti-behavior' ),
                         'priority'       => __( 'Priority', 'opti-behavior' ),
+                        'confidence'     => __( 'Confidence', 'opti-behavior' ),
                         'status'         => __( 'Status', 'opti-behavior' ),
                         'statusNew'      => __( 'New', 'opti-behavior' ),
                         'low'            => __( 'Low', 'opti-behavior' ),
@@ -568,11 +569,24 @@ trait Opti_Behavior_Assets_Trait {
         $is_smart_insights_screen = strpos( $hook_suffix, 'opti-behavior-smart-insights' ) !== false;
         $loads_smart_insights_ui  = $is_smart_insights_screen;
         if ( $loads_smart_insights_ui ) {
+			/*
+			 * Country flags in the "Where is the problem?" segment cards are drawn
+			 * from Unicode regional-indicator pairs in smart-insights.js, NOT from
+			 * assets/css/flag-icons.min.css.
+			 *
+			 * That stylesheet is only nominally "bundled": every one of its ~260
+			 * flags resolves through `url(https://cdnjs.cloudflare.com/...)`, so
+			 * enqueueing it would make an admin screen fetch third-party assets on
+			 * render — broken on offline/air-gapped installs and a privacy leak of
+			 * which country a site's audience comes from. The emoji path costs no
+			 * request, no bundled asset, and degrades to a readable "FR" letter pair
+			 * on platforms that ship no flag glyphs (Windows).
+			 */
 			wp_enqueue_script(
 				'opti-behavior-smart-insights',
 				OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/smart-insights.js',
 				array(),
-				OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-detected-time-v1',
+				OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-segment-intel-v3-2',
 				true
 			);
 
@@ -602,6 +616,24 @@ trait Opti_Behavior_Assets_Trait {
                     'deepOpenInsightId' => isset( $_GET['insight_id'] ) ? absint( wp_unslash( $_GET['insight_id'] ) ) : 0, // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only deep-link state.
                     'excludeSpamDefault' => $smart_insights_exclude_spam ? '1' : '0',
                     'siteNow'      => current_time( 'mysql' ),
+                    /**
+                     * Filters how many Smart Insights cards stay visible before the "show more" fold.
+                     *
+                     * @param int $limit Number of top-level cards rendered outside the fold.
+                     */
+                    'visibleLimit' => (int) apply_filters( 'opti_behavior_smart_insights_visible_limit', 8 ),
+                    /*
+                     * Help tooltips for JS-rendered content. The list cards and the
+                     * detail modal are built client-side, so the copy cannot come
+                     * from opti_behavior_tooltip_e() the way the page header does;
+                     * it is handed to the script instead and re-emitted with the
+                     * exact same .ob-tooltip markup, which assets/js/tooltips.js
+                     * binds automatically through its MutationObserver.
+                     */
+                    'tooltips'     => array(
+                        'signals'  => function_exists( 'opti_behavior_get_smart_insights_signal_tooltips' ) ? opti_behavior_get_smart_insights_signal_tooltips() : array(),
+                        'sections' => function_exists( 'opti_behavior_get_smart_insights_section_tooltips' ) ? opti_behavior_get_smart_insights_section_tooltips() : array(),
+                    ),
                     'i18n'         => array(
                         'loading'            => __( 'Loading Smart Insights...', 'opti-behavior' ),
                         'refreshing'         => __( 'Refreshing Smart Insights...', 'opti-behavior' ),
@@ -658,15 +690,223 @@ trait Opti_Behavior_Assets_Trait {
                         'recurring'          => __( 'Recurring', 'opti-behavior' ),
                         'recurrenceHistory'  => __( 'Older overlapping detections are grouped into this card.', 'opti-behavior' ),
                         'relatedUnavailable' => __( 'No deep link available', 'opti-behavior' ),
+                        'noApplicableReports' => __( 'No report applies directly to this insight.', 'opti-behavior' ),
+                        /* translators: %s: number of reports that do not apply to this insight. */
+                        'relatedOtherReport' => __( '%s other report does not apply to this insight', 'opti-behavior' ),
+                        /* translators: %s: number of reports that do not apply to this insight. */
+                        'relatedOtherReports' => __( '%s other reports do not apply to this insight', 'opti-behavior' ),
                         'recommendedAction'  => __( 'Recommended action', 'opti-behavior' ),
                         'recommendedActions' => __( 'Recommended actions', 'opti-behavior' ),
                         'nextAction'         => __( 'Next action', 'opti-behavior' ),
                         'defaultNextAction'  => __( 'Review the evidence, open the most relevant report, and decide whether this should move to In progress.', 'opti-behavior' ),
                         'likelyCauses'       => __( 'Likely causes', 'opti-behavior' ),
+                        'genericCausesToggle' => __( 'Possible causes (generic)', 'opti-behavior' ),
+                        /* translators: %s: formatted number of sessions. */
+                        'causeSessions'      => __( '%s sessions', 'opti-behavior' ),
+                        /* translators: %s: formatted percentage of affected sessions. */
+                        'causeShareOfSessions' => __( '%s of affected sessions', 'opti-behavior' ),
+                        'businessImpact'     => __( 'Business impact', 'opti-behavior' ),
+                        'measuredCauses'     => __( 'Measured causes', 'opti-behavior' ),
+                        'correlatedStory'    => __( 'Correlated story', 'opti-behavior' ),
+                        /* translators: %s: number of correlated signals. */
+                        'storySignalCount'   => __( '%s correlated signals', 'opti-behavior' ),
+                        /* translators: %s: number of measured causes. */
+                        'storyCauseCount'    => __( '%s measured causes', 'opti-behavior' ),
+                        'revenueExposure'    => __( 'Revenue exposure', 'opti-behavior' ),
+                        'revenueLocked'      => __( 'Revenue exposure for this leak is available in Pro.', 'opti-behavior' ),
+                        'causeSharesLocked'  => __( 'Upgrade to Pro to see how much of this problem each cause explains.', 'opti-behavior' ),
+                        /* translators: %s: formatted currency amount. */
+                        'impactRevenueHeadline' => __( '≈ %s at risk this period', 'opti-behavior' ),
+                        /* translators: %1$s: number of lost visitors, %2$s: formatted average order value. */
+                        'impactRevenueOrders' => __( '%1$s drop-offs × %2$s avg. order', 'opti-behavior' ),
+                        /* translators: %1$s: number of lost visitors, %2$s: formatted value of one conversion. */
+                        'impactRevenueManual' => __( '%1$s drop-offs × %2$s per conversion', 'opti-behavior' ),
+                        /* translators: %1$s: number of lost visitors, %2$s: conversion rate applied, %3$s: formatted average order value. */
+                        'impactRevenueOrdersFactored' => __( '%1$s drop-offs × %2$s conversion rate × %3$s avg. order', 'opti-behavior' ),
+                        /* translators: %1$s: number of lost visitors, %2$s: conversion rate applied, %3$s: formatted value of one conversion. */
+                        'impactRevenueManualFactored' => __( '%1$s drop-offs × %2$s conversion rate × %3$s per conversion', 'opti-behavior' ),
+                        /* translators: %s: number of sessions measured. */
+                        'impactObservation'  => __( 'Too little traffic to size the impact reliably (%s sessions). Treat this as an observation to confirm, not a loss to act on.', 'opti-behavior' ),
+                        'impactObservationNoSample' => __( 'Too little traffic to size the impact reliably. Treat this as an observation to confirm, not a loss to act on.', 'opti-behavior' ),
+                        'impactObservationLabel' => __( 'Observation', 'opti-behavior' ),
+                        'impactBasis'        => __( 'Measured on', 'opti-behavior' ),
                         'whyItMatters'       => __( 'Why it matters', 'opti-behavior' ),
                         'whatHappened'       => __( 'What happened', 'opti-behavior' ),
                         'trendComparison'    => __( 'Trend comparison', 'opti-behavior' ),
                         'segmentBreakdown'   => __( 'Segment breakdown', 'opti-behavior' ),
+                        'whoIsAffected'      => __( 'Who is affected?', 'opti-behavior' ),
+                        // "Where is the problem?" - the merged verdict, comparison bars and daily chart.
+                        'whereTitle'         => __( 'Where is the problem?', 'opti-behavior' ),
+                        'whereLoadingSegments' => __( 'Measuring which audience carries this...', 'opti-behavior' ),
+                        'whereLoadingSeries' => __( 'Measuring the daily trend...', 'opti-behavior' ),
+                        /* translators: %1$s: segment label, %2$s: metric label, %3$s: segment value, %4$s: value for everyone else, %5$s: segment sessions, %6$s: total sessions. */
+                        'whereVerdictWorse'  => __( '%1$s carries this: %2$s %3$s vs %4$s for everyone else (%5$s of %6$s sessions).', 'opti-behavior' ),
+                        /* translators: %1$s: segment label, %2$s: metric label, %3$s: segment value, %4$s: value for everyone else, %5$s: segment sessions, %6$s: total sessions. */
+                        'whereVerdictBetter' => __( '%1$s behaves differently — better: %2$s %3$s vs %4$s for everyone else (%5$s of %6$s sessions).', 'opti-behavior' ),
+                        'whereUniform'       => __( 'Spread evenly across device, source, country and time — this is the page, not an audience.', 'opti-behavior' ),
+                        /* translators: %s: number of sessions measured in scope. */
+                        'whereTooFewSessions' => __( 'Not enough sessions in this period to point at an audience (%s measured). Collect more traffic before blaming a segment.', 'opti-behavior' ),
+                        'whereNeedsPageContext' => __( 'Segment split needs page-level context; open the funnel or form report for step-level detail.', 'opti-behavior' ),
+                        /* translators: %s: audience segment name, e.g. "Mobile". */
+                        'whereAlreadySegment' => __( 'This insight already isolates one audience segment (%s). The per-audience split applies to page-scoped insights - check the page-level insights correlated with this issue.', 'opti-behavior' ),
+                        'whereUnavailable'   => __( 'No audience split could be measured for this insight scope.', 'opti-behavior' ),
+                        'whereEveryoneElse'  => __( 'Everyone else', 'opti-behavior' ),
+                        'whereNoValue'       => __( 'no data', 'opti-behavior' ),
+                        'whereBarHint'       => __( 'Show this segment on the chart and re-scope the evidence links.', 'opti-behavior' ),
+                        /* translators: %1$s: sessions in the segment, %2$s: sessions in scope. */
+                        'whereBarSessions'   => __( '%1$s of %2$s sessions', 'opti-behavior' ),
+                        'whereShortcutsTitle' => __( 'Open filtered to this segment', 'opti-behavior' ),
+                        /* translators: %1$s: destination report name, %2$s: segment label. */
+                        'whereShortcut'      => __( '%1$s (%2$s)', 'opti-behavior' ),
+                        /* translators: %s: metric label. */
+                        'whereChartTitle'    => __( 'Daily %s', 'opti-behavior' ),
+                        'whereChartCurrent'  => __( 'This period', 'opti-behavior' ),
+                        'whereChartPrevious' => __( 'Previous period', 'opti-behavior' ),
+                        'whereFirstDetected' => __( 'First detected', 'opti-behavior' ),
+                        /* translators: %1$s: date, %2$s: metric value, %3$s: number of sessions. */
+                        'whereChartTooltip'  => __( '%1$s: %2$s (%3$s sessions)', 'opti-behavior' ),
+                        'whereChartEmpty'    => __( 'No daily data is available for this period yet.', 'opti-behavior' ),
+                        'whereChartError'    => __( 'Unable to load the daily trend.', 'opti-behavior' ),
+                        /* translators: %1$s: sessions measured, %2$s: sessions required. */
+                        'whereTooFewSessionsFloor' => __( 'Not enough sessions in this period to point at an audience: %1$s of the %2$s needed. Collect more traffic before blaming a segment.', 'opti-behavior' ),
+                        'whereThisSegment'   => __( 'This segment', 'opti-behavior' ),
+                        // Segment-health pulse strip (schema v3): shown to every tier.
+                        'wherePulseTitle'    => __( 'Segment health', 'opti-behavior' ),
+                        'wherePulseBroken'   => __( 'Carries the problem', 'opti-behavior' ),
+                        'wherePulseWatch'    => __( 'Worth watching', 'opti-behavior' ),
+                        'wherePulseHealthy'  => __( 'Behaves normally', 'opti-behavior' ),
+                        'wherePulseInsufficient' => __( 'Not enough data', 'opti-behavior' ),
+                        /* translators: %1$s: segments above the data floor, %2$s: segments found. */
+                        'wherePulseMeasured' => __( '%1$s of %2$s segments measured', 'opti-behavior' ),
+                        'whereBucketInsufficient' => __( 'Below the data floor — measured, but not conclusive.', 'opti-behavior' ),
+                        // Sub-heading above the per-segment outlier cards, so they can carry their own help tooltip.
+                        'whereOutliersTitle' => __( 'Segments that differ most', 'opti-behavior' ),
+                        // Per-segment trend across the two halves of the period.
+                        'whereTrendDegrading' => __( 'Getting worse across the period', 'opti-behavior' ),
+                        'whereTrendImproving' => __( 'Getting better across the period', 'opti-behavior' ),
+                        'whereTrendStable'   => __( 'Flat across the period', 'opti-behavior' ),
+                        'whereTrendInsufficient' => __( 'Too few sessions per half to read a trend', 'opti-behavior' ),
+                        /* translators: %1$s: trend wording, %2$s: early value then late value. */
+                        'whereTrendDetail'   => __( '%1$s (%2$s)', 'opti-behavior' ),
+                        /* translators: %1$s: metric label, %2$s: number of days. */
+                        'whereSparklineLabel' => __( 'Daily %1$s for this segment over %2$s days', 'opti-behavior' ),
+                        // Combination (paired) segments.
+                        'whereComboBadge'    => __( 'Combined', 'opti-behavior' ),
+                        'whereComboLockedOne' => __( '1 combined-segment pattern found', 'opti-behavior' ),
+                        /* translators: %s: number of combined-segment patterns. */
+                        'whereComboLockedMany' => __( '%s combined-segment patterns found', 'opti-behavior' ),
+                        'whereComboLockedBody' => __( 'A pattern that only appears when two audience traits are combined — neither trait on its own was significant. Unlock the full pair in Pro.', 'opti-behavior' ),
+                        // Traffic-mix shift: "did the page get worse, or did the audience change?"
+                        'whereMixTitle'      => __( 'Did the audience change?', 'opti-behavior' ),
+                        /* translators: %1$s: previous period start date, %2$s: previous period end date. */
+                        'whereMixPrevious'   => __( 'compared with %1$s to %2$s', 'opti-behavior' ),
+                        /* translators: %1$s: previous share of sessions, %2$s: current share of sessions. */
+                        'whereMixShare'      => __( '%1$s → %2$s of sessions', 'opti-behavior' ),
+                        'whereMixDegrades'   => __( 'and it performs worse than everyone else — the metric drop is a traffic-mix effect, not a page regression.', 'opti-behavior' ),
+                        'whereMixNeutral'    => __( 'but it behaves like everyone else — the spike does not explain the metric change.', 'opti-behavior' ),
+                        /* translators: %1$s: number of segments, %2$s: previous combined share, %3$s: current combined share. */
+                        'whereMixGrouped'    => __( '%1$s segments grew together: %2$s → %3$s of sessions.', 'opti-behavior' ),
+                        /* translators: %1$s: segment label, %2$s: previous share of sessions, %3$s: current share of sessions. */
+                        'whereMixLockedHeadline' => __( 'Traffic from %1$s moved from %2$s to %3$s of sessions.', 'opti-behavior' ),
+                        'whereMixLockedGeneric' => __( 'Your traffic mix changed measurably over this period.', 'opti-behavior' ),
+                        'whereMixLockedBody' => __( 'The full breakdown — every segment that grew, by how much, and whether it explains the metric — is available in Pro.', 'opti-behavior' ),
+                        'segmentsLoading'    => __( 'Measuring the affected population...', 'opti-behavior' ),
+                        'segmentsEmpty'      => __( 'No segment split could be measured for this insight scope.', 'opti-behavior' ),
+                        'segmentsError'      => __( 'Unable to load the affected segments.', 'opti-behavior' ),
+                        /* translators: %s: number of sessions. */
+                        'segmentsPopulation' => __( '%s affected sessions in scope', 'opti-behavior' ),
+                        'segmentsTopLabel'   => __( 'Most affected', 'opti-behavior' ),
+                        'segmentsLockedMore' => __( 'Upgrade to Pro to break this insight down by device, source, campaign, and visitor type.', 'opti-behavior' ),
+                        'segmentScopeHint'   => __( 'Select a segment to re-scope the evidence links below.', 'opti-behavior' ),
+                        /* translators: %s: segment label. */
+                        'segmentScopeActive' => __( 'Evidence links scoped to %s', 'opti-behavior' ),
+                        'segmentScopeClear'  => __( 'Clear segment scope', 'opti-behavior' ),
+                        'segmentSessions'    => __( 'sessions', 'opti-behavior' ),
+                        'segmentsUpgradeCta' => __( 'Upgrade to Pro', 'opti-behavior' ),
+                        'evidenceRefsTitle'  => __( 'Evidence and proof', 'opti-behavior' ),
+                        /* translators: %s: number of evidence references. */
+                        'evidenceRefsLockedCount' => __( '%s evidence references collected for this insight', 'opti-behavior' ),
+                        'evidencePreviousPeriod' => __( 'Previous period (site-wide)', 'opti-behavior' ),
+                        'hypothesisTitle'    => __( 'Hypothesis and next experiment', 'opti-behavior' ),
+                        'hypothesisMetric'   => __( 'Goal metric', 'opti-behavior' ),
+                        'hypothesisSegment'  => __( 'Suggested audience', 'opti-behavior' ),
+                        'hypothesisTypicalRange' => __( 'Typical industry range', 'opti-behavior' ),
+                        'hypothesisSampleSize' => __( 'Sessions needed per variant', 'opti-behavior' ),
+                        'hypothesisDuration' => __( 'Estimated duration', 'opti-behavior' ),
+                        /* translators: %s: number of days. */
+                        'hypothesisDurationDays' => __( '%s days', 'opti-behavior' ),
+                        /* translators: %s: number of days the server-side estimate was capped at. */
+                        'hypothesisDurationCapped' => __( 'More than %s days at current traffic', 'opti-behavior' ),
+                        /* translators: %s: recomputed number of days the test would really take. */
+                        'hypothesisDurationReal' => __( '~%s days at current traffic', 'opti-behavior' ),
+                        /* translators: %s: average number of sessions per day. */
+                        'hypothesisNotFeasible' => __( 'An A/B test is not feasible at current traffic (~%s sessions/day). Ship the change and compare before/after instead.', 'opti-behavior' ),
+                        'hypothesisNoBaseline' => __( 'No measurable baseline for this goal metric yet — ship the change and compare before/after.', 'opti-behavior' ),
+                        /* translators: %s: number of related signals grouped under this insight. */
+                        'alsoDetectedHere'   => __( 'Also detected here (%s)', 'opti-behavior' ),
+                        /* translators: %s: priority score. */
+                        'priorityShort'      => __( 'priority %s', 'opti-behavior' ),
+                        /* translators: %s: number of sessions lost. */
+                        'sessionsLostShort'  => __( '%s sessions lost', 'opti-behavior' ),
+                        /* translators: 1: signal name, 2: number of traffic sources. */
+                        'sourceGroupTitle'   => __( '%1$s across %2$s traffic sources', 'opti-behavior' ),
+                        /* translators: %s: number of traffic sources grouped in one card. */
+                        'sourceGroupCount'   => __( '%s traffic sources', 'opti-behavior' ),
+                        /* translators: %s: number of sessions on this traffic source. */
+                        'sourceGroupSessions' => __( '%s sessions', 'opti-behavior' ),
+                        /* translators: %s: conversion rate of this traffic source. */
+                        'sourceGroupConversion' => __( '%s conversion rate', 'opti-behavior' ),
+                        'sourceGroupExplanation' => __( 'The same signal fired on several traffic sources. Open a source to see its own diagnosis.', 'opti-behavior' ),
+                        /* translators: %s: formatted money amount. */
+                        'briefAmountAtRisk'  => __( '%s at risk', 'opti-behavior' ),
+                        /* translators: %s: number of visitors. */
+                        'briefVisitorsAtRisk' => __( '%s visitors at risk', 'opti-behavior' ),
+                        /* translators: %s: number of sessions the insight was measured on. */
+                        'briefObservation'   => __( 'Observation on %s sessions', 'opti-behavior' ),
+                        /* translators: %s: number of sessions the insight was measured on. */
+                        'briefSessionsMeasured' => __( 'Measured on %s sessions', 'opti-behavior' ),
+                        'stateNew'           => __( 'New', 'opti-behavior' ),
+                        'stateWorse'         => __( 'Worse', 'opti-behavior' ),
+                        'stateBetter'        => __( 'Better', 'opti-behavior' ),
+                        'stateSteady'        => __( 'Unchanged', 'opti-behavior' ),
+                        'stateResolved'      => __( 'Resolved', 'opti-behavior' ),
+                        /* translators: %s: date the insight was marked resolved. */
+                        'outcomeFixed'       => __( 'Fixed %s', 'opti-behavior' ),
+                        /* translators: 1: metric name, 2: value before the fix, 3: value after the fix, 4: signed change. */
+                        'outcomeChange'      => __( '%1$s %2$s → %3$s (%4$s)', 'opti-behavior' ),
+                        /* translators: %s: change expressed in percentage points. */
+                        'outcomePoints'      => __( '%s pts', 'opti-behavior' ),
+                        /* translators: %s: change expressed in seconds. */
+                        'outcomeSeconds'     => __( '%ss', 'opti-behavior' ),
+                        'outcomeNoChange'    => __( 'no measurable change yet', 'opti-behavior' ),
+                        'outcomeNotMeasurable' => __( 'not measurable yet', 'opti-behavior' ),
+                        'outcomePending'     => __( 'measurement in progress', 'opti-behavior' ),
+                        'winsThisMonth'      => __( 'Wins this month', 'opti-behavior' ),
+                        /* translators: %s: number of additional insights hidden behind the fold. */
+                        'showMoreObservations' => __( 'Show %s more observations', 'opti-behavior' ),
+                        'showFewerObservations' => __( 'Show fewer', 'opti-behavior' ),
+                        'hypothesisDisclaimer' => __( 'Expected ranges are typical published results for this kind of change, not a prediction for your site.', 'opti-behavior' ),
+                        'hypothesisCreateTest' => __( 'Create A/B test from this insight', 'opti-behavior' ),
+                        'hypothesisLinkedTest' => __( 'Linked A/B test', 'opti-behavior' ),
+                        /* translators: %s: A/B test ID. */
+                        'hypothesisTestNumber' => __( 'Test #%s', 'opti-behavior' ),
+                        'hypothesisLockedTitle' => __( 'A testable hypothesis is ready for this insight', 'opti-behavior' ),
+                        'hypothesisLockedHint' => __( 'Upgrade to Pro to see the suggested hypothesis, the typical industry range, and the sample size this test would need.', 'opti-behavior' ),
+                        'stageTrackerLabel'  => __( 'Experiment progress', 'opti-behavior' ),
+                        'stageDetected'      => __( 'Detected', 'opti-behavior' ),
+                        'stageDiagnosed'     => __( 'Diagnosed', 'opti-behavior' ),
+                        'stageHypothesis'    => __( 'Hypothesis', 'opti-behavior' ),
+                        'stageTesting'       => __( 'Testing', 'opti-behavior' ),
+                        'stageVerified'      => __( 'Verified', 'opti-behavior' ),
+                        'experimentResultTitle' => __( 'Experiment result', 'opti-behavior' ),
+                        'verdictLift'        => __( 'Measured lift', 'opti-behavior' ),
+                        'verdictProbability' => __( 'Probability to beat control', 'opti-behavior' ),
+                        'verdictSample'      => __( 'Sessions measured', 'opti-behavior' ),
+                        'verdictWinners'     => __( 'Segments that won', 'opti-behavior' ),
+                        'verdictLosers'      => __( 'Segments that lost', 'opti-behavior' ),
+                        'verdictNextStep'    => __( 'Next experiment', 'opti-behavior' ),
+                        'categoryLearning'   => __( 'Experiment learning', 'opti-behavior' ),
+                        'openReport'         => __( 'Open report', 'opti-behavior' ),
                         'relatedReports'     => __( 'Related reports', 'opti-behavior' ),
                         'relatedReport'      => __( 'Related report', 'opti-behavior' ),
                         'proLocked'          => __( 'Pro preview', 'opti-behavior' ),
@@ -800,7 +1040,6 @@ trait Opti_Behavior_Assets_Trait {
                         'sessionRecordings'                => __( 'Session recordings', 'opti-behavior' ),
                         'siteBaseline'                     => __( 'Site baseline', 'opti-behavior' ),
                         'summaryScopeNote'                 => __( 'Counts use deduplicated active insight groups for the selected range.', 'opti-behavior' ),
-                        'topPriorities'                    => __( 'Top priorities', 'opti-behavior' ),
                         'unavailable'                      => __( 'Unavailable', 'opti-behavior' ),
                         'unknownEntity'                    => __( 'Unknown entity', 'opti-behavior' ),
                         'updateStatus'                     => __( 'Update status', 'opti-behavior' ),
@@ -859,6 +1098,24 @@ trait Opti_Behavior_Assets_Trait {
 			);
 		}
 
+		// Smart Insights redesign layer. Scoped to .ob-smart-insights-center-page
+		// and loaded only on that screen, after the two shared dashboard
+		// stylesheets, so the Analytics screen keeps its own cascade untouched.
+		if ( strpos( $hook_suffix, 'opti-behavior-smart-insights' ) !== false ) {
+			$opti_behavior_smart_insights_center_css = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/smart-insights-center.css';
+
+			wp_enqueue_style(
+				'opti-behavior-smart-insights-center',
+				OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/smart-insights-center.css',
+				array( 'opti-behavior-dashboard-styles' ),
+				// Cache-bust on file change so style updates ship without a
+				// plugin version bump.
+				file_exists( $opti_behavior_smart_insights_center_css )
+					? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $opti_behavior_smart_insights_center_css )
+					: OPTI_BEHAVIOR_HEATMAP_VERSION
+			);
+		}
+
         // Add dashboard-specific dynamic scripts if on analytics page.
         if ( strpos( $hook_suffix, 'opti-behavior-analytics' ) !== false ) {
             // Shared advanced-filters UI module (icon multi-select dropdowns,
@@ -887,6 +1144,20 @@ trait Opti_Behavior_Assets_Trait {
                 file_exists( $opti_behavior_filter_ui_css )
                     ? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $opti_behavior_filter_ui_css )
                     : OPTI_BEHAVIOR_HEATMAP_VERSION
+            );
+
+            // Shared filter-badge module: the "Filters (N)" active-filter counter
+            // and the URL helpers that reflect a Smart Insights deep link in the
+            // page's own filter controls. Dependency-free.
+            $opti_behavior_filter_badge_js = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/opti-behavior-filter-badge.js';
+            wp_enqueue_script(
+                'opti-behavior-filter-badge',
+                OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/opti-behavior-filter-badge.js',
+                array(),
+                file_exists( $opti_behavior_filter_badge_js )
+                    ? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $opti_behavior_filter_badge_js )
+                    : OPTI_BEHAVIOR_HEATMAP_VERSION,
+                true
             );
 
             // Filter Profiles module (site-wide saved advanced-filter sets).
@@ -924,7 +1195,7 @@ trait Opti_Behavior_Assets_Trait {
             wp_enqueue_script(
                 'opti-behavior-dashboard-scripts',
                 OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/dashboard.js',
-                array( 'chart-js', 'opti-behavior-filter-ui', 'opti-behavior-filter-profiles' ), // Chart.js + shared filter-UI + profiles modules
+                array( 'chart-js', 'opti-behavior-filter-ui', 'opti-behavior-filter-badge', 'opti-behavior-filter-profiles' ), // Chart.js + shared filter-UI + badge + profiles modules
                 $opti_behavior_dashboard_ver,
                 true
             );
@@ -1085,7 +1356,10 @@ trait Opti_Behavior_Assets_Trait {
             'opti-behavior-admin-notices',
             OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/admin-notices.css',
             array(),
-            OPTI_BEHAVIOR_HEATMAP_VERSION . '-admin-notices-v7'
+            // v8: the third-party "upgrade" notice suppressor no longer matches
+            // this plugin's own `ob-*-upgrade-*` elements, so cached copies of v7
+            // must not survive — they hide every Pro teaser in the modal.
+            OPTI_BEHAVIOR_HEATMAP_VERSION . '-admin-notices-v8'
         );
 
         // TECHNIQUE 3: JavaScript cleanup for dynamically added notices

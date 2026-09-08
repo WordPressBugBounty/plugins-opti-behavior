@@ -25,7 +25,7 @@ class Opti_Behavior_AB_Test_Database {
 	// -------------------------------------------------------------------------
 
 	/** Current DB schema version — bump when making breaking schema changes. */
-	const DB_VERSION = '1.2.1';
+	const DB_VERSION = '1.3.0';
 
 	/** WP option that stores the installed schema version. */
 	const DB_VERSION_OPTION = 'opti_behavior_ab_db_version';
@@ -448,6 +448,7 @@ class Opti_Behavior_AB_Test_Database {
 			winner_variant_id bigint(20) UNSIGNED DEFAULT NULL,
 			applied_at      datetime            DEFAULT NULL,
 			applied_by      bigint(20) UNSIGNED DEFAULT NULL,
+			origin_insight_id bigint(20) UNSIGNED DEFAULT NULL,
 			created_at      datetime            NOT NULL,
 			updated_at      datetime            NOT NULL,
 			PRIMARY KEY  (id),
@@ -456,7 +457,8 @@ class Opti_Behavior_AB_Test_Database {
 			KEY target_post_id (target_post_id),
 			KEY status_type (status, test_type),
 			KEY started_at (started_at),
-			KEY created_at (created_at)
+			KEY created_at (created_at),
+			KEY origin_insight_id (origin_insight_id)
 			) " . $charset_collate
 		);
 	}
@@ -790,6 +792,40 @@ class Opti_Behavior_AB_Test_Database {
 	// =========================================================================
 
 	/**
+	 * Check whether the Smart Insights link column exists on the tests table.
+	 *
+	 * `origin_insight_id` is created by the activation dbDelta only. On an
+	 * install that received the new plugin files without re-activating, writing
+	 * the column would abort the entire test insert/update, so every write path
+	 * asks here first. The answer is cached per request because it cannot change
+	 * mid-request.
+	 *
+	 * @since 1.3.9
+	 * @return bool
+	 */
+	public static function has_origin_insight_column() {
+		global $wpdb;
+
+		static $has_column = null;
+
+		if ( null !== $has_column ) {
+			return $has_column;
+		}
+
+		$table      = $wpdb->prefix . 'optibehavior_ab_tests';
+		$has_column = (bool) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s',
+				DB_NAME,
+				$table,
+				'origin_insight_id'
+			)
+		);
+
+		return $has_column;
+	}
+
+	/**
 	 * Insert a new A/B test.
 	 *
 	 * @since 1.3.0
@@ -817,6 +853,7 @@ class Opti_Behavior_AB_Test_Database {
 			'target_selector'    => null,
 			'settings'           => null,
 			'created_by'         => get_current_user_id(),
+			'origin_insight_id'  => null,
 			'created_at'         => $now,
 			'updated_at'         => $now,
 		);
@@ -828,34 +865,46 @@ class Opti_Behavior_AB_Test_Database {
 			$data['settings'] = wp_json_encode( $data['settings'] );
 		}
 
-		$result = $wpdb->insert(
-			$wpdb->prefix . 'optibehavior_ab_tests',
-			array(
-				'name'               => sanitize_text_field( $data['name'] ),
-				'description'        => $data['description'] ? sanitize_textarea_field( $data['description'] ) : null,
-				'test_type'          => sanitize_key( $data['test_type'] ),
-				'status'             => sanitize_key( $data['status'] ),
-				'stat_engine'        => sanitize_key( $data['stat_engine'] ),
-				'optimization'       => sanitize_key( $data['optimization'] ),
-				'confidence_level'   => floatval( $data['confidence_level'] ),
-				'min_sample_size'    => absint( $data['min_sample_size'] ),
-				'min_duration_hours' => absint( $data['min_duration_hours'] ),
-				'traffic_percent'    => absint( $data['traffic_percent'] ),
-				'target_url'         => $data['target_url'] ? esc_url_raw( $data['target_url'] ) : null,
-				'target_post_id'     => $data['target_post_id'] ? absint( $data['target_post_id'] ) : null,
-				'target_selector'    => $data['target_selector'] ? sanitize_text_field( $data['target_selector'] ) : null,
-				'settings'           => $data['settings'],
-				'created_by'         => absint( $data['created_by'] ),
-				'created_at'         => $data['created_at'],
-				'updated_at'         => $data['updated_at'],
-			),
-			array(
-				'%s', '%s', '%s', '%s', '%s', '%s',
-				'%f', '%d', '%d', '%d',
-				'%s', '%d', '%s', '%s', '%d',
-				'%s', '%s',
-			)
+		$row = array(
+			'name'               => sanitize_text_field( $data['name'] ),
+			'description'        => $data['description'] ? sanitize_textarea_field( $data['description'] ) : null,
+			'test_type'          => sanitize_key( $data['test_type'] ),
+			'status'             => sanitize_key( $data['status'] ),
+			'stat_engine'        => sanitize_key( $data['stat_engine'] ),
+			'optimization'       => sanitize_key( $data['optimization'] ),
+			'confidence_level'   => floatval( $data['confidence_level'] ),
+			'min_sample_size'    => absint( $data['min_sample_size'] ),
+			'min_duration_hours' => absint( $data['min_duration_hours'] ),
+			'traffic_percent'    => absint( $data['traffic_percent'] ),
+			'target_url'         => $data['target_url'] ? esc_url_raw( $data['target_url'] ) : null,
+			'target_post_id'     => $data['target_post_id'] ? absint( $data['target_post_id'] ) : null,
+			'target_selector'    => $data['target_selector'] ? sanitize_text_field( $data['target_selector'] ) : null,
+			'settings'           => $data['settings'],
+			'created_by'         => absint( $data['created_by'] ),
 		);
+
+		// phpcs:disable WordPress.Arrays.ArrayDeclarationSpacing.ArrayItemNoNewLine -- Placeholder list is grouped to mirror the column order of $row above.
+		$format = array(
+			'%s', '%s', '%s', '%s', '%s', '%s',
+			'%f', '%d', '%d', '%d',
+			'%s', '%d', '%s', '%s', '%d',
+		);
+		// phpcs:enable WordPress.Arrays.ArrayDeclarationSpacing.ArrayItemNoNewLine
+
+		// Smart Insights link column. It ships through activation dbDelta, so an
+		// install that has not re-activated since the upgrade would fail the whole
+		// insert on an unknown column. Guard the single field instead.
+		if ( self::has_origin_insight_column() ) {
+			$row['origin_insight_id'] = $data['origin_insight_id'] ? absint( $data['origin_insight_id'] ) : null;
+			$format[]                 = '%d';
+		}
+
+		$row['created_at'] = $data['created_at'];
+		$format[]          = '%s';
+		$row['updated_at'] = $data['updated_at'];
+		$format[]          = '%s';
+
+		$result = $wpdb->insert( $wpdb->prefix . 'optibehavior_ab_tests', $row, $format );
 
 		if ( false === $result ) {
 			return false;
@@ -1093,6 +1142,10 @@ class Opti_Behavior_AB_Test_Database {
 		if ( array_key_exists( 'applied_by', $data ) ) {
 			$update['applied_by'] = $data['applied_by'] ? absint( $data['applied_by'] ) : null;
 			$format[]             = '%d';
+		}
+		if ( array_key_exists( 'origin_insight_id', $data ) && self::has_origin_insight_column() ) {
+			$update['origin_insight_id'] = $data['origin_insight_id'] ? absint( $data['origin_insight_id'] ) : null;
+			$format[]                    = '%d';
 		}
 
 		$result = $wpdb->update(

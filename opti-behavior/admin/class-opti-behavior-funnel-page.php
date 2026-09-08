@@ -18,6 +18,13 @@ require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-funnels-v
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'trait-opti-behavior-advanced-filters.php';
 require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-funnel-database.php';
 
+// Auto-funnel stack (detection -> recipes -> builder). Not covered by the
+// autoloader (it does not map the Opti_Behavior_Funnel_* prefix), so it is wired
+// explicitly here, next to the funnel database class.
+require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-funnel-site-detector.php';
+require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-funnel-recipes.php';
+require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-funnel-auto-builder.php';
+
 /**
  * Funnel Analytics Page Class
  *
@@ -38,6 +45,29 @@ class Opti_Behavior_Funnel_Page {
 	 * @var Opti_Behavior_Heatmap_Core
 	 */
 	private $heatmap;
+
+	/**
+	 * Lazily-built auto-funnel builder.
+	 *
+	 * @since 1.8.4
+	 * @var Opti_Behavior_Funnel_Auto_Builder|null
+	 */
+	private $auto_builder = null;
+
+	/**
+	 * User meta holding the suggestions-panel display preference.
+	 *
+	 * Per USER, not per site: how noisy the panel is allowed to be is a personal
+	 * screen preference (same reasoning as the Smart Insights notification
+	 * meta), and two admins on the same site must not fight over it. Shape:
+	 * `array( 'collapsed' => 0|1, 'show_created' => 0|1 )`; a missing key means
+	 * "never chosen", which the script resolves per surface (collapsed by
+	 * default once the site has funnels, always expanded in the empty state).
+	 *
+	 * @since 1.8.4.1
+	 * @var string
+	 */
+	const SUGGESTIONS_UI_META = 'opti_behavior_funnel_suggestions_ui';
 
 	/**
 	 * Constructor
@@ -73,6 +103,13 @@ class Opti_Behavior_Funnel_Page {
 		add_action( 'wp_ajax_optibehavior_set_funnel_status', array( $this, 'ajax_set_funnel_status' ) );
 		add_action( 'wp_ajax_optibehavior_reset_funnel_data', array( $this, 'ajax_reset_funnel_data' ) );
 		add_action( 'wp_ajax_optibehavior_get_funnel_countries', array( $this, 'ajax_get_funnel_countries' ) );
+
+		// Auto-funnel suggestions (spec.md §4.2).
+		add_action( 'wp_ajax_optibehavior_funnel_suggestions', array( $this, 'ajax_funnel_suggestions' ) );
+		add_action( 'wp_ajax_optibehavior_create_funnel_from_recipe', array( $this, 'ajax_create_funnel_from_recipe' ) );
+		add_action( 'wp_ajax_optibehavior_create_recommended_funnels', array( $this, 'ajax_create_recommended_funnels' ) );
+		add_action( 'wp_ajax_optibehavior_dismiss_funnel_suggestion', array( $this, 'ajax_dismiss_funnel_suggestion' ) );
+		add_action( 'wp_ajax_optibehavior_funnel_suggestions_prefs', array( $this, 'ajax_save_funnel_suggestions_prefs' ) );
 
 		// Frontend tracking
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_tracking' ) );
@@ -192,6 +229,16 @@ class Opti_Behavior_Funnel_Page {
 			true
 		);
 
+		// Shared filter-badge module (window.OptiBehaviorFilterBadge) — the
+		// "Filters (N)" counter + deep-link URL reflection helpers.
+		wp_enqueue_script(
+			'opti-behavior-filter-badge',
+			plugins_url( 'assets/js/opti-behavior-filter-badge.js', dirname( __FILE__ ) ),
+			array(),
+			OPTI_BEHAVIOR_HEATMAP_VERSION,
+			true
+		);
+
 		// Filter Profiles module (site-wide saved advanced-filter sets). Funnels
 		// enqueues its own assets (not the shared assets trait), so the module +
 		// its config must be registered here too. Depends on the shared filter-UI
@@ -218,7 +265,7 @@ class Opti_Behavior_Funnel_Page {
 		wp_enqueue_script(
 			'opti-behavior-funnels',
 			plugins_url( 'assets/js/funnels.js', dirname( __FILE__ ) ),
-			array( 'jquery', 'chart-js', 'opti-behavior-filter-ui', 'opti-behavior-filter-profiles' ),
+			array( 'jquery', 'chart-js', 'opti-behavior-filter-ui', 'opti-behavior-filter-badge', 'opti-behavior-filter-profiles' ),
 			OPTI_BEHAVIOR_HEATMAP_VERSION,
 			true
 		);
@@ -353,6 +400,112 @@ class Opti_Behavior_Funnel_Page {
 				),
 			)
 		);
+
+		$this->enqueue_funnel_suggestions_assets();
+	}
+
+	/**
+	 * Enqueue + localize the auto-funnel suggestions panel (spec.md §2.3).
+	 *
+	 * Called from enqueue_funnel_assets(), so it inherits the funnels-hook-only
+	 * guard: the script never loads on any other admin screen. It depends on
+	 * `opti-behavior-funnels` because "Customize" calls
+	 * window.optiFunnelOpenBuilderWithSteps(), which that file installs.
+	 *
+	 * No detection runs here — the panel is filled by an AJAX round-trip after
+	 * paint, so a page render never sweeps third-party plugins.
+	 *
+	 * @since 1.8.4
+	 * @return void
+	 */
+	private function enqueue_funnel_suggestions_assets() {
+		wp_enqueue_script(
+			'opti-behavior-funnel-suggestions',
+			plugins_url( 'assets/js/funnel-suggestions.js', dirname( __FILE__ ) ),
+			array( 'jquery', 'opti-behavior-funnels' ),
+			OPTI_BEHAVIOR_HEATMAP_VERSION,
+			true
+		);
+
+		wp_localize_script(
+			'opti-behavior-funnel-suggestions',
+			'optiBehaviorFunnelSuggestions',
+			array(
+				'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+				'nonce'      => wp_create_nonce( 'opti_behavior_funnels' ),
+				'pageUrl'    => admin_url( 'admin.php?page=opti-behavior-funnels' ),
+				'upgradeUrl' => admin_url( 'admin.php?page=opti-behavior-recordings' ),
+				// Cosmetic only: the create endpoint re-checks the tier gate
+				// server-side, so a forged flag unlocks nothing.
+				'proActive'  => $this->funnel_advanced_filter_available() ? 1 : 0,
+				// Per-user panel display state (1.8.4.1). '' = never chosen, so the
+				// script applies the per-surface default: collapsed above a funnel
+				// list, always expanded in the empty state.
+				'prefs'      => $this->get_funnel_suggestions_prefs(),
+				// Detected-family labels. Kept out of the recipe payload so the
+				// same slug reads identically in the panel header and on a card.
+				'siteTypes'  => array(
+					'woocommerce' => __( 'WooCommerce', 'opti-behavior' ),
+					'edd'         => __( 'Easy Digital Downloads', 'opti-behavior' ),
+					'membership'  => __( 'Membership', 'opti-behavior' ),
+					'lms'         => __( 'Courses', 'opti-behavior' ),
+					'booking'     => __( 'Booking', 'opti-behavior' ),
+					'lead'        => __( 'Lead generation', 'opti-behavior' ),
+					'signup'      => __( 'Signup', 'opti-behavior' ),
+					'blog'        => __( 'Blog', 'opti-behavior' ),
+					'traffic'     => __( 'Traffic', 'opti-behavior' ),
+				),
+				'strings'    => array(
+					'loading'             => __( 'Loading suggestions…', 'opti-behavior' ),
+					'loadError'           => __( 'Could not load funnel suggestions.', 'opti-behavior' ),
+					'networkError'        => __( 'Request failed. Please try again.', 'opti-behavior' ),
+					'unknownError'        => __( 'Unknown error', 'opti-behavior' ),
+					'subtitle'            => __( 'Ready-made funnels built from your own URLs. Nothing is created until you say so.', 'opti-behavior' ),
+					'noSuggestions'       => __( 'No funnel suggestions for this site right now. Build one manually, or re-scan after installing a store, form or membership plugin.', 'opti-behavior' ),
+					/* translators: %s: detected site type, e.g. WooCommerce. */
+					'detectedBadge'       => __( '%s detected', 'opti-behavior' ),
+					/* translators: %s: comma-separated list of detected site types. */
+					'unresolvedBadge'     => __( 'Unresolved: %s', 'opti-behavior' ),
+					'unresolvedHint'      => __( 'Detected, but no usable URL could be resolved - no funnel is guessed for it.', 'opti-behavior' ),
+					'createFunnel'        => __( 'Create funnel', 'opti-behavior' ),
+					'creating'            => __( 'Creating…', 'opti-behavior' ),
+					'customize'           => __( 'Customize', 'opti-behavior' ),
+					'dismissTitle'        => __( 'Dismiss this suggestion', 'opti-behavior' ),
+					'dismissed'           => __( 'Suggestion dismissed. "Re-scan site" brings it back.', 'opti-behavior' ),
+					'rescanning'          => __( 'Scanning your site…', 'opti-behavior' ),
+					'rescanned'           => __( 'Site re-scanned. Dismissed suggestions are back.', 'opti-behavior' ),
+					'proBadge'            => __( 'Pro', 'opti-behavior' ),
+					'upgrade'             => __( 'Upgrade to unlock', 'opti-behavior' ),
+					'alreadyCreated'      => __( 'Already created', 'opti-behavior' ),
+					'similarExists'       => __( 'Similar funnel exists', 'opti-behavior' ),
+					'createDisabledExists' => __( 'A funnel with these steps already exists.', 'opti-behavior' ),
+					/* translators: %s: existing funnel name. */
+					'viewExisting'        => __( 'View "%s"', 'opti-behavior' ),
+					/* translators: %s: created funnel name. */
+					'created'             => __( 'Funnel "%s" created.', 'opti-behavior' ),
+					/* translators: 1: created funnel name, 2: number of historical sessions replayed into it. */
+					'createdBackfilled'   => __( 'Funnel "%1$s" created and populated with %2$d sessions of history.', 'opti-behavior' ),
+					'duplicate'           => __( 'A matching funnel already exists - nothing was created.', 'opti-behavior' ),
+					'createError'         => __( 'Could not create the funnel.', 'opti-behavior' ),
+					/* translators: 1: number of funnels created, 2: number of suggestions skipped. */
+					'bulkCreated'         => __( 'Created %1$d funnel(s), skipped %2$d.', 'opti-behavior' ),
+					/* translators: 1: number of funnels created, 2: number of suggestions skipped, 3: number of historical sessions replayed. */
+					'bulkCreatedBackfilled' => __( 'Created %1$d funnel(s), skipped %2$d - populated with %3$d sessions of history.', 'opti-behavior' ),
+					'stepsUnavailable'    => __( 'Step preview unavailable.', 'opti-behavior' ),
+					'builderUnavailable'  => __( 'The funnel builder is not available on this screen.', 'opti-behavior' ),
+					// Collapsible summary bar (1.8.4.1 UX pass).
+					/* translators: 1: number of suggestions not created yet, 2: number of suggestions that already have a funnel. */
+					'barCounts'           => __( '%1$d new · %2$d created', 'opti-behavior' ),
+					'showPanel'           => __( 'Show', 'opti-behavior' ),
+					'hidePanel'           => __( 'Hide', 'opti-behavior' ),
+					/* translators: %d: number of suggestions that already have a funnel. */
+					'showCreated'         => __( 'Show created (%d)', 'opti-behavior' ),
+					/* translators: %d: number of suggestions that already have a funnel. */
+					'hideCreated'         => __( 'Hide created (%d)', 'opti-behavior' ),
+					'allCreated'          => __( 'Every funnel we suggest for this site already exists. Re-scan after installing or configuring a plugin.', 'opti-behavior' ),
+				),
+			)
+		);
 	}
 
 	/**
@@ -436,7 +589,7 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		// Get period from request.
@@ -520,7 +673,7 @@ class Opti_Behavior_Funnel_Page {
 		check_ajax_referer( 'opti_behavior_funnels', 'nonce' );
 
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		global $wpdb;
@@ -1324,7 +1477,7 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		global $wpdb;
@@ -1364,7 +1517,7 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		// Resolve the global period/device filter from the request.
@@ -1472,12 +1625,12 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
 		if ( $funnel_id <= 0 ) {
-			wp_send_json_error( array( 'message' => 'Invalid funnel ID' ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid funnel ID', 'opti-behavior' ) ) );
 		}
 
 		// Resolve this funnel's own period/device filter from the request.
@@ -1520,13 +1673,13 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
 
 		if ( $funnel_id <= 0 ) {
-			wp_send_json_error( array( 'message' => 'Invalid funnel ID' ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid funnel ID', 'opti-behavior' ) ) );
 		}
 
 		global $wpdb;
@@ -1547,7 +1700,7 @@ class Opti_Behavior_Funnel_Page {
 		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! $funnel ) {
-			wp_send_json_error( array( 'message' => 'Funnel not found' ) );
+			wp_send_json_error( array( 'message' => __( 'Funnel not found', 'opti-behavior' ) ) );
 		}
 
 		// Decode steps JSON.
@@ -1565,7 +1718,7 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		// Get funnel data.
@@ -1576,46 +1729,152 @@ class Opti_Behavior_Funnel_Page {
 
 		// Validate.
 		if ( empty( $name ) || empty( $steps ) ) {
-			wp_send_json_error( array( 'message' => 'Name and steps are required' ) );
+			wp_send_json_error( array( 'message' => __( 'Name and steps are required', 'opti-behavior' ) ) );
 		}
 
 		// Decode and validate steps.
 		$steps_array = json_decode( $steps, true );
 		if ( ! is_array( $steps_array ) || empty( $steps_array ) ) {
-			wp_send_json_error( array( 'message' => 'Invalid steps format' ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid steps format', 'opti-behavior' ) ) );
 		}
 
+		// Single shared write path (insert + update + cache purge).
+		$saved_id = $this->persist_funnel(
+			array(
+				'name'        => $name,
+				'description' => $description,
+				'steps'       => $steps_array,
+				'status'      => 'active',
+			),
+			$funnel_id
+		);
+
+		if ( is_wp_error( $saved_id ) ) {
+			wp_send_json_error( array( 'message' => $saved_id->get_error_message() ) );
+		}
+
+		wp_send_json_success( array( 'funnel_id' => $saved_id, 'message' => __( 'Funnel saved successfully', 'opti-behavior' ) ) );
+	}
+
+	/**
+	 * Shared funnel persistence service — the single write path for funnel
+	 * definitions (manual builder saves AND auto-builder recipe creations).
+	 *
+	 * Extracted from ajax_save_funnel() so that every producer of a funnel row
+	 * goes through the same validation, the same column set and — critically —
+	 * the same ONE cache-purge site. The frontend inline
+	 * optiBehaviorFunnelTracker config is baked into cached page HTML, so a
+	 * write path that forgets to purge silently produces a funnel that records
+	 * nothing until the cache expires (WP Rocket default lifespan is 10 h).
+	 *
+	 * Provenance columns (`source`, `recipe_id`, spec.md §4.1) are handled here:
+	 *
+	 * - On INSERT they are always written (defaults: `manual` / NULL).
+	 * - On UPDATE they are written ONLY when explicitly supplied, so that a user
+	 *   editing an auto-created funnel in the builder does not silently reset
+	 *   its provenance back to `manual`.
+	 *
+	 * @since 1.8.4
+	 *
+	 * @param array $data {
+	 *     Funnel fields.
+	 *
+	 *     @type string       $name        Required. Funnel name.
+	 *     @type string       $description Optional. Funnel description.
+	 *     @type array|string $steps       Required. Step array (or its JSON string).
+	 *     @type string       $status      Optional. 'active' (default) | 'suspended' | 'deleted'.
+	 *     @type string       $source      Optional. 'manual' (default) | 'auto' | 'discovered'.
+	 *     @type string|null  $recipe_id   Optional. Auto-builder recipe provenance.
+	 * }
+	 * @param int   $funnel_id Existing funnel id to update; 0 (default) inserts.
+	 * @return int|WP_Error Funnel id on success, WP_Error on validation/DB failure.
+	 */
+	public function persist_funnel( array $data, $funnel_id = 0 ) {
 		global $wpdb;
 		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
 
-		$data = array(
+		$funnel_id = max( 0, (int) $funnel_id );
+
+		$name        = isset( $data['name'] ) ? sanitize_text_field( $data['name'] ) : '';
+		$description = isset( $data['description'] ) ? sanitize_textarea_field( $data['description'] ) : '';
+
+		$steps = isset( $data['steps'] ) ? $data['steps'] : null;
+		if ( is_string( $steps ) ) {
+			$steps = json_decode( $steps, true );
+		}
+
+		if ( '' === $name ) {
+			return new WP_Error( 'opti_behavior_funnel_missing_name', 'Name and steps are required' );
+		}
+		if ( ! is_array( $steps ) || empty( $steps ) ) {
+			return new WP_Error( 'opti_behavior_funnel_invalid_steps', 'Invalid steps format' );
+		}
+
+		// Status allow-list; 'deleted' stays reachable so the shared path can
+		// express every state the dedicated handlers already produce.
+		$status = isset( $data['status'] ) ? sanitize_text_field( $data['status'] ) : 'active';
+		if ( ! in_array( $status, array( 'active', 'suspended', 'deleted' ), true ) ) {
+			$status = 'active';
+		}
+
+		$row     = array(
 			'name'        => $name,
 			'description' => $description,
-			'steps'       => wp_json_encode( $steps_array ),
-			'status'      => 'active',
+			'steps'       => wp_json_encode( $steps ),
+			'status'      => $status,
 		);
+		$formats = array( '%s', '%s', '%s', '%s' );
+
+		// Provenance: always on insert, opt-in on update (see docblock).
+		$is_insert = ( 0 === $funnel_id );
+
+		if ( $is_insert || array_key_exists( 'source', $data ) ) {
+			$source = isset( $data['source'] ) ? sanitize_key( $data['source'] ) : 'manual';
+			if ( ! in_array( $source, array( 'manual', 'auto', 'discovered' ), true ) ) {
+				$source = 'manual';
+			}
+			$row['source'] = $source;
+			$formats[]     = '%s';
+		}
+
+		if ( $is_insert || array_key_exists( 'recipe_id', $data ) ) {
+			$recipe_id = isset( $data['recipe_id'] ) ? sanitize_key( $data['recipe_id'] ) : '';
+			$recipe_id = ( '' === $recipe_id ) ? null : substr( $recipe_id, 0, 64 );
+
+			$row['recipe_id'] = $recipe_id;
+			$formats[]        = '%s';
+		}
 
 		if ( $funnel_id > 0 ) {
 			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// Update existing funnel.
-			$wpdb->update(
+			$result = $wpdb->update(
 				$table_funnels,
-				$data,
+				$row,
 				array( 'id' => $funnel_id ),
-				array( '%s', '%s', '%s', '%s' ),
+				$formats,
 				array( '%d' )
 			);
 			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+			if ( false === $result ) {
+				return new WP_Error( 'opti_behavior_funnel_update_failed', 'Funnel could not be saved' );
+			}
 		} else {
 			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// Insert new funnel.
-			$wpdb->insert(
+			$result = $wpdb->insert(
 				$table_funnels,
-				$data,
-				array( '%s', '%s', '%s', '%s' )
+				$row,
+				$formats
 			);
 			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-			$funnel_id = $wpdb->insert_id;
+
+			if ( false === $result ) {
+				return new WP_Error( 'opti_behavior_funnel_insert_failed', 'Funnel could not be saved' );
+			}
+
+			$funnel_id = (int) $wpdb->insert_id;
 		}
 
 		// The funnel list + steps are baked into every frontend page as the
@@ -1629,7 +1888,231 @@ class Opti_Behavior_Funnel_Page {
 			)
 		);
 
-		wp_send_json_success( array( 'funnel_id' => $funnel_id, 'message' => 'Funnel saved successfully' ) );
+		return $funnel_id;
+	}
+
+	/**
+	 * The auto-funnel builder, wired to this instance as its persistence service
+	 * so every generated funnel goes through the same persist_funnel() write path
+	 * (and therefore the same single cache-purge site) as a manual builder save.
+	 *
+	 * @since 1.8.4
+	 * @return Opti_Behavior_Funnel_Auto_Builder
+	 */
+	public function get_auto_builder() {
+		if ( null === $this->auto_builder ) {
+			$this->auto_builder = new Opti_Behavior_Funnel_Auto_Builder( $this );
+		}
+		return $this->auto_builder;
+	}
+
+	/**
+	 * Guard shared by the four auto-funnel endpoints: valid nonce + admin.
+	 *
+	 * Exits with a JSON error response when the request is not authorized.
+	 *
+	 * Also raises the memory ceiling for the authorized request. The Funnels page
+	 * fires several of these endpoints concurrently on load, and admin-ajax.php —
+	 * unlike admin.php — never applies WP's admin memory limit, so on a busy site
+	 * the PHP default can be exhausted by other plugins' bootstrap work and the
+	 * request that loses the race dies with a 500 before any handler runs. Raising
+	 * here (once, after the request is proven to come from an authenticated admin,
+	 * so an anonymous flood can never use it to inflate memory) covers every
+	 * funnel endpoint without per-handler duplication.
+	 *
+	 * @since 1.8.4
+	 * @return void
+	 */
+	private function check_funnel_ajax_access() {
+		check_ajax_referer( 'opti_behavior_funnels', 'nonce' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
+		}
+
+		if ( function_exists( 'wp_raise_memory_limit' ) ) {
+			wp_raise_memory_limit( 'admin' );
+		}
+	}
+
+	/**
+	 * AJAX: the suggestion payload for this site (spec.md §4.2).
+	 *
+	 * `force=1` is the "Re-scan site" button: it bypasses the 12 h detection
+	 * transient AND clears the dismissal list, which is what makes dismissing a
+	 * card reversible (spec.md §3.5).
+	 *
+	 * @since 1.8.4
+	 * @return void
+	 */
+	public function ajax_funnel_suggestions() {
+		$this->check_funnel_ajax_access();
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified in check_funnel_ajax_access().
+		$force = isset( $_POST['force'] ) ? ( '1' === (string) sanitize_text_field( wp_unslash( $_POST['force'] ) ) ) : false;
+
+		$builder = $this->get_auto_builder();
+
+		if ( $force ) {
+			// A re-scan restores every dismissed card (locked decision 8: the
+			// user must always be able to get a suggestion back).
+			$builder->clear_dismissed();
+		}
+
+		$context = $builder->get_context( $force );
+
+		wp_send_json_success( $builder->get_suggestions( $context ) );
+	}
+
+	/**
+	 * AJAX: create one funnel from a recipe (spec.md §4.2).
+	 *
+	 * Returns `{ duplicate: true, existing_funnel_id }` instead of inserting when
+	 * the journey already exists — the authoritative idempotency guard, so a
+	 * double-click or a stale client cannot duplicate a row (spec.md §3.5).
+	 *
+	 * @since 1.8.4
+	 * @return void
+	 */
+	public function ajax_create_funnel_from_recipe() {
+		$this->check_funnel_ajax_access();
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified in check_funnel_ajax_access().
+		$recipe_id = isset( $_POST['recipe_id'] ) ? sanitize_key( wp_unslash( $_POST['recipe_id'] ) ) : '';
+
+		if ( '' === $recipe_id ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid recipe.', 'opti-behavior' ) ) );
+		}
+
+		$result = $this->get_auto_builder()->create_from_recipe( $recipe_id );
+
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error(
+				array(
+					'message' => $result->get_error_message(),
+					'code'    => $result->get_error_code(),
+				)
+			);
+		}
+
+		wp_send_json_success( $result );
+	}
+
+	/**
+	 * AJAX: create the whole recommended set (spec.md §4.2).
+	 *
+	 * Also the endpoint the onboarding opt-in checkbox calls.
+	 *
+	 * @since 1.8.4
+	 * @return void
+	 */
+	public function ajax_create_recommended_funnels() {
+		$this->check_funnel_ajax_access();
+
+		wp_send_json_success( $this->get_auto_builder()->create_recommended() );
+	}
+
+	/**
+	 * AJAX: dismiss one suggestion card (spec.md §4.2).
+	 *
+	 * The only mechanism that removes a card from the panel, always
+	 * user-initiated and reversible through "Re-scan site".
+	 *
+	 * @since 1.8.4
+	 * @return void
+	 */
+	public function ajax_dismiss_funnel_suggestion() {
+		$this->check_funnel_ajax_access();
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified in check_funnel_ajax_access().
+		$recipe_id = isset( $_POST['recipe_id'] ) ? sanitize_key( wp_unslash( $_POST['recipe_id'] ) ) : '';
+
+		if ( '' === $recipe_id || ! $this->get_auto_builder()->dismiss( $recipe_id ) ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid recipe.', 'opti-behavior' ) ) );
+		}
+
+		wp_send_json_success( array( 'dismissed' => true ) );
+	}
+
+	/**
+	 * The current user's suggestions-panel display preference.
+	 *
+	 * Returned as STRINGS because this is handed to the browser through
+	 * `wp_localize_script()`, which casts every scalar to a string anyway — so
+	 * the JS compares against '1'/'0' and treats '' as "never chosen" instead of
+	 * tripping over a truthy "0".
+	 *
+	 * @since 1.8.4.1
+	 * @return array { collapsed: ''|'0'|'1', showCreated: ''|'0'|'1' }
+	 */
+	private function get_funnel_suggestions_prefs() {
+		$stored = get_user_meta( get_current_user_id(), self::SUGGESTIONS_UI_META, true );
+
+		if ( ! is_array( $stored ) ) {
+			$stored = array();
+		}
+
+		return array(
+			'collapsed'   => isset( $stored['collapsed'] ) ? ( $stored['collapsed'] ? '1' : '0' ) : '',
+			'showCreated' => isset( $stored['show_created'] ) ? ( $stored['show_created'] ? '1' : '0' ) : '',
+		);
+	}
+
+	/**
+	 * AJAX: persist the suggestions-panel display preference (1.8.4.1 UX pass).
+	 *
+	 * Display-only. It stores no funnel state, changes no suggestion payload and
+	 * never removes a card — losing this preference costs the user one click, so
+	 * the client fires it and ignores the answer.
+	 *
+	 * Same guard as every other funnel endpoint (funnels nonce + manage_options)
+	 * and a strict two-key allow-list: only `collapsed` and `show_created` are
+	 * read, each coerced to 0/1, and the stored array is intersected back down to
+	 * those two keys so a legacy or hand-edited meta row cannot grow.
+	 *
+	 * @since 1.8.4.1
+	 * @return void
+	 */
+	public function ajax_save_funnel_suggestions_prefs() {
+		$this->check_funnel_ajax_access();
+
+		$user_id = get_current_user_id();
+
+		if ( $user_id <= 0 ) {
+			wp_send_json_error( array( 'message' => __( 'No user to store this preference for.', 'opti-behavior' ) ) );
+		}
+
+		$stored = get_user_meta( $user_id, self::SUGGESTIONS_UI_META, true );
+		if ( ! is_array( $stored ) ) {
+			$stored = array();
+		}
+
+		$allowed = array(
+			'collapsed'    => 1,
+			'show_created' => 1,
+		);
+		$dirty   = false;
+
+		foreach ( array_keys( $allowed ) as $key ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified in check_funnel_ajax_access().
+			if ( ! isset( $_POST[ $key ] ) ) {
+				continue;
+			}
+			// phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified in check_funnel_ajax_access().
+			$value          = sanitize_text_field( wp_unslash( $_POST[ $key ] ) );
+			$stored[ $key ] = ( '1' === (string) $value ) ? 1 : 0;
+			$dirty          = true;
+		}
+
+		if ( ! $dirty ) {
+			wp_send_json_error( array( 'message' => __( 'Nothing to save.', 'opti-behavior' ) ) );
+		}
+
+		$stored = array_intersect_key( $stored, $allowed );
+
+		update_user_meta( $user_id, self::SUGGESTIONS_UI_META, $stored );
+
+		wp_send_json_success( $stored );
 	}
 
 	/**
@@ -1697,13 +2180,13 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
 
 		if ( $funnel_id <= 0 ) {
-			wp_send_json_error( array( 'message' => 'Invalid funnel ID' ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid funnel ID', 'opti-behavior' ) ) );
 		}
 
 		global $wpdb;
@@ -1728,7 +2211,7 @@ class Opti_Behavior_Funnel_Page {
 			)
 		);
 
-		wp_send_json_success( array( 'message' => 'Funnel deleted successfully' ) );
+		wp_send_json_success( array( 'message' => __( 'Funnel deleted successfully', 'opti-behavior' ) ) );
 	}
 
 	/**
@@ -1745,20 +2228,20 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
 		$status    = isset( $_POST['status'] ) ? sanitize_text_field( wp_unslash( $_POST['status'] ) ) : '';
 
 		if ( $funnel_id <= 0 ) {
-			wp_send_json_error( array( 'message' => 'Invalid funnel ID' ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid funnel ID', 'opti-behavior' ) ) );
 		}
 
 		// Only the two user-facing states are accepted here. 'deleted' is managed
 		// exclusively by ajax_delete_funnel() and must never be set via this path.
 		if ( ! in_array( $status, array( 'active', 'suspended' ), true ) ) {
-			wp_send_json_error( array( 'message' => 'Invalid status' ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid status', 'opti-behavior' ) ) );
 		}
 
 		global $wpdb;
@@ -1775,7 +2258,7 @@ class Opti_Behavior_Funnel_Page {
 		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( false === $updated ) {
-			wp_send_json_error( array( 'message' => 'Error updating funnel status' ) );
+			wp_send_json_error( array( 'message' => __( 'Error updating funnel status', 'opti-behavior' ) ) );
 		}
 
 		// Active/suspended state changes which funnels the cached inline
@@ -1791,7 +2274,7 @@ class Opti_Behavior_Funnel_Page {
 			array(
 				'funnel_id' => $funnel_id,
 				'status'    => $status,
-				'message'   => 'Funnel status updated successfully',
+				'message'   => __( 'Funnel status updated successfully', 'opti-behavior' ),
 			)
 		);
 	}
@@ -1805,13 +2288,13 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check permissions.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Permission denied' ) );
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
 		}
 
 		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
 
 		if ( $funnel_id <= 0 ) {
-			wp_send_json_error( array( 'message' => 'Invalid funnel ID' ) );
+			wp_send_json_error( array( 'message' => __( 'Invalid funnel ID', 'opti-behavior' ) ) );
 		}
 
 		global $wpdb;
@@ -1827,11 +2310,11 @@ class Opti_Behavior_Funnel_Page {
 		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( $deleted === false ) {
-			wp_send_json_error( array( 'message' => 'Error resetting funnel data' ) );
+			wp_send_json_error( array( 'message' => __( 'Error resetting funnel data', 'opti-behavior' ) ) );
 		}
 
 		wp_send_json_success( array(
-			'message' => 'Funnel data reset successfully',
+			'message' => __( 'Funnel data reset successfully', 'opti-behavior' ),
 			'deleted_count' => $deleted
 		) );
 	}
@@ -1885,12 +2368,12 @@ class Opti_Behavior_Funnel_Page {
 		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! $funnel ) {
-			wp_send_json_error( array( 'message' => 'Funnel not found' ) );
+			wp_send_json_error( array( 'message' => __( 'Funnel not found', 'opti-behavior' ) ) );
 		}
 
 		$steps = json_decode( $funnel->steps, true );
 		if ( empty( $steps ) || ! is_array( $steps ) ) {
-			wp_send_json_error( array( 'message' => 'Funnel has no steps' ) );
+			wp_send_json_error( array( 'message' => __( 'Funnel has no steps', 'opti-behavior' ) ) );
 		}
 
 		// Deduplication guard: if the server-side PHP tracker (track_all_requests)
@@ -2409,7 +2892,7 @@ class Opti_Behavior_Funnel_Page {
 		check_ajax_referer( 'opti_behavior_funnels', 'nonce' );
 
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => 'Unauthorized' ) );
+			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'opti-behavior' ) ) );
 		}
 
 		// Get funnel ID, period, and date range from request

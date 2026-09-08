@@ -551,6 +551,7 @@ class Opti_Behavior_Heatmap_Core {
 		add_filter( 'cron_schedules', array( $this->database, 'add_cron_intervals' ) );
 		add_action( Opti_Behavior_Smart_Insights_Generator::CRON_HOOK, array( $this, 'process_smart_insights_daily' ) );
 		add_action( Opti_Behavior_Smart_Insights_Scheduler::BATCH_HOOK, array( $this, 'process_smart_insights_scheduler_batch' ) );
+		add_action( Opti_Behavior_Smart_Insights_Scheduler::OUTCOME_HOOK, array( $this, 'process_smart_insights_outcome_check' ) );
 		add_filter( 'cron_schedules', array( 'Opti_Behavior_Smart_Insights_Scheduler', 'add_cron_schedules' ) );
 		add_action( 'load-toplevel_page_opti-behavior-analytics', array( $this, 'maybe_refresh_smart_insights_admin' ) );
 		add_action( 'load-opti-behavior_page_opti-behavior-smart-insights', array( $this, 'maybe_refresh_smart_insights_admin' ) );
@@ -1270,6 +1271,26 @@ class Opti_Behavior_Heatmap_Core {
 	}
 
 	/**
+	 * Cron callback: measure resolved Smart Insights after the fix.
+	 *
+	 * Bounded batch, read-only re-evaluation of the same signal on the same
+	 * entity over the two weeks that followed the resolution.
+	 *
+	 * @since 1.4.0
+	 */
+	public function process_smart_insights_outcome_check() {
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Scheduler' ) ) {
+			return;
+		}
+
+		$result = Opti_Behavior_Smart_Insights_Scheduler::run_outcome_check( $this->get_smart_insights_generator() );
+
+		if ( $this->debug_manager ) {
+			$this->debug_manager->log( 'Smart Insights outcome check completed: ' . wp_json_encode( $result ), 'info', 'smart-insights' );
+		}
+	}
+
+	/**
 	 * Admin page-load callback: keep Smart Insights page loads read-only.
 	 *
 	 * Smart Insights generation mutates global insight lifecycle state by
@@ -1919,6 +1940,7 @@ class Opti_Behavior_Heatmap_Core {
 			'opti_behavior_scheduled_smart_cleanup',         // Scheduled smart cleanup (daily/weekly).
 			'opti_behavior_heatmap_auto_repair',             // Opti_Behavior_Heatmap_Dashboard::HEATMAP_AUTO_REPAIR_CRON_HOOK (daily + one-off continuations).
 			'opti_behavior_smart_insights_generate_daily',   // Opti_Behavior_Smart_Insights_Generator::CRON_HOOK.
+			'opti_behavior_smart_insights_outcome_check',    // Opti_Behavior_Smart_Insights_Scheduler::OUTCOME_HOOK (daily before/after check).
 			'opti_behavior_heatmap_sync_reconcile',          // Opti_Behavior_Heatmap_Dashboard::HEATMAP_SYNC_CRON_HOOK (every 15 min).
 			'opti_behavior_heatmap_reconcile',               // Opti_Behavior_Heatmap_Dashboard::HEATMAP_RECONCILE_CRON_HOOK (hourly + one-off continuations).
 			'opti_behavior_heatmap_registry_backfill',       // Opti_Behavior_Heatmap_Dashboard::HEATMAP_BACKFILL_CRON_HOOK (daily + one-off continuations).

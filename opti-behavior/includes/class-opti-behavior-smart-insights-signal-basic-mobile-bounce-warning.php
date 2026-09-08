@@ -79,6 +79,9 @@ class Opti_Behavior_Smart_Insights_Signal_Basic_Mobile_Bounce_Warning extends Op
 		$desktop_bounce = isset( $desktop_row['bounce_rate'] ) && is_numeric( $desktop_row['bounce_rate'] ) ? (float) $desktop_row['bounce_rate'] : null;
 		$comparison_bounce = null !== $desktop_bounce ? $desktop_bounce : $baselines['site_avg_bounce_rate'];
 		$bounce_gap = $this->calculate_gap( $metrics['bounce_rate'], $comparison_bounce );
+		// The impact calculator must price the same comparison the diagnosis used,
+		// so the raw comparison values are published, not just the computed gaps.
+		$comparison_scroll = isset( $desktop_row['avg_scroll_depth'] ) ? $desktop_row['avg_scroll_depth'] : $baselines['site_avg_scroll_depth'];
 
 		$detection = array(
 			'rule_version'       => self::RULE_VERSION,
@@ -87,8 +90,9 @@ class Opti_Behavior_Smart_Insights_Signal_Basic_Mobile_Bounce_Warning extends Op
 			'comparison_device'  => null !== $desktop_bounce ? 'desktop' : 'site_average',
 			'desktop_bounce_rate'=> $desktop_bounce,
 			'comparison_bounce_rate'=> $comparison_bounce,
+			'comparison_scroll_depth'=> is_numeric( $comparison_scroll ) ? (float) $comparison_scroll : null,
 			'bounce_gap'         => $bounce_gap,
-			'scroll_gap'         => $this->calculate_gap( $metrics['avg_scroll_depth'], isset( $desktop_row['avg_scroll_depth'] ) ? $desktop_row['avg_scroll_depth'] : $baselines['site_avg_scroll_depth'] ),
+			'scroll_gap'         => $this->calculate_gap( $metrics['avg_scroll_depth'], $comparison_scroll ),
 			'severity_gap'       => null !== $bounce_gap ? $bounce_gap : 0,
 			'opportunity_gap'    => null !== $bounce_gap ? $bounce_gap : 0,
 			'supporting_metrics' => array( 'mobile_sessions', 'mobile_bounce_rate', 'desktop_or_site_bounce_rate' ),

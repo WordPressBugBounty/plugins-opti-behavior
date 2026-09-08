@@ -211,6 +211,77 @@ class Opti_Behavior_Heatmap_Session {
 	}
 
 	/**
+	 * Resolve the canonical persisted session id for a visitor.
+	 *
+	 * Single source of truth for the multi-tab / multi-bucket canonicalization the
+	 * session-start ingest path performs. Extracted so that every satellite ingest
+	 * endpoint (Pro forms, Pro errors, ...) resolves the SAME id that
+	 * {@see Opti_Behavior_Heatmap_Ajax_Handler::handle_session_start()} persisted in
+	 * {prefix}optibehavior_sessions, instead of re-deriving a seed that drifts.
+	 *
+	 * Bug 2 — why this exists. `get_anonymous_identity()` returns a *seed*:
+	 * 'sess_<hash40>_<intdiv(time(),1800)>'. The bucket is evaluated at REQUEST time,
+	 * so a visit that starts in bucket N and submits a form in bucket N+1 derives a
+	 * different seed than the one persisted, and the row is orphaned forever (every
+	 * Smart Insights provider joins on `session_id IN (SELECT id FROM sessions ...)`).
+	 * The ingest path never had that problem because it canonicalizes the seed
+	 * against the sessions table before writing. Satellite endpoints skipped that
+	 * step; now they share it.
+	 *
+	 * Deliberately resolves seed -> canonical id SERVER-SIDE rather than trusting the
+	 * client-supplied session_id: under a full-page cache the localized
+	 * `anon_sid_seed` is frozen into the HTML and shared by every visitor of the
+	 * cached URL, so honouring the client value would re-merge distinct visitors into
+	 * one session row. The lookup key here is the server-recomputed per-request
+	 * visitor id (real IP/UA — admin-ajax is never full-page cached), which keeps the
+	 * rows joinable without reintroducing that collision.
+	 *
+	 * Never inserts: when the visit has no session row yet (event ordering race) the
+	 * caller's own value is returned unchanged, preserving today's semantics.
+	 *
+	 * @since 1.0.9
+	 * @param string $visitor_id         Canonical visitor id (server-recomputed for anon visitors).
+	 * @param string $candidate_session_id Session id the caller would otherwise store.
+	 * @return string Canonical session id, or $candidate_session_id when none is resolvable.
+	 */
+	public function resolve_canonical_session_id( $visitor_id, $candidate_session_id ) {
+		global $wpdb;
+
+		$visitor_id           = is_string( $visitor_id ) ? $visitor_id : '';
+		$candidate_session_id = is_string( $candidate_session_id ) ? $candidate_session_id : '';
+
+		if ( '' === $visitor_id || '' === $candidate_session_id ) {
+			return $candidate_session_id;
+		}
+
+		// The window bound is computed in PHP from current_time('mysql') rather than
+		// with MySQL NOW(). sessions.start_time is WRITTEN with current_time('mysql')
+		// (site timezone), so comparing it against NOW() (MySQL server timezone) is a
+		// clock mismatch: on any install whose DB server offset differs from the site
+		// timezone by more than the window, the lookup silently matched nothing and
+		// canonicalization never happened at all. Same clock on both sides now.
+		$window_start = gmdate( 'Y-m-d H:i:s', strtotime( current_time( 'mysql' ) ) - ( 30 * MINUTE_IN_SECONDS ) );
+
+		$canonical_sid = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT id FROM {$wpdb->prefix}optibehavior_sessions
+				 WHERE visitor_id = %s
+				 AND start_time >= %s
+				 ORDER BY start_time ASC, id ASC
+				 LIMIT 1",
+				$visitor_id,
+				$window_start
+			)
+		);
+
+		if ( ! empty( $canonical_sid ) ) {
+			return (string) $canonical_sid;
+		}
+
+		return $candidate_session_id;
+	}
+
+	/**
 	 * Build an anonymous daily rotating visitor hash.
 	 *
 	 * The IP address is used only in memory to compute the hash and is never

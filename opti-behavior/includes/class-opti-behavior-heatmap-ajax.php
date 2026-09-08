@@ -1578,7 +1578,7 @@ class Opti_Behavior_Heatmap_Ajax {
 				$dbg['fast_total_files']   = $fast_res['total_files'] ?? null;
 				$dbg['fast_session_ids']   = $fast_res['_debug_session_ids'] ?? '(n/a)';
 			} else {
-				$dbg['fast_result'] = var_export( $fast_res, true );
+				$dbg['fast_result'] = wp_json_encode( $fast_res );
 			}
 
 			wp_send_json_success( $dbg );

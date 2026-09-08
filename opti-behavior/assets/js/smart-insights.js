@@ -18,7 +18,26 @@
 	var excludeSpamDefault = config.excludeSpamDefault === '1';
 	var activeModal = null;
 	var activeModalSection = null;
+	var activeSegmentScope = null;
+	// Incremented per rendered collapsed block so each toggle owns a unique id
+	// for aria-controls without leaking ids across modal re-renders.
+	var disclosureSeq = 0;
+	// Client-side safety net; the authoritative cap and the Pro-upsell rule live
+	// in the capabilities layer so JS never branches on the viewer's tier.
+	var MAX_RECOMMENDED_ACTIONS = 3;
 	var pendingDeepOpenInsightId = parseInt(config.deepOpenInsightId || 0, 10) || 0;
+	// Segment dimensions the destination reports can actually be filtered by,
+	// per destination. A shortcut is only offered when the destination really
+	// accepts that filter, so a "mobile" link never lands on an unfiltered
+	// report pretending to be scoped.
+	var WHERE_SCOPED_REPORT_KEYS = ['device', 'source', 'campaign'];
+	var WHERE_SCOPED_REPORT_FILTERS = {
+		session_recordings: ['device', 'source', 'campaign'],
+		analytics: ['device', 'source', 'campaign'],
+		device_report: ['device', 'source', 'campaign'],
+		user_journey: ['device', 'source'],
+		heatmap: ['device']
+	};
 
 	function ready(callback) {
 		if (document.readyState === 'loading') {
@@ -32,6 +51,90 @@
 		var div = document.createElement('div');
 		div.textContent = value === null || value === undefined ? '' : String(value);
 		return div.innerHTML;
+	}
+
+	// --- Help tooltips -------------------------------------------------------
+	// The list cards and the detail modal are rendered here, not in PHP, so the
+	// purple "?" helper used across the settings screens cannot come from
+	// opti_behavior_tooltip_e(). The copy is localized into config.tooltips and
+	// re-emitted below with byte-equivalent markup, so assets/css/tooltips.css
+	// styles it and assets/js/tooltips.js binds it: that script runs a
+	// MutationObserver on document.body and calls bindTooltip() on every
+	// .ob-tooltip node injected after load, which covers every re-render here.
+
+	var tooltipCopy = config.tooltips || {};
+	var signalTooltips = tooltipCopy.signals || {};
+	var sectionTooltips = tooltipCopy.sections || {};
+
+	function renderTooltipMarkup(entry, options) {
+		if (!entry || !entry.title || !entry.content) {
+			return '';
+		}
+
+		var opts = options || {};
+		var classes = ['ob-tooltip'];
+		if (opts.position && opts.position !== 'top') {
+			classes.push('ob-tooltip-' + opts.position);
+		}
+		if (opts.align && opts.align !== 'center') {
+			classes.push('ob-tooltip-align-' + opts.align);
+		}
+		if (opts.extraClass) {
+			classes.push(opts.extraClass);
+		}
+
+		return '<span class="' + escapeHtml(classes.join(' ')) + '" tabindex="0" role="button" aria-label="' + escapeHtml(entry.title) + '">' +
+			'<span class="ob-tooltip-icon" aria-hidden="true">?</span>' +
+			'<span class="ob-tooltip-content" role="tooltip">' +
+				'<span class="ob-tooltip-title">' + escapeHtml(entry.title) + '</span>' +
+				'<span class="ob-tooltip-text">' + escapeHtml(entry.content) + '</span>' +
+				(entry.simple ? '<span class="ob-tooltip-simple">' + escapeHtml(entry.simple) + '</span>' : '') +
+				(entry.example ? '<span class="ob-tooltip-example">' + escapeHtml(entry.example) + '</span>' : '') +
+			'</span>' +
+		'</span>';
+	}
+
+	// Signal tooltip for a card. Unknown signal ids (a newer Pro build writing a
+	// signal this Free release has no copy for) fall back to the generic entry
+	// rather than rendering a card with no explanation at all.
+	function renderSignalTooltip(insight, options) {
+		var signalId = getSignalId(insight);
+		var entry = (signalId && signalTooltips[signalId]) || signalTooltips._default;
+		return renderTooltipMarkup(entry, options);
+	}
+
+	function renderSectionTooltip(key, options) {
+		return renderTooltipMarkup(sectionTooltips[key], options);
+	}
+
+	// A section heading plus its "?" helper, used for every detail-modal section.
+	// `headingClass` lets a caller keep an existing layout class (the "Where"
+	// sub-blocks all use .ob-smart-insights-where-subtitle) while still opting in
+	// to the flex alignment the helper icon needs.
+	function renderSectionHeading(text, tooltipKey, options) {
+		var opts = options || {};
+		var tag = opts.tag || 'h3';
+		var classes = 'ob-smart-insights-section-heading' + (opts.headingClass ? ' ' + opts.headingClass : '');
+		return '<' + tag + ' class="' + escapeHtml(classes) + '">' + escapeHtml(text) +
+			renderSectionTooltip(tooltipKey, opts) + '</' + tag + '>';
+	}
+
+	// tooltips.js portals the open popup into document.body. Closing the modal
+	// removes the trigger but not the portaled popup, so it would stay pinned on
+	// screen forever; drop any popup that belongs to a trigger inside the node
+	// being torn down.
+	function releasePortaledTooltips(root) {
+		if (!root || !root.querySelectorAll) {
+			return;
+		}
+
+		root.querySelectorAll('.ob-tooltip').forEach(function(tooltip) {
+			var content = tooltip._obTooltipContent;
+			if (content && content.parentNode === document.body) {
+				content.parentNode.removeChild(content);
+			}
+			tooltip.classList.remove('is-active', 'is-pinned');
+		});
 	}
 
 	function postAjax(action, data) {
@@ -76,7 +179,7 @@
 			entityType: '',
 			confidence: '',
 			search: '',
-			sort: 'timeline'
+			sort: 'priority'
 		};
 
 		if (context === 'dashboard' && window.opti_behaviorData) {
@@ -124,7 +227,7 @@
 			data.search = searchEl.value || '';
 		}
 		if (sortEl) {
-			data.sort = sortEl.value || 'timeline';
+			data.sort = sortEl.value || 'priority';
 		}
 
 		section.setAttribute('data-period', data.period);
@@ -513,6 +616,10 @@
 		var pageUrl = firstContextValue([report.page_url, entityContext.view_url, metrics.page_url, isHttpUrl(entityId) ? entityId : '']);
 		var formId = firstContextValue([report.form_id, metrics.form_id, entityType === 'form' ? entityId : '']);
 		var funnelId = firstContextValue([report.funnel_id, metrics.funnel_id, entityType === 'funnel' && /^\d+$/.test(entityId) ? entityId : '']);
+		// Funnel-cohort scope for the recordings list: the sessions that entered
+		// the funnel and never reached this step. Supplied by the Pro adapter.
+		var funnelStep = firstContextValue([report.funnel_step, metrics.funnel_step]);
+		var funnelScope = firstContextValue([report.funnel_scope, metrics.funnel_scope]);
 		var testId = firstContextValue([report.test_id, metrics.test_id, entityType === 'test' && /^\d+$/.test(entityId) ? entityId : '']);
 		var ctaSelector = firstContextValue([report.cta_selector, metrics.cta_selector, metrics.selector, entityType === 'cta' ? entityId : '']);
 		var errorType = firstContextValue([report.error_type, metrics.error_type, entityType === 'error' ? entityId : '']);
@@ -554,6 +661,12 @@
 		if (funnelId === '0') {
 			funnelId = '';
 		}
+		if (!funnelId || !/^\d+$/.test(String(funnelStep))) {
+			funnelStep = '';
+			funnelScope = '';
+		} else if (['abandoned', 'reached', 'completed'].indexOf(String(funnelScope)) === -1) {
+			funnelScope = 'abandoned';
+		}
 		if (testId === '0') {
 			testId = '';
 		}
@@ -565,6 +678,8 @@
 			pageUrl: pageUrl,
 			formId: formId,
 			funnelId: funnelId,
+			funnelStep: funnelStep,
+			funnelScope: funnelScope,
 			testId: testId,
 			ctaSelector: ctaSelector,
 			errorType: errorType,
@@ -626,6 +741,97 @@
 		}
 	}
 
+	// Segment and entity keys are stored in the analytics-internal form
+	// ("utm:adnetwork/cpc", "referrer:google.com", "campaign:spring|google|cpc"),
+	// which is never a column value. The destination reports filter on the raw
+	// columns, so the key is decoded here and the decoded parts travel under the
+	// destination's own filter names. The internal key still travels as
+	// `source`/`campaign` so whereUrlCarriesSegment() and the labels keep working.
+	function decodeSourceKey(value) {
+		var text = String(value || '').trim();
+		var out = { utmSource: '', utmMedium: '', referrer: '', channel: '' };
+		if (!text) {
+			return out;
+		}
+		if (/^utm:/i.test(text)) {
+			var rest = text.slice(4);
+			var slash = rest.indexOf('/');
+			if (slash !== -1) {
+				out.utmSource = rest.slice(0, slash);
+				out.utmMedium = rest.slice(slash + 1);
+			} else {
+				out.utmSource = rest;
+			}
+			return out;
+		}
+		if (/^referrer:/i.test(text)) {
+			out.referrer = text.slice(9);
+			return out;
+		}
+		if (isDirectSource(text)) {
+			out.channel = 'direct';
+			return out;
+		}
+		out.utmSource = text;
+		return out;
+	}
+
+	function decodeCampaignKey(value) {
+		var text = String(value || '').trim();
+		var out = { campaign: '', utmSource: '', utmMedium: '' };
+		if (!text) {
+			return out;
+		}
+		if (/^campaign:/i.test(text)) {
+			var parts = text.slice(9).split('|');
+			out.campaign = parts[0] || '';
+			out.utmSource = parts[1] || '';
+			out.utmMedium = parts[2] || '';
+			return out;
+		}
+		out.campaign = text;
+		return out;
+	}
+
+	// Destination-native filter params. The analytics dashboard, the funnel
+	// report and the recordings list all expose the SAME advanced-filter field
+	// names, so one decoder feeds every one of them.
+	function addSegmentFilterAliases(query, context) {
+		if (context.device && !query.device_type) {
+			query.device_type = context.device;
+		}
+		if (context.source) {
+			var source = decodeSourceKey(context.source);
+			if (source.channel === 'direct') {
+				// "direct" is only the no-referrer channel when the segment is a
+				// traffic-source one; on a utm_source/campaign dimension it is a
+				// literal value and must not be turned into a channel filter.
+				if (isDirectTrafficContext(context)) {
+					query.traffic_channel = 'direct';
+				}
+			} else if (source.referrer) {
+				query.referrer = source.referrer;
+			} else if (source.utmSource) {
+				query.utm_source = source.utmSource;
+				if (source.utmMedium) {
+					query.utm_medium = source.utmMedium;
+				}
+			}
+		}
+		if (context.campaign) {
+			var campaign = decodeCampaignKey(context.campaign);
+			if (campaign.campaign) {
+				query.utm_campaign = campaign.campaign;
+			}
+			if (campaign.utmSource && !query.utm_source) {
+				query.utm_source = campaign.utmSource;
+			}
+			if (campaign.utmMedium && !query.utm_medium) {
+				query.utm_medium = campaign.utmMedium;
+			}
+		}
+	}
+
 	function addSegmentContext(query, context) {
 		if (context.device) {
 			query.device = context.device;
@@ -636,6 +842,7 @@
 		if (context.campaign) {
 			query.campaign = context.campaign;
 		}
+		addSegmentFilterAliases(query, context);
 	}
 
 	function normalizeDestinationDateRange(value) {
@@ -647,6 +854,9 @@
 			last_30_days: 'last30days',
 			last30days: 'last30days',
 			'30days': 'last30days',
+			last_90_days: 'last90days',
+			last90days: 'last90days',
+			'90days': 'last90days',
 			this_month: 'thismonth',
 			thismonth: 'thismonth',
 			today: 'today',
@@ -721,13 +931,14 @@
 				query.traffic_channel = 'direct';
 			} else {
 				query.source = context.source;
-				query.utm_source = context.source;
 			}
 		}
 		if (context.campaign) {
 			query.campaign = context.campaign;
-			query.utm_campaign = context.campaign;
 		}
+		// utm_source / utm_medium / utm_campaign / referrer carry the DECODED
+		// column values; the raw keys above stay for the segment-scope contract.
+		addSegmentFilterAliases(query, context);
 	}
 
 	function addJourneySegmentAliases(query, context) {
@@ -739,7 +950,10 @@
 			if (isDirectTrafficContext(context)) {
 				query.referrer = 'Direct';
 			} else if (!/^(utm_source|utm_campaign|campaign)$/i.test(context.segmentDimension || '')) {
-				query.referrer = context.source;
+				// The journey report matches the referrer host, so the internal
+				// "referrer:host" / "utm:name" key has to be decoded first.
+				var journeySource = decodeSourceKey(context.source);
+				query.referrer = journeySource.referrer || journeySource.utmSource || context.source;
 			}
 		}
 	}
@@ -798,6 +1012,12 @@
 			case 'analytics':
 				addPageContext(query, context);
 				addSegmentContext(query, context);
+				// The analytics dashboard reads start_date/end_date/exclude_spam
+				// from the URL; without them a segment or before/after evidence
+				// link would land on the default period instead of the window the
+				// insight was detected in.
+				addDateContext(query, context, 'analytics');
+				addSpamContext(query, context);
 				if (hasAnyReportContext(context)) {
 					query.si_context = '1';
 					query.context = context.pageId || context.pageUrl ? 'page' : (context.device ? 'device' : (context.source ? 'source' : (context.campaign ? 'campaign' : 'insight')));
@@ -807,6 +1027,12 @@
 			case 'funnel_analytics':
 				if (context.funnelId) {
 					query.funnel_id = context.funnelId;
+					// The funnels screen switches from the index list to the single
+					// funnel view on `funnel`; `funnel_id` alone lands on the list
+					// (and on a site without index rows, on an empty page). Both
+					// travel so the detail route opens and the list-side step
+					// anchoring keeps working.
+					query.funnel = context.funnelId;
 				}
 				addSegmentContext(query, context);
 				addDateContext(query, context, 'funnel');
@@ -822,11 +1048,23 @@
 					query.contains_page = context.pageUrl;
 				}
 				addDateContext(query, context, 'recordings');
+				// The recordings list honors exclude_spam; without it the
+				// "affected sessions" evidence link would show a different
+				// population than the insight measured.
+				addSpamContext(query, context);
 				addRecordingSegmentAliases(query, context);
-				if (context.formId && !query.page_id && !query.page_url && !query.contains_page && !query.device && !query.device_type && !query.source && !query.utm_source && !query.traffic_channel && !query.campaign && !query.utm_campaign) {
+				// The recordings list filters on the funnel cohort directly
+				// (funnel_id + funnel_step + funnel_scope), so a funnel insight
+				// does not need a page context to scope its replays.
+				if (context.funnelId && context.funnelStep) {
+					query.funnel_id = context.funnelId;
+					query.funnel_step = context.funnelStep;
+					query.funnel_scope = context.funnelScope || 'abandoned';
+				}
+				if (context.formId && !query.funnel_step && !query.page_id && !query.page_url && !query.contains_page && !query.device && !query.device_type && !query.source && !query.utm_source && !query.traffic_channel && !query.campaign && !query.utm_campaign) {
 					return { url: '', disabledReason: i18n.recordingsFormFilterUnsupported || 'Recordings cannot be filtered by this form yet. Inspect the form analytics report for field-level evidence.' };
 				}
-				if (!query.page_id && !query.page_url && !query.contains_page && !query.device && !query.device_type && !query.source && !query.utm_source && !query.traffic_channel && !query.campaign && !query.utm_campaign) {
+				if (!query.funnel_step && !query.page_id && !query.page_url && !query.contains_page && !query.device && !query.device_type && !query.source && !query.utm_source && !query.traffic_channel && !query.campaign && !query.utm_campaign) {
 					return { url: '', disabledReason: needsPageContext };
 				}
 				return { url: buildAdminReportUrl('opti-behavior-recordings', query), disabledReason: '' };
@@ -838,6 +1076,8 @@
 				}
 				query.tab = report.tab || 'flow';
 				addDateContext(query, context, 'journey');
+				// The journey report reads exclude_spam from the URL too.
+				addSpamContext(query, context);
 				addJourneySegmentAliases(query, context);
 				if (context.formId && !query.page_id && !query.page_url && !query.target_url && !query.device && !query.device_type && !query.referrer) {
 					return { url: '', disabledReason: i18n.journeyFormFilterUnsupported || 'Journeys cannot be filtered by this form yet. Use form analytics to inspect the abandonment path.' };
@@ -853,6 +1093,10 @@
 				} else {
 					return { url: '', disabledReason: i18n.formAnalyticsNeedsFormContext || 'Form analytics needs a specific form or field context for this insight.' };
 				}
+				// Form analytics applies an incoming window to its date inputs and
+				// honors the spam toggle, so both travel with the link.
+				addDateContext(query, context, 'form_analytics');
+				addSpamContext(query, context);
 				if (!query.form_id && !query.page_id && !query.page_url) {
 					return { url: '', disabledReason: i18n.relatedUnavailable || 'This form analytics link requires form or page context.' };
 				}
@@ -870,10 +1114,19 @@
 						query.friction_type = context.errorType;
 					}
 				}
+				// The errors report applies an incoming analysis window. It has no
+				// spam scope of its own (error rows are not session-joined), so no
+				// exclude_spam flag is carried here rather than sending one the
+				// destination would silently ignore.
+				addDateContext(query, context, 'errors');
 				if (context.formId && !query.page_id && !query.page_url && !query.url && !query.error_type) {
 					return { url: '', disabledReason: i18n.errorsFormFilterUnsupported || 'Errors cannot be filtered by this form yet. Inspect form analytics for field errors tied to this form.' };
 				}
-				if (!query.page_id && !query.page_url && !query.url && !query.error_type) {
+				// A site-wide error/friction insight is measured on the whole site:
+				// the unfiltered tab is its exact scope, so no filter is promised
+				// and the report still opens on what the insight counted.
+				var isSiteWideError = context.entityType === 'error' && /^(site|site_wide|sitewide)$/i.test(String(context.errorType || ''));
+				if (!isSiteWideError && !query.page_id && !query.page_url && !query.url && !query.error_type) {
 					return { url: '', disabledReason: i18n.relatedUnavailable || 'This errors link requires page or error context.' };
 				}
 				return { url: buildAdminReportUrl('opti-behavior-errors', query), disabledReason: '' };
@@ -1090,7 +1343,8 @@
 			'Form Friction': i18n.categoryForm || 'Form Friction',
 			'Technical Issue': i18n.categoryTechnical || 'Technical Issue',
 			'Campaign Issue': i18n.categoryCampaign || 'Campaign Issue',
-			'Revenue Opportunity': i18n.categoryRevenue || 'Revenue Opportunity'
+			'Revenue Opportunity': i18n.categoryRevenue || 'Revenue Opportunity',
+			'Experiment Learning': i18n.categoryLearning || 'Experiment learning'
 		};
 		return labels[category] || category || (i18n.categoryGeneral || 'General');
 	}
@@ -1162,11 +1416,123 @@
 		return false;
 	}
 
+	// --- Absolute impact ("largest leak first") -----------------------------
+	// The engine stores how many visitors a problem actually costs. Ranking on
+	// that number instead of on a relative percentage keeps a 10% drop over
+	// 10,000 sessions above a 50% drop over 100 sessions.
+
+	function getImpact(insight) {
+		return insight && typeof insight.impact === 'object' && insight.impact ? insight.impact : null;
+	}
+
+	function getUsersLost(insight) {
+		var impact = getImpact(insight);
+		if (impact && impact.users_lost !== undefined && impact.users_lost !== null && impact.users_lost !== '') {
+			return parseInt(impact.users_lost, 10) || 0;
+		}
+		if (insight && insight.scores && insight.scores.impact && insight.scores.impact.users_lost !== undefined) {
+			return parseInt(insight.scores.impact.users_lost, 10) || 0;
+		}
+		return null;
+	}
+
+	// The money behind the leak. Only an `available` block is a number: a locked
+	// Free hint or a site without a readable order value is not an amount and
+	// must never rank or headline an insight.
+	function getRevenue(insight) {
+		var impact = getImpact(insight);
+		return impact && typeof impact.revenue === 'object' && impact.revenue ? impact.revenue : null;
+	}
+
+	function getRevenueAmount(insight) {
+		var revenue = getRevenue(insight);
+		if (!revenue || !revenue.available) {
+			return null;
+		}
+		var amount = parseFloat(revenue.amount);
+		return isNaN(amount) ? null : amount;
+	}
+
+	// The observation gate (backend) marks insights measured on too little
+	// traffic to be sized honestly. The UI must then say so instead of printing
+	// a loss figure the sample cannot support.
+	function isObservationOnly(insight) {
+		return !!(insight && insight.detection && insight.detection.observation_only);
+	}
+
+	function getObservationSample(insight) {
+		var detection = insight && typeof insight.detection === 'object' && insight.detection ? insight.detection : null;
+		if (detection && detection.observation_sample !== undefined && detection.observation_sample !== null && detection.observation_sample !== '') {
+			var stored = parseInt(detection.observation_sample, 10);
+			if (!isNaN(stored) && stored > 0) {
+				return stored;
+			}
+		}
+		var metrics = insight && typeof insight.metrics === 'object' && insight.metrics ? insight.metrics : {};
+		var keys = ['sessions', 'starts', 'entries', 'pageviews'];
+		for (var i = 0; i < keys.length; i++) {
+			var value = parseInt(metrics[keys[i]], 10);
+			if (!isNaN(value) && value > 0) {
+				return value;
+			}
+		}
+		return null;
+	}
+
+	function getCorrelation(insight) {
+		return insight && typeof insight.correlation === 'object' && insight.correlation ? insight.correlation : null;
+	}
+
+	function getStoryCauses(insight) {
+		var correlation = getCorrelation(insight);
+		return correlation && Array.isArray(correlation.causes) ? correlation.causes : [];
+	}
+
+	function isStoryInsight(insight) {
+		var correlation = getCorrelation(insight);
+		if (!correlation) {
+			return false;
+		}
+		var signalCount = parseInt(correlation.signal_count, 10) || 0;
+		return !!correlation.correlated && (signalCount > 1 || getStoryCauses(insight).length > 0);
+	}
+
+	// Used only by the explicit "Biggest impact" sort. There the viewer asked for
+	// measured leaks, so insights that carry an impact block rank above the ones
+	// that do not. Money decides first when both sides carry a measured amount;
+	// otherwise the absolute visitor loss does. The default orderings never call
+	// this, and the PHP-side comparator stays neutral on mixed pairs so legacy
+	// rows keep their place in the dashboard's priority ranking.
+	function compareByImpact(a, b) {
+		var leftRevenue = getRevenueAmount(a);
+		var rightRevenue = getRevenueAmount(b);
+		if (leftRevenue !== null && rightRevenue !== null && leftRevenue !== rightRevenue) {
+			return rightRevenue - leftRevenue;
+		}
+		var left = getUsersLost(a);
+		var right = getUsersLost(b);
+		if (left === null && right === null) {
+			return 0;
+		}
+		if (left === null) {
+			return 1;
+		}
+		if (right === null) {
+			return -1;
+		}
+		return right - left;
+	}
+
 	function sortInsightsForCenter(items) {
-		var mode = arguments.length > 1 && arguments[1] ? arguments[1] : 'timeline';
+		var mode = arguments.length > 1 && arguments[1] ? arguments[1] : 'priority';
 		return items.slice().sort(function(a, b) {
 			var dateDelta = getInsightTimestamp(b) - getInsightTimestamp(a);
-			if (mode !== 'priority' && dateDelta !== 0) {
+			if (mode === 'impact') {
+				var impactDelta = compareByImpact(a, b);
+				if (impactDelta !== 0) {
+					return impactDelta;
+				}
+			} else if (mode !== 'priority' && dateDelta !== 0) {
 				return dateDelta;
 			}
 			var severityDelta = getSeverityWeight(b) - getSeverityWeight(a);
@@ -1181,11 +1547,172 @@
 			if (actionDelta !== 0) {
 				return actionDelta;
 			}
-			if (mode === 'priority' && dateDelta !== 0) {
+			if ((mode === 'priority' || mode === 'impact') && dateDelta !== 0) {
 				return dateDelta;
 			}
 			return (parseInt(b.id, 10) || 0) - (parseInt(a.id, 10) || 0);
 		});
+	}
+
+	// Story grouping for the center list. Runs AFTER filtering and sorting, so
+	// the top-level order stays exactly what sortInsightsForCenter() produced.
+	// A child whose parent is missing from the filtered set (resolved, ignored,
+	// other status...) stays a top-level card: no insight is ever dropped.
+	function groupCenterItems(items) {
+		var present = {};
+		var childrenByParent = {};
+		var topLevel = [];
+
+		items.forEach(function(insight) {
+			present[String(insight.id)] = true;
+		});
+
+		items.forEach(function(insight) {
+			var parentId = parseInt(insight.parent_insight_id, 10) || 0;
+			if (parentId && present[String(parentId)]) {
+				if (!childrenByParent[String(parentId)]) {
+					childrenByParent[String(parentId)] = [];
+				}
+				childrenByParent[String(parentId)].push(insight);
+				return;
+			}
+			topLevel.push(insight);
+		});
+
+		var groups = topLevel.map(function(insight) {
+			return {
+				insight: insight,
+				children: childrenByParent[String(insight.id)] || []
+			};
+		});
+
+		return groupSourceCards(groups);
+	}
+
+	// --- Source-level grouping ---------------------------------------------
+	// Traffic-source signals fire once per source, so one bad ad network can
+	// push five near-identical cards into the list. Cards of the same signal on
+	// `source` entities collapse into one synthetic card that lists its members.
+	// Every member keeps its own detail modal and its own data-insight-id, so
+	// deep links (maybeOpenDeepLinkedInsight) still resolve to a member.
+	var SOURCE_GROUP_MIN_MEMBERS = 2;
+
+	function isSourceGroupCandidate(group) {
+		if (!group || !group.insight || (group.children && group.children.length)) {
+			return false;
+		}
+		var insight = group.insight;
+		return String(insight.entity_type || '') === 'source' && !!getSignalId(insight) && !isStoryInsight(insight);
+	}
+
+	// Story grouping runs first and is never overridden: only ungrouped,
+	// uncorrelated source cards are collapsed, and a signal with a single source
+	// keeps the exact card it had before.
+	function groupSourceCards(groups) {
+		var buckets = {};
+		groups.forEach(function(group) {
+			if (!isSourceGroupCandidate(group)) {
+				return;
+			}
+			var key = getSignalId(group.insight);
+			if (!buckets[key]) {
+				buckets[key] = [];
+			}
+			buckets[key].push(group.insight);
+		});
+
+		var rendered = {};
+		var result = [];
+		groups.forEach(function(group) {
+			var key = isSourceGroupCandidate(group) ? getSignalId(group.insight) : '';
+			if (!key || !buckets[key] || buckets[key].length < SOURCE_GROUP_MIN_MEMBERS) {
+				result.push(group);
+				return;
+			}
+			if (rendered[key]) {
+				return;
+			}
+			rendered[key] = true;
+			// The synthetic card keeps the position of the best-ranked member, so
+			// the sort order the viewer asked for is preserved.
+			result.push({ insight: group.insight, children: [], sourceMembers: buckets[key] });
+		});
+
+		return result;
+	}
+
+	// The synthetic card speaks with the score of its worst member: collapsing
+	// must never bury a problem lower in the list than it was.
+	function getSourceGroupLeader(members) {
+		var leader = members[0];
+		members.forEach(function(member) {
+			if (getSeverityWeight(member) > getSeverityWeight(leader) ||
+				(getSeverityWeight(member) === getSeverityWeight(leader) && getPriorityScore(member) > getPriorityScore(leader))) {
+				leader = member;
+			}
+		});
+		return leader;
+	}
+
+	function renderSourceGroupMember(insight) {
+		var id = String(insight.id);
+		var label = insight.entity_label || insight.entity_id || (i18n.smartInsight || 'Smart Insight');
+		var parts = [label];
+
+		var sessions = parseFloat(getMetric(insight, 'sessions'));
+		if (!isNaN(sessions) && sessions > 0) {
+			parts.push(fillToken(i18n.sourceGroupSessions || '%s sessions', '%s', formatNumber(sessions)));
+		}
+
+		var conversion = parseFloat(getMetric(insight, 'conversion_rate'));
+		if (!isNaN(conversion)) {
+			parts.push(fillToken(i18n.sourceGroupConversion || '%s conversion rate', '%s', formatPercent(conversion)));
+		}
+
+		return '<li>' +
+			'<button type="button" class="button-link ob-smart-insights-source-open" data-open-insight="' + escapeHtml(id) + '" data-insight-id="' + escapeHtml(id) + '">' +
+				escapeHtml(parts.join(' — ')) +
+			'</button>' +
+		'</li>';
+	}
+
+	function renderSourceGroupCard(members) {
+		var leader = getSourceGroupLeader(members);
+		var priorityLabel = getPriorityLabel(leader);
+		var priorityClass = getSeverityClass(priorityLabel);
+		var signalName = leader.signal_name || (i18n.smartInsight || 'Smart Insight');
+		var title = fillToken(
+			fillToken(i18n.sourceGroupTitle || '%1$s across %2$s traffic sources', '%1$s', signalName),
+			'%2$s',
+			formatNumber(members.length)
+		);
+		var lines = members.map(renderSourceGroupMember).join('');
+		var detectedTime = renderDetectedTime(leader);
+
+		return '<article class="ob-smart-insights-center-card is-' + escapeHtml(priorityClass) + ' is-source-group" data-source-group="' + escapeHtml(getSignalId(leader)) + '">' +
+			'<span class="ob-smart-insights-severity-rail" aria-hidden="true"></span>' +
+			'<div class="ob-smart-insights-center-main ob-smart-insights-primary-zone">' +
+				'<div class="ob-smart-insights-title-row">' +
+					'<h3 title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</h3>' +
+					renderSignalTooltip(leader, { position: 'bottom' }) +
+				'</div>' +
+				renderCenterHeaderChips(leader, priorityLabel, priorityClass) +
+				'<p class="ob-smart-insights-explanation">' + escapeHtml(i18n.sourceGroupExplanation || 'The same signal fired on several traffic sources. Open a source to see its own diagnosis.') + '</p>' +
+				'<div class="ob-smart-insights-source-group">' +
+					'<span class="ob-smart-insights-source-group-label">' + escapeHtml(fillToken(i18n.sourceGroupCount || '%s traffic sources', '%s', formatNumber(members.length))) + '</span>' +
+					'<ul>' + lines + '</ul>' +
+				'</div>' +
+			'</div>' +
+			'<div class="ob-smart-insights-metric-strip ob-smart-insights-evidence-zone" aria-label="' + escapeHtml(i18n.evidence || 'Evidence') + '">' + renderCenterEvidenceMicroCards(leader, 3) + '</div>' +
+			'<div class="ob-smart-insights-action-zone">' + renderCenterActionPanel(leader, getRecommendedAction(leader)) + '</div>' +
+			'<div class="ob-smart-insights-center-footer">' +
+				'<div class="ob-smart-insights-card-footer-meta">' +
+					(detectedTime ? '<span>' + detectedTime + '</span>' : '') +
+					'<span>' + escapeHtml(i18n.confidence || 'Confidence') + ': <strong>' + escapeHtml(getConfidenceLabel(leader)) + '</strong></span>' +
+					renderCenterPriorityMeter(leader, priorityLabel) +
+				'</div>' +
+			'</div>' +
+		'</article>';
 	}
 
 	function getInsightTimestamp(insight) {
@@ -1903,6 +2430,113 @@
 		return text;
 	}
 
+	// --- Outcome loop: did the fix work? ------------------------------------
+	// The backend measures the insight's own metric over the two weeks that
+	// followed the resolution and stores the verdict; the UI only formats it.
+	function getOutcome(insight) {
+		var outcome = insight && insight.outcome && typeof insight.outcome === 'object' ? insight.outcome : null;
+		return outcome && outcome.metric_key ? outcome : null;
+	}
+
+	function formatShortDate(value) {
+		var raw = String(value || '').trim();
+		if (!raw) {
+			return '';
+		}
+		var parsed = Date.parse(raw.replace(' ', 'T'));
+		if (isNaN(parsed)) {
+			return raw.slice(0, 10);
+		}
+		try {
+			return new Date(parsed).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+		} catch (error) {
+			return raw.slice(0, 10);
+		}
+	}
+
+	function formatOutcomeValue(value, unit) {
+		return unit === 'seconds' ? formatSeconds(value) : formatPercent(value);
+	}
+
+	function formatOutcomeDelta(delta, unit) {
+		var number = parseFloat(delta);
+		if (isNaN(number)) {
+			return '';
+		}
+		// U+2212 keeps the minus sign readable next to the digits.
+		var sign = number > 0 ? '+' : (number < 0 ? '−' : '');
+		var magnitude = Math.abs(number);
+		if (unit === 'seconds') {
+			return sign + fillToken(i18n.outcomeSeconds || '%ss', '%s', magnitude.toFixed(1));
+		}
+		return sign + fillToken(i18n.outcomePoints || '%s pts', '%s', magnitude.toFixed(1));
+	}
+
+	// "bounce rate 65.0% -> 48.0% (-17.0 pts)" when both halves were measured,
+	// the honest short sentence when they were not.
+	function getOutcomeChangeLabel(outcome) {
+		if (!outcome) {
+			return '';
+		}
+
+		var verdict = String(outcome.verdict || '');
+		var before = parseFloat(outcome.before_value);
+		var after = parseFloat(outcome.after_value);
+
+		if (isNaN(before) || isNaN(after)) {
+			return verdict === 'inconclusive'
+				? (i18n.outcomeNotMeasurable || 'not measurable yet')
+				: (i18n.outcomePending || 'measurement in progress');
+		}
+
+		if (verdict === 'no_change') {
+			return i18n.outcomeNoChange || 'no measurable change yet';
+		}
+
+		var template = i18n.outcomeChange || '%1$s %2$s → %3$s (%4$s)';
+		template = fillToken(template, '%1$s', outcome.metric_label || outcome.metric_key || '');
+		template = fillToken(template, '%2$s', formatOutcomeValue(before, outcome.unit));
+		template = fillToken(template, '%3$s', formatOutcomeValue(after, outcome.unit));
+		return fillToken(template, '%4$s', formatOutcomeDelta(outcome.delta_abs, outcome.unit));
+	}
+
+	function getOutcomeVerdictClass(outcome) {
+		var verdict = String((outcome && outcome.verdict) || '');
+		if (verdict === 'improved') {
+			return 'is-improved';
+		}
+		if (verdict === 'worse') {
+			return 'is-worse';
+		}
+		return 'is-flat';
+	}
+
+	function getOutcomeChipLabel(insight, outcome) {
+		var resolvedAt = (outcome && outcome.resolved_at) || (insight && insight.resolved_at) || '';
+		var fixed = fillToken(i18n.outcomeFixed || 'Fixed %s', '%s', formatShortDate(resolvedAt));
+		var change = getOutcomeChangeLabel(outcome);
+		return change ? fixed + ' · ' + change : fixed;
+	}
+
+	function renderOutcomeChip(insight) {
+		var status = String((insight && insight.status) || '').toLowerCase();
+		if (status !== 'resolved' && status !== 'auto_resolved') {
+			return '';
+		}
+
+		var outcome = getOutcome(insight);
+		if (!outcome) {
+			return '';
+		}
+
+		var label = getOutcomeChipLabel(insight, outcome);
+		var title = outcome.verdict_label ? outcome.verdict_label + ' — ' + label : label;
+
+		return '<span class="ob-smart-insights-outcome-chip ' + escapeHtml(getOutcomeVerdictClass(outcome)) + '" title="' + escapeHtml(title) + '">' +
+			'<i data-lucide="check-circle-2" aria-hidden="true"></i>' + escapeHtml(label) +
+		'</span>';
+	}
+
 	function renderCenterHeaderChips(insight, priorityLabel, priorityClass) {
 		var title = insight.signal_name || '';
 		var categoryLabel = getCategoryLabel(insight.category);
@@ -1914,10 +2548,21 @@
 
 		chips.push('<span class="ob-smart-insights-status-chip is-' + escapeHtml(getSeverityClass(insight.status || 'new')) + '">' + escapeHtml(getStatusLabel(insight.status)) + '</span>');
 
+		var story = renderStoryChip(insight);
+		if (story) {
+			chips.push(story);
+		}
+
 		var recurrence = renderRecurrenceChip(insight);
 		if (recurrence) {
 			chips.push(recurrence);
 		}
+
+		var outcome = renderOutcomeChip(insight);
+		if (outcome) {
+			chips.push(outcome);
+		}
+
 		if (insight.is_locked_preview) {
 			chips.push('<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>');
 		}
@@ -1964,7 +2609,7 @@
 		if (!action) {
 			return '';
 		}
-		return '<section class="ob-smart-insights-detail-section is-next"><h3>' + escapeHtml(i18n.nextAction || 'Next action') + '</h3><div class="ob-smart-insights-action-callout"><span class="ob-smart-insights-action-icon" aria-hidden="true"><i data-lucide="arrow-up-right"></i><span class="ob-smart-insights-action-icon-fallback">↗</span></span><strong>' + escapeHtml(action) + '</strong></div></section>';
+		return '<section class="ob-smart-insights-detail-section is-next">' + renderSectionHeading(i18n.nextAction || 'Next action', 'next_action', { position: 'left' }) + '<div class="ob-smart-insights-action-callout"><span class="ob-smart-insights-action-icon" aria-hidden="true"><i data-lucide="arrow-up-right"></i><span class="ob-smart-insights-action-icon-fallback">↗</span></span><strong>' + escapeHtml(action) + '</strong></div></section>';
 	}
 
 	function renderUpgradePreview(insight) {
@@ -1975,6 +2620,173 @@
 		var title = preview && preview.title ? preview.title : (i18n.proDiagnosis || 'Pro diagnosis available');
 		var description = preview && preview.description ? preview.description : (i18n.proDiagnosisDescription || 'Unlock segment breakdowns, related recordings, and advanced CRO recommendations.');
 		return '<div class="ob-smart-insights-upgrade-preview"><div><span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span><strong>' + escapeHtml(title) + '</strong></div><p>' + escapeHtml(description) + '</p></div>';
+	}
+
+	var IMPACT_CURRENCY_SYMBOLS = { EUR: '€', USD: '$', GBP: '£', JPY: '¥' };
+
+	// Currency values can contain "$", which String.replace() would read as a
+	// capture-group reference. A function replacement inserts them verbatim.
+	function fillToken(template, token, value) {
+		return String(template).replace(token, function() {
+			return value;
+		});
+	}
+
+	function formatImpactCurrency(amount, currency, decimals) {
+		var number = parseFloat(amount);
+		var digits = decimals === undefined ? 0 : decimals;
+		var value;
+		if (isNaN(number)) {
+			value = '-';
+		} else {
+			value = number.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+		}
+		var code = String(currency || '').trim().toUpperCase();
+		if (IMPACT_CURRENCY_SYMBOLS[code]) {
+			return IMPACT_CURRENCY_SYMBOLS[code] + value;
+		}
+		return code ? code + ' ' + value : value;
+	}
+
+	// The honest half of the impact line: when the backend gate flagged the
+	// insight as measured on too little traffic, no loss figure is printed at
+	// all - only what the sample can support.
+	function renderObservationImpact(insight) {
+		var sample = getObservationSample(insight);
+		var sentence = sample === null
+			? (i18n.impactObservationNoSample || 'Too little traffic to size the impact reliably. Treat this as an observation to confirm, not a loss to act on.')
+			: (i18n.impactObservation || 'Too little traffic to size the impact reliably (%s sessions). Treat this as an observation to confirm, not a loss to act on.').replace('%s', formatNumber(sample));
+
+		return '<div class="ob-smart-insights-impact-line is-observation">' +
+			'<span class="ob-smart-insights-impact-label">' + escapeHtml(i18n.impactObservationLabel || 'Observation') + '</span>' +
+			'<span class="ob-smart-insights-impact-observation">' + escapeHtml(sentence) + '</span>' +
+		'</div>';
+	}
+
+	// One line, always the same shape: what this problem costs in the analysed
+	// window - in money when a value per conversion is known, in visitors
+	// otherwise - and on which population it was measured.
+	function renderImpactLine(insight) {
+		var impact = getImpact(insight);
+		var observationOnly = isObservationOnly(insight);
+
+		if (!impact) {
+			return observationOnly ? renderObservationImpact(insight) : '';
+		}
+
+		var usersLost = getUsersLost(insight);
+		if (usersLost === null || usersLost <= 0) {
+			return observationOnly ? renderObservationImpact(insight) : '';
+		}
+
+		if (observationOnly) {
+			return renderObservationImpact(insight);
+		}
+
+		var basis = String(impact.basis_label || '').trim();
+		var revenue = getRevenue(insight);
+		var revenueAmount = getRevenueAmount(insight);
+		var headline = String(impact.headline || '').trim();
+		var detailHtml = '';
+
+		if (revenueAmount !== null) {
+			headline = fillToken(i18n.impactRevenueHeadline || '≈ %s at risk this period', '%s', formatImpactCurrency(revenueAmount, revenue.currency));
+
+			var unitValue = parseFloat(revenue.average_order_value);
+			if (!isNaN(unitValue) && unitValue > 0) {
+				// The amount is users_lost x conversion factor x unit value. When the
+				// factor discounts the loss (visitors who were not yet at a checkout
+				// step), the factor must be printed too, or the line reads as a
+				// multiplication that does not produce the headline.
+				var isManual = 'manual_conversion_value' === revenue.source;
+				var factor = parseFloat(revenue.conversion_factor);
+				var factored = !isNaN(factor) && factor > 0 && factor < 0.995;
+				var template;
+				if (factored) {
+					template = isManual
+						? (i18n.impactRevenueManualFactored || '%1$s drop-offs × %2$s conversion rate × %3$s per conversion')
+						: (i18n.impactRevenueOrdersFactored || '%1$s drop-offs × %2$s conversion rate × %3$s avg. order');
+					template = fillToken(template, '%3$s', formatImpactCurrency(unitValue, revenue.currency, 2));
+					template = fillToken(template, '%2$s', formatPercent(factor * 100));
+				} else {
+					template = isManual
+						? (i18n.impactRevenueManual || '%1$s drop-offs × %2$s per conversion')
+						: (i18n.impactRevenueOrders || '%1$s drop-offs × %2$s avg. order');
+					template = fillToken(template, '%2$s', formatImpactCurrency(unitValue, revenue.currency, 2));
+				}
+				template = fillToken(template, '%1$s', formatNumber(usersLost));
+				detailHtml = '<small class="ob-smart-insights-impact-revenue">' + escapeHtml(template) + '</small>';
+			}
+		} else if (revenue && revenue.locked) {
+			detailHtml = '<small class="ob-smart-insights-impact-revenue is-locked">' +
+				escapeHtml(revenue.hint || i18n.revenueLocked || 'Revenue exposure for this leak is available in Pro.') + '</small>';
+		}
+
+		if (!headline) {
+			headline = formatNumber(usersLost);
+		}
+
+		return '<div class="ob-smart-insights-impact-line" data-users-lost="' + escapeHtml(usersLost) + '">' +
+			'<span class="ob-smart-insights-impact-label">' + escapeHtml(i18n.businessImpact || 'Business impact') + '</span>' +
+			'<strong class="ob-smart-insights-impact-headline">' + escapeHtml(headline) + '</strong>' +
+			detailHtml +
+			(basis ? '<small class="ob-smart-insights-impact-basis">' + escapeHtml((i18n.impactBasis || 'Measured on') + ': ' + basis) + '</small>' : '') +
+		'</div>';
+	}
+
+	// Cause chips carry the measured share when the viewer may see it; Free gets
+	// the ranked cause labels plus one locked hint instead of the percentages.
+	function renderCauseChips(insight) {
+		var causes = getStoryCauses(insight);
+		if (!causes.length) {
+			return '';
+		}
+
+		var correlation = getCorrelation(insight);
+		var sharesLocked = !!(correlation && correlation.shares_locked);
+		var chips = causes.slice(0, 4).map(function(cause) {
+			var label = String((cause && cause.label) || '').trim();
+			if (!label) {
+				return '';
+			}
+			var share = '';
+			if (!sharesLocked && cause && cause.share_pct !== undefined && cause.share_pct !== null && cause.share_pct !== '') {
+				share = '<span class="ob-smart-insights-cause-share">' + escapeHtml(formatPercent(cause.share_pct)) + '</span>';
+			}
+			return '<span class="ob-smart-insights-cause-chip' + (sharesLocked ? ' is-locked' : '') + '">' +
+				'<span class="ob-smart-insights-cause-label">' + escapeHtml(label) + '</span>' + share +
+			'</span>';
+		}).filter(Boolean);
+
+		if (!chips.length) {
+			return '';
+		}
+
+		var lockedHint = sharesLocked
+			? '<small class="ob-smart-insights-cause-locked-hint">' + escapeHtml((correlation && correlation.locked_hint) || i18n.causeSharesLocked || 'Upgrade to Pro to see how much of this problem each cause explains.') + '</small>'
+			: '';
+
+		return '<div class="ob-smart-insights-cause-row" aria-label="' + escapeHtml(i18n.measuredCauses || 'Measured causes') + '">' +
+			chips.join('') + lockedHint +
+		'</div>';
+	}
+
+	function renderStoryChip(insight) {
+		if (!isStoryInsight(insight)) {
+			return '';
+		}
+
+		var correlation = getCorrelation(insight);
+		var signalCount = parseInt(correlation.signal_count, 10) || 0;
+		var causeCount = getStoryCauses(insight).length || (parseInt(correlation.cause_count, 10) || 0);
+		var title = signalCount > 1
+			? sprintfCount(i18n.storySignalCount || '%s correlated signals', signalCount)
+			: sprintfCount(i18n.storyCauseCount || '%s measured causes', causeCount);
+
+		return '<span class="ob-smart-insights-story-chip" title="' + escapeHtml(title) + '">' +
+			escapeHtml(i18n.correlatedStory || 'Correlated story') +
+			(signalCount > 1 ? '<span class="ob-smart-insights-story-count">' + escapeHtml(signalCount) + '</span>' : '') +
+		'</span>';
 	}
 
 	function renderRecurrenceChip(insight) {
@@ -2006,6 +2818,8 @@
 			return;
 		}
 
+		releasePortaledTooltips(list);
+
 		if (!items.length) {
 			list.innerHTML = renderEmptyState(data, getContextData(section));
 			refreshIcons();
@@ -2022,20 +2836,24 @@
 		var priorityClass = getSeverityClass(priorityLabel);
 		var action = getRecommendedAction(insight);
 
-		return '<article class="ob-smart-insights-card" data-insight-id="' + escapeHtml(insight.id) + '">' +
+		return '<article class="ob-smart-insights-card' + (isStoryInsight(insight) ? ' is-story' : '') + '" data-insight-id="' + escapeHtml(insight.id) + '">' +
 			'<div class="ob-smart-insights-card-top">' +
 				'<span class="ob-smart-insights-badge is-' + escapeHtml(priorityClass) + '">' + escapeHtml(priorityLabel) + '</span>' +
 				'<span class="ob-smart-insights-score">' + escapeHtml(i18n.priority || 'Priority') + ': <strong>' + getPriorityScore(insight) + '/100</strong></span>' +
+				renderStoryChip(insight) +
 				renderRecurrenceChip(insight) +
 				(insight.is_locked_preview ? '<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>' : '') +
 			'</div>' +
-			'<h3>' + escapeHtml(insight.signal_name || (i18n.smartInsight || 'Smart Insight')) + '</h3>' +
+			'<h3 class="ob-smart-insights-section-heading">' + escapeHtml(insight.signal_name || (i18n.smartInsight || 'Smart Insight')) + renderSignalTooltip(insight, { position: 'bottom' }) + '</h3>' +
 			'<p class="ob-smart-insights-page-label"><span>' + escapeHtml(getCategoryLabel(insight.category)) + '</span> &middot; ' + renderEntityReference(insight) + '</p>' +
 			'<div class="ob-smart-insights-meta">' +
 				'<span>' + escapeHtml(i18n.confidence || 'Confidence') + ': <strong>' + escapeHtml(getConfidenceLabel(insight)) + '</strong></span>' +
 				'<span>' + escapeHtml(getStatusLabel(insight.status)) + '</span>' +
 				renderDetectedTime(insight) +
 			'</div>' +
+			renderImpactLine(insight) +
+			renderCauseChips(insight) +
+			renderStageTracker(insight) +
 			'<div class="ob-smart-insights-evidence">' + renderEvidence(insight, 4) + '</div>' +
 			'<p class="ob-smart-insights-explanation">' + escapeHtml(insight.interpretation || '') + '</p>' +
 			(action ? '<div class="ob-smart-insights-recommendation"><span>' + escapeHtml(i18n.recommendedAction || 'Recommended action') + '</span><strong>' + escapeHtml(action) + '</strong></div>' : '') +
@@ -2051,6 +2869,8 @@
 			return;
 		}
 
+		releasePortaledTooltips(list);
+
 		if (!items.length) {
 			list.innerHTML = renderEmptyState(data, getContextData(section));
 			refreshIcons();
@@ -2058,9 +2878,62 @@
 			return;
 		}
 
-		list.innerHTML = '<div class="ob-smart-insights-center-list">' + items.map(renderCenterRow).join('') + '</div>';
+		// Explicit invocation (not `map(renderCenterRow)`): map passes the index
+		// as the second argument, which would collide with the children param.
+		var groups = groupCenterItems(items);
+		var cards = groups.map(function(group) {
+			if (group.sourceMembers && group.sourceMembers.length) {
+				return renderSourceGroupCard(group.sourceMembers);
+			}
+			return renderCenterRow(group.insight, group.children);
+		});
+
+		// Visible cap: the overflow cards stay in the DOM (search, deep links and
+		// [data-insight-id] lookups keep working); only their visibility changes.
+		var visibleLimit = parseInt(config.visibleLimit, 10);
+		if (!(visibleLimit > 0)) {
+			visibleLimit = 8;
+		}
+
+		var folded = cards.slice(visibleLimit);
+		var markup = cards.slice(0, visibleLimit).join('');
+		if (folded.length) {
+			var moreLabel = (i18n.showMoreObservations || 'Show %s more observations').replace('%s', formatNumber(folded.length));
+			markup += '<div class="ob-smart-insights-center-more" hidden>' + folded.join('') + '</div>' +
+				'<button type="button" class="button-link ob-smart-insights-center-more-toggle" data-more-count="' + escapeHtml(String(folded.length)) + '" aria-expanded="false">' +
+					escapeHtml(moreLabel) +
+				'</button>';
+		}
+
+		list.innerHTML = '<div class="ob-smart-insights-center-list">' + markup + '</div>';
 		refreshIcons();
 		maybeOpenDeepLinkedInsight(section);
+	}
+
+	// Folds/unfolds the capped overflow cards and keeps the toggle label and
+	// aria-expanded in sync (also used when a deep link targets a folded card).
+	function setCenterMoreExpanded(section, expanded) {
+		var more = section.querySelector('.ob-smart-insights-center-more');
+		if (!more) {
+			return;
+		}
+
+		if (expanded) {
+			more.removeAttribute('hidden');
+		} else {
+			more.setAttribute('hidden', 'hidden');
+		}
+
+		var toggle = section.querySelector('.ob-smart-insights-center-more-toggle');
+		if (!toggle) {
+			return;
+		}
+
+		var count = parseInt(toggle.getAttribute('data-more-count'), 10) || 0;
+		toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+		toggle.textContent = expanded
+			? (i18n.showFewerObservations || 'Show fewer')
+			: (i18n.showMoreObservations || 'Show %s more observations').replace('%s', formatNumber(count));
 	}
 
 	function maybeOpenDeepLinkedInsight(section) {
@@ -2073,6 +2946,10 @@
 
 		var card = section.querySelector('[data-insight-id="' + insightId + '"]');
 		if (card) {
+			var folded = card.closest ? card.closest('.ob-smart-insights-center-more') : null;
+			if (folded && folded.hasAttribute('hidden')) {
+				setCenterMoreExpanded(section, true);
+			}
 			card.classList.add('is-deep-linked');
 			card.scrollIntoView({ behavior: 'smooth', block: 'center' });
 		} else {
@@ -2087,6 +2964,7 @@
 			last7days: 'Last 7 Days',
 			last14days: 'Last 14 Days',
 			last30days: 'Last 30 Days',
+			last90days: 'Last 3 Months',
 			today: 'Today',
 			yesterday: 'Yesterday',
 			custom: 'Custom Range'
@@ -2115,7 +2993,7 @@
 			'.ob-smart-insights-entity-type': '',
 			'.ob-smart-insights-confidence': '',
 			'.ob-smart-insights-search': '',
-			'.ob-smart-insights-sort': 'timeline'
+			'.ob-smart-insights-sort': 'priority'
 		};
 		Object.keys(defaults).forEach(function(selector) {
 			var element = section.querySelector(selector);
@@ -2128,22 +3006,61 @@
 		loadSection(section, { autoRefreshIfStale: true });
 	}
 
-	function renderCenterRow(insight) {
+	// Compact "Also detected" list for the signals grouped under a primary.
+	// Each line opens the child's own detail modal and keeps data-insight-id so
+	// maybeOpenDeepLinkedInsight() still resolves deep links to children.
+	function renderCenterChildren(children) {
+		if (!Array.isArray(children) || !children.length) {
+			return '';
+		}
+
+		var label = (i18n.alsoDetectedHere || 'Also detected here (%s)').replace('%s', String(children.length));
+		var lines = children.map(function(child) {
+			var childId = String(child.id);
+			var parts = [child.signal_name || (i18n.smartInsight || 'Smart Insight')];
+			parts.push((i18n.priorityShort || 'priority %s').replace('%s', String(getPriorityScore(child))));
+			var usersLost = getUsersLost(child);
+			if (usersLost) {
+				parts.push((i18n.sessionsLostShort || '%s sessions lost').replace('%s', formatNumber(usersLost)));
+			}
+
+			return '<li>' +
+				'<button type="button" class="button-link ob-smart-insights-child-open" data-open-insight="' + escapeHtml(childId) + '" data-insight-id="' + escapeHtml(childId) + '">' +
+					escapeHtml(parts.join(' — ')) +
+				'</button>' +
+			'</li>';
+		}).join('');
+
+		return '<div class="ob-smart-insights-center-children">' +
+			'<span class="ob-smart-insights-center-children-label">' + escapeHtml(label) + '</span>' +
+			'<ul>' + lines + '</ul>' +
+		'</div>';
+	}
+
+	function renderCenterRow(insight, children) {
 		var priorityLabel = getPriorityLabel(insight);
 		var priorityClass = getSeverityClass(priorityLabel);
 		var action = getRecommendedAction(insight);
 		var title = insight.signal_name || (i18n.smartInsight || 'Smart Insight');
 		var interpretation = getCompactCenterExplanation(insight, title);
+		// Story card = merged, correlated problem. Uncorrelated single signals
+		// keep the exact markup they had before, so nothing regresses.
+		var isStory = isStoryInsight(insight);
 
-		return '<article class="ob-smart-insights-center-card is-' + escapeHtml(priorityClass) + (insight.is_locked_preview ? ' is-locked-preview' : '') + '" data-insight-id="' + escapeHtml(insight.id) + '">' +
+		return '<article class="ob-smart-insights-center-card is-' + escapeHtml(priorityClass) + (insight.is_locked_preview ? ' is-locked-preview' : '') + (isStory ? ' is-story' : '') + '" data-insight-id="' + escapeHtml(insight.id) + '">' +
 			'<span class="ob-smart-insights-severity-rail" aria-hidden="true"></span>' +
 			'<div class="ob-smart-insights-center-main ob-smart-insights-primary-zone">' +
 				'<div class="ob-smart-insights-title-row">' +
 					'<h3 title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</h3>' +
+					renderSignalTooltip(insight, { position: 'bottom' }) +
 				'</div>' +
 				renderCenterHeaderChips(insight, priorityLabel, priorityClass) +
 				renderCompactContextLine(insight) +
+				renderImpactLine(insight) +
+				renderCauseChips(insight) +
+				renderStageTracker(insight) +
 				(interpretation ? '<p class="ob-smart-insights-explanation">' + escapeHtml(interpretation) + '</p>' : '') +
+				renderCenterChildren(children) +
 				renderUpgradePreview(insight) +
 			'</div>' +
 			'<div class="ob-smart-insights-metric-strip ob-smart-insights-evidence-zone" aria-label="' + escapeHtml(i18n.evidence || 'Evidence') + '">' + renderCenterEvidenceMicroCards(insight, 3) + '</div>' +
@@ -2158,7 +3075,7 @@
 			return false;
 		}
 		var nonDefaultStatus = contextData.status && contextData.status !== 'active';
-		var nonDefaultSort = contextData.sort && contextData.sort !== 'timeline';
+		var nonDefaultSort = contextData.sort && contextData.sort !== 'priority';
 		return !!(nonDefaultStatus || nonDefaultSort || contextData.severity || contextData.category || contextData.entityType || contextData.confidence || contextData.search);
 	}
 
@@ -2319,6 +3236,19 @@
 		modal.addEventListener('click', function(event) {
 			if (event.target && event.target.hasAttribute('data-ob-smart-insights-close')) {
 				closeModal();
+				return;
+			}
+
+			var disclosureToggle = event.target.closest ? event.target.closest('[data-ob-si-disclosure]') : null;
+			if (disclosureToggle) {
+				event.preventDefault();
+				var expanded = disclosureToggle.getAttribute('aria-expanded') === 'true';
+				var body = modal.querySelector('#' + disclosureToggle.getAttribute('data-ob-si-disclosure'));
+				disclosureToggle.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+				if (body) {
+					body.hidden = expanded;
+				}
+				refreshIcons();
 			}
 		});
 
@@ -2340,6 +3270,9 @@
 
 	function closeModal() {
 		if (activeModal) {
+			// A pinned help popup lives on document.body, not inside the modal, so
+			// hiding the modal alone would strand it on screen.
+			releasePortaledTooltips(activeModal);
 			activeModal.hidden = true;
 			activeModal.classList.remove('has-detail');
 			document.body.classList.remove('ob-smart-insights-modal-open');
@@ -2351,16 +3284,20 @@
 		var modal = ensureModal();
 		var content = modal.querySelector('.ob-smart-insights-modal-content');
 		activeModalSection = section;
+		activeSegmentScope = null;
 		modal.classList.remove('has-detail');
-		content.innerHTML = '<div class="ob-smart-insights-loading"><span class="ob-smart-insights-spinner" aria-hidden="true"></span><span>' + escapeHtml(i18n.loading || 'Loading Smart Insights...') + '</span></div>';
+		releasePortaledTooltips(content);
+		content.innerHTML ='<div class="ob-smart-insights-loading"><span class="ob-smart-insights-spinner" aria-hidden="true"></span><span>' + escapeHtml(i18n.loading || 'Loading Smart Insights...') + '</span></div>';
 		modal.hidden = false;
 		document.body.classList.add('ob-smart-insights-modal-open');
 
 		postAjax('optibehavior_smart_insights_detail', { insight_id: insightId })
 			.then(function(data) {
-				content.innerHTML = renderDetail(data.insight || {});
+				var insight = data.insight || {};
+				content.innerHTML = renderDetail(insight);
 				modal.classList.add('has-detail');
 				refreshIcons();
+				loadWhereSection(content, insight, section);
 			})
 			.catch(function(error) {
 				modal.classList.remove('has-detail');
@@ -2368,9 +3305,30 @@
 			});
 	}
 
-	function renderList(values) {
+	// One collapsed "show the rest" affordance shared by the modal sections that
+	// keep secondary content out of the way (non-applicable reports, generic
+	// causes). The toggle is handled by one delegated listener on the modal.
+	function renderDisclosure(label, body, options) {
+		options = options || {};
+		disclosureSeq += 1;
+		var id = 'ob-si-disclosure-' + disclosureSeq;
+		var open = !!options.open;
+
+		return '<button type="button" class="button-link ob-smart-insights-disclosure-toggle' + (options.className ? ' ' + escapeHtml(options.className) : '') + '" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="' + escapeHtml(id) + '" data-ob-si-disclosure="' + escapeHtml(id) + '">' +
+				'<span class="ob-smart-insights-disclosure-label">' + escapeHtml(label) + '</span>' +
+				'<span class="ob-smart-insights-disclosure-caret" aria-hidden="true">&#9662;</span>' +
+			'</button>' +
+			'<div class="ob-smart-insights-disclosure-body" id="' + escapeHtml(id) + '"' + (open ? '' : ' hidden') + '>' + body + '</div>';
+	}
+
+	function renderList(values, limit) {
 		if (!Array.isArray(values) || !values.length) {
 			return '<p class="description">-</p>';
+		}
+
+		var max = parseInt(limit, 10) || 0;
+		if (max > 0 && values.length > max) {
+			values = values.slice(0, max);
 		}
 
 		return '<ul>' + values.map(function(value) {
@@ -2491,11 +3449,37 @@
 		};
 	}
 
-	function renderRelatedReportCardContent(item, state, insight) {
+	// The A/B destination is a test-creation wizard, not a report: promising
+	// "Open report" there sets the expectation of data that a builder cannot
+	// have. Name the action it actually performs instead.
+	function getRelatedReportCtaLabel(item) {
+		var reportType = String((item && item.report && (item.report.type || item.report.report_type)) || '').toLowerCase();
+		if (reportType === 'ab_testing') {
+			return i18n.createAbTest || 'Create A/B test';
+		}
+
+		return i18n.openReport || 'Open report';
+	}
+
+	// `options.compact` is used for the reports that do not apply to this insight:
+	// they stay reachable behind one collapsed line, but without the explanatory
+	// sentence and the route/scope meta that made the sidebar unreadable in v1.
+	function renderRelatedReportCardContent(item, state, insight, options) {
+		options = options || {};
 		var destination = getRelatedReportDestinationLabel(item.report, item.meta);
 		var scope = getRelatedReportScopeLabel(item.report, insight);
 		var action = item.meta.label && item.meta.label !== destination ? item.meta.label : state.label;
 		var routeLabel = i18n.reportDestination || 'Report destination';
+
+		if (options.compact) {
+			return '<i data-lucide="' + escapeHtml(item.meta.icon) + '"></i>' +
+				'<span class="ob-smart-insights-report-card-body">' +
+					'<span class="ob-smart-insights-report-card-topline">' +
+						'<strong>' + escapeHtml(destination) + '</strong>' +
+						'<span class="ob-smart-insights-report-state ' + escapeHtml(state.badgeClass) + '">' + escapeHtml(state.label) + '</span>' +
+					'</span>' +
+				'</span>';
+		}
 
 		return '<i data-lucide="' + escapeHtml(item.meta.icon) + '"></i>' +
 			'<span class="ob-smart-insights-report-card-body">' +
@@ -2506,8 +3490,20 @@
 				'<small class="ob-smart-insights-report-card-copy">' + escapeHtml(action) + '</small>' +
 				'<small class="ob-smart-insights-report-card-status">' + escapeHtml(state.description) + '</small>' +
 				'<span class="ob-smart-insights-report-card-meta"><span>' + escapeHtml(routeLabel) + '</span><span>' + escapeHtml(scope) + '</span></span>' +
-				(item.resolved.url ? '<span class="ob-smart-insights-report-card-action">' + escapeHtml(i18n.openReport || 'Open report') + ' <span aria-hidden="true">&rarr;</span></span>' : '') +
+				(item.resolved.url ? '<span class="ob-smart-insights-report-card-action">' + escapeHtml(getRelatedReportCtaLabel(item)) + ' <span aria-hidden="true">&rarr;</span></span>' : '') +
 			'</span>';
+	}
+
+	function renderRelatedReportCard(item, insight, options) {
+		options = options || {};
+		var state = getRelatedReportState(item);
+		var content = renderRelatedReportCardContent(item, state, insight || {}, options);
+		var ariaLabel = getRelatedReportDestinationLabel(item.report, item.meta) + ': ' + item.meta.label + '. ' + state.label +
+			(options.compact ? '' : '. ' + state.description);
+		if (item.resolved.url) {
+			return '<a class="ob-smart-insights-report-card ' + escapeHtml(state.className) + '" href="' + escapeHtml(item.resolved.url) + '" target="_blank" rel="noopener noreferrer"' + (item.isPrimary ? ' aria-current="page"' : '') + ' aria-label="' + escapeHtml(ariaLabel) + '">' + content + '</a>';
+		}
+		return '<div class="ob-smart-insights-report-card ' + escapeHtml(state.className) + '" role="group" aria-disabled="true" aria-label="' + escapeHtml(ariaLabel) + '">' + content + '</div>';
 	}
 
 	function renderRelatedReports(reports, insight, options) {
@@ -2535,24 +3531,48 @@
 			}
 		});
 
-		var cards = Object.keys(byLabel).map(function(signature) {
+		var sorted = Object.keys(byLabel).map(function(signature) {
 			return byLabel[signature];
 		}).sort(function(a, b) {
 			if (a.isPrimary !== b.isPrimary) {
 				return a.isPrimary ? -1 : 1;
 			}
 			return (b.score - a.score) || (a.index - b.index);
-		}).map(function(item) {
-			var state = getRelatedReportState(item);
-			var content = renderRelatedReportCardContent(item, state, insight || {});
-			var ariaLabel = getRelatedReportDestinationLabel(item.report, item.meta) + ': ' + item.meta.label + '. ' + state.label + '. ' + state.description;
-			if (item.resolved.url) {
-				return '<a class="ob-smart-insights-report-card ' + escapeHtml(state.className) + '" href="' + escapeHtml(item.resolved.url) + '" target="_blank" rel="noopener noreferrer"' + (item.isPrimary ? ' aria-current="page"' : '') + ' aria-label="' + escapeHtml(ariaLabel) + '">' + content + '</a>';
-			}
-			return '<div class="ob-smart-insights-report-card ' + escapeHtml(state.className) + '" role="group" aria-disabled="true" aria-label="' + escapeHtml(ariaLabel) + '">' + content + '</div>';
 		});
 
-		return cards.length ? '<div class="ob-smart-insights-report-card-list">' + cards.join('') + '</div>' : '<p class="description">' + escapeHtml(i18n.noRelatedReports || 'No related reports are available for this insight yet.') + '</p>';
+		// Only the reports the viewer can actually open (current / open) earn a
+		// full card. Everything that does not apply stays reachable behind one
+		// collapsed line instead of six cards explaining why they are irrelevant.
+		var applicable = [];
+		var other = [];
+		sorted.forEach(function(item) {
+			if (item.resolved.url) {
+				applicable.push(item);
+			} else {
+				other.push(item);
+			}
+		});
+
+		if (!applicable.length && !other.length) {
+			return '<p class="description">' + escapeHtml(i18n.noRelatedReports || 'No related reports are available for this insight yet.') + '</p>';
+		}
+
+		var html = applicable.length
+			? '<div class="ob-smart-insights-report-card-list">' + applicable.map(function(item) {
+				return renderRelatedReportCard(item, insight);
+			}).join('') + '</div>'
+			: '<p class="description">' + escapeHtml(i18n.noApplicableReports || 'No report applies directly to this insight.') + '</p>';
+
+		if (other.length) {
+			var template = other.length === 1
+				? (i18n.relatedOtherReport || '%s other report does not apply to this insight')
+				: (i18n.relatedOtherReports || '%s other reports do not apply to this insight');
+			html += renderDisclosure(sprintfCount(template, other.length), '<div class="ob-smart-insights-report-card-list is-muted-reports">' + other.map(function(item) {
+				return renderRelatedReportCard(item, insight, { compact: true });
+			}).join('') + '</div>', { className: 'ob-smart-insights-report-more-toggle' });
+		}
+
+		return html;
 	}
 
 	function renderSummaryPriority(item) {
@@ -2561,7 +3581,12 @@
 		}
 
 		var score = parseInt(item.priority_score, 10) || 0;
-		var priorityClass = score >= 80 ? 'critical' : (score >= 60 ? 'high' : (score >= 40 ? 'medium' : 'low'));
+		// Rank-based labels no longer map to absolute score bands, so the chip
+		// colour follows the label when there is one and only falls back to the
+		// legacy score bands for rows stored before rank scoring.
+		var priorityClass = item.priority_label
+			? getSeverityClass(item.priority_label)
+			: (score >= 80 ? 'critical' : (score >= 60 ? 'high' : (score >= 40 ? 'medium' : 'low')));
 		var label = item.priority_label || (i18n.priority || 'Priority');
 		return '<span class="ob-smart-insights-summary-priority is-' + escapeHtml(priorityClass) + '">' + escapeHtml(label) + '<strong>' + escapeHtml(score + '/100') + '</strong></span>';
 	}
@@ -2636,7 +3661,34 @@
 		return direction + ': ' + title;
 	}
 
-	function renderTrendWatch(summary) {
+	// A card that has nothing to say is removed, not filled with "No notable
+	// items": the brief must be short enough to be read in full.
+	// "Wins this month": fixes the outcome cron measured as real improvements.
+	// This is the block a white-label report leads with, so it only ever lists
+	// verdicts the backend already confirmed as `improved`.
+	function renderWinsList(wins) {
+		return '<ul class="ob-smart-insights-wins-list">' + wins.map(function(win) {
+			var outcome = win && win.outcome ? win.outcome : null;
+			var title = getBriefTitle(win);
+			return '<li>' +
+				'<span class="ob-smart-insights-brief-title" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span>' +
+				'<span class="ob-smart-insights-win-change">' + escapeHtml(getOutcomeChangeLabel(outcome)) + '</span>' +
+				'<span class="ob-smart-insights-win-date">' + escapeHtml(fillToken(i18n.outcomeFixed || 'Fixed %s', '%s', formatShortDate(outcome && outcome.resolved_at))) + '</span>' +
+				renderSummaryInsightLink(win) +
+			'</li>';
+		}).join('') + '</ul>';
+	}
+
+	function renderBriefingSections(summary) {
+		var sections = [];
+
+		var wins = (Array.isArray(summary.wins) ? summary.wins : []).filter(function(win) {
+			return win && win.outcome && win.outcome.verdict === 'improved';
+		});
+		if (wins.length) {
+			sections.push('<section class="ob-smart-insights-briefing-section is-wins"><h3>' + escapeHtml(i18n.winsThisMonth || 'Wins this month') + '</h3>' + renderWinsList(wins.slice(0, 3)) + '</section>');
+		}
+
 		var movement = [];
 		if (summary.biggest_decline) {
 			movement.push(summary.biggest_decline);
@@ -2644,9 +3696,117 @@
 		if (summary.biggest_improvement) {
 			movement.push(summary.biggest_improvement);
 		}
-		var recurring = Array.isArray(summary.recurring_issues) ? summary.recurring_issues : [];
-		return '<section class="ob-smart-insights-briefing-section is-watch"><h3>' + escapeHtml(i18n.movement || 'Trend watch') + '</h3>' + renderSummaryList(movement, 1, { compact: true, hideLowValue: true, emptyText: i18n.noClearMover || 'No clear movement detected.' }) + '</section>' +
-			'<section class="ob-smart-insights-briefing-section is-recurring"><h3>' + escapeHtml(i18n.recurringPatterns || 'Recurring patterns') + '</h3>' + renderSummaryList(recurring, 1, { compact: true }) + '</section>';
+		movement = movement.filter(function(item) {
+			return !isLowValueSummaryItem(item);
+		});
+		if (movement.length) {
+			sections.push('<section class="ob-smart-insights-briefing-section is-watch"><h3>' + escapeHtml(i18n.movement || 'Trend watch') + '</h3>' + renderSummaryList(movement, 1, { compact: true }) + '</section>');
+		}
+
+		var recurring = (Array.isArray(summary.recurring_issues) ? summary.recurring_issues : []).filter(function(item) {
+			return !isLowValueSummaryItem(item);
+		});
+		if (recurring.length) {
+			sections.push('<section class="ob-smart-insights-briefing-section is-recurring"><h3>' + escapeHtml(i18n.recurringPatterns || 'Recurring patterns') + '</h3>' + renderSummaryList(recurring, 1, { compact: true }) + '</section>');
+		}
+
+		return sections;
+	}
+
+	// --- Weekly brief: top three issues with a number and a state -----------
+	// The state compares the stored loss with the previous run of the same
+	// issue group (server side, 10% tolerance); the key is localized here.
+	var BRIEF_STATES = { 'new': 1, worse: 1, better: 1, steady: 1, resolved: 1 };
+
+	function getBriefStateKey(item) {
+		var key = String((item && item.state) || 'new').toLowerCase();
+		return BRIEF_STATES[key] ? key : 'new';
+	}
+
+	function getBriefStateLabel(state) {
+		if (state === 'worse') {
+			return i18n.stateWorse || 'Worse';
+		}
+		if (state === 'better') {
+			return i18n.stateBetter || 'Better';
+		}
+		if (state === 'resolved') {
+			return i18n.stateResolved || 'Resolved';
+		}
+		if (state === 'steady') {
+			return i18n.stateSteady || 'Unchanged';
+		}
+		return i18n.stateNew || 'New';
+	}
+
+	// Money when the site can price a conversion, visitors when it cannot, and
+	// never a loss figure for an insight the backend flagged as observation.
+	function getBriefAmountLabel(item) {
+		var revenue = item && item.revenue && item.revenue.available ? item.revenue : null;
+		if (revenue) {
+			var amount = parseFloat(revenue.amount);
+			if (!isNaN(amount)) {
+				return fillToken(i18n.briefAmountAtRisk || '%s at risk', '%s', formatImpactCurrency(amount, revenue.currency));
+			}
+		}
+
+		var sessions = parseInt(item && item.sessions, 10) || 0;
+		if (item && item.observation_only) {
+			return fillToken(i18n.briefObservation || 'Observation on %s sessions', '%s', formatNumber(sessions));
+		}
+
+		var usersLost = item && item.users_lost !== undefined && item.users_lost !== null ? parseInt(item.users_lost, 10) : NaN;
+		if (!isNaN(usersLost) && usersLost > 0) {
+			return fillToken(i18n.briefVisitorsAtRisk || '%s visitors at risk', '%s', formatNumber(usersLost));
+		}
+
+		return fillToken(i18n.briefSessionsMeasured || 'Measured on %s sessions', '%s', formatNumber(sessions));
+	}
+
+	// Three entities can carry three different problems and still share a label
+	// ("Mobile"), so the brief names the signal as well when it adds something.
+	function getBriefTitle(item) {
+		var label = getSummaryItemTitle(item);
+		var signalName = item && item.signal_name ? String(item.signal_name).trim() : '';
+		if (signalName && label && label !== signalName) {
+			return signalName + ' — ' + label;
+		}
+		return label || signalName || (item && item.summary) || (i18n.smartInsight || 'Smart Insight');
+	}
+
+	// Summary items carry the same outcome block as cards do, so a brief line for
+	// an already-resolved issue shows the measured before/after too.
+	function renderBriefOutcomeChip(item) {
+		var outcome = item && item.outcome && item.outcome.metric_key ? item.outcome : null;
+		if (!outcome || !outcome.verdict) {
+			return '';
+		}
+
+		var label = getOutcomeChangeLabel(outcome);
+		if (!label) {
+			return '';
+		}
+
+		return '<span class="ob-smart-insights-outcome-chip ' + escapeHtml(getOutcomeVerdictClass(outcome)) + '" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</span>';
+	}
+
+	function renderBriefList(items) {
+		var list = Array.isArray(items) ? items.slice(0, 3) : [];
+		if (!list.length) {
+			return '';
+		}
+
+		return '<ol class="ob-smart-insights-brief-list">' + list.map(function(item) {
+			var title = getBriefTitle(item);
+			var state = getBriefStateKey(item);
+			return '<li>' +
+				'<span class="ob-smart-insights-brief-title" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span>' +
+				'<span class="ob-smart-insights-brief-amount">' + escapeHtml(getBriefAmountLabel(item)) + '</span>' +
+				'<span class="ob-smart-insights-brief-state is-' + escapeHtml(state) + '">' + escapeHtml(getBriefStateLabel(state)) + '</span>' +
+				renderBriefOutcomeChip(item) +
+				renderSummaryInsightLink(item) +
+			'</li>';
+		}).join('') + '</ol>';
 	}
 
 	function getLockedWeeklyPreviewTiles() {
@@ -2701,8 +3861,13 @@
 		var headline = summary.headline || (i18n.weeklyHeadline ? String(i18n.weeklyHeadline).replace('%d', highPriorityCount) : (highPriorityCount + ' high-priority issues need review this week'));
 		var moverLabel = getSummaryMoverLabel(summary);
 		var scopeNote = summary.scope_note || i18n.summaryScopeNote || 'Counts use deduplicated active insight groups for the selected range.';
+		// The lead is the brief: the three issues that cost the most, each with
+		// its number and what changed since the previous run. The counting
+		// headline is only the fallback when nothing could be listed.
+		var briefList = renderBriefList(summary.top_critical_insights);
+		var sections = renderBriefingSections(summary);
 		return '<div class="ob-smart-insights-summary-report is-briefing">' +
-			'<div class="ob-smart-insights-briefing-lead"><span>' + escapeHtml(i18n.analystBriefing || 'Analyst briefing') + '</span><strong>' + escapeHtml(headline) + '</strong></div>' +
+			'<div class="ob-smart-insights-briefing-lead"><span>' + escapeHtml(i18n.analystBriefing || 'Analyst briefing') + '</span>' + (briefList || ('<strong>' + escapeHtml(headline) + '</strong>')) + '</div>' +
 			'<div class="ob-smart-insights-summary-metrics">' +
 				'<span><small>' + escapeHtml(i18n.activeInsights || 'Active') + '</small><strong>' + escapeHtml(counts.active || 0) + '</strong></span>' +
 				'<span><small>' + escapeHtml(i18n.highPriority || 'High priority') + '</small><strong>' + escapeHtml(counts.high_priority || 0) + '</strong></span>' +
@@ -2711,10 +3876,7 @@
 			'</div>' +
 			'<p class="description ob-smart-insights-summary-scope">' + escapeHtml(scopeNote) + '</p>' +
 			'<div class="ob-smart-insights-recommendation ob-smart-insights-summary-next-action"><span>' + escapeHtml(i18n.recommendedAction || 'Recommended action') + '</span><strong>' + escapeHtml(next.action || next.summary || next.title || (i18n.defaultRecommendedAction || 'Review the highest-priority issue and open the supporting report.')) + '</strong>' + renderSummaryInsightLink(next) + '</div>' +
-			'<div class="ob-smart-insights-briefing-grid">' +
-				'<section class="ob-smart-insights-briefing-section is-priorities"><h3>' + escapeHtml(i18n.topPriorities || 'Top priorities') + '</h3>' + renderSummaryList(summary.top_critical_insights, 1, { compact: true }) + '</section>' +
-				renderTrendWatch(summary) +
-			'</div>' +
+			(sections.length ? '<div class="ob-smart-insights-briefing-grid has-' + sections.length + '-sections">' + sections.join('') + '</div>' : '') +
 		'</div>';
 	}
 
@@ -2770,250 +3932,6 @@
 	}
 
 
-	function renderTrendComparison(trend, insight) {
-		if (!trend || typeof trend !== 'object' || (Array.isArray(trend) && !trend.length) || (!Array.isArray(trend) && !Object.keys(trend).length)) {
-			return renderBaselineContext(insight) || '<p class="description">' + escapeHtml(i18n.noTrendData || 'No previous-period trend data is available for this insight yet. Baseline context appears on the evidence tiles when available.') + '</p>';
-		}
-
-		var rows = Object.keys(trend).map(function(key) {
-			var value = trend[key];
-			if (!value || typeof value !== 'object') {
-				var scalar = formatSegmentScalar(value);
-				return scalar && scalar !== (i18n.unavailable || 'Unavailable') ? '<div class="ob-smart-insights-trend-item"><span>' + escapeHtml(prettifyKey(key)) + '</span><strong>' + escapeHtml(scalar) + '</strong></div>' : '';
-			}
-			var current = value.current !== undefined ? value.current : (value.current_value !== undefined ? value.current_value : null);
-			var previous = value.previous !== undefined ? value.previous : (value.previous_value !== undefined ? value.previous_value : null);
-			var delta = value.relative_delta_pct !== undefined ? value.relative_delta_pct : (value.delta_pct !== undefined ? value.delta_pct : null);
-			var hasDelta = delta !== null && delta !== undefined && delta !== '' && !isNaN(parseFloat(delta));
-			var hasPrevious = previous !== null && previous !== undefined && previous !== '' && !isNaN(parseFloat(previous));
-			var hasCurrent = current !== null && current !== undefined && current !== '' && !isNaN(parseFloat(current));
-			if (!hasDelta && !hasPrevious) {
-				return '';
-			}
-			var headline = hasDelta ? formatSignedPercent(delta) : (i18n.baselineUnavailable || 'Baseline unavailable');
-			var comparison = hasCurrent ? (i18n.current || 'Current') + ': ' + formatNumber(current) : '';
-			comparison += hasPrevious ? (comparison ? ' ' + (i18n.vsBaseline || 'vs') + ' ' : '') + (i18n.previous || 'Previous') + ': ' + formatNumber(previous) : (comparison ? ' · ' : '') + (i18n.noPreviousData || 'No previous data');
-			return '<div class="ob-smart-insights-trend-item' + (!hasDelta ? ' is-muted' : '') + '"><span>' + escapeHtml(prettifyKey(key)) + '</span><strong>' + escapeHtml(headline) + '</strong><small>' + escapeHtml(comparison) + '</small></div>';
-		}).filter(Boolean).join('');
-
-		if (!rows) {
-			return renderBaselineContext(insight) || '<p class="description">' + escapeHtml(i18n.noTrendBaseline || 'No previous-period trend is available for this insight yet. Use the site baseline comparison in Evidence until enough previous-period data exists.') + '</p>';
-		}
-
-		return '<div class="ob-smart-insights-trend-grid">' + rows + '</div>';
-	}
-
-	function renderBaselineContext(insight) {
-		if (!insight || insight.is_locked_preview) {
-			return '';
-		}
-		var rows = collectEvidenceRows(insight, 7).filter(function(row) {
-			return row.baseline && !row.isUnavailable;
-		});
-		if (!rows.length) {
-			return '';
-		}
-		return '<div class="ob-smart-insights-trend-grid is-baseline-context">' + rows.slice(0, 4).map(function(row) {
-			return '<div class="ob-smart-insights-trend-item"><span>' + escapeHtml(row.label) + '</span><strong>' + escapeHtml(row.value) + '</strong><small>' + escapeHtml((i18n.siteBaseline || 'Site baseline') + ': ' + row.baseline) + '</small></div>';
-		}).join('') + '</div><p class="description">' + escapeHtml(i18n.previousTrendUnavailable || 'Previous-period trend is not available yet; these comparisons use the current site baseline.') + '</p>';
-	}
-
-	function formatSegmentScalar(value) {
-		if (value === null || value === undefined || value === '') {
-			return i18n.unavailable || 'Unavailable';
-		}
-
-		if (typeof value === 'number') {
-			if (!isFinite(value)) {
-				return i18n.unavailable || 'Unavailable';
-			}
-			if (Math.abs(value) <= 100 && String(value).indexOf('.') !== -1) {
-				return value.toFixed(2);
-			}
-			return value.toLocaleString();
-		}
-
-		if (typeof value === 'boolean') {
-			return value ? (i18n.yes || 'Yes') : (i18n.no || 'No');
-		}
-
-		if (typeof value === 'object') {
-			if (Array.isArray(value)) {
-				return value.map(formatSegmentScalar).filter(function(item) {
-					return item && item !== (i18n.unavailable || 'Unavailable');
-				}).join(', ') || (i18n.unavailable || 'Unavailable');
-			}
-
-			var parts = Object.keys(value).slice(0, 4).map(function(key) {
-				return prettifyKey(key) + ': ' + formatSegmentScalar(value[key]);
-			}).filter(function(item) {
-				return item && item.indexOf(i18n.unavailable || 'Unavailable') === -1;
-			});
-
-			return parts.length ? parts.join(', ') : (i18n.unavailable || 'Unavailable');
-		}
-
-		return String(value);
-	}
-
-	function flattenSegmentRows(value, labelPrefix, rows) {
-		if (value === null || value === undefined) {
-			return;
-		}
-
-		if (Array.isArray(value)) {
-			if (!value.length) {
-				return;
-			}
-
-			value.forEach(function(item, index) {
-				if (item && typeof item === 'object') {
-					var itemLabel = item.label || item.name || item.key || item.segment || ('Item ' + (index + 1));
-					if (item.value !== undefined && (typeof item.value !== 'object' || item.value === null)) {
-						rows.push({ label: labelPrefix ? labelPrefix + ' / ' + itemLabel : itemLabel, value: formatSegmentScalar(item.value) });
-					}
-					Object.keys(item).forEach(function(key) {
-						if (key === 'label' || key === 'name' || key === 'key' || key === 'segment' || key === 'value') {
-							return;
-						}
-						flattenSegmentRows(item[key], (labelPrefix ? labelPrefix + ' / ' : '') + itemLabel + ' / ' + prettifyKey(key), rows);
-					});
-					return;
-				}
-
-				rows.push({
-					label: labelPrefix ? labelPrefix + ' / ' + (index + 1) : 'Item ' + (index + 1),
-					value: formatSegmentScalar(item)
-				});
-			});
-			return;
-		}
-
-		if (typeof value === 'object') {
-			Object.keys(value).forEach(function(key) {
-				var nextLabel = labelPrefix ? labelPrefix + ' / ' + prettifyKey(key) : prettifyKey(key);
-				flattenSegmentRows(value[key], nextLabel, rows);
-			});
-			return;
-		}
-
-		rows.push({ label: labelPrefix || (i18n.segmentBreakdown || 'Segment breakdown'), value: formatSegmentScalar(value) });
-	}
-
-	function isInternalSegmentRow(row) {
-		var text = String((row && row.label) || '').toLowerCase();
-		var value = String((row && row.value) || '').toLowerCase();
-		var blocked = [
-			'access',
-			'features',
-			'feature flags',
-			'limits',
-			'tier',
-			'plan',
-			'entitlement',
-			'entitlements',
-			'upgrade url',
-			'upgrade_url',
-			'upgrade',
-			'download',
-			'url',
-			'has pro access',
-			'has_pro_access',
-			'pro context',
-			'pro_context',
-			'manifest',
-			'manifest manager',
-			'manifest_manager',
-			'nonce',
-			'license',
-			'sodium',
-			'capabilities',
-			'raw',
-			'internal',
-			'implementation',
-			'max recordings',
-			'max_recordings',
-			'recording limit',
-			'recordings limit'
-		];
-		for (var i = 0; i < blocked.length; i++) {
-			if (text.indexOf(blocked[i]) !== -1 || value.indexOf(blocked[i]) !== -1) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	function isAllowedSegmentLabel(label) {
-		return /device|source|campaign|visitor|returning|new visitor|page|form|funnel|step|error|friction|performance|speed|load|path|journey|referrer|browser|country|region|conversion|checkout|cart/i.test(String(label || ''));
-	}
-
-	function formatSegmentLabel(label) {
-		return String(label || (i18n.segment || 'Segment'))
-			.replace(/\s*\/\s*/g, ' / ')
-			.replace(/\bUrl\b/g, 'URL')
-			.replace(/\bCta\b/g, 'CTA')
-			.replace(/\bAb\b/g, 'A/B');
-	}
-
-	function collectHumanSegmentRows(value, labelPrefix, rows) {
-		if (value === null || value === undefined) {
-			return;
-		}
-
-		if (Array.isArray(value)) {
-			value.forEach(function(item, index) {
-				var itemLabel = item && typeof item === 'object'
-					? (item.label || item.name || item.key || item.segment || ((i18n.item || 'Item') + ' ' + (index + 1)))
-					: ((i18n.item || 'Item') + ' ' + (index + 1));
-				collectHumanSegmentRows(item, labelPrefix ? labelPrefix + ' / ' + itemLabel : itemLabel, rows);
-			});
-			return;
-		}
-
-		if (typeof value === 'object') {
-			Object.keys(value).forEach(function(key) {
-				var keyLabel = prettifyKey(key);
-				var nextLabel = labelPrefix ? labelPrefix + ' / ' + keyLabel : keyLabel;
-				if (isInternalSegmentRow({ label: nextLabel, value: '' })) {
-					return;
-				}
-				collectHumanSegmentRows(value[key], nextLabel, rows);
-			});
-			return;
-		}
-
-		var row = { label: labelPrefix || (i18n.segmentBreakdown || 'Segment breakdown'), value: formatSegmentScalar(value) };
-		if (isAllowedSegmentLabel(row.label) && !isInternalSegmentRow(row) && row.value !== (i18n.unavailable || 'Unavailable') && row.value !== '') {
-			rows.push(row);
-		}
-	}
-
-	function renderSegmentBreakdown(insight) {
-		var segment = insight.segment;
-		if (insight.is_locked_preview) {
-			return '<div class="ob-smart-insights-upgrade-preview"><span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span><strong>' + escapeHtml(i18n.segmentLockedTitle || 'Advanced segment insight available in Pro') + '</strong><p>' + escapeHtml(i18n.segmentLockedBody || 'Upgrade to unlock device/source breakdowns, related session recordings, and advanced recommendations.') + '</p></div>';
-		}
-		if (!segment || typeof segment !== 'object' || (Array.isArray(segment) && !segment.length) || (!Array.isArray(segment) && !Object.keys(segment).length)) {
-			return '<p class="description">' + escapeHtml(i18n.noSegmentData || 'No segment breakdown is available for this insight yet.') + '</p>';
-		}
-
-		var rows = [];
-		collectHumanSegmentRows(segment, '', rows);
-		rows = rows.filter(function(row, index, allRows) {
-			var signature = String(row.label || '') + '::' + String(row.value || '');
-			return allRows.findIndex(function(compareRow) {
-				return String(compareRow.label || '') + '::' + String(compareRow.value || '') === signature;
-			}) === index;
-		});
-		if (!rows.length) {
-			return '<p class="description">' + escapeHtml(i18n.noSegmentData || 'No segment breakdown is available for this insight yet.') + '</p>';
-		}
-
-		return '<div class="ob-smart-insights-segment-grid">' + rows.slice(0, 12).map(function(row) {
-			return '<div class="ob-smart-insights-segment-item"><span>' + escapeHtml(formatSegmentLabel(row.label)) + '</span><strong>' + escapeHtml(row.value || (i18n.unavailable || 'Unavailable')) + '</strong></div>';
-		}).join('') + '</div>';
-	}
 
 	function getDetailDateRange(insight) {
 		var from = insight && insight.date_from ? String(insight.date_from).trim() : '';
@@ -3054,6 +3972,11 @@
 		if (insight.is_locked_preview) {
 			chips.push('<span class="ob-smart-insights-badge ob-smart-insights-detail-chip is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>');
 		}
+
+		// The signal helper rides in the chip row rather than in the <h2>: that
+		// heading is a -webkit-line-clamp box, and turning it into a flex row to
+		// seat the icon would drop the two-line clamp on long signal names.
+		chips.push(renderSignalTooltip(insight, { position: 'bottom' }));
 
 		return '<div class="ob-smart-insights-card-top ob-smart-insights-detail-chip-row">' + chips.join('') + '</div>';
 	}
@@ -3142,6 +4065,1739 @@
 		return '<footer class="ob-smart-insights-detail-footer"><div class="ob-smart-insights-detail-footer-meta">' + meta.join('<span class="ob-smart-insights-detail-footer-separator" aria-hidden="true">|</span>') + '</div><div class="ob-smart-insights-detail-footer-actions">' + statusControl + reportCta + '</div></footer>';
 	}
 
+	// ---------------------------------------------------------------------
+	// Typed evidence references (Milestone 5)
+	//
+	// The insight row carries a bundle of typed refs, each with the destination
+	// report descriptor that the existing related-report resolver understands.
+	// Rendering therefore reuses resolveRelatedReportLink() so an evidence link
+	// carries exactly the same page/date/segment/spam context as any other deep
+	// link, plus the ref-specific args (recording, session, field, step).
+	// ---------------------------------------------------------------------
+
+	var EVIDENCE_TYPE_ORDER = ['session', 'recording', 'error_group', 'form', 'field', 'heatmap_zone', 'heatmap', 'funnel', 'journey', 'segment', 'comparison'];
+
+	function getEvidenceBundle(insight) {
+		var bundle = insight && insight.evidence_refs && typeof insight.evidence_refs === 'object' ? insight.evidence_refs : null;
+		if (!bundle || !Array.isArray(bundle.refs) || !bundle.refs.length) {
+			return null;
+		}
+		return bundle;
+	}
+
+	function appendUrlArgs(url, args) {
+		if (!url || !args || typeof args !== 'object') {
+			return url;
+		}
+
+		var pairs = [];
+		Object.keys(args).forEach(function(key) {
+			var value = args[key];
+			if (value === undefined || value === null || value === '') {
+				return;
+			}
+			pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(value)));
+		});
+
+		if (!pairs.length) {
+			return url;
+		}
+
+		return url + (url.indexOf('?') === -1 ? '?' : '&') + pairs.join('&');
+	}
+
+	function resolveEvidenceRefLink(ref, insight, scope, reportKey) {
+		var report = ref && ref[reportKey || 'report'];
+		if (!report || typeof report !== 'object') {
+			return { url: '', disabledReason: i18n.relatedUnavailable || 'No deep link is available for this report.' };
+		}
+
+		var scoped = applySegmentScopeToReports([report], scope);
+		var resolved = resolveRelatedReportLink(scoped[0], insight);
+		if (resolved && resolved.url) {
+			resolved.url = appendUrlArgs(resolved.url, ref.url_args);
+		}
+		return resolved;
+	}
+
+	// An evidence action that resolves to the exact same URL as the modal's
+	// primary report CTA (footer button + "Current" related-report card) adds a
+	// third identical button with no extra value — form insights were showing
+	// "Inspect field drop-off", "Open report" and "View form analytics" all
+	// pointing at the same screen. Suppress the duplicate; keep any evidence
+	// action whose destination or scope differs (recordings, journeys,
+	// previous-period comparisons, differently-dated heatmaps).
+	function isEvidenceActionDuplicateOfPrimary(url, insight) {
+		if (!url) {
+			return false;
+		}
+		var primary = getBestRelatedReport(insight);
+		var primaryUrl = primary && primary.resolved ? primary.resolved.url : '';
+		if (!primaryUrl) {
+			return false;
+		}
+		return normalizeReportUrlForComparison(url) === normalizeReportUrlForComparison(primaryUrl);
+	}
+
+	function renderEvidenceRefAction(ref, insight, scope, reportKey, label) {
+		var resolved = resolveEvidenceRefLink(ref, insight, scope, reportKey);
+		if (resolved && resolved.url) {
+			if (isEvidenceActionDuplicateOfPrimary(resolved.url, insight)) {
+				return '';
+			}
+			// A destination whose scope is wider than the insight (the analytics
+			// dashboard reports site-wide totals) discloses it on the control
+			// itself, so the button never implies a page-scoped result set.
+			var scopeNote = ref && ref.scope_note ? ' title="' + escapeHtml(ref.scope_note) + '"' : '';
+			return '<a class="button button-secondary ob-smart-insights-evidence-ref-action" href="' + escapeHtml(resolved.url) + '"' + scopeNote + ' target="_blank" rel="noopener noreferrer" data-evidence-action="' + escapeHtml(ref.action || '') + '">' + escapeHtml(label) + '</a>';
+		}
+
+		var reason = (resolved && resolved.disabledReason) || (i18n.relatedUnavailable || 'This report is not available for this insight yet.');
+		return '<span class="ob-smart-insights-evidence-ref-action is-disabled" title="' + escapeHtml(reason) + '">' + escapeHtml(label) + '</span>';
+	}
+
+	function renderEvidenceRef(ref, insight, scope) {
+		if (!ref || typeof ref !== 'object') {
+			return '';
+		}
+
+		var label = ref.label || ref.id || ref.type_label || '';
+		var meta = [];
+		if (ref.share_pct !== undefined && ref.share_pct !== null && ref.share_pct !== '') {
+			meta.push('<span class="ob-smart-insights-evidence-ref-share">' + escapeHtml(formatPercent(parseFloat(ref.share_pct) || 0)) + '</span>');
+		}
+		if (ref.count) {
+			meta.push('<span class="ob-smart-insights-evidence-ref-count">' + escapeHtml(formatNumber(ref.count) + ' ' + (i18n.segmentSessions || 'sessions')) + '</span>');
+		}
+
+		var actions = renderEvidenceRefAction(ref, insight, scope, 'report', ref.action_label || (i18n.openReport || 'Open report'));
+		if (ref.compare_report) {
+			actions = renderEvidenceRefAction(ref, insight, scope, 'compare_report', i18n.evidencePreviousPeriod || 'Previous period') + actions;
+		}
+
+		return '<li class="ob-smart-insights-evidence-ref" data-evidence-type="' + escapeHtml(ref.type || '') + '">' +
+			'<span class="ob-smart-insights-evidence-ref-label" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</span>' +
+			(meta.length ? '<span class="ob-smart-insights-evidence-ref-meta">' + meta.join('') + '</span>' : '') +
+			(actions ? '<span class="ob-smart-insights-evidence-ref-actions">' + actions + '</span>' : '') +
+		'</li>';
+	}
+
+	function renderEvidenceRefsBody(insight, scope) {
+		var bundle = getEvidenceBundle(insight);
+		if (!bundle) {
+			return '';
+		}
+
+		var groups = {};
+		bundle.refs.forEach(function(ref) {
+			if (!ref || !ref.type) {
+				return;
+			}
+			if (!groups[ref.type]) {
+				groups[ref.type] = { label: ref.type_label || ref.type, refs: [] };
+			}
+			groups[ref.type].refs.push(ref);
+		});
+
+		var types = Object.keys(groups).sort(function(left, right) {
+			var leftIndex = EVIDENCE_TYPE_ORDER.indexOf(left);
+			var rightIndex = EVIDENCE_TYPE_ORDER.indexOf(right);
+			return (leftIndex === -1 ? 99 : leftIndex) - (rightIndex === -1 ? 99 : rightIndex);
+		});
+
+		var html = types.map(function(type) {
+			var group = groups[type];
+			return '<div class="ob-smart-insights-evidence-ref-group" data-evidence-group="' + escapeHtml(type) + '">' +
+				'<h4>' + escapeHtml(group.label) + '<span class="ob-smart-insights-evidence-ref-group-count">' + escapeHtml(formatNumber(group.refs.length)) + '</span></h4>' +
+				'<ul class="ob-smart-insights-evidence-ref-list">' + group.refs.map(function(ref) {
+					return renderEvidenceRef(ref, insight, scope);
+				}).join('') + '</ul>' +
+			'</div>';
+		}).join('');
+
+		if (!html) {
+			return '';
+		}
+
+		// No explanatory placeholder here: the refs themselves are the proof, and
+		// the section renders nothing at all when there is none.
+		return '<div class="ob-smart-insights-evidence-refs">' + html + '</div>';
+	}
+
+	function renderEvidenceRefsLocked(insight) {
+		var summary = insight && insight.evidence_summary && typeof insight.evidence_summary === 'object' ? insight.evidence_summary : null;
+		if (!summary || !summary.total) {
+			return '';
+		}
+
+		var template = i18n.evidenceRefsLockedCount || '%s evidence references collected for this insight';
+		return '<div class="ob-smart-insights-upgrade-preview">' +
+			'<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>' +
+			'<strong>' + escapeHtml(template.replace('%s', formatNumber(summary.total))) + '</strong>' +
+			'<p>' + escapeHtml(summary.locked_hint || i18n.proEvidenceLocked || 'Detailed evidence is available in Pro.') + '</p>' +
+			'<a class="button button-secondary" href="' + escapeHtml(upgradeUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(i18n.segmentsUpgradeCta || 'Upgrade to Pro') + '</a>' +
+		'</div>';
+	}
+
+	function renderEvidenceRefsSection(insight, scope) {
+		var body = renderEvidenceRefsBody(insight, scope) || renderEvidenceRefsLocked(insight);
+		if (!body) {
+			return '';
+		}
+
+		return '<section class="ob-smart-insights-detail-section is-evidence-refs" data-ob-si-evidence-refs>' +
+			renderSectionHeading(i18n.evidenceRefsTitle || 'Evidence and proof', 'evidence_refs') +
+			body +
+		'</section>';
+	}
+
+	// Detail counterpart of the story card: the absolute impact plus the ranked
+	// causes that were actually measured for this scope. Rendered only when the
+	// insight carries one of those blocks, so legacy rows are untouched.
+	function renderDetailStorySection(insight) {
+		var impactHtml = renderImpactLine(insight);
+		var causeHtml = renderCauseChips(insight);
+		if (!impactHtml && !causeHtml) {
+			return '';
+		}
+
+		var impact = getImpact(insight);
+		var facts = [];
+		if (impact && impact.population) {
+			facts.push('<li><span>' + escapeHtml(impact.population_label || i18n.sessions || 'Sessions') + '</span><strong>' + escapeHtml(formatNumber(impact.population)) + '</strong></li>');
+		}
+		if (impact && !isObservationOnly(insight) && impact.loss_rate !== undefined && impact.loss_rate !== null && impact.loss_rate !== '') {
+			facts.push('<li><span>' + escapeHtml(i18n.impactBasis || 'Measured on') + '</span><strong>' + escapeHtml(formatPercent((parseFloat(impact.loss_rate) || 0) * 100)) + '</strong></li>');
+		}
+
+		return '<section class="ob-smart-insights-detail-section is-impact">' +
+			renderSectionHeading(i18n.businessImpact || 'Business impact', 'impact') +
+			impactHtml +
+			(facts.length ? '<ul class="ob-smart-insights-impact-facts">' + facts.join('') + '</ul>' : '') +
+			(causeHtml ? '<h4 class="ob-smart-insights-impact-causes-title">' + escapeHtml(i18n.measuredCauses || 'Measured causes') + '</h4>' + causeHtml : '') +
+		'</section>';
+	}
+
+	// --- Hypothesis and experiment ------------------------------------------
+	// The story's "what next / how to verify" half. Both blocks are produced by
+	// Pro; Free receives a locked shape from the capabilities layer, so the same
+	// renderer covers both tiers and legacy rows render nothing at all.
+
+	function getHypothesis(insight) {
+		return (insight && typeof insight.hypothesis === 'object' && insight.hypothesis) ? insight.hypothesis : null;
+	}
+
+	function getExperiment(insight) {
+		return (insight && typeof insight.experiment === 'object' && insight.experiment) ? insight.experiment : null;
+	}
+
+	function buildInsightAbBuilderUrl(insight) {
+		var id = (insight && parseInt(insight.id, 10)) ? parseInt(insight.id, 10) : 0;
+		if (!id) {
+			return '';
+		}
+
+		return buildAdminReportUrl('opti-behavior-ab-testing', {
+			view: 'builder',
+			origin_insight_id: id
+		});
+	}
+
+	// The server caps duration_days at 56 and flags duration_capped. Recompute
+	// the honest estimate here so the modal never prints a capped value as if it
+	// were exact, and so a test nobody could ever finish is called out as such.
+	function getHypothesisFeasibility(hypothesis) {
+		var sample = (hypothesis && hypothesis.sample_size && typeof hypothesis.sample_size === 'object') ? hypothesis.sample_size : null;
+		var perVariant = sample ? (parseInt(sample.per_variant, 10) || 0) : 0;
+		var daily = sample ? (parseFloat(sample.daily_sessions) || 0) : 0;
+		var realDays = (perVariant && daily > 0) ? Math.ceil((perVariant * 2) / daily) : 0;
+
+		return {
+			sample: sample,
+			capped: !!(sample && sample.duration_capped),
+			dailySessions: daily,
+			realDays: realDays,
+			// The server could not resolve a baseline rate for the goal metric, so
+			// there is no honest per-variant number to print at all.
+			noBaseline: !!(sample && sample.available === false && sample.reason === 'baseline_unavailable'),
+			notFeasible: realDays > 90
+		};
+	}
+
+	function renderHypothesisFacts(hypothesis) {
+		var facts = [];
+
+		if (hypothesis.metric_label) {
+			facts.push('<li><span>' + escapeHtml(i18n.hypothesisMetric || 'Goal metric') + '</span><strong>' + escapeHtml(hypothesis.metric_label) + '</strong></li>');
+		}
+		if (hypothesis.segment_label) {
+			facts.push('<li><span>' + escapeHtml(i18n.hypothesisSegment || 'Suggested audience') + '</span><strong>' + escapeHtml(hypothesis.segment_label) + '</strong></li>');
+		}
+		if (hypothesis.expected_range_label) {
+			facts.push('<li><span>' + escapeHtml(i18n.hypothesisTypicalRange || 'Typical industry range') + '</span><strong>' + escapeHtml(hypothesis.expected_range_label) + '</strong></li>');
+		}
+
+		var feasibility = getHypothesisFeasibility(hypothesis);
+		var sample = feasibility.sample;
+
+		if (feasibility.noBaseline) {
+			// No baseline means no sample size and no duration: printing either
+			// would be inventing a number, so the whole block becomes advice.
+			facts.push('<li class="is-warning"><span>' + escapeHtml(i18n.hypothesisSampleSize || 'Sessions needed per variant') + '</span><strong>' +
+				escapeHtml(i18n.hypothesisNoBaseline || 'No measurable baseline for this goal metric yet — ship the change and compare before/after.') +
+				'</strong></li>');
+		} else if (feasibility.notFeasible) {
+			// Both sample facts are replaced: the numbers are technically correct
+			// but practically meaningless at this traffic level.
+			facts.push('<li class="is-warning"><span>' + escapeHtml(i18n.hypothesisSampleSize || 'Sessions needed per variant') + '</span><strong>' +
+				escapeHtml((i18n.hypothesisNotFeasible || 'An A/B test is not feasible at current traffic (~%s sessions/day). Ship the change and compare before/after instead.').replace('%s', formatNumber(Math.round(feasibility.dailySessions)))) +
+				'</strong></li>');
+		} else {
+			if (sample && sample.per_variant) {
+				facts.push('<li><span>' + escapeHtml(i18n.hypothesisSampleSize || 'Sessions needed per variant') + '</span><strong>' + escapeHtml(formatNumber(sample.per_variant)) + '</strong></li>');
+			}
+			if (feasibility.realDays && feasibility.realDays <= 90) {
+				// The server caps duration_days at 56, so "More than 56 days" was
+				// printed for tests that would really take, say, 82. Print the
+				// honest recomputed number whenever it is still a runnable test.
+				facts.push('<li><span>' + escapeHtml(i18n.hypothesisDuration || 'Estimated duration') + '</span><strong>' + escapeHtml((i18n.hypothesisDurationReal || '~%s days at current traffic').replace('%s', formatNumber(feasibility.realDays))) + '</strong></li>');
+			} else if (sample && sample.duration_days) {
+				if (feasibility.capped) {
+					facts.push('<li class="is-warning"><span>' + escapeHtml(i18n.hypothesisDuration || 'Estimated duration') + '</span><strong>' + escapeHtml((i18n.hypothesisDurationCapped || 'More than %s days at current traffic').replace('%s', formatNumber(sample.duration_days))) + '</strong></li>');
+				} else {
+					facts.push('<li><span>' + escapeHtml(i18n.hypothesisDuration || 'Estimated duration') + '</span><strong>' + escapeHtml((i18n.hypothesisDurationDays || '%s days').replace('%s', formatNumber(sample.duration_days))) + '</strong></li>');
+				}
+			}
+		}
+
+		return facts.length ? '<ul class="ob-smart-insights-hypothesis-facts">' + facts.join('') + '</ul>' : '';
+	}
+
+	function renderExperimentLink(insight) {
+		var experiment = getExperiment(insight);
+		var testId = (experiment && parseInt(experiment.test_id, 10)) ? parseInt(experiment.test_id, 10) : 0;
+		if (!testId) {
+			return '';
+		}
+
+		var url = buildAdminReportUrl('opti-behavior-ab-testing', { view: 'results', test_id: testId });
+		var name = String(experiment.test_name || '').trim();
+		var statusLabel = String(experiment.status_label || '').trim();
+
+		return '<div class="ob-smart-insights-experiment-link" data-test-id="' + escapeHtml(testId) + '">' +
+			'<span class="ob-smart-insights-experiment-link-label">' + escapeHtml(i18n.hypothesisLinkedTest || 'Linked A/B test') + '</span>' +
+			'<a class="button button-secondary" href="' + escapeHtml(url) + '">' + escapeHtml(name || ((i18n.hypothesisTestNumber || 'Test #%s').replace('%s', testId))) + '</a>' +
+			(statusLabel ? '<span class="ob-smart-insights-experiment-status">' + escapeHtml(statusLabel) + '</span>' : '') +
+		'</div>';
+	}
+
+	function renderHypothesisLocked(hypothesis) {
+		var lines = [];
+		if (hypothesis.metric_label) {
+			lines.push((i18n.hypothesisMetric || 'Goal metric') + ': ' + hypothesis.metric_label);
+		}
+
+		return '<div class="ob-smart-insights-upgrade-preview" data-ob-si-hypothesis-locked>' +
+			'<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>' +
+			'<strong>' + escapeHtml(i18n.hypothesisLockedTitle || 'A testable hypothesis is ready for this insight') + '</strong>' +
+			(lines.length ? '<p class="ob-smart-insights-hypothesis-locked-meta">' + escapeHtml(lines.join(' — ')) + '</p>' : '') +
+			'<p>' + escapeHtml(hypothesis.locked_hint || i18n.hypothesisLockedHint || 'Upgrade to Pro to see the suggested hypothesis, the typical industry range, and the sample size this test would need.') + '</p>' +
+			'<a class="button button-secondary" href="' + escapeHtml(upgradeUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(i18n.segmentsUpgradeCta || 'Upgrade to Pro') + '</a>' +
+		'</div>';
+	}
+
+	function renderHypothesisSection(insight) {
+		var hypothesis = getHypothesis(insight);
+		if (!hypothesis) {
+			return '';
+		}
+
+		var body;
+		if (hypothesis.locked) {
+			body = renderHypothesisLocked(hypothesis);
+		} else {
+			var statement = String(hypothesis.statement || '').trim();
+			if (!statement) {
+				return '';
+			}
+
+			// No "create test" CTA when the test could never finish at this traffic.
+			var builderUrl = getHypothesisFeasibility(hypothesis).notFeasible ? '' : buildInsightAbBuilderUrl(insight);
+			var experimentHtml = renderExperimentLink(insight);
+
+			body = '<p class="ob-smart-insights-hypothesis-statement">' + escapeHtml(statement) + '</p>' +
+				renderHypothesisFacts(hypothesis) +
+				'<p class="description ob-smart-insights-hypothesis-disclaimer">' + escapeHtml(i18n.hypothesisDisclaimer || 'Expected ranges are typical published results for this kind of change, not a prediction for your site.') + '</p>' +
+				(experimentHtml ? experimentHtml : (builderUrl ? '<a class="button button-primary ob-smart-insights-create-ab-test" href="' + escapeHtml(builderUrl) + '" data-ob-si-create-ab-test="' + escapeHtml(insight.id) + '">' + escapeHtml(i18n.hypothesisCreateTest || 'Create A/B test from this insight') + '</a>' : ''));
+		}
+
+		if (!body) {
+			return '';
+		}
+
+		return '<section class="ob-smart-insights-detail-section is-hypothesis" data-ob-si-hypothesis>' +
+			renderSectionHeading(i18n.hypothesisTitle || 'Hypothesis and next experiment', 'hypothesis') +
+			body +
+		'</section>';
+	}
+
+	// --- Experiment verdict and stage tracker -------------------------------
+	// The closing half of the loop. Only insights that carry an analyzed
+	// experiment render any of this; a Free viewer never receives the block at
+	// all, and legacy rows render nothing.
+
+	function getVerdict(insight) {
+		var experiment = getExperiment(insight);
+		return (experiment && typeof experiment.verdict === 'object' && experiment.verdict) ? experiment.verdict : null;
+	}
+
+	// Detected -> Diagnosed -> Hypothesis -> Testing -> Verified, derived from
+	// what is actually stored: no stage column, no guessing forward.
+	function getStoryStages(insight) {
+		var experiment = getExperiment(insight);
+		var hypothesis = getHypothesis(insight);
+		var verdict = getVerdict(insight);
+		var reached = 0;
+
+		if (getStoryCauses(insight).length || isStoryInsight(insight)) {
+			reached = 1;
+		}
+		if (hypothesis) {
+			reached = Math.max(reached, 2);
+		}
+		if (experiment && parseInt(experiment.test_id, 10)) {
+			reached = Math.max(reached, 3);
+		}
+		if (verdict || (experiment && experiment.stage === 'verified')) {
+			reached = Math.max(reached, 4);
+		}
+
+		return {
+			reached: reached,
+			labels: [
+				i18n.stageDetected || 'Detected',
+				i18n.stageDiagnosed || 'Diagnosed',
+				i18n.stageHypothesis || 'Hypothesis',
+				i18n.stageTesting || 'Testing',
+				i18n.stageVerified || 'Verified'
+			]
+		};
+	}
+
+	function renderStageTracker(insight) {
+		// The tracker only earns its space once the story moved past detection.
+		if (!getHypothesis(insight) && !getExperiment(insight)) {
+			return '';
+		}
+
+		var stage = getStoryStages(insight);
+		var steps = stage.labels.map(function(label, index) {
+			var state = index < stage.reached ? ' is-done' : (index === stage.reached ? ' is-current' : '');
+			return '<li class="ob-smart-insights-stage-step' + state + '" data-stage-index="' + index + '">' +
+				'<span class="ob-smart-insights-stage-dot" aria-hidden="true"></span>' +
+				'<span class="ob-smart-insights-stage-label">' + escapeHtml(label) + '</span>' +
+			'</li>';
+		}).join('');
+
+		return '<ol class="ob-smart-insights-stage-tracker" data-ob-si-stage="' + escapeHtml(stage.reached) + '"' +
+			' aria-label="' + escapeHtml(i18n.stageTrackerLabel || 'Experiment progress') + '">' + steps + '</ol>';
+	}
+
+	function renderVerdictFacts(verdict) {
+		var facts = [];
+
+		if (verdict.lift_pct !== undefined && verdict.lift_pct !== null && verdict.lift_pct !== '') {
+			facts.push('<li><span>' + escapeHtml(i18n.verdictLift || 'Measured lift') + '</span><strong>' + escapeHtml(formatSignedPercent(verdict.lift_pct)) + '</strong></li>');
+		}
+		if (verdict.pbc_pct !== undefined && verdict.pbc_pct !== null && verdict.pbc_pct !== '') {
+			facts.push('<li><span>' + escapeHtml(i18n.verdictProbability || 'Probability to beat control') + '</span><strong>' + escapeHtml(formatPercent(verdict.pbc_pct)) + '</strong></li>');
+		}
+		if (verdict.total_impressions) {
+			facts.push('<li><span>' + escapeHtml(i18n.verdictSample || 'Sessions measured') + '</span><strong>' + escapeHtml(formatNumber(verdict.total_impressions)) + '</strong></li>');
+		}
+
+		return facts.length ? '<ul class="ob-smart-insights-verdict-facts">' + facts.join('') + '</ul>' : '';
+	}
+
+	function renderSegmentOutcomeList(entries, className, title) {
+		if (!Array.isArray(entries) || !entries.length) {
+			return '';
+		}
+
+		var items = entries.slice(0, 3).map(function(entry) {
+			return '<li class="ob-smart-insights-verdict-segment ' + className + '">' +
+				'<span class="ob-smart-insights-verdict-segment-label">' + escapeHtml(entry.label || '') + '</span>' +
+				'<span class="ob-smart-insights-verdict-segment-dimension">' + escapeHtml(entry.dimension_label || '') + '</span>' +
+				'<span class="ob-smart-insights-verdict-segment-lift">' + escapeHtml(formatSignedPercent(entry.lift_pct)) + '</span>' +
+			'</li>';
+		}).join('');
+
+		return '<div class="ob-smart-insights-verdict-segments">' +
+			'<h4>' + escapeHtml(title) + '</h4>' +
+			'<ul>' + items + '</ul>' +
+		'</div>';
+	}
+
+	function renderExperimentSection(insight) {
+		var experiment = getExperiment(insight);
+		var verdict = getVerdict(insight);
+		if (!experiment || !verdict) {
+			return '';
+		}
+
+		var outcome = String(verdict.outcome || 'inconclusive');
+		var segments = (experiment.segments && typeof experiment.segments === 'object') ? experiment.segments : {};
+		var recheck = (experiment.signal_recheck && typeof experiment.signal_recheck === 'object') ? experiment.signal_recheck : null;
+		var nextStep = (experiment.next_step && typeof experiment.next_step === 'object') ? experiment.next_step : null;
+
+		return '<section class="ob-smart-insights-detail-section is-experiment" data-ob-si-experiment="' + escapeHtml(outcome) + '">' +
+			renderSectionHeading(i18n.experimentResultTitle || 'Experiment result', 'experiment') +
+			renderStageTracker(insight) +
+			'<p class="ob-smart-insights-verdict-outcome is-' + escapeHtml(outcome.replace(/_/g, '-')) + '">' +
+				'<span class="ob-smart-insights-verdict-badge">' + escapeHtml(verdict.outcome_label || '') + '</span>' +
+				escapeHtml(verdict.summary || '') +
+			'</p>' +
+			renderVerdictFacts(verdict) +
+			renderSegmentOutcomeList(segments.winners, 'is-won', i18n.verdictWinners || 'Segments that won') +
+			renderSegmentOutcomeList(segments.losers, 'is-lost', i18n.verdictLosers || 'Segments that lost') +
+			(recheck ? '<p class="ob-smart-insights-verdict-recheck is-' + escapeHtml(String(recheck.status || 'not_measured').replace(/_/g, '-')) + '">' + escapeHtml(recheck.label || '') + '</p>' : '') +
+			(nextStep && nextStep.statement ? '<p class="ob-smart-insights-verdict-next"><span>' + escapeHtml(i18n.verdictNextStep || 'Next experiment') + '</span>' + escapeHtml(nextStep.statement) + '</p>' : '') +
+			renderExperimentLink(insight) +
+		'</section>';
+	}
+
+	// "Where is the problem?" — the single section that answers "which audience
+	// carries this" (segment matrix) and "since when" (daily series). Neither
+	// half is stored on the insight row: both only make sense for the current
+	// spam policy, so they are fetched on demand once the modal is open and
+	// rendered into these two placeholders. The two calls run in parallel and
+	// render independently, so one failing half never blanks the other.
+	function renderWhereSection(insight) {
+		var id = insight && parseInt(insight.id, 10) ? parseInt(insight.id, 10) : 0;
+		if (!id) {
+			return '';
+		}
+
+		return '<section class="ob-smart-insights-detail-section is-where is-affected" data-ob-si-segments="' + id + '">' +
+			renderSectionHeading(i18n.whereTitle || 'Where is the problem?', 'where') +
+			'<div class="ob-smart-insights-where" data-ob-si-segments-body>' +
+				'<div class="ob-smart-insights-where-segments" data-ob-si-where-segments>' + renderWhereSkeleton(i18n.whereLoadingSegments || 'Measuring which audience carries this...') + '</div>' +
+				'<div class="ob-smart-insights-where-series" data-ob-si-where-series>' + renderWhereSkeleton(i18n.whereLoadingSeries || 'Measuring the daily trend...') + '</div>' +
+			'</div>' +
+		'</section>';
+	}
+
+	function renderWhereSkeleton(label) {
+		return '<div class="ob-smart-insights-where-skeleton">' +
+			'<span class="ob-smart-insights-where-skeleton-bar" aria-hidden="true"></span>' +
+			'<span class="ob-smart-insights-where-skeleton-bar is-short" aria-hidden="true"></span>' +
+			'<p class="description">' + escapeHtml(label) + '</p>' +
+		'</div>';
+	}
+
+	// Values only ever carry the unit the backend declared for the primary
+	// metric, so formatting stays a lookup instead of a guess.
+	function formatWhereValue(value, unit) {
+		var number = parseFloat(value);
+		if (value === null || value === undefined || value === '' || isNaN(number)) {
+			return i18n.whereNoValue || 'no data';
+		}
+
+		return unit === 'seconds' ? formatSeconds(number) : formatPercent(number);
+	}
+
+	function getWhereUnavailableText(matrix) {
+		var reason = matrix && matrix.reason ? String(matrix.reason) : '';
+		var sessions = matrix && matrix.scope_sessions ? parseInt(matrix.scope_sessions, 10) || 0 : 0;
+		var floor = matrix && matrix.min_scope_sessions ? parseInt(matrix.min_scope_sessions, 10) || 0 : 0;
+
+		if (reason === 'scope_not_page') {
+			return i18n.whereNeedsPageContext || 'Segment split needs page-level context; open the funnel or form report for step-level detail.';
+		}
+		// A device/source/campaign/segment insight IS one audience already:
+		// explaining that beats the generic "could not measure" shrug.
+		var scopeEntityType = matrix && matrix.scope && matrix.scope.entity_type ? String(matrix.scope.entity_type) : '';
+		if (reason === 'scope_not_addressable' && ['device', 'source', 'campaign', 'segment'].indexOf(scopeEntityType) !== -1) {
+			var scopeEntityLabel = (matrix.scope.entity_label || matrix.scope.entity_id || scopeEntityType);
+			return fillToken(
+				i18n.whereAlreadySegment || 'This insight already isolates one audience segment (%s). The per-audience split applies to page-scoped insights - check the page-level insights correlated with this issue.',
+				'%s',
+				scopeEntityLabel
+			);
+		}
+		if (reason === 'too_few_sessions' || reason === 'no_scope_sessions') {
+			// "12 sessions" alone reads like an opinion; "12 of the 30 needed"
+			// tells the reader exactly how much more traffic ends the wait, so the
+			// floor is spelled out whenever the backend sent it.
+			if (floor > 0) {
+				return fillToken(
+					fillToken(i18n.whereTooFewSessionsFloor || 'Not enough sessions in this period to point at an audience: %1$s of the %2$s needed. Collect more traffic before blaming a segment.', '%1$s', formatNumber(sessions)),
+					'%2$s',
+					formatNumber(floor)
+				);
+			}
+			return fillToken(i18n.whereTooFewSessions || 'Not enough sessions in this period to point at an audience (%s measured). Collect more traffic before blaming a segment.', '%s', formatNumber(sessions));
+		}
+
+		return i18n.whereUnavailable || 'No audience split could be measured for this insight scope.';
+	}
+
+	// One sentence, generated from the strongest outlier. A segment that sits on
+	// the GOOD side of the metric is still worth naming, but never with problem
+	// wording: "better" is a finding, not a fault.
+	function renderWhereVerdict(matrix) {
+		if (!matrix || typeof matrix !== 'object' || !matrix.available) {
+			return '<p class="ob-smart-insights-where-verdict is-muted">' + escapeHtml(getWhereUnavailableText(matrix)) + '</p>';
+		}
+
+		var outliers = Array.isArray(matrix.outliers) ? matrix.outliers : [];
+		if (matrix.uniform || !outliers.length) {
+			return '<p class="ob-smart-insights-where-verdict is-uniform">' + escapeHtml(i18n.whereUniform || 'Spread evenly across device, source, country and time - this is the page, not an audience.') + '</p>';
+		}
+
+		var outlier = outliers[0];
+		var unit = matrix.metric_unit || 'percent';
+		var isWorse = !!outlier.is_worse_side;
+		var template = isWorse
+			? (i18n.whereVerdictWorse || '%1$s carries this: %2$s %3$s vs %4$s for everyone else (%5$s of %6$s sessions).')
+			: (i18n.whereVerdictBetter || '%1$s behaves differently - better: %2$s %3$s vs %4$s for everyone else (%5$s of %6$s sessions).');
+
+		template = fillToken(template, '%1$s', outlier.label || outlier.key || '');
+		template = fillToken(template, '%2$s', matrix.metric_label || matrix.primary_metric || '');
+		template = fillToken(template, '%3$s', formatWhereValue(outlier.value, unit));
+		template = fillToken(template, '%4$s', formatWhereValue(outlier.complement_value, unit));
+		template = fillToken(template, '%5$s', formatNumber(outlier.sessions));
+		template = fillToken(template, '%6$s', formatNumber(matrix.scope_sessions));
+
+		// The sentence itself is identical in both tiers, but only Free reads its
+		// verdict from here — the outlier cards below it are Pro. The pulse and the
+		// data-floor note therefore ride on the sentence too, so a Free viewer is
+		// told "measured, but not conclusive" instead of reading a bare comparison
+		// as if it were significant.
+		var pulse = getWhereOutlierPulse(outlier);
+		var note = outlier.insufficient
+			? '<span class="ob-smart-insights-where-verdict-note">' + escapeHtml(i18n.whereBucketInsufficient || 'Below the data floor — measured, but not conclusive.') + '</span>'
+			: '';
+
+		return '<p class="ob-smart-insights-where-verdict' + (isWorse ? ' is-worse' : ' is-better') + ' has-pulse-' + pulse + '">' +
+			renderWherePulse(pulse) +
+			'<span>' + escapeHtml(template) + '</span>' +
+			note +
+		'</p>';
+	}
+
+	function truncateWhereLabel(label, maxLength) {
+		var text = String(label === null || label === undefined ? '' : label);
+		return text.length > maxLength ? text.slice(0, maxLength - 1) + '…' : text;
+	}
+
+	// ---------------------------------------------------------------------
+	// Segment identity layer: pulses, flags, icons, trend arrows, sparklines.
+	//
+	// Every verdict drawn here is READ from the payload, never recomputed. The
+	// significance maths (z-tests, session floors, trend direction) lives in the
+	// segment matrix so a Free viewer, a Pro viewer and a future export can never
+	// disagree about what "broken" means. This file only decides what red looks
+	// like.
+	// ---------------------------------------------------------------------
+
+	var WHERE_PULSE_STATES = ['broken', 'watch', 'healthy', 'insufficient'];
+
+	var WHERE_DEVICE_ICONS = {
+		mobile: 'smartphone',
+		phone: 'smartphone',
+		tablet: 'tablet',
+		desktop: 'monitor',
+		laptop: 'laptop'
+	};
+
+	// Browser keys arrive as free-form user-agent labels ("Mobile Safari",
+	// "Chrome 121"), so the match is a substring probe, not a table lookup.
+	var WHERE_BROWSER_ICONS = [
+		['chrome', 'chrome'],
+		['firefox', 'flame'],
+		['safari', 'compass'],
+		['edge', 'globe'],
+		['opera', 'circle-dot'],
+		['samsung', 'smartphone']
+	];
+
+	var WHERE_DIMENSION_ICONS = {
+		device: 'monitor',
+		browser: 'globe',
+		country: 'map-pin',
+		source: 'share-2',
+		campaign: 'megaphone',
+		visitor_type: 'user-round',
+		daypart: 'clock',
+		weekday: 'calendar-days'
+	};
+
+	function normalizeWherePulse(pulse) {
+		var value = String(pulse === null || pulse === undefined ? '' : pulse);
+		return WHERE_PULSE_STATES.indexOf(value) === -1 ? 'insufficient' : value;
+	}
+
+	function getWherePulseLabel(pulse) {
+		switch (normalizeWherePulse(pulse)) {
+			case 'broken':
+				return i18n.wherePulseBroken || 'Carries the problem';
+			case 'watch':
+				return i18n.wherePulseWatch || 'Worth watching';
+			case 'healthy':
+				return i18n.wherePulseHealthy || 'Behaves normally';
+			default:
+				return i18n.wherePulseInsufficient || 'Not enough data';
+		}
+	}
+
+	function renderWherePulse(pulse) {
+		var state = normalizeWherePulse(pulse);
+		var label = getWherePulseLabel(state);
+		return '<span class="ob-smart-insights-where-pulse is-' + state + '" role="img" aria-label="' + escapeHtml(label) + '" title="' + escapeHtml(label) + '"></span>';
+	}
+
+	// The per-outlier pulse is a projection of server flags, in priority order:
+	// an unmeasurable bucket is grey before it is anything else, a significant
+	// bucket is red or green by which side of the metric it sits on, and only a
+	// non-significant bucket can fall back to its trend for amber.
+	function getWhereOutlierPulse(outlier) {
+		if (!outlier || typeof outlier !== 'object') {
+			return 'insufficient';
+		}
+		if (outlier.insufficient) {
+			return 'insufficient';
+		}
+		if (outlier.is_outlier) {
+			return outlier.is_worse_side ? 'broken' : 'healthy';
+		}
+
+		var direction = outlier.trend && outlier.trend.direction ? String(outlier.trend.direction) : '';
+		return direction === 'degrading' ? 'watch' : 'healthy';
+	}
+
+	// Country flags with no network dependency. The bundled flag-icons stylesheet
+	// resolves every single flag against a public CDN, which an admin screen must
+	// never depend on (offline installs, air-gapped staging, privacy), so the
+	// ISO-2 code is mapped to its Unicode regional-indicator pair instead: zero
+	// requests, zero bundled assets, and a readable "FR" letter pair on the
+	// platforms that ship no flag glyphs.
+	function renderWhereFlag(countryCode) {
+		var code = String(countryCode === null || countryCode === undefined ? '' : countryCode).toUpperCase().replace(/[^A-Z]/g, '');
+		if (code.length !== 2 || !String.fromCodePoint) {
+			return '';
+		}
+
+		var emoji = String.fromCodePoint(0x1F1E6 + code.charCodeAt(0) - 65, 0x1F1E6 + code.charCodeAt(1) - 65);
+		return '<span class="ob-smart-insights-where-flag" data-country="' + escapeHtml(code) + '" aria-hidden="true">' + emoji + '</span>';
+	}
+
+	function getWhereSegmentIcon(dimension, key) {
+		var dim = String(dimension === null || dimension === undefined ? '' : dimension);
+		var normalized = String(key === null || key === undefined ? '' : key).toLowerCase();
+
+		if (dim === 'device') {
+			for (var deviceKey in WHERE_DEVICE_ICONS) {
+				if (Object.prototype.hasOwnProperty.call(WHERE_DEVICE_ICONS, deviceKey) && normalized.indexOf(deviceKey) !== -1) {
+					return WHERE_DEVICE_ICONS[deviceKey];
+				}
+			}
+			return 'monitor';
+		}
+
+		if (dim === 'browser') {
+			for (var index = 0; index < WHERE_BROWSER_ICONS.length; index++) {
+				if (normalized.indexOf(WHERE_BROWSER_ICONS[index][0]) !== -1) {
+					return WHERE_BROWSER_ICONS[index][1];
+				}
+			}
+			return 'globe';
+		}
+
+		return WHERE_DIMENSION_ICONS[dim] || 'circle-dot';
+	}
+
+	// A country renders as its flag when the backend could resolve an ISO-2 code
+	// and as the generic pin when it could not, so a NULL country column degrades
+	// to a still-labelled row instead of a hole.
+	function renderWhereSegmentMark(dimension, key, countryCode) {
+		if (String(dimension || '') === 'country') {
+			var flag = renderWhereFlag(countryCode);
+			if (flag) {
+				return flag;
+			}
+		}
+
+		return '<i class="ob-smart-insights-where-mark" data-lucide="' + escapeHtml(getWhereSegmentIcon(dimension, key)) + '" aria-hidden="true"></i>';
+	}
+
+	function getWhereTrendMeta(trend) {
+		var direction = trend && trend.direction ? String(trend.direction) : 'insufficient';
+
+		switch (direction) {
+			case 'degrading':
+				return { direction: 'degrading', glyph: '↗', label: i18n.whereTrendDegrading || 'Getting worse across the period' };
+			case 'improving':
+				return { direction: 'improving', glyph: '↘', label: i18n.whereTrendImproving || 'Getting better across the period' };
+			case 'stable':
+				return { direction: 'stable', glyph: '→', label: i18n.whereTrendStable || 'Flat across the period' };
+			default:
+				return { direction: 'insufficient', glyph: '·', label: i18n.whereTrendInsufficient || 'Too few sessions per half to read a trend' };
+		}
+	}
+
+	// The arrow is the headline; the early → late pair behind it is the proof and
+	// only exists for Pro, so the tooltip degrades to the direction word alone.
+	function renderWhereTrend(trend, unit) {
+		var meta = getWhereTrendMeta(trend);
+		var detail = meta.label;
+		var hasValues = trend &&
+			trend.early_value !== undefined && trend.early_value !== null &&
+			trend.late_value !== undefined && trend.late_value !== null;
+
+		if (hasValues) {
+			detail = fillToken(
+				fillToken(i18n.whereTrendDetail || '%1$s (%2$s)', '%1$s', meta.label),
+				'%2$s',
+				formatWhereValue(trend.early_value, unit) + ' → ' + formatWhereValue(trend.late_value, unit)
+			);
+		}
+
+		return '<span class="ob-smart-insights-where-trend is-' + meta.direction + '" title="' + escapeHtml(detail) + '">' +
+			'<span aria-hidden="true">' + meta.glyph + '</span>' +
+			'<span class="screen-reader-text">' + escapeHtml(detail) + '</span>' +
+		'</span>';
+	}
+
+	// One outlier, one line, drawn with the same null-gapped path builder as the
+	// big chart: days the segment had no sessions carry value:null and BREAK the
+	// line rather than being drawn as a zero the segment never actually scored.
+	// A day the segment had no sessions at all carries value:null, so the finite
+	// days can sit anywhere in the window — including alone. A lone point is not
+	// a line and gets no `L` command, which would silently draw an empty SVG, so
+	// the days that have no drawable neighbour are emitted as dots instead.
+	function collectWhereSparkPoints(series) {
+		var points = [];
+		series.forEach(function(point, index) {
+			var number = point ? parseFloat(point.value) : NaN;
+			if (!isNaN(number) && isFinite(number)) {
+				points.push({ index: index, value: number });
+			}
+		});
+		return points;
+	}
+
+	function renderWhereSparkline(outlier, matrix) {
+		var series = outlier && Array.isArray(outlier.sparkline) ? outlier.sparkline : [];
+		if (!series.length) {
+			return '';
+		}
+
+		var points = collectWhereSparkPoints(series);
+		if (!points.length) {
+			return '';
+		}
+
+		var values = points.map(function(point) {
+			return point.value;
+		});
+		var min = Math.min.apply(null, values);
+		var max = Math.max.apply(null, values);
+
+		var width = 104;
+		var height = 26;
+		var padY = 3;
+		var plot = height - padY * 2;
+		var lastIndex = Math.max(1, series.length - 1);
+		var xFor = function(index) {
+			return (index * width) / lastIndex;
+		};
+		// A segment whose value never moved has no range to scale against, and
+		// drawing it against a synthetic one pins the line to the floor — which
+		// reads as "it dropped to zero". A flat series belongs on the mid-line.
+		var yFor = max > min
+			? function(value) {
+				return padY + plot - ((value - min) / (max - min)) * plot;
+			}
+			: function() {
+				return padY + plot / 2;
+			};
+
+		var path = buildWhereChartPath(series, xFor, yFor);
+		// Only the days with no drawable neighbour become dots: a run of two or
+		// more consecutive days is already a visible line segment.
+		var dots = points.filter(function(point, position) {
+			var previous = points[position - 1];
+			var next = points[position + 1];
+			return (!previous || previous.index !== point.index - 1) && (!next || next.index !== point.index + 1);
+		}).map(function(point) {
+			return '<circle class="ob-smart-insights-where-sparkline-dot" cx="' + xFor(point.index).toFixed(1) + '" cy="' + yFor(point.value).toFixed(1) + '" r="1.6"></circle>';
+		}).join('');
+
+		if (!path && !dots) {
+			return '';
+		}
+
+		var unit = matrix.metric_unit || 'percent';
+		var label = fillToken(
+			fillToken(i18n.whereSparklineLabel || 'Daily %1$s for this segment over %2$s days', '%1$s', matrix.metric_label || matrix.primary_metric || ''),
+			'%2$s',
+			formatNumber(series.length)
+		);
+		var summary = values.length > 1
+			? label + ': ' + formatWhereValue(values[0], unit) + ' → ' + formatWhereValue(values[values.length - 1], unit)
+			: label + ': ' + formatWhereValue(values[0], unit);
+
+		return '<svg class="ob-smart-insights-where-sparkline" viewBox="0 0 ' + width + ' ' + height + '" width="' + width + '" height="' + height + '" role="img" aria-label="' + escapeHtml(summary) + '" preserveAspectRatio="none" focusable="false">' +
+			'<title>' + escapeHtml(summary) + '</title>' +
+			(path ? '<path class="ob-smart-insights-where-sparkline-line" d="' + path + '"></path>' : '') +
+			dots +
+		'</svg>';
+	}
+
+	// A combined finding only earns its extra row if the reader can see BOTH
+	// halves, so it renders as two separately-marked parts instead of one
+	// pre-joined string.
+	function renderWhereCardLabel(outlier) {
+		var parts = Array.isArray(outlier.parts) ? outlier.parts : [];
+
+		if (parts.length) {
+			return '<span class="ob-smart-insights-where-card-label is-combo">' + parts.map(function(part, index) {
+				if (!part || typeof part !== 'object') {
+					return '';
+				}
+				return (index ? '<span class="ob-smart-insights-where-card-join" aria-hidden="true">×</span>' : '') +
+					'<span class="ob-smart-insights-where-card-part">' +
+						renderWhereSegmentMark(part.dimension, part.key, part.country_code) +
+						'<span>' + escapeHtml(part.label || part.key || '') + '</span>' +
+					'</span>';
+			}).join('') + '</span>';
+		}
+
+		return '<span class="ob-smart-insights-where-card-label">' +
+			renderWhereSegmentMark(outlier.dimension, outlier.key, outlier.country_code) +
+			'<span>' + escapeHtml(outlier.label || outlier.key || '') + '</span>' +
+		'</span>';
+	}
+
+	// The first thing the eye should hit: which dimensions carry a problem, and
+	// which ones could not be measured at all. Free and Pro read different fields
+	// (`dimension_pulses` vs the full `dimensions` list, because Free never
+	// receives buckets) but the rendered strip is deliberately identical.
+	function collectWherePulseEntries(matrix) {
+		if (Array.isArray(matrix.dimension_pulses) && matrix.dimension_pulses.length) {
+			return matrix.dimension_pulses;
+		}
+
+		return (Array.isArray(matrix.dimensions) ? matrix.dimensions : []).filter(function(entry) {
+			// Combination dimensions are already represented by their two parents;
+			// listing them again would double-count the same audience in the strip.
+			return entry && typeof entry === 'object' && !entry.parts;
+		});
+	}
+
+	function renderWherePulseStrip(matrix) {
+		if (!matrix || !matrix.available) {
+			return '';
+		}
+
+		var entries = collectWherePulseEntries(matrix);
+		if (!entries.length) {
+			return '';
+		}
+
+		var items = entries.map(function(entry) {
+			var pulse = normalizeWherePulse(entry.pulse);
+			var tested = parseInt(entry.tested_bucket_count, 10) || 0;
+			var total = parseInt(entry.bucket_count, 10) || 0;
+			// "3 of 8 segments measured" is the honest version of a grey dot: it
+			// names the missing data instead of implying the dimension is fine.
+			var meta = (total > tested)
+				? fillToken(fillToken(i18n.wherePulseMeasured || '%1$s of %2$s segments measured', '%1$s', formatNumber(tested)), '%2$s', formatNumber(total))
+				: getWherePulseLabel(pulse);
+
+			return '<li class="ob-smart-insights-where-pulse-item is-' + pulse + '" title="' + escapeHtml(getWherePulseLabel(pulse) + ' — ' + meta) + '">' +
+				renderWherePulse(pulse) +
+				'<span class="ob-smart-insights-where-pulse-name">' + escapeHtml(entry.dimension_label || entry.dimension || '') + '</span>' +
+				'<span class="ob-smart-insights-where-pulse-meta">' + escapeHtml(meta) + '</span>' +
+			'</li>';
+		}).filter(Boolean).join('');
+
+		if (!items) {
+			return '';
+		}
+
+		return '<div class="ob-smart-insights-where-pulses">' +
+			renderSectionHeading(i18n.wherePulseTitle || 'Segment health', 'where_pulse', { tag: 'h4', headingClass: 'ob-smart-insights-where-subtitle' }) +
+			'<ul class="ob-smart-insights-where-pulse-list">' + items + '</ul>' +
+		'</div>';
+	}
+
+	// Free teaser for combination findings (decision D1): the count and half the
+	// identity prove the analysis found something a single dimension missed, and
+	// stop exactly short of being actionable without Pro.
+	function renderWhereComboTeaser(matrix) {
+		var count = matrix ? parseInt(matrix.locked_combo_count, 10) || 0 : 0;
+		if (!count) {
+			return '';
+		}
+
+		var teaser = matrix.locked_combo_teaser && typeof matrix.locked_combo_teaser === 'object' ? matrix.locked_combo_teaser : null;
+		var headline = count === 1
+			? (i18n.whereComboLockedOne || '1 combined-segment pattern found')
+			: fillToken(i18n.whereComboLockedMany || '%s combined-segment patterns found', '%s', formatNumber(count));
+
+		return '<div class="ob-smart-insights-where-combo-teaser' + (teaser && teaser.is_worse_side ? ' is-worse' : '') + '">' +
+			'<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>' +
+			'<strong>' + escapeHtml(headline) + '</strong>' +
+			(teaser
+				? '<p class="ob-smart-insights-where-combo-hint">' +
+					'<span class="ob-smart-insights-where-combo-dimension">' + escapeHtml(teaser.dimension_label || '') + '</span>' +
+					'<span class="ob-smart-insights-where-combo-label">' + escapeHtml(teaser.label_hint || '') + '</span>' +
+				'</p>'
+				: '') +
+			'<p class="description">' + escapeHtml(i18n.whereComboLockedBody || 'A pattern that only appears when two audience traits are combined — neither trait on its own was significant. Unlock the full pair in Pro.') + '</p>' +
+		'</div>';
+	}
+
+	function formatWhereShare(share) {
+		var number = parseFloat(share);
+		return isNaN(number) ? (i18n.whereNoValue || 'no data') : formatPercent(number * 100);
+	}
+
+	function renderWhereMixBucket(bucket, entry) {
+		var shares = fillToken(
+			fillToken(i18n.whereMixShare || '%1$s → %2$s of sessions', '%1$s', formatWhereShare(bucket.previous_share)),
+			'%2$s',
+			formatWhereShare(bucket.share)
+		);
+		// The causality hint is the whole point of the block: a spike that also
+		// degrades the metric changes what to do next, a spike that does not is
+		// noise the reader should be told to ignore.
+		var causality = '';
+		if (bucket.degrades_metric === true) {
+			causality = i18n.whereMixDegrades || 'and it performs worse than everyone else — the metric drop is a traffic-mix effect, not a page regression.';
+		} else if (bucket.degrades_metric === false) {
+			causality = i18n.whereMixNeutral || 'but it behaves like everyone else — the spike does not explain the metric change.';
+		}
+
+		return '<li class="ob-smart-insights-where-mix-item' + (bucket.degrades_metric === true ? ' is-degrading' : '') + '">' +
+			'<span class="ob-smart-insights-where-mix-label">' +
+				renderWhereSegmentMark(entry.dimension, bucket.key, bucket.country_code) +
+				'<span>' + escapeHtml(bucket.label || bucket.key || '') + '</span>' +
+			'</span>' +
+			'<span class="ob-smart-insights-where-mix-share">' + escapeHtml(shares) + '</span>' +
+			(causality ? '<span class="ob-smart-insights-where-mix-cause">' + escapeHtml(causality) + '</span>' : '') +
+		'</li>';
+	}
+
+	// "Did the page get worse, or did the audience get replaced?" — the one
+	// question the metric alone cannot answer. Absent block = quiet mix, and a
+	// quiet mix renders nothing at all.
+	function renderWhereMixShift(matrix) {
+		var mix = matrix && matrix.traffic_mix && typeof matrix.traffic_mix === 'object' ? matrix.traffic_mix : null;
+		if (!mix || !mix.available) {
+			return '';
+		}
+
+		var range = mix.previous_range && typeof mix.previous_range === 'object' ? mix.previous_range : null;
+		var rangeText = range && range.from && range.to
+			? fillToken(fillToken(i18n.whereMixPrevious || 'compared with %1$s to %2$s', '%1$s', String(range.from)), '%2$s', String(range.to))
+			: '';
+		var title = '<h4 class="ob-smart-insights-where-subtitle ob-smart-insights-section-heading">' + escapeHtml(i18n.whereMixTitle || 'Did the audience change?') +
+			renderSectionTooltip('where_mix') +
+			(rangeText ? '<span class="ob-smart-insights-where-mix-range">' + escapeHtml(rangeText) + '</span>' : '') +
+		'</h4>';
+
+		if (mix.locked) {
+			var headline = mix.headline && typeof mix.headline === 'object' ? mix.headline : null;
+			var sentence = headline
+				? fillToken(
+					fillToken(
+						fillToken(i18n.whereMixLockedHeadline || 'Traffic from %1$s moved from %2$s to %3$s of sessions.', '%1$s', headline.label || ''),
+						'%2$s',
+						formatWhereShare(headline.previous_share)
+					),
+					'%3$s',
+					formatWhereShare(headline.share)
+				)
+				: (i18n.whereMixLockedGeneric || 'Your traffic mix changed measurably over this period.');
+
+			return '<div class="ob-smart-insights-where-mix is-locked">' +
+				title +
+				'<p class="ob-smart-insights-where-mix-verdict">' + renderWherePulse(headline && headline.degrades_metric === true ? 'broken' : 'watch') + escapeHtml(sentence) + '</p>' +
+				(headline && headline.degrades_metric === true
+					? '<p class="ob-smart-insights-where-mix-cause is-degrading">' + escapeHtml(i18n.whereMixDegrades || 'and it performs worse than everyone else — the metric drop is a traffic-mix effect, not a page regression.') + '</p>'
+					: '') +
+				'<p class="description">' + escapeHtml(i18n.whereMixLockedBody || 'The full breakdown — every segment that grew, by how much, and whether it explains the metric — is available in Pro.') + '</p>' +
+			'</div>';
+		}
+
+		var blocks = (Array.isArray(mix.dimensions) ? mix.dimensions : []).map(function(entry) {
+			if (!entry || typeof entry !== 'object') {
+				return '';
+			}
+
+			var buckets = (Array.isArray(entry.buckets) ? entry.buckets : []).filter(function(bucket) {
+				return bucket && bucket.mix_shift;
+			});
+			var grouped = entry.grouped_shift && entry.grouped && typeof entry.grouped === 'object' ? entry.grouped : null;
+			if (!buckets.length && !grouped) {
+				return '';
+			}
+
+			// A single bucket growing is already reported per row; the grouped line
+			// exists for the bot-wave shape where no single country moves enough on
+			// its own but several together replace the audience.
+			var groupedText = grouped
+				? fillToken(
+					fillToken(
+						fillToken(i18n.whereMixGrouped || '%1$s segments grew together: %2$s → %3$s of sessions.', '%1$s', formatNumber(grouped.bucket_count)),
+						'%2$s',
+						formatWhereShare(grouped.previous_share)
+					),
+					'%3$s',
+					formatWhereShare(grouped.share)
+				)
+				: '';
+
+			return '<div class="ob-smart-insights-where-mix-dimension is-' + normalizeWherePulse(entry.pulse) + '">' +
+				'<h5>' + renderWherePulse(entry.pulse) + escapeHtml(entry.dimension_label || entry.dimension || '') + '</h5>' +
+				(buckets.length
+					? '<ul class="ob-smart-insights-where-mix-list">' + buckets.map(function(bucket) {
+						return renderWhereMixBucket(bucket, entry);
+					}).join('') + '</ul>'
+					: '') +
+				(groupedText ? '<p class="ob-smart-insights-where-mix-grouped">' + escapeHtml(groupedText) + '</p>' : '') +
+			'</div>';
+		}).filter(Boolean).join('');
+
+		if (!blocks) {
+			return '';
+		}
+
+		return '<div class="ob-smart-insights-where-mix">' + title + blocks + '</div>';
+	}
+
+	// Two bars, one segment, one complement, drawn to the same scale so the gap
+	// the verdict claims is the gap the reader sees.
+	function renderWhereBar(outlier, matrix, scope) {
+		var unit = matrix.metric_unit || 'percent';
+		var value = parseFloat(outlier.value);
+		var complement = parseFloat(outlier.complement_value);
+		if (isNaN(value) && isNaN(complement)) {
+			return '';
+		}
+
+		var top = Math.max(isNaN(value) ? 0 : value, isNaN(complement) ? 0 : complement);
+		if (unit === 'percent') {
+			top = Math.max(top, 100);
+		}
+		if (top <= 0) {
+			top = 1;
+		}
+
+		var trackStart = 104;
+		var trackWidth = 168;
+		var segmentWidth = isNaN(value) ? 0 : Math.max(2, (value / top) * trackWidth);
+		var complementWidth = isNaN(complement) ? 0 : Math.max(2, (complement / top) * trackWidth);
+		var isActive = !!(scope && scope.dimension === outlier.dimension && scope.key === outlier.key);
+		var everyoneElse = i18n.whereEveryoneElse || 'Everyone else';
+		var ariaLabel = (outlier.dimension_label || outlier.dimension || '') + ': ' +
+			(outlier.label || outlier.key || '') + ' ' + formatWhereValue(outlier.value, unit) + ', ' +
+			everyoneElse + ' ' + formatWhereValue(outlier.complement_value, unit);
+		var isCombo = Array.isArray(outlier.parts) && outlier.parts.length > 1;
+		var pulse = getWhereOutlierPulse(outlier);
+		var sparkline = renderWhereSparkline(outlier, matrix);
+		// Free ships `trend` as a bare direction word and no sparkline, so both
+		// halves of the card degrade independently instead of the row vanishing.
+		var trend = outlier.trend ? renderWhereTrend(outlier.trend, unit) : '';
+
+		return '<button type="button" class="ob-smart-insights-where-bar ob-smart-insights-where-card' + (isActive ? ' is-active' : '') + (outlier.is_worse_side ? ' is-worse' : ' is-better') + (isCombo ? ' is-combo' : '') + ' has-pulse-' + pulse + '"' +
+			' aria-pressed="' + (isActive ? 'true' : 'false') + '"' +
+			' aria-label="' + escapeHtml(ariaLabel) + '"' +
+			' title="' + escapeHtml(i18n.whereBarHint || 'Show this segment on the chart and re-scope the evidence links.') + '"' +
+			' data-segment-dimension="' + escapeHtml(outlier.dimension || '') + '"' +
+			' data-segment-key="' + escapeHtml(outlier.key || '') + '"' +
+			' data-segment-label="' + escapeHtml(outlier.label || outlier.key || '') + '"' +
+			' data-segment-pulse="' + escapeHtml(pulse) + '"' +
+			' data-report-key="' + escapeHtml(outlier.report_key || '') + '">' +
+			'<span class="ob-smart-insights-where-card-head">' +
+				renderWherePulse(pulse) +
+				'<span class="ob-smart-insights-where-bar-dimension">' + escapeHtml(outlier.dimension_label || outlier.dimension || '') + '</span>' +
+				(isCombo ? '<span class="ob-smart-insights-where-card-badge">' + escapeHtml(i18n.whereComboBadge || 'Combined') + '</span>' : '') +
+				trend +
+			'</span>' +
+			renderWhereCardLabel(outlier) +
+			(outlier.insufficient ? '<span class="ob-smart-insights-where-card-note">' + escapeHtml(i18n.whereBucketInsufficient || 'Below the data floor — measured, but not conclusive.') + '</span>' : '') +
+			(sparkline ? '<span class="ob-smart-insights-where-card-spark">' + sparkline + '</span>' : '') +
+			'<svg class="ob-smart-insights-where-bar-svg" viewBox="0 0 292 56" width="100%" height="56" role="img" aria-hidden="true" focusable="false">' +
+				// The card header already names the segment (with its flag or icon,
+				// and both halves when it is a pair), so the bar row says which SIDE
+				// it is instead of repeating a label that combos would overflow.
+				'<text class="ob-smart-insights-where-bar-name" x="0" y="16">' + escapeHtml(truncateWhereLabel(i18n.whereThisSegment || 'This segment', 16)) + '</text>' +
+				'<rect class="ob-smart-insights-where-bar-track" x="' + trackStart + '" y="4" width="' + trackWidth + '" height="16" rx="3"></rect>' +
+				'<rect class="ob-smart-insights-where-bar-fill is-segment" x="' + trackStart + '" y="4" width="' + segmentWidth.toFixed(1) + '" height="16" rx="3"></rect>' +
+				'<text class="ob-smart-insights-where-bar-value" x="' + (trackStart + segmentWidth + 6).toFixed(1) + '" y="16">' + escapeHtml(formatWhereValue(outlier.value, unit)) + '</text>' +
+				'<text class="ob-smart-insights-where-bar-name" x="0" y="44">' + escapeHtml(truncateWhereLabel(everyoneElse, 16)) + '</text>' +
+				'<rect class="ob-smart-insights-where-bar-track" x="' + trackStart + '" y="32" width="' + trackWidth + '" height="16" rx="3"></rect>' +
+				'<rect class="ob-smart-insights-where-bar-fill is-complement" x="' + trackStart + '" y="32" width="' + complementWidth.toFixed(1) + '" height="16" rx="3"></rect>' +
+				'<text class="ob-smart-insights-where-bar-value" x="' + (trackStart + complementWidth + 6).toFixed(1) + '" y="44">' + escapeHtml(formatWhereValue(outlier.complement_value, unit)) + '</text>' +
+			'</svg>' +
+			'<span class="ob-smart-insights-where-bar-meta">' + escapeHtml(fillToken(fillToken(i18n.whereBarSessions || '%1$s of %2$s sessions', '%1$s', formatNumber(outlier.sessions)), '%2$s', formatNumber(matrix.scope_sessions))) + '</span>' +
+		'</button>';
+	}
+
+	// Free viewers get the verdict and the daily chart; the per-segment bars and
+	// the segment-scoped shortcuts are the Pro half, gated server-side by
+	// filter_segment_matrix_for_viewer() (`matrix.locked`), never by a tier check
+	// in this file.
+	function renderWhereBarsLocked(matrix) {
+		return '<div class="ob-smart-insights-upgrade-preview ob-smart-insights-where-locked">' +
+			'<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>' +
+			'<strong>' + escapeHtml(i18n.segmentLockedTitle || 'Advanced segment insight available in Pro') + '</strong>' +
+			'<p>' + escapeHtml(matrix.locked_hint || i18n.segmentsLockedMore || 'Upgrade to Pro to break this insight down by device, source, campaign, and visitor type.') + '</p>' +
+			'<a class="button button-secondary" href="' + escapeHtml(upgradeUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(i18n.segmentsUpgradeCta || 'Upgrade to Pro') + '</a>' +
+		'</div>';
+	}
+
+	function renderWhereBars(matrix, scope) {
+		if (!matrix || !matrix.available) {
+			return '';
+		}
+
+		// MAX_OUTLIERS is 4 since schema v3 (decision D2) so a combined pattern can
+		// surface beside the singles instead of being ranked out by them.
+		var outliers = Array.isArray(matrix.outliers) ? matrix.outliers.slice(0, 4) : [];
+		if (matrix.locked) {
+			return outliers.length ? renderWhereBarsLocked(matrix) : '';
+		}
+
+		var bars = outliers.map(function(outlier) {
+			return renderWhereBar(outlier, matrix, scope);
+		}).filter(Boolean).join('');
+
+		if (!bars) {
+			return '';
+		}
+
+		// Same subtitle element the pulse strip and the mix-shift block already use,
+		// so the outlier cards can carry their own "?" without a new layout idiom.
+		return renderSectionHeading(
+			i18n.whereOutliersTitle || 'Segments that differ most',
+			'where_outliers',
+			{ tag: 'h4', headingClass: 'ob-smart-insights-where-subtitle' }
+		) + '<div class="ob-smart-insights-where-bars">' + bars + '</div>';
+	}
+
+	// A destination "accepts" the segment only if the built URL actually carries
+	// it. The whitelist alone is not enough: some report types accept a filter on
+	// one route but not on another (heatmaps take `device` on the page_id detail
+	// route, not on the search-by-url list route), so a whitelisted report can
+	// still resolve to a link that silently drops the segment. Promising
+	// "Heatmap (Mobile)" and landing on unfiltered data is worse than not
+	// offering the shortcut at all, so the emitted URL is the source of truth.
+	function whereUrlCarriesSegment(url, scope) {
+		var expected = String(scope.reportKey) + '=' + encodeURIComponent(scope.key);
+		return String(url || '').toLowerCase().indexOf(expected.toLowerCase()) !== -1;
+	}
+
+	// Only the destinations that actually accept the segment as a filter get a
+	// shortcut: the report whitelist is the same one applySegmentScopeToReports()
+	// injects the segment into.
+	function renderWhereShortcuts(insight, scope) {
+		if (!scope || WHERE_SCOPED_REPORT_KEYS.indexOf(scope.reportKey) === -1) {
+			return '';
+		}
+
+		var reports = Array.isArray(insight.related_reports) ? insight.related_reports : [];
+		var scoped = applySegmentScopeToReports(reports, scope);
+		var seen = {};
+		var links = [];
+
+		scoped.forEach(function(report) {
+			if (links.length >= 4 || !report || typeof report !== 'object') {
+				return;
+			}
+			var accepted = WHERE_SCOPED_REPORT_FILTERS[normalizeReportType(report)];
+			if (!accepted || accepted.indexOf(scope.reportKey) === -1) {
+				return;
+			}
+			var resolved = resolveRelatedReportLink(report, insight);
+			if (!resolved || !resolved.url || !whereUrlCarriesSegment(resolved.url, scope)) {
+				return;
+			}
+			var label = fillToken(fillToken(i18n.whereShortcut || '%1$s (%2$s)', '%1$s', getRelatedReportDestinationLabel(report, getContextualReportMeta(report, insight))), '%2$s', scope.label);
+			// Two related reports can differ only by insight-tracking params and
+			// still be the same destination to the reader, so the visible label is
+			// what gets de-duplicated, not the raw URL.
+			var dedupeKey = label.toLowerCase();
+			if (seen[resolved.url] || seen[dedupeKey]) {
+				return;
+			}
+			seen[resolved.url] = true;
+			seen[dedupeKey] = true;
+			links.push('<a class="button button-secondary ob-smart-insights-where-shortcut" href="' + escapeHtml(resolved.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(label) + '</a>');
+		});
+
+		if (!links.length) {
+			return '';
+		}
+
+		return '<div class="ob-smart-insights-where-shortcuts">' +
+			'<h4>' + escapeHtml(i18n.whereShortcutsTitle || 'Open filtered to this segment') + '</h4>' +
+			links.join('') +
+		'</div>';
+	}
+
+	// Reading order is the diagnostic order: the verdict sentence, then the pulse
+	// strip that shows WHICH dimensions were even measurable, then the outlier
+	// cards, then the "was it the audience, not the page?" mix block. Free and Pro
+	// run the exact same sequence — the server already decided what each field
+	// contains, so no tier check appears here.
+	function renderWhereSegments(insight, matrix, scope) {
+		return renderWhereVerdict(matrix) +
+			renderWherePulseStrip(matrix) +
+			renderWhereBars(matrix, scope) +
+			renderWhereComboTeaser(matrix) +
+			renderWhereMixShift(matrix) +
+			(matrix && matrix.available && !matrix.locked && Array.isArray(matrix.outliers) && matrix.outliers.length ? renderSegmentScopeStatus(scope) : '') +
+			renderWhereShortcuts(insight, scope);
+	}
+
+	// ---------------------------------------------------------------------
+	// Daily chart. Inline SVG only: no chart library, no new dependency. The
+	// current period is solid, the previous period dashed behind it, and the
+	// day the problem was first detected is marked so "since when" is readable
+	// without a legend lookup.
+	// ---------------------------------------------------------------------
+
+	function collectWhereSeriesValues(series, values) {
+		if (!Array.isArray(series)) {
+			return;
+		}
+		series.forEach(function(point) {
+			var number = point ? parseFloat(point.value) : NaN;
+			if (!isNaN(number) && isFinite(number)) {
+				values.push(number);
+			}
+		});
+	}
+
+	function buildWhereChartPath(series, xFor, yFor) {
+		if (!Array.isArray(series)) {
+			return '';
+		}
+
+		var path = '';
+		var drawing = false;
+		series.forEach(function(point, index) {
+			var number = point ? parseFloat(point.value) : NaN;
+			if (isNaN(number) || !isFinite(number)) {
+				drawing = false;
+				return;
+			}
+			path += (drawing ? 'L' : 'M') + xFor(index).toFixed(1) + ' ' + yFor(number).toFixed(1) + ' ';
+			drawing = true;
+		});
+
+		return path.trim();
+	}
+
+	function formatWhereChartDay(date) {
+		var text = String(date || '');
+		return text.length >= 10 ? text.slice(5) : text;
+	}
+
+	function renderWhereChart(series, scope) {
+		if (!series || typeof series !== 'object' || !series.available) {
+			return '<p class="description ob-smart-insights-where-chart-empty">' + escapeHtml(getWhereUnavailableText(series)) + '</p>';
+		}
+
+		var current = Array.isArray(series.current) ? series.current : [];
+		var previous = Array.isArray(series.previous) ? series.previous : [];
+		var segmentSeries = series.segment && Array.isArray(series.segment.series) ? series.segment.series : [];
+		if (!current.length) {
+			return '<p class="description ob-smart-insights-where-chart-empty">' + escapeHtml(i18n.whereChartEmpty || 'No daily data is available for this period yet.') + '</p>';
+		}
+
+		var values = [];
+		collectWhereSeriesValues(current, values);
+		collectWhereSeriesValues(previous, values);
+		collectWhereSeriesValues(segmentSeries, values);
+		if (!values.length) {
+			return '<p class="description ob-smart-insights-where-chart-empty">' + escapeHtml(i18n.whereChartEmpty || 'No daily data is available for this period yet.') + '</p>';
+		}
+
+		var unit = series.metric_unit || 'percent';
+		var min = Math.min.apply(null, values);
+		var max = Math.max.apply(null, values);
+		var pad = max > min ? (max - min) * 0.15 : Math.max(1, Math.abs(max) * 0.1);
+		min = Math.max(0, min - pad);
+		max = max + pad;
+		if (max <= min) {
+			max = min + 1;
+		}
+		if (unit === 'percent' && max > 100) {
+			max = 100;
+		}
+
+		var width = 640;
+		var height = 196;
+		var padLeft = 48;
+		var padRight = 14;
+		var padTop = 14;
+		var padBottom = 30;
+		var plotWidth = width - padLeft - padRight;
+		var plotHeight = height - padTop - padBottom;
+		var lastIndex = Math.max(1, current.length - 1);
+
+		var xFor = function(index) {
+			return current.length === 1 ? padLeft + plotWidth / 2 : padLeft + (index * plotWidth) / lastIndex;
+		};
+		var yFor = function(value) {
+			return padTop + plotHeight - ((value - min) / (max - min)) * plotHeight;
+		};
+
+		var grid = '';
+		for (var tick = 0; tick <= 2; tick++) {
+			var tickValue = min + ((max - min) * tick) / 2;
+			var tickY = yFor(tickValue);
+			grid += '<line class="ob-smart-insights-where-chart-grid" x1="' + padLeft + '" y1="' + tickY.toFixed(1) + '" x2="' + (width - padRight) + '" y2="' + tickY.toFixed(1) + '"></line>' +
+				'<text class="ob-smart-insights-where-chart-axis" x="' + (padLeft - 6) + '" y="' + (tickY + 3.5).toFixed(1) + '" text-anchor="end">' + escapeHtml(formatWhereValue(tickValue, unit)) + '</text>';
+		}
+
+		var marker = '';
+		var firstDetected = series.first_detected_at ? String(series.first_detected_at).slice(0, 10) : '';
+		if (firstDetected) {
+			for (var day = 0; day < current.length; day++) {
+				if (String(current[day].date || '').slice(0, 10) === firstDetected) {
+					var markerX = xFor(day);
+					marker = '<line class="ob-smart-insights-where-chart-marker" x1="' + markerX.toFixed(1) + '" y1="' + padTop + '" x2="' + markerX.toFixed(1) + '" y2="' + (padTop + plotHeight) + '"></line>' +
+						'<text class="ob-smart-insights-where-chart-marker-label" x="' + Math.min(markerX + 4, width - padRight - 60).toFixed(1) + '" y="' + (padTop + 10) + '">' + escapeHtml(i18n.whereFirstDetected || 'First detected') + '</text>';
+					break;
+				}
+			}
+		}
+
+		var tooltipTemplate = i18n.whereChartTooltip || '%1$s: %2$s (%3$s sessions)';
+		var hitWidth = plotWidth / Math.max(1, current.length);
+		var hits = current.map(function(point, index) {
+			var tooltip = fillToken(tooltipTemplate, '%1$s', String(point.date || ''));
+			tooltip = fillToken(tooltip, '%2$s', formatWhereValue(point.value, unit));
+			tooltip = fillToken(tooltip, '%3$s', formatNumber(point.sessions));
+			return '<rect class="ob-smart-insights-where-chart-hit" x="' + Math.max(padLeft, xFor(index) - hitWidth / 2).toFixed(1) + '" y="' + padTop + '" width="' + hitWidth.toFixed(1) + '" height="' + plotHeight + '"><title>' + escapeHtml(tooltip) + '</title></rect>';
+		}).join('');
+
+		var previousPath = buildWhereChartPath(previous.slice(0, current.length), xFor, yFor);
+		var currentPath = buildWhereChartPath(current, xFor, yFor);
+		var segmentPath = buildWhereChartPath(segmentSeries.slice(0, current.length), xFor, yFor);
+
+		var legend = '<p class="ob-smart-insights-where-chart-legend">' +
+			'<span class="is-current">' + escapeHtml(i18n.whereChartCurrent || 'This period') + '</span>' +
+			(previousPath ? '<span class="is-previous">' + escapeHtml(i18n.whereChartPrevious || 'Previous period') + '</span>' : '') +
+			(segmentPath && scope ? '<span class="is-segment">' + escapeHtml(scope.label) + '</span>' : '') +
+		'</p>';
+
+		var chartTitle = fillToken(i18n.whereChartTitle || 'Daily %s', '%s', series.metric_label || series.metric || '');
+
+		return '<h4 class="ob-smart-insights-where-chart-title">' + escapeHtml(chartTitle) + '</h4>' +
+			'<svg class="ob-smart-insights-where-chart" viewBox="0 0 ' + width + ' ' + height + '" width="100%" height="' + height + '" role="img" aria-label="' + escapeHtml(chartTitle) + '" preserveAspectRatio="xMidYMid meet">' +
+				grid +
+				marker +
+				(previousPath ? '<path class="ob-smart-insights-where-chart-line is-previous" d="' + previousPath + '"></path>' : '') +
+				(segmentPath ? '<path class="ob-smart-insights-where-chart-line is-segment" d="' + segmentPath + '"></path>' : '') +
+				'<path class="ob-smart-insights-where-chart-line is-current" d="' + currentPath + '"></path>' +
+				'<text class="ob-smart-insights-where-chart-axis" x="' + padLeft + '" y="' + (height - 10) + '">' + escapeHtml(formatWhereChartDay(current[0].date)) + '</text>' +
+				'<text class="ob-smart-insights-where-chart-axis" x="' + (width - padRight) + '" y="' + (height - 10) + '" text-anchor="end">' + escapeHtml(formatWhereChartDay(current[current.length - 1].date)) + '</text>' +
+				hits +
+			'</svg>' +
+			legend;
+	}
+
+	// ---------------------------------------------------------------------
+	// Loading and interaction.
+	// ---------------------------------------------------------------------
+
+	function getWhereState(content) {
+		var panel = content ? content.querySelector('[data-ob-si-segments]') : null;
+		return panel && panel.__obWhereState ? panel.__obWhereState : null;
+	}
+
+	function renderWhereSegmentsInto(content, insight) {
+		var state = getWhereState(content);
+		var target = content.querySelector('[data-ob-si-where-segments]');
+		if (!state || !target) {
+			return;
+		}
+
+		releasePortaledTooltips(target);
+		target.innerHTML = renderWhereSegments(insight, state.matrix, activeSegmentScope);
+		refreshIcons();
+	}
+
+	function renderWhereSeriesInto(content) {
+		var state = getWhereState(content);
+		var target = content.querySelector('[data-ob-si-where-series]');
+		if (!state || !target) {
+			return;
+		}
+
+		target.innerHTML = renderWhereChart(state.series, activeSegmentScope);
+	}
+
+	function loadWhereSeries(content, insight, section, scope) {
+		var panel = content.querySelector('[data-ob-si-segments]');
+		if (!panel) {
+			return;
+		}
+
+		var payload = { insight_id: panel.getAttribute('data-ob-si-segments') };
+		if (section) {
+			payload.exclude_spam = getExcludeSpamFlag(section);
+		}
+		if (scope && scope.dimension && scope.key) {
+			payload.segment_dimension = scope.dimension;
+			payload.segment_key = scope.key;
+		}
+
+		return postAjax('optibehavior_smart_insights_timeseries', payload)
+			.then(function(data) {
+				var state = getWhereState(content);
+				if (!state) {
+					return;
+				}
+				state.series = data.timeseries || null;
+				renderWhereSeriesInto(content);
+			})
+			.catch(function(error) {
+				var target = content.querySelector('[data-ob-si-where-series]');
+				if (target) {
+					target.innerHTML = '<p class="description ob-smart-insights-where-chart-empty">' + escapeHtml(error.message || (i18n.whereChartError || 'Unable to load the daily trend.')) + '</p>';
+				}
+			});
+	}
+
+	function bindWhereSection(content, insight, section) {
+		var panel = content.querySelector('[data-ob-si-segments]');
+		if (!panel || panel.__obWhereBound) {
+			return;
+		}
+
+		panel.__obWhereBound = true;
+		panel.addEventListener('click', function(event) {
+			var clearButton = event.target.closest('.ob-smart-insights-segment-clear');
+			if (clearButton) {
+				event.preventDefault();
+				activeSegmentScope = null;
+				applySegmentScopeToDetail(content, insight, null);
+				renderWhereSegmentsInto(content, insight);
+				loadWhereSeries(content, insight, section, null);
+				return;
+			}
+
+			var bar = event.target.closest('.ob-smart-insights-where-bar');
+			if (!bar) {
+				return;
+			}
+
+			event.preventDefault();
+			var dimension = bar.getAttribute('data-segment-dimension') || '';
+			var key = bar.getAttribute('data-segment-key') || '';
+			var isSame = !!(activeSegmentScope && activeSegmentScope.dimension === dimension && activeSegmentScope.key === key);
+			activeSegmentScope = isSame ? null : {
+				dimension: dimension,
+				key: key,
+				label: bar.getAttribute('data-segment-label') || key,
+				reportKey: bar.getAttribute('data-report-key') || ''
+			};
+
+			applySegmentScopeToDetail(content, insight, activeSegmentScope);
+			renderWhereSegmentsInto(content, insight);
+			loadWhereSeries(content, insight, section, activeSegmentScope);
+		});
+	}
+
+	function loadWhereSection(content, insight, section) {
+		var panel = content.querySelector('[data-ob-si-segments]');
+		if (!panel) {
+			return;
+		}
+
+		panel.__obWhereState = { matrix: null, series: null };
+		bindWhereSection(content, insight, section);
+
+		var payload = { insight_id: panel.getAttribute('data-ob-si-segments') };
+		if (section) {
+			payload.exclude_spam = getExcludeSpamFlag(section);
+		}
+
+		postAjax('optibehavior_smart_insights_segments', payload)
+			.then(function(data) {
+				var state = getWhereState(content);
+				if (!state) {
+					return;
+				}
+				state.matrix = data.segments || null;
+				renderWhereSegmentsInto(content, insight);
+			})
+			.catch(function(error) {
+				var target = content.querySelector('[data-ob-si-where-segments]');
+				if (target) {
+					target.innerHTML = '<p class="description">' + escapeHtml(error.message || (i18n.segmentsError || 'Unable to load the affected segments.')) + '</p>';
+				}
+			});
+
+		loadWhereSeries(content, insight, section, null);
+	}
+
+	function renderSegmentScopeStatus(scope) {
+		if (!scope) {
+			return '<p class="description ob-smart-insights-segment-scope-status">' + escapeHtml(i18n.segmentScopeHint || 'Select a segment to re-scope the evidence links below.') + '</p>';
+		}
+
+		var template = i18n.segmentScopeActive || 'Evidence links scoped to %s';
+		return '<p class="description ob-smart-insights-segment-scope-status is-active">' +
+			escapeHtml(template.replace('%s', scope.label)) +
+			' <button type="button" class="button-link ob-smart-insights-segment-clear">' + escapeHtml(i18n.segmentScopeClear || 'Clear segment scope') + '</button>' +
+		'</p>';
+	}
+
+
+	// Re-scoping is a presentation-time overlay: the segment is injected into a
+	// copy of each related report so the existing link resolver carries it into
+	// the destination report exactly like any other report-level context.
+	function applySegmentScopeToReports(reports, scope) {
+		if (!Array.isArray(reports) || !scope) {
+			return Array.isArray(reports) ? reports : [];
+		}
+
+		return reports.map(function(report) {
+			if (!report || typeof report !== 'object') {
+				return report;
+			}
+
+			var clone = {};
+			Object.keys(report).forEach(function(key) {
+				clone[key] = report[key];
+			});
+			clone.segment_dimension = scope.dimension;
+			clone.segment_key = scope.key;
+			if (scope.reportKey === 'device') {
+				clone.device = scope.key;
+			} else if (scope.reportKey === 'source') {
+				clone.source = scope.key;
+			} else if (scope.reportKey === 'campaign') {
+				clone.campaign = scope.key;
+			}
+			return clone;
+		});
+	}
+
+	function applySegmentScopeToDetail(content, insight, scope) {
+		var relatedSection = content.querySelector('.ob-smart-insights-detail-section.is-related');
+		if (relatedSection) {
+			releasePortaledTooltips(relatedSection);
+			var reports = applySegmentScopeToReports(insight.related_reports, scope);
+			var primaryReport = getBestRelatedReport(insight);
+			var primaryReportUrl = primaryReport && primaryReport.resolved ? primaryReport.resolved.url : '';
+			relatedSection.innerHTML = renderSectionHeading(i18n.relatedReports || 'Where to investigate', 'related_reports', { position: 'left' }) +
+				renderRelatedReports(reports, insight, { primaryReportUrl: primaryReportUrl });
+		}
+
+		var evidenceSection = content.querySelector('[data-ob-si-evidence-refs]');
+		if (evidenceSection) {
+			releasePortaledTooltips(evidenceSection);
+			var evidenceBody = renderEvidenceRefsBody(insight, scope) || renderEvidenceRefsLocked(insight);
+			evidenceSection.innerHTML = renderSectionHeading(i18n.evidenceRefsTitle || 'Evidence and proof', 'evidence_refs') + evidenceBody;
+		}
+
+		var status = content.querySelector('.ob-smart-insights-segment-scope-status');
+		if (status) {
+			status.outerHTML = renderSegmentScopeStatus(scope);
+		}
+
+		var chips = content.querySelectorAll('[data-segment-dimension]');
+		Array.prototype.forEach.call(chips, function(chip) {
+			var isActive = !!(scope &&
+				chip.getAttribute('data-segment-dimension') === scope.dimension &&
+				chip.getAttribute('data-segment-key') === scope.key);
+			chip.classList.toggle('is-active', isActive);
+			chip.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+		});
+
+		refreshIcons();
+	}
+
+
+	// The sidebar is capped at three actions. Which bullets survive (and whether
+	// the Pro-context bullet is present at all) is decided server-side by the
+	// capabilities layer, so this renderer never inspects the viewer's tier.
+	function renderRecommendationsSection(insight) {
+		var actions = Array.isArray(insight.recommended_actions) ? insight.recommended_actions : [];
+		if (!actions.length) {
+			return '';
+		}
+
+		return '<section class="ob-smart-insights-detail-section is-recommendations">' +
+			renderSectionHeading(i18n.recommendedActions || i18n.recommendedAction || 'Recommended actions', 'recommendations', { position: 'left' }) +
+			'<div class="ob-smart-insights-action-checklist">' + renderList(actions, MAX_RECOMMENDED_ACTIONS) + '</div>' +
+		'</section>';
+	}
+
+	// Measured causes come from the correlation probes and carry a value the
+	// viewer can check ("Rage clicks on this page: 41 sessions"). Only when there
+	// is none do we fall back to the generic template list, collapsed so it never
+	// competes with measured evidence.
+	function renderMeasuredCauseList(insight) {
+		var causes = getStoryCauses(insight);
+		if (!causes.length) {
+			return '';
+		}
+
+		var items = causes.map(function(cause) {
+			var label = String((cause && cause.label) || '').trim();
+			if (!label) {
+				return '';
+			}
+
+			var parts = [];
+			if (cause.value !== undefined && cause.value !== null && cause.value !== '') {
+				var metricLabel = String(cause.metric_label || '').trim();
+				var value = formatNumber(cause.value);
+				parts.push(metricLabel ? value + ' ' + metricLabel : value);
+			} else if (cause.sample_size) {
+				parts.push(sprintfCount(i18n.causeSessions || '%s sessions', formatNumber(cause.sample_size)));
+			}
+			if (cause.share_pct !== undefined && cause.share_pct !== null && cause.share_pct !== '') {
+				parts.push(sprintfCount(i18n.causeShareOfSessions || '%s of affected sessions', formatPercent(cause.share_pct)));
+			}
+
+			return '<li><strong>' + escapeHtml(label) + '</strong>' +
+				(parts.length ? '<span>' + escapeHtml(parts.join(' · ')) + '</span>' : '') +
+			'</li>';
+		}).filter(Boolean);
+
+		return items.length ? '<ul class="ob-smart-insights-measured-causes">' + items.join('') + '</ul>' : '';
+	}
+
+	function renderCausesSection(insight) {
+		var title = renderSectionHeading(i18n.likelyCauses || 'Likely causes', 'causes', { position: 'left' });
+		var measured = renderMeasuredCauseList(insight);
+		if (measured) {
+			return '<section class="ob-smart-insights-detail-section is-causes">' + title + measured + '</section>';
+		}
+
+		var generic = Array.isArray(insight.likely_causes) ? insight.likely_causes : [];
+		if (!generic.length) {
+			return '';
+		}
+
+		return '<section class="ob-smart-insights-detail-section is-causes">' + title +
+			renderDisclosure(i18n.genericCausesToggle || 'Possible causes (generic)', renderList(generic), { className: 'ob-smart-insights-generic-causes-toggle', open: true }) +
+		'</section>';
+	}
+
 	function renderDetail(insight) {
 		var priorityLabel = getPriorityLabel(insight);
 		var priorityClass = getSeverityClass(priorityLabel);
@@ -3167,17 +5823,20 @@
 			'<div class="ob-smart-insights-detail-grid ob-smart-insights-detail-body">' +
 				'<main class="ob-smart-insights-detail-main">' +
 					renderUpgradePreview(insight) +
-					'<section class="ob-smart-insights-detail-section is-diagnosis"><h3>' + escapeHtml(i18n.diagnosis || 'Diagnosis') + '</h3><div class="ob-smart-insights-detail-diagnosis-copy"><p>' + escapeHtml(insight.interpretation || '') + '</p>' + (insight.why_it_matters ? '<p class="ob-smart-insights-detail-why">' + escapeHtml(insight.why_it_matters) + '</p>' : '') + '</div></section>' +
-					'<section class="ob-smart-insights-detail-section is-evidence"><h3>' + escapeHtml(i18n.evidence || 'Evidence') + '</h3><div class="ob-smart-insights-evidence is-detail-evidence">' + renderDetailEvidence(insight, 7) + '</div></section>' +
-					'<section class="ob-smart-insights-detail-section is-trend"><h3>' + escapeHtml(i18n.trendComparison || 'Trend comparison') + '</h3>' + renderTrendComparison(insight.trend, insight) + '</section>' +
-					'<section class="ob-smart-insights-detail-section is-segments"><h3>' + escapeHtml(i18n.segmentBreakdown || 'Segments') + '</h3>' + renderSegmentBreakdown(insight) + '</section>' +
+					renderDetailStorySection(insight) +
+					'<section class="ob-smart-insights-detail-section is-diagnosis">' + renderSectionHeading(i18n.diagnosis || 'Diagnosis', 'diagnosis') + '<div class="ob-smart-insights-detail-diagnosis-copy"><p>' + escapeHtml(insight.interpretation || '') + '</p>' + (insight.why_it_matters ? '<p class="ob-smart-insights-detail-why">' + escapeHtml(insight.why_it_matters) + '</p>' : '') + '</div></section>' +
+					'<section class="ob-smart-insights-detail-section is-evidence">' + renderSectionHeading(i18n.evidence || 'Evidence', 'evidence') + '<div class="ob-smart-insights-evidence is-detail-evidence">' + renderDetailEvidence(insight, 7) + '</div></section>' +
+					renderEvidenceRefsSection(insight, activeSegmentScope) +
+					renderHypothesisSection(insight) +
+					renderExperimentSection(insight) +
+					renderWhereSection(insight) +
 				'</main>' +
 				'<aside class="ob-smart-insights-detail-side">' +
-					'<section class="ob-smart-insights-detail-section is-context"><h3>' + escapeHtml(i18n.context || 'Context') + '</h3>' + renderDetailContextFacts(insight, dateRange) + '</section>' +
+					'<section class="ob-smart-insights-detail-section is-context">' + renderSectionHeading(i18n.context || 'Context', 'context', { position: 'left' }) + renderDetailContextFacts(insight, dateRange) + '</section>' +
 					renderDetailNextAction(insight, action) +
-					'<section class="ob-smart-insights-detail-section is-related"><h3>' + escapeHtml(i18n.relatedReports || 'Where to investigate') + '</h3>' + renderRelatedReports(insight.related_reports, insight, { primaryReportUrl: primaryReportUrl }) + '</section>' +
-					'<section class="ob-smart-insights-detail-section is-recommendations"><h3>' + escapeHtml(i18n.recommendedActions || i18n.recommendedAction || 'Recommended actions') + '</h3><div class="ob-smart-insights-action-checklist">' + renderList(insight.recommended_actions) + '</div></section>' +
-					'<section class="ob-smart-insights-detail-section is-causes"><h3>' + escapeHtml(i18n.likelyCauses || 'Likely causes') + '</h3>' + renderList(insight.likely_causes) + '</section>' +
+					'<section class="ob-smart-insights-detail-section is-related">' + renderSectionHeading(i18n.relatedReports || 'Where to investigate', 'related_reports', { position: 'left' }) + renderRelatedReports(insight.related_reports, insight, { primaryReportUrl: primaryReportUrl }) + '</section>' +
+					renderRecommendationsSection(insight) +
+					renderCausesSection(insight) +
 				'</aside>' +
 			'</div>' +
 			renderDetailFooter(insight, dateRange, primaryReport) +
@@ -3216,6 +5875,20 @@
 			if (resetButton) {
 				event.preventDefault();
 				resetFilters(section);
+				return;
+			}
+
+			var moreToggle = event.target.closest('.ob-smart-insights-center-more-toggle');
+			if (moreToggle) {
+				event.preventDefault();
+				setCenterMoreExpanded(section, moreToggle.getAttribute('aria-expanded') !== 'true');
+				return;
+			}
+
+			var childOpenButton = event.target.closest('[data-open-insight]');
+			if (childOpenButton) {
+				event.preventDefault();
+				openDetail(section, childOpenButton.getAttribute('data-open-insight'));
 				return;
 			}
 

@@ -3993,6 +3993,180 @@
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+/* Empty briefing cards are dropped, so the grid follows what is left. */
+.ob-smart-insights-briefing-grid.has-1-sections {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.ob-smart-insights-briefing-grid.has-2-sections {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* Weekly brief: the three costliest issues, each with a number and a state. */
+.ob-smart-insights-brief-list {
+	list-style: none;
+	margin: 4px 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-brief-list li {
+	align-items: baseline;
+	border-top: 1px solid #dbeafe;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 5px 0;
+}
+
+.ob-smart-insights-brief-list li:first-child {
+	border-top: 0;
+	padding-top: 0;
+}
+
+/* The lead uppercases its own label span; brief lines must opt out of it. */
+.ob-smart-insights-briefing-lead .ob-smart-insights-brief-title {
+	color: #0f172a;
+	flex: 1 1 100%;
+	font-size: 13px;
+	font-weight: 700;
+	letter-spacing: normal;
+	line-height: 1.3;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	text-transform: none;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-briefing-lead .ob-smart-insights-brief-amount {
+	color: #334155;
+	display: inline;
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: normal;
+	text-transform: none;
+}
+
+.ob-smart-insights-briefing-lead .ob-smart-insights-brief-state {
+	display: inline;
+}
+
+.ob-smart-insights-brief-state {
+	border: 1px solid #cbd5e1;
+	border-radius: 999px;
+	color: #475569;
+	font-size: 10px;
+	font-weight: 800;
+	letter-spacing: 0.04em;
+	padding: 1px 7px;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-brief-state.is-worse {
+	background: #fef2f2;
+	border-color: #fecaca;
+	color: #b91c1c;
+}
+
+.ob-smart-insights-brief-state.is-better,
+.ob-smart-insights-brief-state.is-resolved {
+	background: #ecfdf5;
+	border-color: #a7f3d0;
+	color: #047857;
+}
+
+.ob-smart-insights-brief-state.is-new {
+	background: #eff6ff;
+	border-color: #bfdbfe;
+	color: #1d4ed8;
+}
+
+.ob-smart-insights-brief-list .ob-smart-insights-summary-link {
+	font-size: 11px;
+	margin-left: auto;
+}
+
+/* Outcome loop: measured before/after of a resolved insight. Neutral by
+   default so "no measurable change yet" never reads as a win or a failure. */
+.ob-smart-insights-outcome-chip {
+	align-items: center;
+	background: #f8fafc;
+	border: 1px solid #cbd5e1;
+	border-radius: 999px;
+	color: #334155;
+	display: inline-flex;
+	font-size: 10px;
+	font-weight: 700;
+	gap: 4px;
+	line-height: 1.4;
+	padding: 2px 8px;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-outcome-chip i,
+.ob-smart-insights-outcome-chip svg {
+	height: 12px;
+	width: 12px;
+}
+
+.ob-smart-insights-outcome-chip.is-improved {
+	background: #ecfdf5;
+	border-color: #a7f3d0;
+	color: #047857;
+}
+
+.ob-smart-insights-outcome-chip.is-worse {
+	background: #fef2f2;
+	border-color: #fecaca;
+	color: #b91c1c;
+}
+
+.ob-smart-insights-wins-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ob-smart-insights-wins-list li {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0;
+}
+
+.ob-smart-insights-wins-list .ob-smart-insights-brief-title {
+	color: #0f172a;
+	flex: 1 1 100%;
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: normal;
+	line-height: 1.3;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	text-transform: none;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-wins-list .ob-smart-insights-win-change {
+	color: #047857;
+	font-size: 11px;
+	font-weight: 700;
+}
+
+.ob-smart-insights-wins-list .ob-smart-insights-win-date {
+	color: #64748b;
+	font-size: 10px;
+	text-transform: none;
+}
+
+.ob-smart-insights-wins-list .ob-smart-insights-summary-link {
+	font-size: 11px;
+	margin-left: auto;
+}
+
 .ob-smart-insights-briefing-lead {
 	grid-column: 1;
 	grid-row: 1;
@@ -4543,6 +4717,73 @@
 .ob-smart-insights-report-card-list {
     display: grid;
     gap: 8px;
+}
+
+/* Collapsed secondary content (reports that do not apply, generic causes). */
+.ob-smart-insights-modal .ob-smart-insights-disclosure-toggle,
+.ob-smart-insights-disclosure-toggle {
+    align-items: center;
+    background: none;
+    border: 0;
+    color: #64748b;
+    cursor: pointer;
+    display: flex;
+    font-size: 12px;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 4px 0;
+    text-align: left;
+    text-decoration: none;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-disclosure-toggle:hover,
+.ob-smart-insights-modal .ob-smart-insights-disclosure-toggle:focus,
+.ob-smart-insights-disclosure-toggle:hover,
+.ob-smart-insights-disclosure-toggle:focus {
+    color: #0f172a;
+}
+
+.ob-smart-insights-disclosure-caret {
+    font-size: 10px;
+    line-height: 1;
+    transition: transform 140ms ease;
+}
+
+.ob-smart-insights-disclosure-toggle[aria-expanded="true"] .ob-smart-insights-disclosure-caret {
+    transform: rotate(180deg);
+}
+
+.ob-smart-insights-disclosure-body {
+    margin-top: 8px;
+}
+
+.ob-smart-insights-disclosure-body[hidden] {
+    display: none;
+}
+
+.ob-smart-insights-report-card-list.is-muted-reports .ob-smart-insights-report-card {
+    opacity: 0.75;
+    padding: 8px 10px;
+}
+
+.ob-smart-insights-measured-causes {
+    display: grid;
+    gap: 6px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.ob-smart-insights-measured-causes li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    margin: 0;
+}
+
+.ob-smart-insights-measured-causes li span {
+    color: #64748b;
+    font-size: 12px;
 }
 
 .ob-smart-insights-report-card {
@@ -5465,6 +5706,1047 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	font-size: 13px;
 	line-height: 1.45;
 	margin: 0;
+}
+
+/* --- Correlated story card: absolute impact + ranked causes --------------- */
+
+.ob-smart-insights-story-chip {
+	align-items: center;
+	background: #eef2ff;
+	border: 1px solid #c7d2fe;
+	border-radius: 999px;
+	color: #3730a3;
+	display: inline-flex;
+	font-size: 11px;
+	font-weight: 700;
+	gap: 5px;
+	line-height: 1;
+	padding: 5px 8px;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-story-chip .ob-smart-insights-story-count {
+	background: #3730a3;
+	border-radius: 999px;
+	color: #ffffff;
+	font-size: 10px;
+	min-width: 15px;
+	padding: 2px 5px;
+	text-align: center;
+}
+
+.ob-smart-insights-impact-line {
+	align-items: baseline;
+	background: #fff7ed;
+	border: 1px solid #fed7aa;
+	border-radius: 10px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+	margin: 8px 0 0;
+	padding: 8px 10px;
+}
+
+.ob-smart-insights-impact-line .ob-smart-insights-impact-label {
+	color: #9a3412;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-impact-line .ob-smart-insights-impact-headline {
+	color: #7c2d12;
+	font-size: 14px;
+	font-weight: 700;
+	line-height: 1.3;
+}
+
+.ob-smart-insights-impact-line .ob-smart-insights-impact-basis,
+.ob-smart-insights-impact-line .ob-smart-insights-impact-revenue {
+	color: #9a3412;
+	font-size: 11px;
+	line-height: 1.35;
+}
+
+.ob-smart-insights-impact-line .ob-smart-insights-impact-revenue.is-locked {
+	color: #92400e;
+	font-style: italic;
+	opacity: 0.85;
+}
+
+/* Observation gate: too little traffic to size the loss. Neutral, never alarming. */
+.ob-smart-insights-impact-line.is-observation {
+	background: #f8fafc;
+	border-color: #e2e8f0;
+}
+
+.ob-smart-insights-impact-line.is-observation .ob-smart-insights-impact-label {
+	color: #475569;
+}
+
+.ob-smart-insights-impact-line .ob-smart-insights-impact-observation {
+	color: #475569;
+	font-size: 12px;
+	line-height: 1.45;
+}
+
+.ob-smart-insights-cause-row {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 8px 0 0;
+}
+
+.ob-smart-insights-cause-chip {
+	align-items: center;
+	background: #f8fafc;
+	border: 1px solid #e2e8f0;
+	border-radius: 999px;
+	color: #334155;
+	display: inline-flex;
+	font-size: 11px;
+	font-weight: 600;
+	gap: 6px;
+	line-height: 1;
+	max-width: 100%;
+	padding: 5px 8px;
+}
+
+.ob-smart-insights-cause-chip .ob-smart-insights-cause-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-cause-chip .ob-smart-insights-cause-share {
+	background: #e0e7ff;
+	border-radius: 999px;
+	color: #3730a3;
+	font-weight: 700;
+	padding: 2px 6px;
+}
+
+.ob-smart-insights-cause-chip.is-locked {
+	border-style: dashed;
+	color: #64748b;
+}
+
+.ob-smart-insights-cause-locked-hint {
+	color: #64748b;
+	flex-basis: 100%;
+	font-size: 11px;
+	font-style: italic;
+}
+
+.ob-smart-insights-center-card.is-story .ob-smart-insights-severity-rail,
+.ob-smart-insights-card.is-story {
+	box-shadow: inset 2px 0 0 #6366f1;
+}
+
+.ob-smart-insights-impact-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 18px;
+	list-style: none;
+	margin: 10px 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-impact-facts li {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 0;
+}
+
+.ob-smart-insights-impact-facts li span {
+	color: #64748b;
+	font-size: 11px;
+}
+
+.ob-smart-insights-impact-facts li strong {
+	color: #0f172a;
+	font-size: 13px;
+}
+
+.ob-smart-insights-impact-causes-title {
+	color: #475569;
+	font-size: 12px;
+	font-weight: 700;
+	margin: 12px 0 0;
+}
+
+/* Smart Insights "Who is affected?" segment panel. */
+.ob-smart-insights-segment-population {
+	color: #475569;
+	font-size: 12px;
+	font-weight: 600;
+	margin: 0 0 6px;
+}
+
+.ob-smart-insights-segment-top {
+	align-items: baseline;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0 0 8px;
+}
+
+.ob-smart-insights-segment-top span {
+	color: #64748b;
+	font-size: 11px;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-segment-top strong {
+	color: #0f172a;
+	font-size: 13px;
+}
+
+.ob-smart-insights-segment-top em {
+	color: #475569;
+	font-size: 11px;
+	font-style: normal;
+}
+
+.ob-smart-insights-segment-scope-status {
+	margin: 0 0 8px;
+}
+
+.ob-smart-insights-segment-scope-status.is-active {
+	color: #3730a3;
+	font-weight: 600;
+}
+
+.ob-smart-insights-segment-matrix {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.ob-smart-insights-segment-dimension h4 {
+	color: #475569;
+	font-size: 12px;
+	font-weight: 700;
+	margin: 0 0 4px;
+}
+
+.ob-smart-insights-segment-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.ob-smart-insights-segment-chip {
+	align-items: center;
+	background: #f8fafc;
+	border: 1px solid #e2e8f0;
+	border-radius: 999px;
+	color: #334155;
+	cursor: pointer;
+	display: inline-flex;
+	font-size: 11px;
+	font-weight: 600;
+	gap: 6px;
+	line-height: 1;
+	max-width: 100%;
+	padding: 5px 9px;
+}
+
+.ob-smart-insights-segment-chip:hover {
+	border-color: #a5b4fc;
+}
+
+.ob-smart-insights-segment-chip.is-active {
+	background: #eef2ff;
+	border-color: #6366f1;
+	color: #3730a3;
+}
+
+.ob-smart-insights-segment-chip-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-segment-chip-share {
+	background: #e0e7ff;
+	border-radius: 999px;
+	color: #3730a3;
+	font-weight: 700;
+	padding: 2px 6px;
+}
+
+.ob-smart-insights-segment-chip-count {
+	color: #64748b;
+	font-weight: 500;
+}
+
+/* Smart Insights "Where is the problem?" - verdict, comparison bars, daily chart.
+   Every colour comes from the modal's own --ob-si-* tokens (dashboard.css), so
+   the section follows whatever scheme the modal is rendered in instead of
+   pinning its own light-mode palette. */
+.ob-smart-insights-where {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.ob-smart-insights-where-skeleton {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.ob-smart-insights-where-skeleton-bar {
+	background: var(--ob-si-warm-strong, #f1efe8);
+	border-radius: 4px;
+	display: block;
+	height: 12px;
+	width: 100%;
+}
+
+.ob-smart-insights-where-skeleton-bar.is-short {
+	width: 55%;
+}
+
+.ob-smart-insights-where-verdict {
+	color: var(--ob-si-ink, #1a1916);
+	font-size: 13px;
+	font-weight: 700;
+	line-height: 1.45;
+	margin: 0;
+}
+
+.ob-smart-insights-where-verdict.is-muted,
+.ob-smart-insights-where-verdict.is-uniform,
+.ob-smart-insights-where-verdict.is-better {
+	color: var(--ob-si-muted, #5f5e5a);
+	font-weight: 600;
+}
+
+.ob-smart-insights-where-bars {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.ob-smart-insights-where-bar {
+	background: var(--ob-si-warm, #f5f4f0);
+	border: 1px solid var(--ob-si-border-soft, #e8e6df);
+	border-radius: 10px;
+	cursor: pointer;
+	display: block;
+	margin: 0;
+	padding: 8px 10px;
+	text-align: left;
+	width: 100%;
+}
+
+.ob-smart-insights-where-bar:hover,
+.ob-smart-insights-where-bar:focus-visible {
+	border-color: var(--ob-si-action, #185fa5);
+}
+
+.ob-smart-insights-where-bar.is-active {
+	background: var(--ob-si-warm-strong, #f1efe8);
+	border-color: var(--ob-si-action, #185fa5);
+}
+
+.ob-smart-insights-where-bar-dimension {
+	color: var(--ob-si-faint, #888780);
+	display: block;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-where-bar-svg {
+	display: block;
+	margin: 2px 0;
+}
+
+.ob-smart-insights-where-bar-name {
+	fill: var(--ob-si-muted, #5f5e5a);
+	font-size: 11px;
+}
+
+.ob-smart-insights-where-bar-value {
+	fill: var(--ob-si-ink, #1a1916);
+	font-size: 11px;
+	font-weight: 700;
+}
+
+.ob-smart-insights-where-bar-track {
+	fill: var(--ob-si-border-soft, #e8e6df);
+}
+
+.ob-smart-insights-where-bar-fill.is-segment {
+	fill: var(--ob-si-action, #185fa5);
+}
+
+.ob-smart-insights-where-bar.is-worse .ob-smart-insights-where-bar-fill.is-segment {
+	fill: var(--ob-si-critical, #e24b4a);
+}
+
+.ob-smart-insights-where-bar-fill.is-complement {
+	fill: var(--ob-si-faint, #888780);
+}
+
+.ob-smart-insights-where-bar-meta {
+	color: var(--ob-si-faint, #888780);
+	display: block;
+	font-size: 11px;
+}
+
+.ob-smart-insights-where-shortcuts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.ob-smart-insights-where-shortcuts h4 {
+	color: var(--ob-si-muted, #5f5e5a);
+	flex: 0 0 100%;
+	font-size: 12px;
+	font-weight: 700;
+	margin: 0;
+}
+
+.ob-smart-insights-where-chart-title {
+	color: var(--ob-si-muted, #5f5e5a);
+	font-size: 12px;
+	font-weight: 700;
+	margin: 0 0 4px;
+}
+
+.ob-smart-insights-where-chart {
+	display: block;
+	max-width: 100%;
+}
+
+.ob-smart-insights-where-chart-grid {
+	stroke: var(--ob-si-border-soft, #e8e6df);
+	stroke-width: 1;
+}
+
+.ob-smart-insights-where-chart-axis {
+	fill: var(--ob-si-faint, #888780);
+	font-size: 10px;
+}
+
+.ob-smart-insights-where-chart-line {
+	fill: none;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-width: 2;
+}
+
+.ob-smart-insights-where-chart-line.is-current {
+	stroke: var(--ob-si-action, #185fa5);
+}
+
+.ob-smart-insights-where-chart-line.is-previous {
+	stroke: var(--ob-si-faint, #888780);
+	stroke-dasharray: 5 4;
+	stroke-width: 1.5;
+}
+
+.ob-smart-insights-where-chart-line.is-segment {
+	stroke: var(--ob-si-critical, #e24b4a);
+}
+
+.ob-smart-insights-where-chart-marker {
+	stroke: var(--ob-si-critical, #e24b4a);
+	stroke-dasharray: 3 3;
+	stroke-width: 1;
+}
+
+.ob-smart-insights-where-chart-marker-label {
+	fill: var(--ob-si-critical-text, #a32d2d);
+	font-size: 10px;
+	font-weight: 700;
+}
+
+.ob-smart-insights-where-chart-hit {
+	fill: transparent;
+}
+
+.ob-smart-insights-where-chart-legend {
+	color: var(--ob-si-faint, #888780);
+	display: flex;
+	flex-wrap: wrap;
+	font-size: 11px;
+	gap: 12px;
+	margin: 4px 0 0;
+}
+
+.ob-smart-insights-where-chart-legend span::before {
+	border-radius: 2px;
+	content: "";
+	display: inline-block;
+	height: 3px;
+	margin-right: 5px;
+	vertical-align: middle;
+	width: 14px;
+}
+
+.ob-smart-insights-where-chart-legend .is-current::before {
+	background: var(--ob-si-action, #185fa5);
+}
+
+.ob-smart-insights-where-chart-legend .is-previous::before {
+	background: var(--ob-si-faint, #888780);
+}
+
+.ob-smart-insights-where-chart-legend .is-segment::before {
+	background: var(--ob-si-critical, #e24b4a);
+}
+
+.ob-smart-insights-where-chart-empty {
+	margin: 0;
+}
+
+/* Smart Insights "Where is the problem?" - segment intelligence layer (schema v3):
+   pulse strip, outlier cards with flags/icons/sparklines/trend arrows, combination
+   segments, and the traffic-mix card.
+
+   Colour policy is unchanged from the block above: everything resolves through the
+   modal's own --ob-si-* tokens so the section follows whatever scheme the modal is
+   rendered in. The four verdict colours the base token set does not define (healthy
+   green, watch amber) are declared here as --ob-si-pulse-* with light-mode
+   fallbacks, so a future dark palette only has to override these four. */
+.ob-smart-insights-where {
+	--ob-si-pulse-broken: var(--ob-si-critical, #e24b4a);
+	--ob-si-pulse-broken-text: var(--ob-si-critical-text, #a32d2d);
+	--ob-si-pulse-healthy: #10b981;
+	--ob-si-pulse-healthy-text: #047857;
+	--ob-si-pulse-watch: #f59e0b;
+	--ob-si-pulse-watch-text: #b45309;
+	--ob-si-pulse-insufficient: var(--ob-si-faint, #888780);
+	--ob-si-pulse-insufficient-text: var(--ob-si-muted, #5f5e5a);
+}
+
+.ob-smart-insights-where-subtitle {
+	align-items: center;
+	color: var(--ob-si-muted, #5f5e5a);
+	display: flex;
+	flex-wrap: wrap;
+	font-size: 11px;
+	font-weight: 700;
+	gap: 6px;
+	letter-spacing: 0.06em;
+	margin: 0 0 6px;
+	text-transform: uppercase;
+}
+
+/* --- Pulse dots ------------------------------------------------------- */
+
+.ob-smart-insights-where-pulse {
+	background: var(--ob-si-pulse-insufficient);
+	border-radius: 50%;
+	display: inline-block;
+	flex: 0 0 auto;
+	height: 8px;
+	position: relative;
+	width: 8px;
+}
+
+.ob-smart-insights-where-pulse.is-broken {
+	background: var(--ob-si-pulse-broken);
+}
+
+.ob-smart-insights-where-pulse.is-healthy {
+	background: var(--ob-si-pulse-healthy);
+}
+
+.ob-smart-insights-where-pulse.is-watch {
+	background: var(--ob-si-pulse-watch);
+}
+
+/* Only the state that demands attention animates, and only once the reader has
+   had a moment to land on the panel. A grid of competing pulses would be noise. */
+.ob-smart-insights-where-pulse.is-broken::after {
+	animation: ob-si-where-pulse 2s ease-out infinite;
+	border: 1px solid var(--ob-si-pulse-broken);
+	border-radius: 50%;
+	content: "";
+	inset: -3px;
+	position: absolute;
+}
+
+@keyframes ob-si-where-pulse {
+	0% { opacity: 0.7; transform: scale(0.7); }
+	70% { opacity: 0; transform: scale(1.6); }
+	100% { opacity: 0; transform: scale(1.6); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-smart-insights-where-pulse.is-broken::after {
+		animation: none;
+		opacity: 0.5;
+		transform: none;
+	}
+}
+
+/* The verdict sentence carries the pulse too: it is the ONLY verdict a Free
+   viewer gets, so the colour that says "conclusive" has to live on it and not
+   only on the Pro cards underneath. */
+.ob-smart-insights-where-verdict {
+	align-items: baseline;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.ob-smart-insights-where-verdict .ob-smart-insights-where-pulse {
+	position: relative;
+	top: -1px;
+}
+
+.ob-smart-insights-where-verdict-note {
+	color: var(--ob-si-pulse-insufficient-text);
+	flex: 1 1 100%;
+	font-size: 11px;
+	font-style: italic;
+	font-weight: 400;
+}
+
+/* --- Pulse strip ------------------------------------------------------ */
+
+.ob-smart-insights-where-pulses {
+	background: var(--ob-si-warm, #f5f4f0);
+	border: 1px solid var(--ob-si-border-soft, #e8e6df);
+	border-radius: 10px;
+	padding: 10px;
+}
+
+.ob-smart-insights-where-pulse-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 14px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ob-smart-insights-where-pulse-item {
+	align-items: baseline;
+	display: flex;
+	gap: 6px;
+	margin: 0;
+}
+
+.ob-smart-insights-where-pulse-name {
+	color: var(--ob-si-ink, #1a1916);
+	font-size: 12px;
+	font-weight: 700;
+}
+
+.ob-smart-insights-where-pulse-meta {
+	color: var(--ob-si-muted, #5f5e5a);
+	font-size: 11px;
+}
+
+.ob-smart-insights-where-pulse-item.is-broken .ob-smart-insights-where-pulse-meta {
+	color: var(--ob-si-pulse-broken-text);
+	font-weight: 600;
+}
+
+.ob-smart-insights-where-pulse-item.is-watch .ob-smart-insights-where-pulse-meta {
+	color: var(--ob-si-pulse-watch-text);
+	font-weight: 600;
+}
+
+/* --- Outlier cards ---------------------------------------------------- */
+
+.ob-smart-insights-where-card-head {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 2px;
+}
+
+.ob-smart-insights-where-card-head .ob-smart-insights-where-bar-dimension {
+	display: inline;
+}
+
+.ob-smart-insights-where-card-badge {
+	background: var(--ob-si-warm-strong, #f1efe8);
+	border: 1px solid var(--ob-si-border, #dedcd4);
+	border-radius: 999px;
+	color: var(--ob-si-muted, #5f5e5a);
+	font-size: 9px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	padding: 1px 6px;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-where-card-label {
+	align-items: center;
+	color: var(--ob-si-ink, #1a1916);
+	display: flex;
+	flex-wrap: wrap;
+	font-size: 13px;
+	font-weight: 700;
+	gap: 5px;
+	line-height: 1.3;
+}
+
+.ob-smart-insights-where-card-part {
+	align-items: center;
+	display: inline-flex;
+	gap: 4px;
+}
+
+.ob-smart-insights-where-card-join {
+	color: var(--ob-si-faint, #888780);
+	font-weight: 400;
+}
+
+.ob-smart-insights-where-card-note {
+	color: var(--ob-si-pulse-insufficient-text);
+	display: block;
+	font-size: 11px;
+	font-style: italic;
+	margin-top: 2px;
+}
+
+/* Lucide swaps the <i> for an <svg>, so the size has to hold on both. */
+.ob-smart-insights-where-mark,
+.ob-smart-insights-where-mark svg {
+	color: var(--ob-si-muted, #5f5e5a);
+	flex: 0 0 auto;
+	height: 14px;
+	stroke-width: 2;
+	width: 14px;
+}
+
+.ob-smart-insights-where-bar.is-worse .ob-smart-insights-where-mark,
+.ob-smart-insights-where-bar.is-worse .ob-smart-insights-where-mark svg {
+	color: var(--ob-si-pulse-broken-text);
+}
+
+/* Emoji flags render at the surrounding font size; the nudge keeps them on the
+   text baseline next to a 14px Lucide glyph. */
+.ob-smart-insights-where-flag {
+	flex: 0 0 auto;
+	font-size: 14px;
+	font-style: normal;
+	line-height: 1;
+}
+
+.ob-smart-insights-where-trend {
+	font-size: 13px;
+	font-weight: 700;
+	line-height: 1;
+	margin-left: auto;
+}
+
+.ob-smart-insights-where-trend.is-degrading {
+	color: var(--ob-si-pulse-broken-text);
+}
+
+.ob-smart-insights-where-trend.is-improving {
+	color: var(--ob-si-pulse-healthy-text);
+}
+
+.ob-smart-insights-where-trend.is-stable {
+	color: var(--ob-si-muted, #5f5e5a);
+}
+
+.ob-smart-insights-where-trend.is-insufficient {
+	color: var(--ob-si-faint, #888780);
+}
+
+.ob-smart-insights-where-card-spark {
+	display: block;
+	margin: 4px 0 0;
+}
+
+.ob-smart-insights-where-sparkline {
+	display: block;
+	height: 26px;
+	overflow: visible;
+	width: 104px;
+}
+
+.ob-smart-insights-where-sparkline-line {
+	fill: none;
+	stroke: var(--ob-si-muted, #5f5e5a);
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-width: 1.5;
+	/* The sparkline is drawn non-uniformly scaled, so the stroke must not be. */
+	vector-effect: non-scaling-stroke;
+}
+
+/* A day with no drawable neighbour: without this the segment's only measured
+   day would render as an empty box. */
+.ob-smart-insights-where-sparkline-dot {
+	fill: var(--ob-si-muted, #5f5e5a);
+	stroke: none;
+}
+
+.ob-smart-insights-where-bar.is-worse .ob-smart-insights-where-sparkline-line {
+	stroke: var(--ob-si-pulse-broken);
+}
+
+.ob-smart-insights-where-bar.is-worse .ob-smart-insights-where-sparkline-dot {
+	fill: var(--ob-si-pulse-broken);
+}
+
+/* --- Combination teaser (Free) ---------------------------------------- */
+
+.ob-smart-insights-where-combo-teaser {
+	background: var(--ob-si-warm, #f5f4f0);
+	border: 1px dashed var(--ob-si-border, #dedcd4);
+	border-radius: 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 10px;
+}
+
+.ob-smart-insights-where-combo-teaser strong {
+	color: var(--ob-si-ink, #1a1916);
+	font-size: 13px;
+}
+
+.ob-smart-insights-where-combo-teaser.is-worse strong {
+	color: var(--ob-si-pulse-broken-text);
+}
+
+.ob-smart-insights-where-combo-hint {
+	align-items: baseline;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 0;
+}
+
+.ob-smart-insights-where-combo-dimension {
+	color: var(--ob-si-faint, #888780);
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-where-combo-label {
+	color: var(--ob-si-ink, #1a1916);
+	font-size: 13px;
+	font-weight: 700;
+}
+
+.ob-smart-insights-where-combo-teaser .description {
+	margin: 0;
+}
+
+/* --- Traffic-mix card ------------------------------------------------- */
+
+.ob-smart-insights-where-mix {
+	background: var(--ob-si-warm, #f5f4f0);
+	border: 1px solid var(--ob-si-border-soft, #e8e6df);
+	border-left: 3px solid var(--ob-si-pulse-watch);
+	border-radius: 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px;
+}
+
+.ob-smart-insights-where-mix-range {
+	color: var(--ob-si-faint, #888780);
+	font-weight: 600;
+	letter-spacing: 0;
+	text-transform: none;
+}
+
+.ob-smart-insights-where-mix-dimension h5 {
+	align-items: center;
+	color: var(--ob-si-ink, #1a1916);
+	display: flex;
+	font-size: 12px;
+	gap: 6px;
+	margin: 0 0 4px;
+}
+
+.ob-smart-insights-where-mix-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ob-smart-insights-where-mix-item {
+	background: var(--ob-si-panel, #ffffff);
+	border: 1px solid var(--ob-si-border-soft, #e8e6df);
+	border-radius: 8px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+	margin: 0;
+	padding: 6px 8px;
+}
+
+.ob-smart-insights-where-mix-item.is-degrading {
+	border-color: var(--ob-si-pulse-broken);
+}
+
+.ob-smart-insights-where-mix-label {
+	align-items: center;
+	color: var(--ob-si-ink, #1a1916);
+	display: flex;
+	font-size: 12px;
+	font-weight: 700;
+	gap: 5px;
+}
+
+.ob-smart-insights-where-mix-share {
+	color: var(--ob-si-muted, #5f5e5a);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+}
+
+.ob-smart-insights-where-mix-cause {
+	color: var(--ob-si-muted, #5f5e5a);
+	flex: 1 1 100%;
+	font-size: 11px;
+	line-height: 1.4;
+}
+
+.ob-smart-insights-where-mix-item.is-degrading .ob-smart-insights-where-mix-cause,
+.ob-smart-insights-where-mix-cause.is-degrading {
+	color: var(--ob-si-pulse-broken-text);
+	font-weight: 600;
+}
+
+.ob-smart-insights-where-mix-grouped {
+	color: var(--ob-si-muted, #5f5e5a);
+	font-size: 11px;
+	margin: 6px 0 0;
+}
+
+.ob-smart-insights-where-mix-verdict {
+	align-items: baseline;
+	color: var(--ob-si-ink, #1a1916);
+	display: flex;
+	font-size: 13px;
+	font-weight: 700;
+	gap: 6px;
+	line-height: 1.45;
+	margin: 0;
+}
+
+.ob-smart-insights-where-mix.is-locked .description {
+	margin: 0;
+}
+
+/* Smart Insights - typed evidence references (Milestone 5). */
+.ob-smart-insights-evidence-refs {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.ob-smart-insights-evidence-refs-hint {
+	margin: 0 0 8px;
+}
+
+.ob-smart-insights-evidence-ref-group h4 {
+	align-items: center;
+	color: #475569;
+	display: flex;
+	font-size: 12px;
+	font-weight: 700;
+	gap: 6px;
+	margin: 0 0 4px;
+}
+
+.ob-smart-insights-evidence-ref-group-count {
+	background: #e2e8f0;
+	border-radius: 999px;
+	color: #334155;
+	font-size: 10px;
+	font-weight: 700;
+	padding: 1px 7px;
+}
+
+.ob-smart-insights-evidence-ref-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ob-smart-insights-evidence-ref {
+	align-items: center;
+	background: #f8fafc;
+	border: 1px solid #e2e8f0;
+	border-radius: 10px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	justify-content: space-between;
+	padding: 7px 10px;
+}
+
+.ob-smart-insights-evidence-ref-label {
+	color: #1e293b;
+	flex: 1 1 45%;
+	font-size: 12px;
+	font-weight: 600;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-evidence-ref-meta {
+	align-items: center;
+	display: inline-flex;
+	gap: 6px;
+}
+
+.ob-smart-insights-evidence-ref-share {
+	background: #e0e7ff;
+	border-radius: 999px;
+	color: #3730a3;
+	font-size: 11px;
+	font-weight: 700;
+	padding: 2px 7px;
+}
+
+.ob-smart-insights-evidence-ref-count {
+	color: #64748b;
+	font-size: 11px;
+	font-weight: 500;
+}
+
+.ob-smart-insights-evidence-ref-actions {
+	align-items: center;
+	display: inline-flex;
+	gap: 6px;
+}
+
+.ob-smart-insights-evidence-ref-action.is-disabled {
+	border: 1px dashed #cbd5e1;
+	border-radius: 6px;
+	color: #94a3b8;
+	cursor: not-allowed;
+	font-size: 11px;
+	padding: 4px 8px;
 }
 
 .ob-smart-insights-metric-strip {
@@ -7497,3 +8779,408 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	}
 }
 
+
+/* Smart Insights - hypothesis and linked experiment (Milestone 6). */
+.ob-smart-insights-hypothesis-statement {
+	color: #0f172a;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1.5;
+	margin: 0;
+}
+
+.ob-smart-insights-hypothesis-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 18px;
+	list-style: none;
+	margin: 10px 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-hypothesis-facts li {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 0;
+}
+
+.ob-smart-insights-hypothesis-facts li span {
+	color: #64748b;
+	font-size: 11px;
+}
+
+.ob-smart-insights-hypothesis-facts li strong {
+	color: #0f172a;
+	font-size: 13px;
+}
+
+.ob-smart-insights-hypothesis-facts li.is-warning {
+	flex: 1 1 100%;
+}
+
+.ob-smart-insights-hypothesis-facts li.is-warning span,
+.ob-smart-insights-hypothesis-facts li.is-warning strong {
+	color: #b45309;
+}
+
+.ob-smart-insights-hypothesis-disclaimer {
+	margin: 10px 0;
+}
+
+.ob-smart-insights-hypothesis-locked-meta {
+	color: #475569;
+	font-size: 12px;
+	margin: 6px 0 0;
+}
+
+.ob-smart-insights-create-ab-test {
+	margin-top: 4px;
+}
+
+.ob-smart-insights-experiment-link {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.ob-smart-insights-experiment-link-label {
+	color: #64748b;
+	font-size: 11px;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-experiment-status {
+	background: #eef2ff;
+	border-radius: 10px;
+	color: #4338ca;
+	font-size: 11px;
+	font-weight: 600;
+	padding: 2px 8px;
+}
+
+/* Smart Insights - stage tracker and experiment verdict (Milestone 7). */
+.ob-smart-insights-stage-tracker {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 14px;
+	list-style: none;
+	margin: 10px 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-stage-step {
+	align-items: center;
+	color: #94a3b8;
+	display: flex;
+	font-size: 11px;
+	gap: 5px;
+	margin: 0;
+}
+
+.ob-smart-insights-stage-dot {
+	background: #e2e8f0;
+	border-radius: 50%;
+	display: inline-block;
+	height: 8px;
+	width: 8px;
+}
+
+.ob-smart-insights-stage-step.is-done {
+	color: #0f766e;
+}
+
+.ob-smart-insights-stage-step.is-done .ob-smart-insights-stage-dot {
+	background: #0d9488;
+}
+
+.ob-smart-insights-stage-step.is-current {
+	color: #0f172a;
+	font-weight: 600;
+}
+
+.ob-smart-insights-stage-step.is-current .ob-smart-insights-stage-dot {
+	background: #6366f1;
+	box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+.ob-smart-insights-verdict-outcome {
+	align-items: baseline;
+	color: #0f172a;
+	display: flex;
+	flex-wrap: wrap;
+	font-size: 13px;
+	gap: 8px;
+	margin: 10px 0 0;
+}
+
+.ob-smart-insights-verdict-badge {
+	background: #e2e8f0;
+	border-radius: 10px;
+	color: #334155;
+	font-size: 11px;
+	font-weight: 600;
+	padding: 2px 8px;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-verdict-outcome.is-hypothesis-confirmed .ob-smart-insights-verdict-badge {
+	background: #dcfce7;
+	color: #166534;
+}
+
+.ob-smart-insights-verdict-outcome.is-hypothesis-refuted .ob-smart-insights-verdict-badge {
+	background: #fee2e2;
+	color: #991b1b;
+}
+
+.ob-smart-insights-verdict-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 18px;
+	list-style: none;
+	margin: 10px 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-verdict-facts li {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 0;
+}
+
+.ob-smart-insights-verdict-facts li span {
+	color: #64748b;
+	font-size: 11px;
+}
+
+.ob-smart-insights-verdict-facts li strong {
+	color: #0f172a;
+	font-size: 13px;
+}
+
+.ob-smart-insights-verdict-segments {
+	margin-top: 12px;
+}
+
+.ob-smart-insights-verdict-segments h4 {
+	color: #475569;
+	font-size: 11px;
+	margin: 0 0 4px;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-verdict-segments ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ob-smart-insights-verdict-segment {
+	align-items: baseline;
+	display: flex;
+	flex-wrap: wrap;
+	font-size: 12px;
+	gap: 8px;
+	margin: 0 0 2px;
+}
+
+.ob-smart-insights-verdict-segment-dimension {
+	color: #94a3b8;
+	font-size: 11px;
+}
+
+.ob-smart-insights-verdict-segment.is-won .ob-smart-insights-verdict-segment-lift {
+	color: #166534;
+	font-weight: 600;
+}
+
+.ob-smart-insights-verdict-segment.is-lost .ob-smart-insights-verdict-segment-lift {
+	color: #991b1b;
+	font-weight: 600;
+}
+
+.ob-smart-insights-verdict-recheck {
+	color: #475569;
+	font-size: 12px;
+	margin: 12px 0 0;
+}
+
+.ob-smart-insights-verdict-recheck.is-persists {
+	color: #b45309;
+}
+
+.ob-smart-insights-verdict-recheck.is-resolved {
+	color: #166534;
+}
+
+.ob-smart-insights-verdict-next {
+	color: #0f172a;
+	font-size: 12px;
+	margin: 8px 0 0;
+}
+
+.ob-smart-insights-verdict-next span {
+	color: #64748b;
+	display: block;
+	font-size: 11px;
+	text-transform: uppercase;
+}
+
+/* Story grouping: signals nested under a primary insight card. */
+.ob-smart-insights-center-children {
+	margin: 6px 0 0;
+}
+
+.ob-smart-insights-center-children-label {
+	color: #64748b;
+	display: block;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-center-children ul {
+	list-style: none;
+	margin: 4px 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-center-children li {
+	margin: 0 0 2px;
+	padding: 0 0 0 10px;
+	position: relative;
+}
+
+.ob-smart-insights-center-children li::before {
+	color: #94a3b8;
+	content: "\2022";
+	left: 0;
+	position: absolute;
+}
+
+.ob-smart-insights-center-children .ob-smart-insights-child-open {
+	color: #334155;
+	font-size: 12px;
+	line-height: 1.3;
+	text-align: left;
+}
+
+.ob-smart-insights-center-children .ob-smart-insights-child-open:hover,
+.ob-smart-insights-center-children .ob-smart-insights-child-open:focus {
+	color: #1d4ed8;
+}
+
+/* Source grouping: one card per signal, one line per traffic source. */
+.ob-smart-insights-source-group {
+	margin: 6px 0 0;
+}
+
+.ob-smart-insights-source-group-label {
+	color: #64748b;
+	display: block;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-source-group ul {
+	list-style: none;
+	margin: 4px 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-source-group li {
+	margin: 0 0 2px;
+	padding: 0 0 0 10px;
+	position: relative;
+}
+
+.ob-smart-insights-source-group li::before {
+	color: #94a3b8;
+	content: "\2022";
+	left: 0;
+	position: absolute;
+}
+
+.ob-smart-insights-source-group .ob-smart-insights-source-open {
+	color: #334155;
+	font-size: 12px;
+	line-height: 1.3;
+	text-align: left;
+}
+
+.ob-smart-insights-source-group .ob-smart-insights-source-open:hover,
+.ob-smart-insights-source-group .ob-smart-insights-source-open:focus {
+	color: #1d4ed8;
+}
+
+.ob-smart-insights-center-more {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.ob-smart-insights-center-more[hidden] {
+	display: none;
+}
+
+.ob-smart-insights-center-more-toggle {
+	align-self: flex-start;
+	color: #1d4ed8;
+	font-size: 12px;
+	font-weight: 600;
+	margin: 2px 0 0;
+}
+
+.ob-smart-insights-center-more-toggle:hover,
+.ob-smart-insights-center-more-toggle:focus {
+	color: #1e40af;
+}
+
+/* Smart Insights help tooltips ("?" helper on every signal card and every
+   detail-modal section). The trigger is emitted by assets/js/smart-insights.js
+   with the same markup as opti_behavior_tooltip(), so assets/css/tooltips.css
+   already styles the icon and the popup; these rules only keep the icon aligned
+   inside headings that were plain text blocks before. */
+.ob-smart-insights-section-heading {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.ob-smart-insights-section-heading .ob-tooltip {
+	color: inherit;
+	flex-shrink: 0;
+	vertical-align: middle;
+}
+
+/* The detail-section and "Where" sub-headings are uppercase with wide tracking.
+   The popup is portaled to <body> once opened, but it inherits these while it is
+   still inside the heading, so reset them to keep the copy readable. */
+.ob-smart-insights-section-heading .ob-tooltip-content,
+.ob-smart-insights-title-row .ob-tooltip-content {
+	font-weight: 400;
+	letter-spacing: normal;
+	text-transform: none;
+}
+
+/* The detail-modal signal helper sits in the chip row beside the priority and
+   category chips, so it aligns with them instead of with the heading text. */
+.ob-smart-insights-detail-chip-row .ob-tooltip {
+	align-self: center;
+	color: inherit;
+}
+
+.ob-smart-insights-detail-chip-row .ob-tooltip-content {
+	font-weight: 400;
+	letter-spacing: normal;
+	text-transform: none;
+}

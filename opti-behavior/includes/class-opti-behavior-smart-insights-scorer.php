@@ -198,6 +198,108 @@ class Opti_Behavior_Smart_Insights_Scorer {
 	}
 
 	/**
+	 * Calculate evidence-anchored confidence points for a correlated story.
+	 *
+	 * A single rule firing on one metric is a hint; the same problem confirmed by
+	 * several independent data sources, on a large enough sample, is evidence.
+	 * The rubric below is a deterministic point system (max 30) so every added
+	 * point can be traced back to a measured probe.
+	 *
+	 * @since 1.3.8
+	 *
+	 * @param array $correlation Correlation payload.
+	 * @return array Points plus a per-rule breakdown.
+	 */
+	public function calculate_evidence_confidence_points( $correlation ) {
+		$breakdown = array(
+			'corroborating_causes' => 0,
+			'dominant_cause'       => 0,
+			'sample_size'          => 0,
+			'independent_signals'  => 0,
+		);
+
+		if ( ! is_array( $correlation ) || empty( $correlation ) ) {
+			return array(
+				'points'    => 0,
+				'breakdown' => $breakdown,
+			);
+		}
+
+		$causes = isset( $correlation['causes'] ) && is_array( $correlation['causes'] ) ? $correlation['causes'] : array();
+
+		$corroborating = 0;
+		$best_share    = 0.0;
+		$best_sample   = 0;
+		foreach ( $causes as $cause ) {
+			if ( ! is_array( $cause ) ) {
+				continue;
+			}
+
+			$share = isset( $cause['share'] ) && is_numeric( $cause['share'] ) ? (float) $cause['share'] : 0.0;
+			if ( $share >= 0.1 ) {
+				++$corroborating;
+			}
+			$best_share  = max( $best_share, $share );
+			$best_sample = max( $best_sample, isset( $cause['sample_size'] ) ? (int) $cause['sample_size'] : 0 );
+		}
+
+		$breakdown['corroborating_causes'] = min( 24, $corroborating * 8 );
+
+		if ( $best_share >= 0.5 ) {
+			$breakdown['dominant_cause'] = 5;
+		}
+
+		if ( $best_sample >= 100 ) {
+			$breakdown['sample_size'] = 8;
+		} elseif ( $best_sample >= 30 ) {
+			$breakdown['sample_size'] = 4;
+		}
+
+		$signal_count = isset( $correlation['signal_count'] ) ? (int) $correlation['signal_count'] : 0;
+		if ( $signal_count >= 3 ) {
+			$breakdown['independent_signals'] = 10;
+		} elseif ( $signal_count >= 2 ) {
+			$breakdown['independent_signals'] = 6;
+		}
+
+		$points = min( 30, array_sum( $breakdown ) );
+
+		return array(
+			'points'    => (int) $points,
+			'breakdown' => $breakdown,
+		);
+	}
+
+	/**
+	 * Apply evidence-anchored confidence points to a scores payload.
+	 *
+	 * @since 1.3.8
+	 *
+	 * @param array $scores      Existing scores payload.
+	 * @param array $correlation Correlation payload.
+	 * @return array
+	 */
+	public function apply_evidence_confidence( $scores, $correlation ) {
+		$scores = is_array( $scores ) ? $scores : array();
+
+		$evidence = $this->calculate_evidence_confidence_points( $correlation );
+		if ( empty( $evidence['points'] ) ) {
+			return $scores;
+		}
+
+		$current = isset( $scores['confidence_score'] ) ? (int) $scores['confidence_score'] : 0;
+		$updated = min( 100, max( 0, $current + (int) $evidence['points'] ) );
+
+		$scores['confidence_score_before_evidence'] = $current;
+		$scores['evidence_confidence_points']       = (int) $evidence['points'];
+		$scores['evidence_confidence_breakdown']    = $evidence['breakdown'];
+		$scores['confidence_score']                 = $updated;
+		$scores['confidence_label']                 = $this->get_confidence_label( $updated );
+
+		return $scores;
+	}
+
+	/**
 	 * Get priority label for a score.
 	 *
 	 * @param float $score Score.
@@ -219,6 +321,72 @@ class Opti_Behavior_Smart_Insights_Scorer {
 		}
 
 		return $this->translate_label( 'Low' );
+	}
+
+	/**
+	 * Ordered canonical priority label keys, weakest first.
+	 *
+	 * The stored `priority_label` is translated for display, so every consumer
+	 * that needs to compare severities works on these canonical keys instead of
+	 * the localized string.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @return array
+	 */
+	public static function get_priority_label_keys() {
+		return array( 'low', 'medium', 'high', 'critical' );
+	}
+
+	/**
+	 * Get the display label for a canonical priority key.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param string $key Canonical key (`critical`, `high`, `medium`, `low`).
+	 * @return string
+	 */
+	public static function get_label_for_key( $key ) {
+		switch ( (string) $key ) {
+			case 'critical':
+				return function_exists( '__' ) ? __( 'Critical', 'opti-behavior' ) : 'Critical';
+			case 'high':
+				return function_exists( '__' ) ? __( 'High', 'opti-behavior' ) : 'High';
+			case 'medium':
+				return function_exists( '__' ) ? __( 'Medium', 'opti-behavior' ) : 'Medium';
+			case 'low':
+				return function_exists( '__' ) ? __( 'Low', 'opti-behavior' ) : 'Low';
+		}
+
+		return '';
+	}
+
+	/**
+	 * Resolve a stored (possibly translated) label back to its canonical key.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param string $label Stored label.
+	 * @return string Canonical key, or an empty string when unresolvable.
+	 */
+	public static function normalize_label_key( $label ) {
+		$label = trim( (string) $label );
+		if ( '' === $label ) {
+			return '';
+		}
+
+		foreach ( self::get_priority_label_keys() as $key ) {
+			if ( 0 === strcasecmp( $label, $key ) ) {
+				return $key;
+			}
+
+			$translated = self::get_label_for_key( $key );
+			if ( '' !== $translated && 0 === strcasecmp( $label, $translated ) ) {
+				return $key;
+			}
+		}
+
+		return '';
 	}
 
 	/**
@@ -302,17 +470,8 @@ class Opti_Behavior_Smart_Insights_Scorer {
 			return $label;
 		}
 
-		switch ( $label ) {
-			case 'Critical':
-				return __( 'Critical', 'opti-behavior' );
-			case 'High':
-				return __( 'High', 'opti-behavior' );
-			case 'Medium':
-				return __( 'Medium', 'opti-behavior' );
-			case 'Low':
-				return __( 'Low', 'opti-behavior' );
-			default:
-				return $label;
-		}
+		$translated = self::get_label_for_key( strtolower( (string) $label ) );
+
+		return '' === $translated ? $label : $translated;
 	}
 }

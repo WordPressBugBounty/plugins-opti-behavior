@@ -1578,7 +1578,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <div class="auto-cleanup-limits" id="sc-schedule-limits-group" style="<?php echo empty( $auto_settings['enabled'] ) ? 'opacity:0.5;pointer-events:none;' : ''; ?>">
                             <label class="condition-row">
                                 <span class="condition-label"><?php esc_html_e( 'Maximum sessions per run', 'opti-behavior' ); ?></span>
-                                <input type="number" id="sc-max-rows-per-run" class="condition-input condition-input-small" min="1" max="50000" value="<?php echo esc_attr( ! empty( $auto_settings['max_rows_per_run'] ) ? absint( $auto_settings['max_rows_per_run'] ) : 5000 ); ?>">
+                                <input type="number" id="sc-max-rows-per-run" class="condition-input condition-input-small" min="1" max="50000" value="<?php echo esc_attr( ! empty( $auto_settings['max_rows_per_run'] ) ? absint( $auto_settings['max_rows_per_run'] ) : 50000 ); ?>">
                             </label>
                             <label class="condition-row">
                                 <input type="checkbox" id="sc-schedule-optimize-after-cleanup" <?php checked( ! empty( $auto_settings['optimize_after_cleanup'] ) ); ?>>
@@ -1645,6 +1645,19 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <?php foreach ( $cleanup_logs as $log ) : ?>
                             <li class="cleanup-history-item">
                                 <span class="cleanup-history-date"><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $log['timestamp'] ) ) ); ?></span>
+                                <?php if ( ! empty( $log['repeat_count'] ) && intval( $log['repeat_count'] ) > 1 ) : ?>
+                                    <span class="cleanup-history-repeat">
+                                        <?php
+                                        $repeat_since = ! empty( $log['first_timestamp'] ) ? $log['first_timestamp'] : $log['timestamp'];
+                                        printf(
+                                            /* translators: 1: number of identical consecutive runs, 2: date of the first run in the streak */
+                                            esc_html__( '×%1$d — repeated since %2$s', 'opti-behavior' ),
+                                            intval( $log['repeat_count'] ),
+                                            esc_html( wp_date( get_option( 'date_format' ), strtotime( $repeat_since ) ) )
+                                        );
+                                        ?>
+                                    </span>
+                                <?php endif; ?>
                                 <span class="cleanup-history-type cleanup-history-type-<?php echo esc_attr( $log['type'] ); ?>"><?php echo esc_html( ucfirst( $log['type'] ) ); ?></span>
                                 <span class="cleanup-history-stats">
                                     <?php
@@ -5878,6 +5891,9 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             $scheduler_state    = class_exists( 'Opti_Behavior_Smart_Insights_Scheduler' ) ? Opti_Behavior_Smart_Insights_Scheduler::get_state() : array();
             $next_kickoff       = class_exists( 'Opti_Behavior_Smart_Insights_Scheduler' ) ? Opti_Behavior_Smart_Insights_Scheduler::get_next_kickoff_timestamp() : false;
             $tooltips = function_exists( 'opti_behavior_get_smart_insights_tooltips' ) ? opti_behavior_get_smart_insights_tooltips() : array();
+            $conversion_value   = get_option( 'opti_behavior_smart_insights_conversion_value', array() );
+            $conversion_amount  = is_array( $conversion_value ) && isset( $conversion_value['amount'] ) && (float) $conversion_value['amount'] > 0 ? (float) $conversion_value['amount'] : '';
+            $conversion_currency = is_array( $conversion_value ) && isset( $conversion_value['currency'] ) ? (string) $conversion_value['currency'] : '';
             $has_pro    = false;
 
             if ( class_exists( 'Opti_Behavior_Smart_Insights_Capabilities' ) ) {
@@ -6054,6 +6070,24 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
 
                         <div class="settings-category">
                             <h3 class="category-title">
+                                <span class="category-icon"><i data-lucide="coins"></i></span>
+                                <?php esc_html_e( 'Value of one conversion', 'opti-behavior' ); ?>
+                            </h3>
+                            <p class="category-description"><?php esc_html_e( 'What one conversion is worth to this site. Smart Insights uses it to express a leak in money instead of visitors when no WooCommerce order history is readable for the analysed period. Leave the amount empty to keep the visitor-based wording.', 'opti-behavior' ); ?></p>
+                            <table class="form-table">
+                                <tr>
+                                    <th scope="row"><label for="opti-si-conversion-amount"><?php esc_html_e( 'Amount per conversion', 'opti-behavior' ); ?></label></th>
+                                    <td>
+                                        <input type="number" step="0.01" min="0" id="opti-si-conversion-amount" name="opti_si_conversion_value[amount]" value="<?php echo esc_attr( $conversion_amount ); ?>" class="small-text" />
+                                        <input type="text" id="opti-si-conversion-currency" name="opti_si_conversion_value[currency]" value="<?php echo esc_attr( $conversion_currency ); ?>" maxlength="3" size="4" placeholder="<?php esc_attr_e( 'EUR', 'opti-behavior' ); ?>" aria-label="<?php esc_attr_e( 'Currency code', 'opti-behavior' ); ?>" />
+                                        <p class="description"><?php esc_html_e( 'Three-letter currency code, for example EUR, USD or GBP. WooCommerce order data, when available for the period, always takes precedence over this value.', 'opti-behavior' ); ?></p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </div>
+
+                        <div class="settings-category">
+                            <h3 class="category-title">
                                 <span class="category-icon"><i data-lucide="bell-ring"></i></span>
                                 <?php esc_html_e( 'Global notification launcher', 'opti-behavior' ); ?>
                                 <?php if ( ! empty( $tooltips['notification_settings'] ) && function_exists( 'opti_behavior_tooltip_e' ) ) : ?>
@@ -6225,6 +6259,28 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             );
 
             update_option( 'opti_behavior_smart_insights_notifications', $settings );
+
+            $conversion_input  = isset( $_POST['opti_si_conversion_value'] ) && is_array( $_POST['opti_si_conversion_value'] ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['opti_si_conversion_value'] ) ) : array();
+            $conversion_amount = isset( $conversion_input['amount'] ) && is_numeric( $conversion_input['amount'] ) ? max( 0, (float) $conversion_input['amount'] ) : 0;
+            $conversion_raw    = isset( $conversion_input['currency'] ) ? $conversion_input['currency'] : '';
+            if ( class_exists( 'Opti_Behavior_Smart_Insights_Impact_Calculator' ) ) {
+                $conversion_code = Opti_Behavior_Smart_Insights_Impact_Calculator::sanitize_currency_code( $conversion_raw );
+            } else {
+                $conversion_code = strtoupper( preg_replace( '/[^A-Za-z]/', '', (string) $conversion_raw ) );
+                $conversion_code = 3 === strlen( $conversion_code ) ? $conversion_code : '';
+            }
+
+            if ( $conversion_amount > 0 ) {
+                update_option(
+                    'opti_behavior_smart_insights_conversion_value',
+                    array(
+                        'amount'   => $conversion_amount,
+                        'currency' => $conversion_code,
+                    )
+                );
+            } else {
+                delete_option( 'opti_behavior_smart_insights_conversion_value' );
+            }
 
             if ( class_exists( 'Opti_Behavior_Smart_Insights_Scheduler' ) ) {
                 $scheduler_input = isset( $_POST['opti_si_scheduler'] ) && is_array( $_POST['opti_si_scheduler'] ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['opti_si_scheduler'] ) ) : array();

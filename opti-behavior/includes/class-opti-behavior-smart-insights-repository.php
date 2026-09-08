@@ -37,6 +37,9 @@ class Opti_Behavior_Smart_Insights_Repository {
 	const STATUS_IGNORED       = 'ignored';
 	const STATUS_AUTO_RESOLVED = 'auto_resolved';
 
+	/** Cap on the stored recurrence audit trail so the payload stays bounded. */
+	const MAX_RECURRENCE_WINDOWS = 12;
+
 	/**
 	 * Database table name.
 	 *
@@ -236,14 +239,21 @@ class Opti_Behavior_Smart_Insights_Repository {
 
 			$detection          = $this->decode_json_field( $data['detection_json'] );
 			$existing_detection = $this->decode_json_field( $existing['detection_json'] );
-			$same_window        = isset( $existing['date_from'], $existing['date_to'] ) && $existing['date_from'] === $data['date_from'] && $existing['date_to'] === $data['date_to'];
-			$recurrence_count   = isset( $existing_detection['recurrence_count'] ) ? max( 1, (int) $existing_detection['recurrence_count'] ) : 1;
-			if ( ! $same_window ) {
-				$recurrence_count++;
-			}
+			// An issue recurs when it is detected in two *non-overlapping* analysis
+			// windows. Counting every changed window instead turned the sliding
+			// 30-day range plus a daily scheduler into "Recurring: N days".
+			$recurrence = $this->resolve_recurrence(
+				$existing_detection,
+				isset( $existing['date_from'] ) ? (string) $existing['date_from'] : '',
+				isset( $existing['date_to'] ) ? (string) $existing['date_to'] : '',
+				(string) $data['date_from'],
+				(string) $data['date_to']
+			);
+			$recurrence_count = $recurrence['count'];
 
 			$detection['same_issue_previous_period'] = true;
 			$detection['recurrence_count']           = $recurrence_count;
+			$detection['recurrence_windows']         = $recurrence['windows'];
 			$detection['previous_status']            = $existing_status;
 			$detection['previous_priority_score']    = $old_priority;
 			$detection['priority_delta']             = $priority_delta;
@@ -270,6 +280,7 @@ class Opti_Behavior_Smart_Insights_Repository {
 			}
 
 			$data['detection_json'] = $this->encode_json_field( $detection, array() );
+			$this->preserve_existing_story_blocks( $data, $existing );
 			$data['created_at'] = $existing['created_at'];
 			$data['status']     = $is_ignored && $is_material_worsening ? self::STATUS_NEW : $existing_status;
 
@@ -283,7 +294,7 @@ class Opti_Behavior_Smart_Insights_Repository {
 				$this->table,
 				$data,
 				array( 'id' => (int) $existing['id'] ),
-				$this->get_format_list(),
+				$this->get_format_list( $data ),
 				array( '%d' )
 			);
 
@@ -296,7 +307,7 @@ class Opti_Behavior_Smart_Insights_Repository {
 			return (int) $existing['id'];
 		}
 
-		$result = $wpdb->insert( $this->table, $data, $this->get_format_list() );
+		$result = $wpdb->insert( $this->table, $data, $this->get_format_list( $data ) );
 		if ( false === $result ) {
 			return new WP_Error( 'opti_behavior_smart_insights_insert_failed', __( 'Unable to save the Smart Insight.', 'opti-behavior' ) );
 		}
@@ -305,6 +316,49 @@ class Opti_Behavior_Smart_Insights_Repository {
 		$this->auto_resolve_superseded_insights( $insert_id, $data );
 
 		return $insert_id;
+	}
+
+	/**
+	 * Count newly detected primary insights the given user has not seen yet.
+	 *
+	 * "Seen" is defined by the shared notification watermark
+	 * (`opti_behavior_si_notifications_last_seen` user meta, a Unix epoch):
+	 * an insight is unseen when its row was created after that watermark and
+	 * is still in the `new` status. Story children and suppressed rows are
+	 * excluded so the count matches the deduplicated card list.
+	 *
+	 * @since 1.8.6
+	 * @param int $last_seen_timestamp Unix epoch of the user's last-seen watermark (0 = never seen).
+	 * @return int
+	 */
+	public function count_unseen_new_insights( $last_seen_timestamp = 0 ) {
+		global $wpdb;
+
+		if ( ! $this->table_exists() ) {
+			return 0;
+		}
+
+		$now    = $this->current_mysql_time();
+		$where  = array(
+			'status = %s',
+			'( parent_insight_id IS NULL OR parent_insight_id = 0 )',
+			'( suppressed_until IS NULL OR suppressed_until <= %s )',
+		);
+		$values = array( self::STATUS_NEW, $now );
+
+		if ( $last_seen_timestamp > 0 ) {
+			// `created_at` is written with current_time( 'mysql' ) (site-local),
+			// so convert the epoch watermark into the same clock before comparing.
+			$where[]  = 'created_at > %s';
+			$values[] = function_exists( 'wp_date' )
+				? wp_date( 'Y-m-d H:i:s', (int) $last_seen_timestamp )
+				: gmdate( 'Y-m-d H:i:s', (int) $last_seen_timestamp );
+		}
+
+		$sql = "SELECT COUNT(*) FROM {$this->table} WHERE " . implode( ' AND ', $where );
+
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Table name is internal; placeholders prepared below.
+		return (int) $wpdb->get_var( $wpdb->prepare( $sql, $values ) );
 	}
 
 	/**
@@ -324,6 +378,128 @@ class Opti_Behavior_Smart_Insights_Repository {
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$this->table} WHERE id = %d", $id ), ARRAY_A );
 
 		return $row ? $this->decode_insight_row( $row ) : null;
+	}
+
+	/**
+	 * Earliest creation time recorded for one group key.
+	 *
+	 * Rows are keyed by `group_key`, so the oldest row of a group is the first
+	 * time the plugin ever detected this problem on this entity - the "first
+	 * detected" marker on the daily chart.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param string $group_key Insight group key.
+	 * @return string Empty string when unknown.
+	 */
+	public function get_first_detected_at( $group_key ) {
+		global $wpdb;
+
+		$group_key = is_scalar( $group_key ) ? (string) $group_key : '';
+		if ( '' === $group_key || ! $this->table_exists() ) {
+			return '';
+		}
+
+		$value = $wpdb->get_var(
+			$wpdb->prepare( "SELECT MIN(created_at) FROM {$this->table} WHERE group_key = %s", $group_key )
+		);
+
+		return $value ? (string) $value : '';
+	}
+
+	/**
+	 * Last stored run of the same issue group before a given row.
+	 *
+	 * Rows are keyed by `group_key`: a generation run either updates the open row
+	 * of the current window or stores a new row for a new window, so the newest
+	 * other row of the same group is the previous run of the same problem. Used
+	 * by the weekly brief to say whether an issue is new, worse or better.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param string $group_key  Insight group key.
+	 * @param int    $exclude_id Row to exclude (the current run).
+	 * @param string $before_date Optional `date_from` upper bound (exclusive).
+	 * @return array|null Decoded row, or null when the group has no earlier run.
+	 */
+	public function get_previous_run_by_group_key( $group_key, $exclude_id = 0, $before_date = '' ) {
+		global $wpdb;
+
+		$group_key = is_scalar( $group_key ) ? (string) $group_key : '';
+		if ( '' === $group_key || ! $this->table_exists() ) {
+			return null;
+		}
+
+		$where  = array( 'group_key = %s', 'id <> %d' );
+		$values = array( $group_key, absint( $exclude_id ) );
+
+		$before_date = $this->normalize_date( $before_date );
+		if ( '' !== $before_date ) {
+			$where[]  = 'date_from < %s';
+			$values[] = $before_date;
+		}
+
+		$sql = "SELECT * FROM {$this->table} WHERE " . implode( ' AND ', $where ) . ' ORDER BY date_to DESC, id DESC LIMIT 1';
+		$row = $wpdb->get_row( $wpdb->prepare( $sql, $values ), ARRAY_A );
+
+		return $row ? $this->decode_insight_row( $row ) : null;
+	}
+
+	/**
+	 * Resolved insights carrying a measured outcome verdict.
+	 *
+	 * Feeds the weekly brief's "Wins this month" block and the CSV export. The
+	 * verdict is matched on the encoded JSON so no extra column or index is
+	 * needed; the query stays bounded by `resolved_at` and `LIMIT`.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param array $args Query args (`verdict`, `resolved_since`, `limit`).
+	 * @return array Decoded rows.
+	 */
+	public function get_outcomes( $args = array() ) {
+		global $wpdb;
+
+		if ( ! $this->table_exists() ) {
+			return array();
+		}
+
+		if ( ! $this->schema_checked ) {
+			$this->ensure_optional_schema();
+		}
+
+		if ( ! $this->column_exists( 'outcome_json' ) ) {
+			return array();
+		}
+
+		$defaults = array(
+			'verdict'        => '',
+			'resolved_since' => '',
+			'limit'          => 10,
+		);
+		$args     = wp_parse_args( $args, $defaults );
+
+		$where  = array( 'outcome_json IS NOT NULL' );
+		$values = array();
+
+		$verdict = sanitize_key( (string) $args['verdict'] );
+		if ( '' !== $verdict ) {
+			$where[]  = 'outcome_json LIKE %s';
+			$values[] = '%' . $wpdb->esc_like( '"verdict":"' . $verdict . '"' ) . '%';
+		}
+
+		$since = $this->normalize_datetime_or_null( $args['resolved_since'] );
+		if ( $since ) {
+			$where[]  = 'resolved_at >= %s';
+			$values[] = $since;
+		}
+
+		$values[] = max( 1, min( 100, absint( $args['limit'] ) ) );
+
+		$sql  = "SELECT * FROM {$this->table} WHERE " . implode( ' AND ', $where ) . ' ORDER BY resolved_at DESC, id DESC LIMIT %d';
+		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $values ), ARRAY_A );
+
+		return $rows ? array_map( array( $this, 'decode_insight_row' ), $rows ) : array();
 	}
 
 	/**
@@ -583,6 +759,18 @@ class Opti_Behavior_Smart_Insights_Repository {
 		usort(
 			$insights,
 			function( $a, $b ) {
+				// Largest leak first: an insight that costs more actual visitors
+				// outranks a higher relative percentage on a small population.
+				// Rows without a stored impact block (legacy rows, signals whose
+				// affected population is not measurable) stay on the original
+				// priority ordering, so nothing regresses for existing installs.
+				if ( class_exists( 'Opti_Behavior_Smart_Insights_Impact_Calculator' ) ) {
+					$impact_delta = Opti_Behavior_Smart_Insights_Impact_Calculator::compare_by_impact( $a, $b );
+					if ( 0 !== $impact_delta ) {
+						return $impact_delta;
+					}
+				}
+
 				$a_priority = isset( $a['scores']['priority_score'] ) ? (float) $a['scores']['priority_score'] : 0;
 				$b_priority = isset( $b['scores']['priority_score'] ) ? (float) $b['scores']['priority_score'] : 0;
 
@@ -657,7 +845,13 @@ class Opti_Behavior_Smart_Insights_Repository {
 					}
 				);
 
-				$latest['recurrence_count'] = count( $history );
+				// The stored count is the window-based one; the in-set history is
+				// only the rows this query happened to return. Taking the larger of
+				// the two keeps the collapsed row from erasing measured recurrence.
+				$stored_recurrence = isset( $latest['detection']['recurrence_count'] ) ? (int) $latest['detection']['recurrence_count'] : 0;
+				$collapsed_count   = max( count( $history ), $stored_recurrence );
+
+				$latest['recurrence_count'] = $collapsed_count;
 				$latest['superseded_ids']   = array_values(
 					array_filter(
 						array_map(
@@ -672,7 +866,7 @@ class Opti_Behavior_Smart_Insights_Repository {
 				);
 				$latest['first_seen_at']    = $this->oldest_timestamp_from_history( $history );
 				$latest['detection']        = isset( $latest['detection'] ) && is_array( $latest['detection'] ) ? $latest['detection'] : array();
-				$latest['detection']['recurrence_count'] = count( $history );
+				$latest['detection']['recurrence_count'] = $collapsed_count;
 			}
 
 			$output[] = $latest;
@@ -686,6 +880,90 @@ class Opti_Behavior_Smart_Insights_Repository {
 		);
 
 		return array_values( $output );
+	}
+
+	/**
+	 * Drop story children whose primary is present in the same set.
+	 *
+	 * A story is one finding: the primary plus the child signals that explain it.
+	 * Counting the children as separate stories makes a briefing repeat the same
+	 * issue N times with the identical `users_lost`. Children whose primary is not
+	 * in the set (resolved, ignored, or filtered out) are kept, because they are
+	 * the only remaining representation of that issue.
+	 *
+	 * @param array $insights Insight rows.
+	 * @return array
+	 */
+	public function collapse_story_children( $insights ) {
+		if ( ! is_array( $insights ) || count( $insights ) < 2 ) {
+			return is_array( $insights ) ? array_values( $insights ) : array();
+		}
+
+		$present = array();
+		foreach ( $insights as $insight ) {
+			$id = isset( $insight['id'] ) ? (int) $insight['id'] : 0;
+			if ( $id > 0 ) {
+				$present[ $id ] = true;
+			}
+		}
+
+		$output = array();
+		foreach ( $insights as $insight ) {
+			$parent_id = isset( $insight['parent_insight_id'] ) ? (int) $insight['parent_insight_id'] : 0;
+			if ( $parent_id > 0 && isset( $present[ $parent_id ] ) ) {
+				continue;
+			}
+			$output[] = $insight;
+		}
+
+		return array_values( $output );
+	}
+
+	/**
+	 * Resolve the recurrence count and audit trail for an upserted insight.
+	 *
+	 * Recurrence means "seen again in a later, non-overlapping analysis window".
+	 * A sliding window that merely shifted by a day describes the same occurrence,
+	 * so it must not increment anything.
+	 *
+	 * @param array  $existing_detection Stored detection payload.
+	 * @param string $existing_from      Stored window start.
+	 * @param string $existing_to        Stored window end.
+	 * @param string $new_from           Incoming window start.
+	 * @param string $new_to             Incoming window end.
+	 * @return array `array( count, windows )`.
+	 */
+	private function resolve_recurrence( $existing_detection, $existing_from, $existing_to, $new_from, $new_to ) {
+		$count = isset( $existing_detection['recurrence_count'] ) ? max( 1, (int) $existing_detection['recurrence_count'] ) : 1;
+
+		$windows = isset( $existing_detection['recurrence_windows'] ) && is_array( $existing_detection['recurrence_windows'] )
+			? array_values( $existing_detection['recurrence_windows'] )
+			: array();
+
+		if ( empty( $windows ) && '' !== $existing_from && '' !== $existing_to ) {
+			$windows[] = array( $existing_from, $existing_to );
+		}
+
+		$last = ! empty( $windows ) ? end( $windows ) : array( $existing_from, $existing_to );
+		reset( $windows );
+		$last_to = isset( $last[1] ) ? (string) $last[1] : (string) $existing_to;
+
+		$is_new_window = '' !== $new_from && '' !== $last_to && strtotime( $new_from ) > strtotime( $last_to );
+		if ( $is_new_window ) {
+			$count++;
+			$windows[] = array( $new_from, $new_to );
+		} elseif ( empty( $windows ) && '' !== $new_from && '' !== $new_to ) {
+			$windows[] = array( $new_from, $new_to );
+		}
+
+		if ( count( $windows ) > self::MAX_RECURRENCE_WINDOWS ) {
+			$windows = array_slice( $windows, -self::MAX_RECURRENCE_WINDOWS );
+		}
+
+		return array(
+			'count'   => $count,
+			'windows' => array_values( $windows ),
+		);
 	}
 
 	/**
@@ -853,6 +1131,222 @@ class Opti_Behavior_Smart_Insights_Repository {
 			return new WP_Error( 'opti_behavior_smart_insights_status_failed', __( 'Unable to update Smart Insight status.', 'opti-behavior' ) );
 		}
 
+		// Outcome loop: freeze the "before" measurement the moment a human says
+		// the problem is fixed. Without this snapshot the later cron check has
+		// nothing to compare against, because the insight row keeps being
+		// refreshed by generation runs.
+		if ( self::STATUS_RESOLVED === $status ) {
+			$this->maybe_snapshot_outcome( $id );
+		}
+
+		return true;
+	}
+
+	/**
+	 * Store the "before" half of the outcome measurement for a resolved insight.
+	 *
+	 * Never fatal: a missing evaluator, a missing column, or an unusable signal
+	 * leaves the row exactly as it was and the status change still succeeds.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param int $id Insight ID.
+	 * @return bool True when a snapshot was written.
+	 */
+	private function maybe_snapshot_outcome( $id ) {
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Outcome_Evaluator' ) ) {
+			return false;
+		}
+
+		try {
+			$insight = $this->get_insight( $id );
+			if ( ! is_array( $insight ) ) {
+				return false;
+			}
+
+			$existing = isset( $insight['outcome'] ) && is_array( $insight['outcome'] ) ? $insight['outcome'] : array();
+			if ( ! empty( $existing['verdict'] ) || isset( $existing['after_value'] ) ) {
+				// Already measured; re-resolving must not erase a stored result.
+				return false;
+			}
+
+			$snapshot = Opti_Behavior_Smart_Insights_Outcome_Evaluator::build_snapshot( $insight );
+			if ( empty( $snapshot ) ) {
+				return false;
+			}
+
+			return true === $this->update_outcome( $id, $snapshot );
+		} catch ( Exception $e ) {
+			return false;
+		} catch ( Error $e ) {
+			return false;
+		}
+	}
+
+	/**
+	 * Write the outcome block of one insight row in place.
+	 *
+	 * Mirrors update_story_block(): one whitelisted column, no re-run of the
+	 * upsert path, every other field untouched.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param int   $id      Insight ID.
+	 * @param mixed $outcome Outcome payload. Empty/null clears the column.
+	 * @return bool|WP_Error
+	 */
+	public function update_outcome( $id, $outcome ) {
+		global $wpdb;
+
+		$id = absint( $id );
+		if ( ! $id ) {
+			return new WP_Error( 'opti_behavior_smart_insights_invalid_id', __( 'Invalid Smart Insight ID.', 'opti-behavior' ) );
+		}
+
+		if ( ! $this->table_exists() ) {
+			return $this->missing_table_error();
+		}
+
+		if ( ! $this->schema_checked ) {
+			$this->ensure_optional_schema();
+		}
+
+		if ( ! $this->column_exists( 'outcome_json' ) ) {
+			return new WP_Error( 'opti_behavior_smart_insights_outcome_column_missing', __( 'The Smart Insights outcome column is not available yet.', 'opti-behavior' ) );
+		}
+
+		$result = $wpdb->update(
+			$this->table,
+			array(
+				'outcome_json' => $this->encode_optional_json_field( $outcome ),
+				'updated_at'   => $this->current_mysql_time(),
+			),
+			array( 'id' => $id ),
+			array( '%s', '%s' ),
+			array( '%d' )
+		);
+
+		if ( false === $result ) {
+			return new WP_Error( 'opti_behavior_smart_insights_outcome_failed', __( 'Unable to store the Smart Insight outcome.', 'opti-behavior' ) );
+		}
+
+		return true;
+	}
+
+	/**
+	 * Resolved insights that are ready for their after-the-fix measurement.
+	 *
+	 * "Ready" means resolved long enough ago that a full post-fix window exists,
+	 * but not so long ago that the check would keep re-running forever. Rows that
+	 * already carry a verdict (including `inconclusive`) are skipped, so one row
+	 * is measured at most once.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param int $min_days Minimum age in days of `resolved_at`.
+	 * @param int $max_days Maximum age in days of `resolved_at`.
+	 * @param int $limit    Maximum rows returned.
+	 * @return array Decoded rows.
+	 */
+	public function get_outcome_check_candidates( $min_days = 14, $max_days = 20, $limit = 25 ) {
+		global $wpdb;
+
+		if ( ! $this->table_exists() ) {
+			return array();
+		}
+
+		if ( ! $this->schema_checked ) {
+			$this->ensure_optional_schema();
+		}
+
+		if ( ! $this->column_exists( 'outcome_json' ) ) {
+			return array();
+		}
+
+		$min_days = max( 0, absint( $min_days ) );
+		$max_days = max( $min_days, absint( $max_days ) );
+		$limit    = max( 1, min( 100, absint( $limit ) ) );
+
+		$now     = $this->current_mysql_time();
+		$newest  = gmdate( 'Y-m-d H:i:s', strtotime( $now . ' -' . $min_days . ' days' ) );
+		$oldest  = gmdate( 'Y-m-d H:i:s', strtotime( $now . ' -' . $max_days . ' days' ) );
+		// `_` is the single-character LIKE wildcard: the pattern matches a verdict
+		// with at least one character, so a row carrying an empty verdict is still
+		// treated as unmeasured instead of silently skipped forever.
+		$pending = '%' . $wpdb->esc_like( '"verdict":"' ) . '_%';
+
+		$sql = "SELECT * FROM {$this->table}
+			WHERE status = %s
+			AND resolved_at IS NOT NULL
+			AND resolved_at <= %s
+			AND resolved_at >= %s
+			AND ( outcome_json IS NULL OR outcome_json NOT LIKE %s )
+			ORDER BY resolved_at ASC
+			LIMIT %d";
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare( $sql, self::STATUS_RESOLVED, $newest, $oldest, $pending, $limit ),
+			ARRAY_A
+		);
+
+		return $rows ? array_map( array( $this, 'decode_insight_row' ), $rows ) : array();
+	}
+
+	/**
+	 * Write a single story block on an existing insight row.
+	 *
+	 * The generator owns the story blocks it computes during a detection pass,
+	 * but two of them (`hypothesis`, `experiment`) are also written outside a
+	 * generation run: the hypothesis when a viewer opens the story, the
+	 * experiment link the moment an A/B test is created from the insight. Those
+	 * writers must not re-run the whole upsert path, so this method updates one
+	 * whitelisted column in place and leaves every other field untouched.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param int    $id    Insight ID.
+	 * @param string $block Story block key (`hypothesis`, `experiment`, ...).
+	 * @param mixed  $value Block payload. Empty/null clears the column.
+	 * @return bool|WP_Error True on success.
+	 */
+	public function update_story_block( $id, $block, $value ) {
+		global $wpdb;
+
+		$id    = absint( $id );
+		$block = sanitize_key( $block );
+
+		if ( ! $id ) {
+			return new WP_Error( 'opti_behavior_smart_insights_invalid_id', __( 'Invalid Smart Insight ID.', 'opti-behavior' ) );
+		}
+
+		$column = array_search( $block, self::get_story_block_columns(), true );
+		if ( false === $column ) {
+			return new WP_Error( 'opti_behavior_smart_insights_invalid_story_block', __( 'Unknown Smart Insight story block.', 'opti-behavior' ) );
+		}
+
+		if ( ! $this->table_exists() ) {
+			return $this->missing_table_error();
+		}
+
+		if ( ! $this->schema_checked ) {
+			$this->ensure_optional_schema();
+		}
+
+		$result = $wpdb->update(
+			$this->table,
+			array(
+				$column      => $this->encode_optional_json_field( $value ),
+				'updated_at' => $this->current_mysql_time(),
+			),
+			array( 'id' => $id ),
+			array( '%s', '%s' ),
+			array( '%d' )
+		);
+
+		if ( false === $result ) {
+			return new WP_Error( 'opti_behavior_smart_insights_story_block_failed', __( 'Unable to update the Smart Insight story block.', 'opti-behavior' ) );
+		}
+
 		return true;
 	}
 
@@ -863,8 +1357,19 @@ class Opti_Behavior_Smart_Insights_Repository {
 	 * open insight did not re-trigger across the configured consecutive periods.
 	 * Manually ignored insights are preserved.
 	 *
+	 * Hardening (Bug 5): rows written or refreshed by the CURRENT run are excluded
+	 * via `active_group_keys`, mirroring the protection auto_resolve_unseen_insights()
+	 * already had. Without it this method resolves purely on `last_seen_at < cutoff`,
+	 * and `last_seen_at` is not always "now" — the funnel aggregator sets it from
+	 * MAX(funnel_tracking.last_activity), i.e. real historical data. A run could
+	 * therefore write an insight and immediately auto-resolve it in the same pass,
+	 * making it vanish from a UI that lists open statuses only. That path was not
+	 * observed on the current corpus (cutoff sat a month before the funnel
+	 * last_activity values), so this is defence-in-depth rather than an observed
+	 * defect — but it is the one mechanism that could produce the reported symptom.
+	 *
 	 * @param string $last_seen_before MySQL datetime cutoff.
-	 * @param array  $args Optional signal/entity filters.
+	 * @param array  $args Optional signal/entity filters plus active_group_keys.
 	 * @return int|WP_Error Number of rows updated.
 	 */
 	public function auto_resolve_stale_insights( $last_seen_before, $args = array() ) {
@@ -875,14 +1380,28 @@ class Opti_Behavior_Smart_Insights_Repository {
 		}
 
 		$defaults = array(
-			'signal_id'   => '',
-			'entity_type' => '',
-			'spam_scope'  => null,
+			'signal_id'         => '',
+			'entity_type'       => '',
+			'spam_scope'        => null,
+			'active_group_keys' => array(),
 		);
 		$args     = wp_parse_args( $args, $defaults );
 
 		$where  = array( 'last_seen_at < %s', "status IN ('new','viewed','in_progress')" );
 		$values = array( $last_seen_before );
+
+		$active_group_keys = array_values(
+			array_unique(
+				array_filter(
+					array_map( 'sanitize_text_field', (array) $args['active_group_keys'] )
+				)
+			)
+		);
+		if ( ! empty( $active_group_keys ) ) {
+			$placeholders = implode( ', ', array_fill( 0, count( $active_group_keys ), '%s' ) );
+			$where[]      = "( group_key IS NULL OR group_key = '' OR group_key NOT IN ( {$placeholders} ) )";
+			$values       = array_merge( $values, $active_group_keys );
+		}
 
 		if ( '' !== $args['signal_id'] ) {
 			$where[]  = 'signal_id = %s';
@@ -1107,6 +1626,12 @@ class Opti_Behavior_Smart_Insights_Repository {
 			'scores_json'              => $this->encode_json_field( isset( $insight['scores'] ) ? $insight['scores'] : array(), array() ),
 			'segment_json'             => $this->encode_json_field( isset( $insight['segment'] ) ? $insight['segment'] : ( isset( $insight['segments'] ) ? $insight['segments'] : array() ), array() ),
 			'trend_json'               => $this->encode_json_field( isset( $insight['trend'] ) ? $insight['trend'] : array(), array() ),
+			'parent_insight_id'        => isset( $insight['parent_insight_id'] ) && absint( $insight['parent_insight_id'] ) ? absint( $insight['parent_insight_id'] ) : null,
+			'correlation_json'         => $this->encode_optional_json_field( isset( $insight['correlation'] ) ? $insight['correlation'] : null ),
+			'evidence_refs_json'       => $this->encode_optional_json_field( isset( $insight['evidence_refs'] ) ? $insight['evidence_refs'] : null ),
+			'hypothesis_json'          => $this->encode_optional_json_field( isset( $insight['hypothesis'] ) ? $insight['hypothesis'] : null ),
+			'experiment_json'          => $this->encode_optional_json_field( isset( $insight['experiment'] ) ? $insight['experiment'] : null ),
+			'impact_json'              => $this->encode_optional_json_field( isset( $insight['impact'] ) ? $insight['impact'] : null ),
 			'interpretation'           => isset( $insight['interpretation'] ) ? wp_kses_post( $insight['interpretation'] ) : '',
 			'why_it_matters'           => isset( $insight['why_it_matters'] ) ? wp_kses_post( $insight['why_it_matters'] ) : '',
 			'likely_causes_json'       => $this->encode_json_field( isset( $insight['likely_causes'] ) ? $insight['likely_causes'] : array(), array() ),
@@ -1147,13 +1672,49 @@ class Opti_Behavior_Smart_Insights_Repository {
 			'to'   => $row['date_to'],
 		);
 
-		foreach ( array( 'metrics_json', 'detection_json', 'scores_json', 'segment_json', 'trend_json', 'likely_causes_json', 'recommended_actions_json', 'related_reports_json' ) as $field ) {
+		// Story blocks (correlation engine). Legacy rows predate these columns, so
+		// every lookup is guarded and decodes to an empty array, which keeps the
+		// uncorrelated single-signal card path byte-for-byte unchanged.
+		$row['parent_insight_id'] = isset( $row['parent_insight_id'] ) ? (int) $row['parent_insight_id'] : 0;
+		$row['correlation']       = $this->decode_json_field( isset( $row['correlation_json'] ) ? $row['correlation_json'] : '' );
+		$row['evidence_refs']     = $this->decode_json_field( isset( $row['evidence_refs_json'] ) ? $row['evidence_refs_json'] : '' );
+		$row['hypothesis']        = $this->decode_json_field( isset( $row['hypothesis_json'] ) ? $row['hypothesis_json'] : '' );
+		$row['experiment']        = $this->decode_json_field( isset( $row['experiment_json'] ) ? $row['experiment_json'] : '' );
+		$row['impact']            = $this->decode_json_field( isset( $row['impact_json'] ) ? $row['impact_json'] : '' );
+
+		// Outcome loop (Workstream F). Legacy rows and rows that were never
+		// resolved decode to an empty array, so every consumer keeps the exact
+		// "no outcome" path it had before the column existed. The metric label is
+		// resolved on read so a stored row never carries a frozen translation.
+		$row['outcome'] = $this->decode_json_field( isset( $row['outcome_json'] ) ? $row['outcome_json'] : '' );
+		if ( ! empty( $row['outcome'] ) && is_array( $row['outcome'] ) && class_exists( 'Opti_Behavior_Smart_Insights_Outcome_Evaluator' ) ) {
+			$row['outcome'] = Opti_Behavior_Smart_Insights_Outcome_Evaluator::decorate( $row['outcome'] );
+		}
+
+		foreach ( array( 'metrics_json', 'detection_json', 'scores_json', 'segment_json', 'trend_json', 'likely_causes_json', 'recommended_actions_json', 'related_reports_json', 'correlation_json', 'evidence_refs_json', 'hypothesis_json', 'experiment_json', 'impact_json', 'outcome_json' ) as $field ) {
 			unset( $row[ $field ] );
 		}
 
 		$row['id'] = isset( $row['id'] ) ? (int) $row['id'] : 0;
 
 		return $row;
+	}
+
+	/**
+	 * Return the nullable story-block columns added by the correlation engine.
+	 *
+	 * @since 1.3.8
+	 *
+	 * @return array Column name => payload key on the decoded insight array.
+	 */
+	public static function get_story_block_columns() {
+		return array(
+			'correlation_json'   => 'correlation',
+			'evidence_refs_json' => 'evidence_refs',
+			'hypothesis_json'    => 'hypothesis',
+			'experiment_json'    => 'experiment',
+			'impact_json'        => 'impact',
+		);
 	}
 
 	/**
@@ -1211,6 +1772,37 @@ class Opti_Behavior_Smart_Insights_Repository {
 	}
 
 	/**
+	 * JSON-encode a nullable story block.
+	 *
+	 * Story columns (`correlation_json`, `evidence_refs_json`, `hypothesis_json`,
+	 * `experiment_json`, `impact_json`) stay SQL NULL until the correlation
+	 * engine actually produces content. That keeps "no story yet" distinguishable
+	 * from "empty story" and leaves legacy rows untouched.
+	 *
+	 * @since 1.3.8
+	 *
+	 * @param mixed $value Field value.
+	 * @return string|null
+	 */
+	private function encode_optional_json_field( $value ) {
+		if ( null === $value || '' === $value || array() === $value ) {
+			return null;
+		}
+
+		if ( is_string( $value ) ) {
+			$decoded = json_decode( $value, true );
+			if ( JSON_ERROR_NONE !== json_last_error() || ! is_array( $decoded ) || array() === $decoded ) {
+				return null;
+			}
+			$value = $decoded;
+		}
+
+		$json = wp_json_encode( $value );
+
+		return ( false === $json || 'null' === $json ) ? null : $json;
+	}
+
+	/**
 	 * Decode a JSON field safely.
 	 *
 	 * @param string $value JSON string.
@@ -1229,10 +1821,18 @@ class Opti_Behavior_Smart_Insights_Repository {
 	/**
 	 * Get insert/update formats matching prepare_insight_data().
 	 *
+	 * $wpdb only consumes formats positionally, so the list length must track the
+	 * prepared column count. Deriving it from the prepared row keeps the two in
+	 * sync when story columns are added. NULL values bypass the format entirely
+	 * in $wpdb, so '%s' is safe for the nullable integer column too.
+	 *
+	 * @param array|null $data Prepared insight row.
 	 * @return array
 	 */
-	private function get_format_list() {
-		return array_fill( 0, 29, '%s' );
+	private function get_format_list( $data = null ) {
+		$count = is_array( $data ) ? count( $data ) : 35;
+
+		return array_fill( 0, $count, '%s' );
 	}
 
 	/**
@@ -1249,6 +1849,36 @@ class Opti_Behavior_Smart_Insights_Repository {
 		);
 
 		return substr( implode( ':', array_filter( $parts ) ), 0, 191 );
+	}
+
+	/**
+	 * Keep already-stored story blocks when a refresh does not supply them.
+	 *
+	 * A plain signal re-detection (scheduler tick, spam-scope refresh) rebuilds
+	 * only the classic insight payload. Without this guard it would overwrite a
+	 * previously computed correlation, hypothesis, experiment link, or impact
+	 * block with NULL. Incoming non-empty blocks always win.
+	 *
+	 * @since 1.3.8
+	 *
+	 * @param array $data     Prepared incoming insight data (by reference).
+	 * @param array $existing Existing database row.
+	 * @return void
+	 */
+	private function preserve_existing_story_blocks( &$data, $existing ) {
+		foreach ( array_keys( self::get_story_block_columns() ) as $column ) {
+			if ( ! empty( $data[ $column ] ) ) {
+				continue;
+			}
+
+			if ( isset( $existing[ $column ] ) && null !== $existing[ $column ] && '' !== $existing[ $column ] ) {
+				$data[ $column ] = $existing[ $column ];
+			}
+		}
+
+		if ( empty( $data['parent_insight_id'] ) && ! empty( $existing['parent_insight_id'] ) ) {
+			$data['parent_insight_id'] = (int) $existing['parent_insight_id'];
+		}
 	}
 
 	/**
@@ -1487,6 +2117,18 @@ class Opti_Behavior_Smart_Insights_Repository {
 			'suppressed_until' => 'ADD COLUMN suppressed_until datetime DEFAULT NULL AFTER group_key',
 			'source_plugin'    => "ADD COLUMN source_plugin varchar(20) NOT NULL DEFAULT 'free' AFTER suppressed_until",
 			'visibility_tier'  => "ADD COLUMN visibility_tier varchar(50) NOT NULL DEFAULT 'free' AFTER source_plugin",
+			// Story columns (correlation engine). Added AFTER trend_json to match
+			// the dbDelta layout; all nullable so existing rows keep rendering
+			// through the uncorrelated single-signal card path.
+			'parent_insight_id'  => 'ADD COLUMN parent_insight_id bigint(20) UNSIGNED DEFAULT NULL AFTER trend_json',
+			'correlation_json'   => 'ADD COLUMN correlation_json longtext DEFAULT NULL AFTER parent_insight_id',
+			'evidence_refs_json' => 'ADD COLUMN evidence_refs_json longtext DEFAULT NULL AFTER correlation_json',
+			'hypothesis_json'    => 'ADD COLUMN hypothesis_json longtext DEFAULT NULL AFTER evidence_refs_json',
+			'experiment_json'    => 'ADD COLUMN experiment_json longtext DEFAULT NULL AFTER hypothesis_json',
+			'impact_json'        => 'ADD COLUMN impact_json longtext DEFAULT NULL AFTER experiment_json',
+			// Outcome loop: the before/after measurement of a resolved insight.
+			// Written only by update_outcome(); a generation run never touches it.
+			'outcome_json'       => 'ADD COLUMN outcome_json longtext DEFAULT NULL AFTER impact_json',
 		);
 
 		foreach ( $columns as $column => $alter_sql ) {

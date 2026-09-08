@@ -40,6 +40,16 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	 */
 	private $core;
 
+	/**
+	 * Whether the pageviews table exposes the exit_page flag column.
+	 *
+	 * Memoized schema probe for sync_pageview_exit_flag(); null until resolved.
+	 *
+	 * @since 1.0.9
+	 * @var bool|null
+	 */
+	private $pageviews_exit_flag_supported = null;
+
 
 	/**
 	 * Constructor.
@@ -341,18 +351,13 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// Multi-tab session deduplication: use the earliest active session for this
 		// visitor (within 30 min) as the canonical one, so heatmap events from a
 		// second tab are recorded under the same session.
+		// Bug 2: the lookup itself now lives in Opti_Behavior_Heatmap_Session so the
+		// Pro forms/errors endpoints resolve the SAME canonical id (they used to
+		// re-derive a 30-min-bucket seed and orphan every row they wrote).
 		if ( ! empty( $visitor_id ) && ! empty( $session_id ) ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-			$canonical_sid = $wpdb->get_var( $wpdb->prepare(
-				"SELECT id FROM {$wpdb->prefix}optibehavior_sessions
-				 WHERE visitor_id = %s
-				 AND start_time >= DATE_SUB( NOW(), INTERVAL 30 MINUTE )
-				 ORDER BY start_time ASC, id ASC
-				 LIMIT 1",
-				$visitor_id
-			) );
-			if ( ! empty( $canonical_sid ) && $canonical_sid !== $session_id ) {
-				$session_id = $canonical_sid;
+			$canonical_session_handler = $this->core->get_session();
+			if ( $canonical_session_handler && method_exists( $canonical_session_handler, 'resolve_canonical_session_id' ) ) {
+				$session_id = $canonical_session_handler->resolve_canonical_session_id( $visitor_id, $session_id );
 			}
 		}
 
@@ -482,19 +487,20 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// beacon (rrweb), which can miss clicks the heatmap tracker captured, leaving a
 		// genuinely-clicked page reading 0 and getting hidden by the spam allow-list.
 		if ( 16 === $event_numeric || 17 === $event_numeric ) {
-			// A click is engagement — the session is not a bounce. Mirrors the
-			// batch-events handler; without this, a single-page engaged session
-			// whose clicks arrive via this heatmap event endpoint stayed
-			// flagged as a bounce forever.
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
-			$wpdb->update(
-				"{$wpdb->prefix}optibehavior_sessions",
-				array( 'is_bounce' => 0 ),
-				array( 'id' => $session_id ),
-				array( '%d' ),
-				array( '%s' )
-			);
-			$debug_manager->log( 'Bounce status updated to 0 due to heatmap click engagement for session: ' . $session_id, 'debug', 'ajax' );
+			// Bug 4 — a bare click no longer clears is_bounce.
+			//
+			// The anti-spam classifier requires clicks >= min_clicks_threshold() (1 by
+			// default) before a session is counted as `human`, while this endpoint used
+			// to clear is_bounce on the FIRST click. The two rules together made
+			// "counted AND bounced" impossible, so the real bounce rate of all counted
+			// traffic was ~0 and every bounce-driven signal under-detected massively.
+			//
+			// Bounce now follows the standard analytics definition — a single pageview
+			// with no qualified engagement. The clears that encode exactly that remain
+			// untouched: page_views > 1 (ensure_pageview_exists + the batch handler)
+			// and scroll depth > 25% (heartbeat + session end). The anti-spam contract
+			// is deliberately NOT weakened: real bots still fail the duration and
+			// scroll thresholds independently of clicks.
 			$this->reconcile_session_page_click_count( $session_id, $page_id );
 		}
 
@@ -1293,6 +1299,105 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			"UPDATE {$wpdb->prefix}optibehavior_sessions SET is_bounce = 0 WHERE id = %s AND page_views > 1",
 			$session_id
 		) );
+
+		// Bug 3: the row just inserted is the session's newest pageview, so it is
+		// now the exit. Only reached on the INSERT path — the early-return dedup /
+		// heartbeat-touch branches above leave the latest row unchanged, so the
+		// flag they would recompute is already correct.
+		$this->sync_pageview_exit_flag( $session_id );
+	}
+
+	/**
+	 * Flag the session's latest pageview row as its exit pageview.
+	 *
+	 * Bug 3 — `{prefix}optibehavior_pageviews.exit_page` (tinyint flag) was never
+	 * written by ANY code path, while the Smart Insights aggregator computes
+	 * `exit_sessions = COUNT(DISTINCT CASE WHEN pv.exit_page = 1 ...)`. Every page
+	 * therefore reported exit_rate 0 and `high_exit_rate_page` was untriggerable.
+	 *
+	 * NOT to be confused with `sessions.exit_page`, a TEXT column holding the exit
+	 * URL, which is a different column with different semantics and is maintained
+	 * by sync_session_exit_page() below.
+	 *
+	 * Called after a pageview row is created rather than at the final beacon: many
+	 * sessions never send an unload beacon (tab killed, adblock, mobile background),
+	 * and marking on insert means the flag is correct for single-pageview sessions
+	 * from the very first view. A later navigation re-points it — the statement
+	 * clears the previous flag and sets the new one atomically, so exactly one row
+	 * per session ever carries the flag.
+	 *
+	 * @since 1.0.9
+	 * @param string $session_id Session ID.
+	 */
+	private function sync_pageview_exit_flag( $session_id ) {
+		global $wpdb;
+
+		$session_id = (string) $session_id;
+		if ( '' === $session_id ) {
+			return;
+		}
+
+		$pageviews_table = "{$wpdb->prefix}optibehavior_pageviews";
+
+		// Mid-upgrade installs may not have the column yet: degrade, never error.
+		// Mirrors the column_exists() guards the Smart Insights readers already use.
+		if ( ! $this->pageviews_have_exit_flag() ) {
+			return;
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
+		$latest_id = $wpdb->get_var( $wpdb->prepare(
+			"SELECT id FROM {$pageviews_table}
+			 WHERE session_id = %s
+			 ORDER BY view_time DESC, id DESC
+			 LIMIT 1",
+			$session_id
+		) );
+
+		if ( ! $latest_id ) {
+			return;
+		}
+
+		// Single statement: set the new exit row and clear any stale one. Touches
+		// only the latest row plus whatever row currently holds the flag, and rides
+		// the existing session_id index.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
+		$wpdb->query( $wpdb->prepare(
+			"UPDATE {$pageviews_table}
+			 SET exit_page = CASE WHEN id = %d THEN 1 ELSE 0 END
+			 WHERE session_id = %s AND ( id = %d OR exit_page = 1 )",
+			$latest_id,
+			$session_id,
+			$latest_id
+		) );
+	}
+
+	/**
+	 * Whether the pageviews table exposes the exit_page flag column.
+	 *
+	 * Memoized per request: sync_pageview_exit_flag() runs on every pageview.
+	 *
+	 * @since 1.0.9
+	 * @return bool
+	 */
+	private function pageviews_have_exit_flag() {
+		global $wpdb;
+
+		if ( null !== $this->pageviews_exit_flag_supported ) {
+			return $this->pageviews_exit_flag_supported;
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Schema probe, cached for the request.
+		$this->pageviews_exit_flag_supported = (bool) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s',
+				DB_NAME,
+				$wpdb->prefix . 'optibehavior_pageviews',
+				'exit_page'
+			)
+		);
+
+		return $this->pageviews_exit_flag_supported;
 	}
 
 	/**
@@ -1302,6 +1407,9 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	 * call of a session leaves the true exit page behind. The WHERE guard skips
 	 * the write entirely when the stored value is already this URL, keeping the
 	 * per-heartbeat overhead at a single indexed no-op SELECT.
+	 *
+	 * Writes `sessions.exit_page` (TEXT, a URL). The tinyint flag on the pageviews
+	 * table is a separate concern handled by sync_pageview_exit_flag().
 	 *
 	 * @param string $session_id Session ID.
 	 * @param string $url        URL the visitor is currently viewing.
@@ -2532,18 +2640,13 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// is redirected to the canonical session so all tracking data (sessions,
 		// recordings, heatmap events) are consolidated under one session.
 		// -----------------------------------------------------------------------
+		// Bug 2: the lookup itself now lives in Opti_Behavior_Heatmap_Session so the
+		// Pro forms/errors endpoints resolve the SAME canonical id (they used to
+		// re-derive a 30-min-bucket seed and orphan every row they wrote).
 		if ( ! empty( $visitor_id ) && ! empty( $session_id ) ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-			$canonical_sid = $wpdb->get_var( $wpdb->prepare(
-				"SELECT id FROM {$wpdb->prefix}optibehavior_sessions
-				 WHERE visitor_id = %s
-				 AND start_time >= DATE_SUB( NOW(), INTERVAL 30 MINUTE )
-				 ORDER BY start_time ASC, id ASC
-				 LIMIT 1",
-				$visitor_id
-			) );
-			if ( ! empty( $canonical_sid ) && $canonical_sid !== $session_id ) {
-				$session_id = $canonical_sid;
+			$canonical_session_handler = $this->core->get_session();
+			if ( $canonical_session_handler && method_exists( $canonical_session_handler, 'resolve_canonical_session_id' ) ) {
+				$session_id = $canonical_session_handler->resolve_canonical_session_id( $visitor_id, $session_id );
 			}
 		}
 
@@ -2697,11 +2800,28 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			);
 		} else {
 			// Insert new visitor
-			$wpdb->insert(
+			$visitor_inserted = $wpdb->insert(
 				"{$wpdb->prefix}optibehavior_visitors",
 				$visitor_data,
 				array( '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s' )
 			);
+
+			// Concurrent session_start requests (multi-tab first hit, tracker +
+			// recorder double-fire) can both pass the existence check above and
+			// race this INSERT — the loser fails on the visitors PRIMARY key even
+			// though the row now exists. Re-read so the rest of this request
+			// (visit_count increment below) behaves exactly like the
+			// existing-visitor path instead of treating the visitor as new.
+			if ( false === $visitor_inserted ) {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
+				$existing_visitor = $wpdb->get_row( $wpdb->prepare(
+					"SELECT * FROM {$wpdb->prefix}optibehavior_visitors WHERE id = %s",
+					$visitor_id
+				) );
+				if ( $existing_visitor ) {
+					$debug_manager->log( 'Visitor insert lost a concurrent-start race; row already exists: ' . $visitor_id, 'debug', 'ajax' );
+				}
+			}
 		}
 
 		// Create or update session record
@@ -2776,28 +2896,49 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			// false; previously this method still emitted wp_send_json_success()
 			// below, yielding the "on ne détecte rien" false positive (HTTP 200,
 			// zero rows). Surface the failure with a real error instead.
+			//
+			// EXCEPTION — concurrent-start race: two simultaneous session_start
+			// requests can both pass the existence check above and race this
+			// INSERT. The loser fails on the sessions PRIMARY key even though the
+			// session row now exists — that is a success condition (the session is
+			// recorded), not the missing-tables outage this guard protects
+			// against. Re-check before surfacing a 500.
+			$session_race_lost = false;
 			if ( false === $session_inserted ) {
-				$debug_manager->log(
-					'Session insert FAILED for ' . $session_id . '. DB error: ' . $wpdb->last_error,
-					'error',
-					'ajax'
-				);
-				wp_send_json_error(
-					array(
-						'message' => __( 'Session could not be recorded', 'opti-behavior' ),
-						'reason'  => 'db_insert_failed',
-					),
-					500
-				);
-				return;
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
+				$session_race_lost = (bool) $wpdb->get_var( $wpdb->prepare(
+					"SELECT id FROM {$wpdb->prefix}optibehavior_sessions WHERE id = %s",
+					$session_id
+				) );
+				if ( $session_race_lost ) {
+					$debug_manager->log( 'Session insert lost a concurrent-start race; row already exists: ' . $session_id, 'debug', 'ajax' );
+				} else {
+					$debug_manager->log(
+						'Session insert FAILED for ' . $session_id . '. DB error: ' . $wpdb->last_error,
+						'error',
+						'ajax'
+					);
+					wp_send_json_error(
+						array(
+							'message' => __( 'Session could not be recorded', 'opti-behavior' ),
+							'reason'  => 'db_insert_failed',
+						),
+						500
+					);
+					return;
+				}
 			}
-			$debug_manager->log( 'New session created: ' . $session_id, 'debug', 'ajax' );
+			if ( ! $session_race_lost ) {
+				$debug_manager->log( 'New session created: ' . $session_id, 'debug', 'ajax' );
+			}
 
 			// Increment visit_count only when a genuinely new session is created AND
 			// the visitor already existed before (not just created above with visit_count=1).
 			// This ensures a brand-new visitor's first session keeps visit_count=1 ("New"),
 			// while truly returning visitors (existing record) get incremented ("Returning").
-			if ( $existing_visitor ) {
+			// A race-lost insert means the winning request already accounted for
+			// this session — do not double-increment.
+			if ( $existing_visitor && ! $session_race_lost ) {
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
 				$wpdb->query( $wpdb->prepare(
 					"UPDATE {$wpdb->prefix}optibehavior_visitors SET visit_count = visit_count + 1 WHERE id = %s",
@@ -2887,16 +3028,12 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 
 			// Handle click events for heatmaps
 			if ( $event['type'] === 'click' && isset( $event['data']['x'], $event['data']['y'] ) ) {
-				// A click indicates engagement - session is not a bounce
-				$wpdb->update(
-					"{$wpdb->prefix}optibehavior_sessions",
-					array( 'is_bounce' => 0 ),
-					array( 'id' => $session_id ),
-					array( '%d' ),
-					array( '%s' )
-				);
-				$debug_manager->log( 'Bounce status updated to 0 due to click engagement for session: ' . $session_id, 'debug', 'ajax' );
-
+				// Bug 4 — a bare click no longer clears is_bounce. See the matching
+				// comment in the heatmap event endpoint above: requiring a click to be
+				// counted as human while treating any click as non-bounce made the two
+				// states mutually exclusive. Bounce is now "single pageview, no
+				// qualified engagement"; the page_views > 1 clear directly above and
+				// the scroll > 25% clears elsewhere still apply.
 				$current_url = isset( $event['data']['url'] ) ? $event['data']['url'] : ( isset( $data['url'] ) ? $data['url'] : '' );
 				if ( empty( $current_url ) ) {
 					$current_url = isset( $_SERVER['HTTP_REFERER'] ) ? esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) : '';
@@ -3069,8 +3206,11 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 					$session_id
 				) );
 
-				// It's a bounce if only one page was viewed AND no prior engagement was detected
-				// Don't override is_bounce = 0 that was set by scroll/click handlers
+				// It's a bounce if only one page was viewed AND no prior engagement was detected.
+				// Don't override is_bounce = 0 that was set by a qualified-engagement
+				// handler (scroll > 25%, or a second pageview). Bug 4: a bare click is
+				// no longer qualified engagement, so a one-page session that clicked
+				// once and scrolled < 25% now correctly stays a bounce.
 				// First, check current bounce status to preserve engagement flags
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
 				$current_bounce = $wpdb->get_var( $wpdb->prepare(
@@ -3081,7 +3221,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 				if ( $pageview_count <= 1 && intval( $current_bounce ) !== 0 ) {
 					$is_bounce = 1;
 				} else if ( intval( $current_bounce ) === 0 ) {
-					// Preserve engagement flag - user scrolled > 25% or clicked
+					// Preserve engagement flag — user scrolled > 25% or viewed a 2nd page.
 					$is_bounce = 0;
 				}
 
@@ -3216,8 +3356,9 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		);
 
 		// This direct-insert path bypasses ensure_pageview_exists(), so mirror
-		// its exit-page bookkeeping here.
+		// its exit-page bookkeeping here (session exit URL + pageview exit flag).
 		$this->sync_session_exit_page( $session_id, $data['url'] );
+		$this->sync_pageview_exit_flag( $session_id );
 
 		$debug_manager->log( 'Page load processed successfully', 'debug', 'ajax' );
 		wp_send_json_success( __( 'Page load recorded', 'opti-behavior' ) );

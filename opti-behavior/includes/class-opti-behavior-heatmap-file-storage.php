@@ -234,12 +234,94 @@ class Opti_Behavior_Heatmap_File_Storage {
 			return array( 'error' => 'Failed to write file' );
 		}
 
-		return array(
-			'success'   => true,
-			'file_path' => str_replace( $this->base_dir, '', $filepath ),
-			'file_size' => filesize( $filepath ),
-			'timestamp' => $timestamp,
+		// Seed the running-counter sidecar straight away (bug #2 / D2) so the
+		// event-timestamp span of the very first batch is available before any
+		// append happens. Without it the first recordings row would fall back to
+		// the client wall clock.
+		$bounds = $this->scan_events_timestamp_bounds( isset( $data['events'] ) && is_array( $data['events'] ) ? $data['events'] : array() );
+		$this->write_recording_index(
+			$filepath . self::INDEX_SUFFIX,
+			array(
+				'events'   => isset( $data['events'] ) && is_array( $data['events'] ) ? count( $data['events'] ) : 0,
+				'duration' => isset( $data['duration'] ) ? (int) $data['duration'] : 0,
+				'first_ts' => null === $bounds ? 0 : $bounds['min'],
+				'last_ts'  => null === $bounds ? 0 : $bounds['max'],
+			)
 		);
+
+		return array(
+			'success'         => true,
+			'file_path'       => str_replace( $this->base_dir, '', $filepath ),
+			'file_size'       => filesize( $filepath ),
+			'timestamp'       => $timestamp,
+			'replay_duration' => self::replay_duration_from_bounds( null === $bounds ? 0 : $bounds['min'], null === $bounds ? 0 : $bounds['max'] ),
+		);
+	}
+
+	/**
+	 * Min/max `timestamp` across a batch of events.
+	 *
+	 * Batches are NOT guaranteed to be element-ordered (rrweb can flush an
+	 * out-of-order tail, and merged `.oblog` batches are concatenated in save
+	 * order), so the span must come from min/max, never from first/last.
+	 *
+	 * @param array $events Event array.
+	 * @return array|null array( 'min' => int, 'max' => int ) or null when the
+	 *                    batch carries no usable timestamp.
+	 */
+	private function scan_events_timestamp_bounds( $events ) {
+		if ( ! is_array( $events ) || empty( $events ) ) {
+			return null;
+		}
+
+		$min = null;
+		$max = null;
+		foreach ( $events as $event ) {
+			if ( ! is_array( $event ) || ! isset( $event['timestamp'] ) || ! is_numeric( $event['timestamp'] ) ) {
+				continue;
+			}
+			$ts = (int) $event['timestamp'];
+			if ( $ts <= 0 ) {
+				continue;
+			}
+			if ( null === $min || $ts < $min ) {
+				$min = $ts;
+			}
+			if ( null === $max || $ts > $max ) {
+				$max = $ts;
+			}
+		}
+
+		if ( null === $min ) {
+			return null;
+		}
+
+		return array( 'min' => $min, 'max' => $max );
+	}
+
+	/**
+	 * Replay duration (seconds) from a first/last event timestamp pair.
+	 *
+	 * This is the length a user can actually WATCH, as opposed to the wall-clock
+	 * session duration. It is deliberately NOT capped at the recording
+	 * collection caps (`max_duration` 600 / server 1800): those bound what is
+	 * collected, not how much of it exists.
+	 *
+	 * Rounding convention: durations round UP (ceil), matching the player's
+	 * `#total-time`, so the recordings list, the payload meta and the control
+	 * bar agree to the second (a 14.4 s span reads 0:15 everywhere).
+	 *
+	 * @param int $first_ts Epoch milliseconds of the first event.
+	 * @param int $last_ts  Epoch milliseconds of the last event.
+	 * @return int Seconds, never negative.
+	 */
+	public static function replay_duration_from_bounds( $first_ts, $last_ts ) {
+		$first_ts = (int) $first_ts;
+		$last_ts  = (int) $last_ts;
+		if ( $first_ts <= 0 || $last_ts <= 0 || $last_ts <= $first_ts ) {
+			return 0;
+		}
+		return (int) ceil( ( $last_ts - $first_ts ) / 1000 );
 	}
 
 	/**
@@ -278,6 +360,14 @@ class Opti_Behavior_Heatmap_File_Storage {
 		if ( null === $idx ) {
 			$idx = $this->init_recording_index( $full_path, $file_path );
 			$this->write_recording_index( $idx_path, $idx );
+		} elseif ( $idx['first_ts'] <= 0 ) {
+			// Sidecar written before the replay-duration tracking existed
+			// (bug #2 / D2). Seed the timestamp bounds once from the base file
+			// so the span starts at the real first event, then let later
+			// appends extend `last_ts`.
+			$seed             = $this->init_recording_index( $full_path, $file_path );
+			$idx['first_ts']  = $seed['first_ts'];
+			$idx['last_ts']   = max( (int) $idx['last_ts'], (int) $seed['last_ts'] );
 		}
 
 		$new_events   = isset( $data['events'] ) && is_array( $data['events'] ) ? array_values( $data['events'] ) : array();
@@ -324,11 +414,12 @@ class Opti_Behavior_Heatmap_File_Storage {
 				$this->write_recording_index( $idx_path, $idx );
 			}
 			return array(
-				'success'   => true,
-				'file_path' => $file_path,
-				'file_size' => $combined_size,
-				'timestamp' => current_time( 'timestamp' ),
-				'duration'  => (int) $idx['duration'],
+				'success'         => true,
+				'file_path'       => $file_path,
+				'file_size'       => $combined_size,
+				'timestamp'       => current_time( 'timestamp' ),
+				'duration'        => (int) $idx['duration'],
+				'replay_duration' => self::replay_duration_from_bounds( $idx['first_ts'], $idx['last_ts'] ),
 			);
 		}
 
@@ -341,16 +432,25 @@ class Opti_Behavior_Heatmap_File_Storage {
 
 		$idx['events']  += count( $new_events );
 		$idx['duration'] = max( (int) $idx['duration'], $new_duration );
+
+		// Extend the replay span with this batch (bug #2 / D2).
+		$bounds = $this->scan_events_timestamp_bounds( $new_events );
+		if ( null !== $bounds ) {
+			$idx['first_ts'] = ( (int) $idx['first_ts'] > 0 ) ? min( (int) $idx['first_ts'], $bounds['min'] ) : $bounds['min'];
+			$idx['last_ts']  = max( (int) $idx['last_ts'], $bounds['max'] );
+		}
+
 		$this->write_recording_index( $idx_path, $idx );
 
 		$combined_size = (int) @filesize( $full_path ) + (int) @filesize( $log_path );
 
 		return array(
-			'success'   => true,
-			'file_path' => $file_path,
-			'file_size' => $combined_size,
-			'timestamp' => current_time( 'timestamp' ),
-			'duration'  => (int) $idx['duration'],
+			'success'         => true,
+			'file_path'       => $file_path,
+			'file_size'       => $combined_size,
+			'timestamp'       => current_time( 'timestamp' ),
+			'duration'        => (int) $idx['duration'],
+			'replay_duration' => self::replay_duration_from_bounds( $idx['first_ts'], $idx['last_ts'] ),
 		);
 	}
 
@@ -358,7 +458,7 @@ class Opti_Behavior_Heatmap_File_Storage {
 	 * Read the running-counter sidecar (`.obidx`) for a recording.
 	 *
 	 * @param string $idx_path Absolute path to the `.obidx` file.
-	 * @return array|null array( 'events' => int, 'duration' => int ) or null if absent/unreadable.
+	 * @return array|null array( 'events', 'duration', 'first_ts', 'last_ts' ) or null if absent/unreadable.
 	 */
 	private function read_recording_index( $idx_path ) {
 		if ( ! is_file( $idx_path ) ) {
@@ -375,14 +475,44 @@ class Opti_Behavior_Heatmap_File_Storage {
 		return array(
 			'events'   => (int) $decoded['events'],
 			'duration' => isset( $decoded['duration'] ) ? (int) $decoded['duration'] : 0,
+			// Sidecars written before bug #2 carry no timestamp bounds; 0 means
+			// "unknown" and callers fall back to the wall-clock duration.
+			'first_ts' => isset( $decoded['first_ts'] ) ? (int) $decoded['first_ts'] : 0,
+			'last_ts'  => isset( $decoded['last_ts'] ) ? (int) $decoded['last_ts'] : 0,
 		);
+	}
+
+	/**
+	 * Public accessor for a recording's running counters (`.obidx` sidecar).
+	 *
+	 * Kept in sync with the Pro storage class: the Pro playback layer reads
+	 * these to report honest `event_count` / `duration` values when streaming a
+	 * large recording, instead of estimating them from the base file size.
+	 *
+	 * `replay_duration` (bug #2 / D2) is the event-timestamp span — the length a
+	 * user can actually watch — as opposed to `duration`, which is the client
+	 * wall clock kept for spam scoring and analytics.
+	 *
+	 * @param string $file_path Relative file path (from the database).
+	 * @return array|null array( 'events', 'duration', 'first_ts', 'last_ts', 'replay_duration' ) or null when absent.
+	 */
+	public function get_recording_counters( $file_path ) {
+		if ( empty( $file_path ) ) {
+			return null;
+		}
+		$idx = $this->read_recording_index( $this->base_dir . $file_path . self::INDEX_SUFFIX );
+		if ( null === $idx ) {
+			return null;
+		}
+		$idx['replay_duration'] = self::replay_duration_from_bounds( $idx['first_ts'], $idx['last_ts'] );
+		return $idx;
 	}
 
 	/**
 	 * Write the running-counter sidecar (`.obidx`). Tiny, O(1) overwrite.
 	 *
 	 * @param string $idx_path Absolute path to the `.obidx` file.
-	 * @param array  $idx      array( 'events' => int, 'duration' => int ).
+	 * @param array  $idx      array( 'events', 'duration', 'first_ts', 'last_ts' ).
 	 * @return void
 	 */
 	private function write_recording_index( $idx_path, $idx ) {
@@ -391,6 +521,8 @@ class Opti_Behavior_Heatmap_File_Storage {
 			wp_json_encode( array(
 				'events'   => (int) $idx['events'],
 				'duration' => (int) $idx['duration'],
+				'first_ts' => isset( $idx['first_ts'] ) ? (int) $idx['first_ts'] : 0,
+				'last_ts'  => isset( $idx['last_ts'] ) ? (int) $idx['last_ts'] : 0,
 			) ),
 			LOCK_EX
 		);
@@ -406,10 +538,10 @@ class Opti_Behavior_Heatmap_File_Storage {
 	 *
 	 * @param string $full_path Absolute path to the base recording file.
 	 * @param string $file_path Relative file path (used to detect .gz).
-	 * @return array array( 'events' => int, 'duration' => int ).
+	 * @return array array( 'events', 'duration', 'first_ts', 'last_ts' ).
 	 */
 	private function init_recording_index( $full_path, $file_path ) {
-		$idx = array( 'events' => 0, 'duration' => 0 );
+		$idx = array( 'events' => 0, 'duration' => 0, 'first_ts' => 0, 'last_ts' => 0 );
 
 		$file_contents = @file_get_contents( $full_path );
 		if ( false === $file_contents ) {
@@ -428,6 +560,11 @@ class Opti_Behavior_Heatmap_File_Storage {
 		if ( is_array( $decoded ) ) {
 			if ( isset( $decoded['events'] ) && is_array( $decoded['events'] ) ) {
 				$idx['events'] = count( $decoded['events'] );
+				$bounds        = $this->scan_events_timestamp_bounds( $decoded['events'] );
+				if ( null !== $bounds ) {
+					$idx['first_ts'] = $bounds['min'];
+					$idx['last_ts']  = $bounds['max'];
+				}
 			}
 			if ( isset( $decoded['duration'] ) ) {
 				$idx['duration'] = (int) $decoded['duration'];
@@ -588,6 +725,19 @@ class Opti_Behavior_Heatmap_File_Storage {
 		if ( null !== $idx && $idx['duration'] > ( isset( $data['duration'] ) ? (int) $data['duration'] : 0 ) ) {
 			$data['duration'] = $idx['duration'];
 		}
+
+		// Bug #2 / D2: expose the REPLAY duration (event-timestamp span) next to
+		// the wall-clock `duration`, so callers can pick the right contract
+		// instead of conflating the two. Falls back to a scan of the merged
+		// events when the sidecar predates the tracking.
+		$replay_duration = ( null !== $idx ) ? self::replay_duration_from_bounds( $idx['first_ts'], $idx['last_ts'] ) : 0;
+		if ( $replay_duration <= 0 && isset( $data['events'] ) && is_array( $data['events'] ) ) {
+			$bounds = $this->scan_events_timestamp_bounds( $data['events'] );
+			if ( null !== $bounds ) {
+				$replay_duration = self::replay_duration_from_bounds( $bounds['min'], $bounds['max'] );
+			}
+		}
+		$data['replay_duration'] = $replay_duration;
 
 		return $data;
 	}
@@ -1025,7 +1175,12 @@ class Opti_Behavior_Heatmap_File_Storage {
 				try {
 					$file_data = $this->read_recording( $recording['file_path'] );
 					if ( $file_data && isset( $file_data['duration'] ) ) {
-						$recording['duration'] = intval( $file_data['duration'] );
+						// Bug #2 / D1: sort on the DISPLAY (replay) duration, so
+						// the order matches the rendered column. Fall back to the
+						// wall clock for legacy files with no timestamp span.
+						$recording['duration'] = ( isset( $file_data['replay_duration'] ) && (int) $file_data['replay_duration'] > 0 )
+							? (int) $file_data['replay_duration']
+							: intval( $file_data['duration'] );
 						$this->log( '[Opti-FREE] Session ' . $recording['session_id'] . ' duration: ' . $recording['duration'] . 's', 'debug' );
 					}
 				} catch ( Exception $e ) {

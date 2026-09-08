@@ -3515,7 +3515,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 'frequency'                => isset( $raw_settings['frequency'] ) ? sanitize_text_field( $raw_settings['frequency'] ) : 'daily',
                 'conditions'               => isset( $raw_settings['conditions'] ) ? $this->sanitize_cleanup_conditions( $raw_settings['conditions'] ) : array(),
                 'delete_orphaned_visitors' => isset( $raw_settings['delete_orphaned_visitors'] ) ? filter_var( $raw_settings['delete_orphaned_visitors'], FILTER_VALIDATE_BOOLEAN ) : true,
-                'max_rows_per_run'         => isset( $raw_settings['max_rows_per_run'] ) ? min( max( 1, absint( $raw_settings['max_rows_per_run'] ) ), 50000 ) : 5000,
+                'max_rows_per_run'         => isset( $raw_settings['max_rows_per_run'] ) ? min( max( 1, absint( $raw_settings['max_rows_per_run'] ) ), 50000 ) : 50000,
                 'optimize_after_cleanup'   => isset( $raw_settings['optimize_after_cleanup'] ) ? filter_var( $raw_settings['optimize_after_cleanup'], FILTER_VALIDATE_BOOLEAN ) : false,
                 'recalculate_spam_before_cleanup' => isset( $raw_settings['recalculate_spam_before_cleanup'] ) ? filter_var( $raw_settings['recalculate_spam_before_cleanup'], FILTER_VALIDATE_BOOLEAN ) : false,
                 'last_run'                 => null,
@@ -3783,6 +3783,70 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			}
 
 			return $settings;
+		}
+
+		/**
+		 * Count newly detected insights the current user has not seen yet.
+		 *
+		 * Powers the red pulse dot on the "Insights" admin menu item. Uses the
+		 * same per-user watermark as the floating launcher
+		 * (`opti_behavior_si_notifications_last_seen`), so opening the Smart
+		 * Insights center clears both indicators together.
+		 *
+		 * @since 1.8.6
+		 * @return int
+		 */
+		private function get_smart_insights_menu_unseen_count_impl() {
+			static $count = null;
+
+			if ( null !== $count ) {
+				return $count;
+			}
+
+			$count = 0;
+
+			if ( ! is_user_logged_in() || ! current_user_can( 'manage_options' ) ) {
+				return $count;
+			}
+
+			$generator = $this->get_smart_insights_generator_impl();
+			if ( ! $generator || ! method_exists( $generator, 'get_repository' ) ) {
+				return $count;
+			}
+
+			$repository = $generator->get_repository();
+			if ( ! $repository || ! method_exists( $repository, 'count_unseen_new_insights' ) ) {
+				return $count;
+			}
+
+			$last_seen = (int) get_user_meta( get_current_user_id(), 'opti_behavior_si_notifications_last_seen', true );
+			$count     = (int) $repository->count_unseen_new_insights( $last_seen );
+
+			/**
+			 * Filter the unseen-insight count behind the admin menu pulse dot.
+			 *
+			 * @since 1.8.6
+			 * @param int $count Unseen new insight count for the current user.
+			 */
+			$count = max( 0, (int) apply_filters( 'opti_behavior_smart_insights_menu_unseen_count', $count ) );
+
+			return $count;
+		}
+
+		/**
+		 * Mark Smart Insights as seen for the current user.
+		 *
+		 * Runs on the Smart Insights screen `load-` hook (before the admin menu
+		 * renders) so the pulse dot disappears as soon as the user opens the page.
+		 *
+		 * @since 1.8.6
+		 */
+		private function mark_smart_insights_menu_seen_impl() {
+			if ( ! is_user_logged_in() || ! current_user_can( 'manage_options' ) ) {
+				return;
+			}
+
+			update_user_meta( get_current_user_id(), 'opti_behavior_si_notifications_last_seen', time() );
 		}
 
 		/**
@@ -4269,24 +4333,405 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			$status   = sanitize_key( $item['status'] ?? '' );
 			$detail_url = $center_url ? add_query_arg( 'insight_id', $id, $center_url ) : admin_url( 'admin.php?page=opti-behavior-smart-insights&insight_id=' . $id );
 			$detected  = $this->get_smart_insights_notification_detected_labels_impl( $item );
+			$category  = sanitize_text_field( $item['category'] ?? '' );
+			$priority  = isset( $item['scores']['priority_score'] ) ? (int) $item['scores']['priority_score'] : 0;
+			$priority  = max( 0, min( 100, $priority ) );
+
+			// A locked Pro preview arrives here with an emptied metrics array, so
+			// the enriched comparison block resolves to nothing on its own. The
+			// confidence chip is suppressed explicitly because `scores` survives
+			// the lock and must not print a Pro measurement to a Free viewer.
+			$is_locked = ! empty( $item['is_locked_preview'] );
+			$primary   = $is_locked ? null : $this->get_smart_insights_notification_primary_metric_impl( $item );
+			$secondary = $is_locked ? null : $this->get_smart_insights_notification_secondary_metric_impl( $item, is_array( $primary ) ? $primary['key'] : '' );
+			$confidence = $is_locked ? array(
+				'label' => '',
+				'score' => 0,
+			) : $this->get_smart_insights_notification_confidence_impl( $item );
 
 			return array(
 				'id'                    => $id,
 				'title'                 => sanitize_text_field( $item['signal_name'] ?? __( 'Smart Insight', 'opti-behavior' ) ),
 				'severity'              => sanitize_key( $severity ),
 				'severity_label'        => $this->get_smart_insights_notification_severity_label_impl( $severity ),
-				'priority_score'        => isset( $item['scores']['priority_score'] ) ? (int) $item['scores']['priority_score'] : 0,
+				'priority_score'        => $priority,
+				'priority_score_label'  => $priority > 0 ? sprintf( '%s/100', number_format_i18n( $priority ) ) : '',
+				'priority_score_aria'   => $priority > 0
+					? sprintf(
+						/* translators: %s: priority score between 0 and 100. */
+						__( 'Priority score: %s out of 100', 'opti-behavior' ),
+						number_format_i18n( $priority )
+					)
+					: '',
 				'status'                => $status,
 				'status_label'          => $this->get_smart_insights_status_label_impl( $status ),
 				'entity_label'          => sanitize_text_field( $item['entity_label'] ?? $item['entity_id'] ?? __( 'Site-wide', 'opti-behavior' ) ),
-				'category'              => sanitize_text_field( $item['category'] ?? '' ),
+				'category'              => $category,
+				'category_label'        => '' !== $category ? sanitize_text_field( $this->get_smart_insights_category_label_impl( $category ) ) : '',
+				'confidence_label'      => $confidence['label'],
+				'confidence_score'      => $confidence['score'],
+				'primary_metric'        => $primary,
+				'secondary_metric'      => $secondary,
 				'metric_label'          => $metric['label'],
 				'metric_value'          => $metric['value'],
 				'detected_at'           => sanitize_text_field( $item['last_seen_at'] ?? $item['updated_at'] ?? $item['created_at'] ?? $item['date_to'] ?? '' ),
 				'detected_at_human'     => $detected['human'],
 				'detected_at_formatted' => $detected['formatted'],
 				'detail_url'            => $detail_url,
-				'is_locked_preview'     => ! empty( $item['is_locked_preview'] ),
+				'is_locked_preview'     => $is_locked,
+			);
+		}
+
+		/**
+		 * Build the compared primary metric block for one notification card.
+		 *
+		 * The card headline must answer "how bad, compared to what" instead of
+		 * printing a raw volume number. The metric is picked from the signal's own
+		 * vocabulary (a bounce signal is judged on bounce rate), then compared to
+		 * the site average when the insight stored one, and to the previous period
+		 * when it did not. Volume-only signals (traffic spikes) legitimately end up
+		 * on `sessions` with a previous-period baseline.
+		 *
+		 * @since 1.4.3
+		 * @param array $item Insight row.
+		 * @return array|null
+		 */
+		private function get_smart_insights_notification_primary_metric_impl( $item ) {
+			$metrics = isset( $item['metrics'] ) && is_array( $item['metrics'] ) ? $item['metrics'] : array();
+			if ( empty( $metrics ) ) {
+				return null;
+			}
+
+			$candidates = $this->get_smart_insights_notification_metric_candidates_impl(
+				isset( $item['signal_id'] ) ? sanitize_key( $item['signal_id'] ) : ''
+			);
+
+			$fallback = null;
+
+			foreach ( $candidates as $key ) {
+				$value = $this->get_smart_insights_notification_metric_value_impl( $metrics, $key );
+				if ( ! is_numeric( $value ) ) {
+					continue;
+				}
+
+				$value    = (float) $value;
+				$baseline = $this->resolve_smart_insights_notification_baseline_impl( $metrics, $key );
+
+				if ( null === $baseline ) {
+					if ( null === $fallback ) {
+						$fallback = $this->shape_smart_insights_notification_metric_block_impl( $key, $value, null );
+					}
+					continue;
+				}
+
+				return $this->shape_smart_insights_notification_metric_block_impl( $key, $value, $baseline );
+			}
+
+			return $fallback;
+		}
+
+		/**
+		 * Assemble one formatted primary-metric block.
+		 *
+		 * @since 1.4.3
+		 * @param string     $key      Metric key.
+		 * @param float      $value    Current value.
+		 * @param array|null $baseline Baseline descriptor: value + source label.
+		 * @return array
+		 */
+		private function shape_smart_insights_notification_metric_block_impl( $key, $value, $baseline ) {
+			$meta  = $this->get_smart_insights_notification_metric_meta_impl( $key );
+			$block = array(
+				'key'            => $key,
+				'label'          => $this->get_smart_insights_notification_metric_label_impl( $key ),
+				'value'          => $this->format_smart_insights_notification_metric_unit_impl( $value, $meta['unit'] ),
+				'baseline'       => '',
+				'baseline_label' => '',
+				'comparison'     => '',
+				'delta'          => '',
+				'direction'      => 'flat',
+				'sentiment'      => 'neutral',
+				'hint'           => '',
+			);
+
+			if ( ! is_array( $baseline ) || ! is_numeric( $baseline['value'] ) ) {
+				return $block;
+			}
+
+			$baseline_value          = (float) $baseline['value'];
+			$block['baseline']       = $this->format_smart_insights_notification_metric_unit_impl( $baseline_value, $meta['unit'] );
+			$block['baseline_label'] = $baseline['label'];
+			$block['comparison']     = sprintf(
+				/* translators: 1: baseline metric value, 2: baseline source, e.g. "site average". */
+				__( 'vs %1$s %2$s', 'opti-behavior' ),
+				$block['baseline'],
+				$baseline['label']
+			);
+
+			$difference = $value - $baseline_value;
+			$relative   = 0.0 !== $baseline_value ? ( $difference / abs( $baseline_value ) ) * 100 : null;
+
+			// "Flat" is a real answer: a 0.2-point drift is noise and colouring it
+			// red would make every card look like an emergency.
+			$is_flat = 'percent' === $meta['unit']
+				? abs( $difference ) < 0.5
+				: ( null === $relative || abs( $relative ) < 1 );
+
+			if ( $is_flat ) {
+				return $block;
+			}
+
+			$block['direction'] = $difference > 0 ? 'up' : 'down';
+
+			if ( 'percent' === $meta['unit'] ) {
+				$block['delta'] = sprintf(
+					/* translators: %s: signed difference in percentage points. */
+					__( '%s pts', 'opti-behavior' ),
+					$this->format_smart_insights_notification_signed_impl( $difference, 1 )
+				);
+			} elseif ( null !== $relative ) {
+				$block['delta'] = $this->format_smart_insights_notification_signed_impl( $relative, 0 ) . '%';
+			} else {
+				$block['delta'] = $this->format_smart_insights_notification_signed_impl( $difference, 0 );
+			}
+
+			if ( null !== $meta['higher_is_worse'] ) {
+				$is_worse           = $meta['higher_is_worse'] ? $difference > 0 : $difference < 0;
+				$block['sentiment'] = $is_worse ? 'worse' : 'better';
+				$block['hint']      = $is_worse
+					? __( 'Worse than the comparison baseline', 'opti-behavior' )
+					: __( 'Better than the comparison baseline', 'opti-behavior' );
+			}
+
+			return $block;
+		}
+
+		/**
+		 * Ordered metric keys to try for one signal, most specific first.
+		 *
+		 * @since 1.4.3
+		 * @param string $signal_id Signal id.
+		 * @return array
+		 */
+		private function get_smart_insights_notification_metric_candidates_impl( $signal_id ) {
+			$keywords = array(
+				'bounce'     => array( 'bounce_rate' ),
+				'scroll'     => array( 'avg_scroll_depth' ),
+				'exit'       => array( 'exit_rate' ),
+				'conversion' => array( 'conversion_rate', 'cta_click_rate' ),
+				'cta'        => array( 'cta_click_rate' ),
+				'click'      => array( 'cta_click_rate', 'dead_click_rate' ),
+				'dropoff'    => array( 'dropoff_rate', 'completion_rate' ),
+				'funnel'     => array( 'dropoff_rate', 'completion_rate' ),
+				'checkout'   => array( 'dropoff_rate', 'completion_rate' ),
+				'cart'       => array( 'dropoff_rate', 'completion_rate' ),
+				'abandon'    => array( 'abandonment_rate', 'form_error_rate' ),
+				'form'       => array( 'form_error_rate', 'abandonment_rate' ),
+				'field'      => array( 'field_error_rate', 'form_error_rate' ),
+				'error'      => array( 'error_rate', 'form_error_rate' ),
+				'engagement' => array( 'avg_time_on_page', 'avg_scroll_depth' ),
+				'decay'      => array( 'avg_time_on_page' ),
+				'confusion'  => array( 'avg_time_on_page' ),
+				'traffic'    => array( 'sessions' ),
+				'spike'      => array( 'sessions' ),
+				'recording'  => array( 'sessions' ),
+			);
+
+			$candidates = array();
+			foreach ( $keywords as $needle => $keys ) {
+				if ( '' !== $signal_id && false !== strpos( $signal_id, $needle ) ) {
+					$candidates = array_merge( $candidates, $keys );
+				}
+			}
+
+			// Universal tail so a signal whose own metric was not tracked still gets
+			// an honest comparison instead of an empty card.
+			$candidates = array_merge(
+				$candidates,
+				array( 'bounce_rate', 'exit_rate', 'conversion_rate', 'cta_click_rate', 'avg_scroll_depth', 'avg_time_on_page', 'sessions' )
+			);
+
+			return array_values( array_unique( $candidates ) );
+		}
+
+		/**
+		 * Resolve the comparison baseline for one metric key.
+		 *
+		 * @since 1.4.3
+		 * @param array  $metrics Metrics.
+		 * @param string $key     Metric key.
+		 * @return array|null { value: float, label: string }
+		 */
+		private function resolve_smart_insights_notification_baseline_impl( $metrics, $key ) {
+			$site_key  = 'site_avg_' . preg_replace( '/^avg_/', '', $key );
+			$baselines = isset( $metrics['baseline'] ) && is_array( $metrics['baseline'] ) ? $metrics['baseline'] : array();
+
+			foreach ( array( 'comparison_' . $key, $site_key ) as $lookup ) {
+				$value = $this->get_smart_insights_notification_metric_value_impl( $metrics, $lookup );
+				if ( null === $value && isset( $baselines[ $lookup ] ) ) {
+					$value = $baselines[ $lookup ];
+				}
+
+				if ( is_numeric( $value ) ) {
+					return array(
+						'value' => (float) $value,
+						'label' => __( 'site average', 'opti-behavior' ),
+					);
+				}
+			}
+
+			$previous = null;
+			if ( isset( $metrics['trend'][ $key ]['previous'] ) && is_numeric( $metrics['trend'][ $key ]['previous'] ) ) {
+				$previous = $metrics['trend'][ $key ]['previous'];
+			} elseif ( isset( $metrics['previous_period_metrics'][ $key ] ) && is_numeric( $metrics['previous_period_metrics'][ $key ] ) ) {
+				$previous = $metrics['previous_period_metrics'][ $key ];
+			}
+
+			if ( null !== $previous ) {
+				return array(
+					'value' => (float) $previous,
+					'label' => __( 'previous period', 'opti-behavior' ),
+				);
+			}
+
+			return null;
+		}
+
+		/**
+		 * Unit and polarity metadata for a notification metric.
+		 *
+		 * @since 1.4.3
+		 * @param string $key Metric key.
+		 * @return array { unit: string, higher_is_worse: bool|null }
+		 */
+		private function get_smart_insights_notification_metric_meta_impl( $key ) {
+			$worse_when_higher = array( 'bounce_rate', 'exit_rate', 'dropoff_rate', 'abandonment_rate', 'error_rate', 'form_error_rate', 'field_error_rate', 'worst_field_error_rate', 'dead_click_rate' );
+			$worse_when_lower  = array( 'conversion_rate', 'cta_click_rate', 'avg_scroll_depth', 'avg_time_on_page', 'avg_session_duration', 'completion_rate', 'recording_watch_rate' );
+
+			if ( in_array( $key, $worse_when_higher, true ) ) {
+				$polarity = true;
+			} elseif ( in_array( $key, $worse_when_lower, true ) ) {
+				$polarity = false;
+			} else {
+				$polarity = null;
+			}
+
+			if ( false !== strpos( $key, 'time' ) || false !== strpos( $key, 'duration' ) ) {
+				$unit = 'seconds';
+			} elseif ( false !== strpos( $key, 'rate' ) || false !== strpos( $key, 'depth' ) || false !== strpos( $key, 'percent' ) ) {
+				$unit = 'percent';
+			} else {
+				$unit = 'count';
+			}
+
+			return array(
+				'unit'            => $unit,
+				'higher_is_worse' => $polarity,
+			);
+		}
+
+		/**
+		 * Format a metric value for its unit.
+		 *
+		 * @since 1.4.3
+		 * @param float  $value Value.
+		 * @param string $unit  percent|seconds|count.
+		 * @return string
+		 */
+		private function format_smart_insights_notification_metric_unit_impl( $value, $unit ) {
+			$value = (float) $value;
+
+			if ( 'percent' === $unit ) {
+				return number_format_i18n( round( $value, 1 ), 1 ) . '%';
+			}
+
+			if ( 'seconds' === $unit ) {
+				return sprintf(
+					/* translators: %s: number of seconds. */
+					__( '%ss', 'opti-behavior' ),
+					number_format_i18n( round( $value, 1 ), 1 )
+				);
+			}
+
+			return number_format_i18n( $value, $value === floor( $value ) ? 0 : 1 );
+		}
+
+		/**
+		 * Format a signed number with a localized magnitude.
+		 *
+		 * @since 1.4.3
+		 * @param float $value    Value.
+		 * @param int   $decimals Decimals.
+		 * @return string
+		 */
+		private function format_smart_insights_notification_signed_impl( $value, $decimals ) {
+			$rounded = round( (float) $value, $decimals );
+			$sign    = $rounded > 0 ? '+' : ( $rounded < 0 ? "\xE2\x88\x92" : '' );
+
+			return $sign . number_format_i18n( abs( $rounded ), $decimals );
+		}
+
+		/**
+		 * Secondary volume metric shown next to the compared headline.
+		 *
+		 * @since 1.4.3
+		 * @param array  $item        Insight row.
+		 * @param string $primary_key Key already used by the primary block.
+		 * @return array|null
+		 */
+		private function get_smart_insights_notification_secondary_metric_impl( $item, $primary_key ) {
+			$metrics = isset( $item['metrics'] ) && is_array( $item['metrics'] ) ? $item['metrics'] : array();
+			if ( empty( $metrics ) ) {
+				return null;
+			}
+
+			foreach ( array( 'sessions', 'page_sessions', 'entries', 'pageviews' ) as $key ) {
+				if ( $key === $primary_key ) {
+					continue;
+				}
+
+				$value = $this->get_smart_insights_notification_metric_value_impl( $metrics, $key );
+				if ( ! is_numeric( $value ) ) {
+					continue;
+				}
+
+				return array(
+					'label' => $this->get_smart_insights_notification_metric_label_impl( $key ),
+					'value' => $this->format_smart_insights_notification_metric_unit_impl( (float) $value, 'count' ),
+				);
+			}
+
+			return null;
+		}
+
+		/**
+		 * Localized confidence chip for one notification card.
+		 *
+		 * Stored labels are inconsistently cased across rule versions, so the label
+		 * is re-derived from the score whenever a score exists.
+		 *
+		 * @since 1.4.3
+		 * @param array $item Insight row.
+		 * @return array { label: string, score: int }
+		 */
+		private function get_smart_insights_notification_confidence_impl( $item ) {
+			$score = isset( $item['scores']['confidence_score'] ) ? (int) round( (float) $item['scores']['confidence_score'] ) : 0;
+			$score = max( 0, min( 100, $score ) );
+			$label = isset( $item['scores']['confidence_label'] ) ? strtolower( sanitize_key( $item['scores']['confidence_label'] ) ) : '';
+
+			if ( $score > 0 ) {
+				$label = $score >= 70 ? 'high' : ( $score >= 40 ? 'medium' : 'low' );
+			}
+
+			$labels = array(
+				'high'   => __( 'High', 'opti-behavior' ),
+				'medium' => __( 'Medium', 'opti-behavior' ),
+				'low'    => __( 'Low', 'opti-behavior' ),
+			);
+
+			return array(
+				'label' => isset( $labels[ $label ] ) ? $labels[ $label ] : '',
+				'score' => $score,
 			);
 		}
 
@@ -4721,6 +5166,140 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 		}
 
 		/**
+		 * AJAX: compute the "Who is affected?" segment matrix for one insight.
+		 *
+		 * Answers the story's third question on demand instead of persisting it:
+		 * the affected population is only meaningful for the insight's own scope
+		 * and the caller's current spam policy, both of which are request state.
+		 *
+		 * @since 1.3.9
+		 */
+		private function ajax_smart_insights_segments_impl() {
+			$this->smart_insights_ajax_check();
+
+			$generator = $this->get_smart_insights_generator_impl();
+			if ( ! $generator || ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
+				wp_send_json_error( array( 'message' => __( 'Smart Insights are not available yet.', 'opti-behavior' ) ) );
+			}
+
+			// phpcs:disable WordPress.Security.NonceVerification.Missing -- Nonce verified by smart_insights_ajax_check() above.
+			$insight_id = isset( $_POST['insight_id'] ) ? absint( wp_unslash( $_POST['insight_id'] ) ) : 0;
+			// phpcs:enable WordPress.Security.NonceVerification.Missing
+			$insight    = $insight_id ? $generator->get_repository()->get_insight( $insight_id ) : null;
+			if ( ! $insight ) {
+				wp_send_json_error( array( 'message' => __( 'Smart Insight not found.', 'opti-behavior' ) ) );
+			}
+
+			// phpcs:disable WordPress.Security.NonceVerification.Missing -- Nonce verified by smart_insights_ajax_check() above.
+			$exclude_spam = $this->set_smart_insights_spam_exclusion_context_impl( $_POST );
+			// phpcs:enable WordPress.Security.NonceVerification.Missing
+
+			$builder = new Opti_Behavior_Smart_Insights_Segment_Matrix();
+			$matrix  = $builder->get_matrix( $insight, array( 'exclude_spam' => $exclude_spam ) );
+			$cached  = $builder->was_served_from_cache();
+			$matrix  = $this->get_smart_insights_segment_matrix_capabilities_impl()->filter_segment_matrix_for_viewer( $matrix );
+
+			wp_send_json_success(
+				array(
+					'insight_id'   => $insight_id,
+					'segments'     => $matrix,
+					'exclude_spam' => $exclude_spam,
+					'cached'       => $cached,
+				)
+			);
+		}
+
+		/**
+		 * AJAX: compute the daily time series for one insight.
+		 *
+		 * Answers "since when" for the same scope the segment matrix answers
+		 * "where" for: current period, previous period of equal length, and the
+		 * first time this problem was ever detected. Optionally restricted to one
+		 * segment bucket so clicking an outlier overlays its own curve.
+		 *
+		 * @since 1.4.0
+		 */
+		private function ajax_smart_insights_timeseries_impl() {
+			$this->smart_insights_ajax_check();
+
+			$generator = $this->get_smart_insights_generator_impl();
+			if ( ! $generator || ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
+				wp_send_json_error( array( 'message' => __( 'Smart Insights are not available yet.', 'opti-behavior' ) ) );
+			}
+
+			// phpcs:disable WordPress.Security.NonceVerification.Missing -- Nonce verified by smart_insights_ajax_check() above.
+			$insight_id        = isset( $_POST['insight_id'] ) ? absint( wp_unslash( $_POST['insight_id'] ) ) : 0;
+			$segment_dimension = isset( $_POST['segment_dimension'] ) ? sanitize_key( wp_unslash( $_POST['segment_dimension'] ) ) : '';
+			// A combination overlay arrives as a pipe-joined pair ("Safari|France").
+			// sanitize_text_field() keeps the separator, and the builder is what
+			// validates the pair and expands it into two equality restrictions —
+			// do not narrow this to sanitize_key() or combos stop overlaying.
+			$segment_key       = isset( $_POST['segment_key'] ) ? sanitize_text_field( wp_unslash( $_POST['segment_key'] ) ) : '';
+			// phpcs:enable WordPress.Security.NonceVerification.Missing
+			$insight = $insight_id ? $generator->get_repository()->get_insight( $insight_id ) : null;
+			if ( ! $insight ) {
+				wp_send_json_error( array( 'message' => __( 'Smart Insight not found.', 'opti-behavior' ) ) );
+			}
+
+			// phpcs:disable WordPress.Security.NonceVerification.Missing -- Nonce verified by smart_insights_ajax_check() above.
+			$exclude_spam = $this->set_smart_insights_spam_exclusion_context_impl( $_POST );
+			// phpcs:enable WordPress.Security.NonceVerification.Missing
+
+			$builder = new Opti_Behavior_Smart_Insights_Segment_Matrix();
+			$series  = $builder->get_timeseries(
+				$insight,
+				array(
+					'exclude_spam'      => $exclude_spam,
+					'segment_dimension' => $segment_dimension,
+					'segment_key'       => $segment_key,
+				)
+			);
+
+			wp_send_json_success(
+				array(
+					'insight_id'   => $insight_id,
+					'timeseries'   => $series,
+					'exclude_spam' => $exclude_spam,
+					'cached'       => $builder->was_served_from_cache(),
+				)
+			);
+		}
+
+		/**
+		 * Resolve a capability shaper that can shape segment matrices.
+		 *
+		 * Falls back to the anonymous stub used by the other Smart Insights
+		 * handlers when the capabilities class is not loadable, so the endpoint
+		 * degrades to a locked payload instead of fataling.
+		 *
+		 * @since 1.3.9
+		 * @return object
+		 */
+		private function get_smart_insights_segment_matrix_capabilities_impl() {
+			$capabilities = $this->get_smart_insights_capabilities_impl();
+			if ( is_object( $capabilities ) && method_exists( $capabilities, 'filter_segment_matrix_for_viewer' ) ) {
+				return $capabilities;
+			}
+
+			return new class() {
+				/**
+				 * Locked fallback shaper.
+				 *
+				 * @param array $matrix Segment matrix.
+				 * @return array
+				 */
+				public function filter_segment_matrix_for_viewer( $matrix ) {
+					$matrix               = is_array( $matrix ) ? $matrix : array();
+					$matrix['dimensions'] = array();
+					$matrix['locked']     = true;
+					$matrix['tier']       = 'pro_locked';
+
+					return $matrix;
+				}
+			};
+		}
+
+		/**
 		 * AJAX: force Smart Insights refresh.
 		 *
 		 * @since 1.3.3
@@ -4742,6 +5321,14 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			$exclude_spam = $this->set_smart_insights_spam_exclusion_context_impl( $_POST );
 			// phpcs:enable WordPress.Security.NonceVerification.Missing
 			$spam_scope   = $this->get_smart_insights_spam_scope_key_impl( $exclude_spam );
+
+			// "Refresh insights" is the only user action that can change what a
+			// segment split or a daily curve should say, so it is the only place
+			// that invalidates their 6h transients.
+			if ( class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
+				Opti_Behavior_Smart_Insights_Segment_Matrix::flush_cache();
+			}
+
 			$range      = $generator->get_date_range_for_period( $period, $start_date, $end_date );
 			if ( is_wp_error( $range ) ) {
 				wp_send_json_error( array( 'message' => $range->get_error_message() ) );
@@ -5012,8 +5599,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 					$counts['active']++;
 				}
 
-				$priority = isset( $item['scores']['priority_score'] ) ? (int) $item['scores']['priority_score'] : 0;
-				if ( $priority >= 60 ) {
+				if ( $this->is_smart_insights_high_priority_impl( $item ) ) {
 					$counts['high_priority']++;
 				}
 
@@ -5024,6 +5610,35 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			}
 
 			return $counts;
+		}
+
+		/**
+		 * Whether an insight row counts as high priority.
+		 *
+		 * Rank-scored rows are counted by their label (Critical or High); rows
+		 * generated before rank scoring keep the historical `>= 60` threshold.
+		 *
+		 * @since 1.3.9
+		 * @param array $item Insight row.
+		 * @return bool
+		 */
+		private function is_smart_insights_high_priority_impl( $item ) {
+			$scores = isset( $item['scores'] ) && is_array( $item['scores'] ) ? $item['scores'] : array();
+
+			if ( isset( $scores['priority_method'] ) && 'rank_v2' === $scores['priority_method'] ) {
+				$label_key = ! empty( $scores['priority_label_key'] ) ? sanitize_key( $scores['priority_label_key'] ) : '';
+				if ( '' === $label_key && class_exists( 'Opti_Behavior_Smart_Insights_Scorer' ) ) {
+					$label_key = Opti_Behavior_Smart_Insights_Scorer::normalize_label_key( isset( $scores['priority_label'] ) ? $scores['priority_label'] : '' );
+				}
+
+				if ( '' !== $label_key ) {
+					return in_array( $label_key, array( 'critical', 'high' ), true );
+				}
+			}
+
+			$priority = isset( $scores['priority_score'] ) ? (int) $scores['priority_score'] : 0;
+
+			return $priority >= 60;
 		}
 
 		/**
@@ -5128,7 +5743,14 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				)
 			);
 
+			// This refresh runs AFTER filter_insight_for_viewer(), so re-copying
+			// the template's upgrade teaser would resurrect it for Pro viewers
+			// the capabilities layer just stripped it from.
+			$viewer_has_pro = $this->get_smart_insights_capabilities_impl()->has_pro_access();
 			foreach ( array( 'interpretation', 'why_it_matters', 'likely_causes', 'recommended_actions', 'related_reports', 'upgrade_preview' ) as $copy_key ) {
+				if ( 'upgrade_preview' === $copy_key && $viewer_has_pro ) {
+					continue;
+				}
 				if ( array_key_exists( $copy_key, $template ) ) {
 					$insight[ $copy_key ] = $template[ $copy_key ];
 				}

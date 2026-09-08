@@ -2740,3 +2740,623 @@
 	font-size: 13px;
 	line-height: 1.5;
 }
+
+/* ============================================
+   SUGGESTED FUNNELS PANEL (spec.md 2.3)
+   Auto-detected funnel recipes. Rendered in the empty state and directly above
+   the funnel list - the ONLY suggestion surface (locked decision 7). Reuses the
+   funnel-card / badge primitives above so the panel reads as part of the same
+   page.
+   ============================================ */
+
+.opti-funnel-suggestions {
+	max-width: 1400px;
+	margin: 0 auto 24px;
+	padding: 20px 24px 22px;
+	background: #ffffff;
+	border: 1px solid #e5e7eb;
+	border-radius: 12px;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.opti-funnel-suggestions--empty {
+	margin-top: 8px;
+}
+
+/* ---- Collapsed summary bar (1.8.4.1 UX pass) ----
+   Above a funnel list the panel defaults to this single row, so the suggestions
+   stop competing with the list the user actually came for. The empty state never
+   gets .is-collapsed, so its layout is untouched. */
+
+.opti-funnel-suggestions.is-collapsed {
+	padding: 12px 16px;
+}
+
+.opti-funnel-suggestions__bar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+/* Expanded, the bar degrades to an action row: the panel's own <h2> (with its
+   tooltip) is right below it, so repeating the icon and the title there would
+   just be the same heading twice. */
+.opti-funnel-suggestions:not(.is-collapsed) .opti-funnel-suggestions__bar {
+	margin-bottom: 14px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid #f3f4f6;
+}
+
+.opti-funnel-suggestions:not(.is-collapsed) .opti-funnel-suggestions__bar-icon,
+.opti-funnel-suggestions:not(.is-collapsed) .opti-funnel-suggestions__bar-title {
+	display: none;
+}
+
+.opti-funnel-suggestions:not(.is-collapsed) .opti-funnel-suggestions__bar-counts::before {
+	content: none;
+}
+
+.opti-funnel-suggestions__bar-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border-radius: 8px;
+	background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
+	color: #fff;
+	flex: none;
+}
+
+.opti-funnel-suggestions__bar-icon i,
+.opti-funnel-suggestions__bar-icon svg {
+	width: 15px;
+	height: 15px;
+}
+
+.opti-funnel-suggestions__bar-title {
+	font-size: 14px;
+	font-weight: 700;
+	color: #111827;
+}
+
+.opti-funnel-suggestions__bar-counts {
+	font-size: 13px;
+	color: #6b7280;
+}
+
+.opti-funnel-suggestions__bar-counts:not(:empty)::before {
+	content: '—';
+	margin-right: 8px;
+	color: #d1d5db;
+}
+
+.opti-funnel-suggestions__bar-spacer {
+	flex: 1 1 auto;
+}
+
+.opti-funnel-suggestions__bar-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 12px;
+	border: 1px solid #d1d5db;
+	border-radius: 8px;
+	background: #fff;
+	color: #374151;
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+
+.opti-funnel-suggestions__bar-btn:hover:not(:disabled) {
+	border-color: #9ca3af;
+	background: #f9fafb;
+}
+
+.opti-funnel-suggestions__bar-btn:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+.opti-funnel-suggestions__bar-btn--primary {
+	border-color: #7c3aed;
+	color: #6d28d9;
+}
+
+.opti-funnel-suggestions__bar-btn--primary:hover:not(:disabled) {
+	border-color: #6d28d9;
+	background: #f5f3ff;
+}
+
+.opti-funnel-suggestions__bar-btn i,
+.opti-funnel-suggestions__bar-btn svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* Exactly one status node is ever visible: the mirror belongs to the collapsed
+   bar, the in-body one to the expanded panel. !important beats the inline
+   display the script sets on BOTH when it writes a message. */
+.opti-funnel-suggestions:not(.is-collapsed) .opti-funnel-suggestions__bar-status {
+	display: none !important;
+}
+
+.opti-funnel-suggestions.is-collapsed .opti-funnel-suggestions__bar-status {
+	margin-top: 10px;
+}
+
+.opti-funnel-suggestions__header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+
+.opti-funnel-suggestions__heading {
+	flex: 1;
+	min-width: 260px;
+}
+
+.opti-funnel-suggestions__title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	font-size: 17px;
+	font-weight: 700;
+	color: #111827;
+}
+
+.opti-funnel-suggestions__title-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border-radius: 8px;
+	background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
+	color: #fff;
+}
+
+.opti-funnel-suggestions__title-icon i,
+.opti-funnel-suggestions__title-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.opti-funnel-suggestions__subtitle {
+	margin: 6px 0 0;
+	font-size: 13px;
+	color: #6b7280;
+	line-height: 1.5;
+}
+
+.opti-funnel-suggestions__detection {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 10px;
+}
+
+.opti-funnel-detection-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 3px 10px;
+	border-radius: 999px;
+	background: #ede9fe;
+	color: #5b21b6;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.opti-funnel-detection-pill--unresolved {
+	background: #fef3c7;
+	color: #92400e;
+}
+
+.opti-funnel-detection-pill i,
+.opti-funnel-detection-pill svg {
+	width: 13px;
+	height: 13px;
+}
+
+.btn-create-recommended {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 9px 16px;
+	border: none;
+	border-radius: 8px;
+	background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
+	color: #fff;
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+
+.btn-create-recommended:hover:not(:disabled) {
+	box-shadow: 0 6px 16px rgba(124, 58, 237, 0.3);
+	transform: translateY(-1px);
+}
+
+.btn-create-recommended:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+.btn-create-recommended i,
+.btn-create-recommended svg {
+	width: 16px;
+	height: 16px;
+}
+
+.opti-funnel-suggestions__status {
+	display: none;
+	margin-top: 12px;
+	padding: 9px 12px;
+	border-radius: 8px;
+	font-size: 13px;
+	line-height: 1.4;
+}
+
+.opti-funnel-suggestions__status.is-info {
+	background: #eff6ff;
+	color: #1d4ed8;
+}
+
+.opti-funnel-suggestions__status.is-success {
+	background: #ecfdf5;
+	color: #047857;
+}
+
+.opti-funnel-suggestions__status.is-error {
+	background: #fef2f2;
+	color: #b91c1c;
+}
+
+.opti-funnel-suggestions__grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+	gap: 16px;
+	margin-top: 16px;
+}
+
+.opti-funnel-suggestions__grid:empty {
+	display: none;
+}
+
+/* ---- "Show created (N)" sub-group ----
+   User-controlled visibility, NOT the dedupe hiding a card: every flagged card
+   is rendered here and is one click away (locked decision 8). */
+
+.opti-funnel-suggestions__created {
+	margin-top: 16px;
+	padding-top: 14px;
+	border-top: 1px dashed #e5e7eb;
+}
+
+.opti-funnel-suggestions__created-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 12px;
+	border: 1px solid #e5e7eb;
+	border-radius: 999px;
+	background: #f9fafb;
+	color: #6b7280;
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+
+.opti-funnel-suggestions__created-toggle:hover {
+	border-color: #d1d5db;
+	background: #f3f4f6;
+	color: #374151;
+}
+
+.opti-funnel-suggestions__grid--created {
+	margin-top: 14px;
+}
+
+/* ---- Suggestion card ---- */
+
+.opti-funnel-suggestion-card {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 16px;
+	background: #fff;
+	border: 1px solid #d1d5db;
+	border-radius: 12px;
+	transition: all 0.2s;
+}
+
+.opti-funnel-suggestion-card:hover {
+	border-color: #9ca3af;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.opti-funnel-suggestion-card.is-locked {
+	background: #fafafa;
+}
+
+.opti-funnel-suggestion-card.is-existing {
+	border-color: #a7f3d0;
+}
+
+.opti-funnel-suggestion-card__head {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+}
+
+.opti-funnel-suggestion-card__icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 36px;
+	height: 36px;
+	border-radius: 10px;
+	background: #f3f4f6;
+	color: #4f46e5;
+}
+
+.opti-funnel-suggestion-card__icon i,
+.opti-funnel-suggestion-card__icon svg {
+	width: 18px;
+	height: 18px;
+}
+
+.opti-funnel-suggestion-card__titles {
+	flex: 1;
+	min-width: 0;
+}
+
+.opti-funnel-suggestion-card__title {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 700;
+	color: #111827;
+	line-height: 1.3;
+}
+
+.opti-funnel-suggestion-card__desc {
+	margin: 4px 0 0;
+	font-size: 12px;
+	color: #6b7280;
+	line-height: 1.45;
+}
+
+.opti-funnel-suggestion-dismiss {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: #9ca3af;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+
+.opti-funnel-suggestion-dismiss:hover {
+	background: #f3f4f6;
+	color: #4b5563;
+}
+
+.opti-funnel-suggestion-dismiss i,
+.opti-funnel-suggestion-dismiss svg {
+	width: 15px;
+	height: 15px;
+}
+
+.opti-funnel-suggestion-card__badges {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+/* Scoped to the suggestion card on purpose: `.opti-funnel-badge` is already
+   taken by the funnel LIST row KPI badge (see ~line 2367, a column flex with
+   __value/__label children). An unscoped redefinition here would win on source
+   order and flatten every list badge. */
+.opti-funnel-suggestion-card__badges .opti-funnel-badge {
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	min-width: 0;
+	gap: 4px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 11px;
+	font-weight: 600;
+	background: #f3f4f6;
+	color: #4b5563;
+}
+
+.opti-funnel-suggestion-card__badges .opti-funnel-badge i,
+.opti-funnel-suggestion-card__badges .opti-funnel-badge svg {
+	width: 12px;
+	height: 12px;
+}
+
+.opti-funnel-suggestion-card__badges .opti-funnel-badge--detected {
+	background: #ede9fe;
+	color: #5b21b6;
+}
+
+.opti-funnel-suggestion-card__badges .opti-funnel-badge--pro {
+	background: #fef3c7;
+	color: #b45309;
+}
+
+.opti-funnel-suggestion-card__badges .opti-funnel-badge--exists {
+	background: #d1fae5;
+	color: #047857;
+}
+
+.opti-funnel-suggestion-card__steps {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 4px;
+	padding: 8px 10px;
+	background: #f9fafb;
+	border-radius: 8px;
+}
+
+.opti-funnel-step-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 3px 8px;
+	border: 1px solid #e5e7eb;
+	border-radius: 6px;
+	background: #fff;
+	font-size: 11px;
+	color: #374151;
+	max-width: 100%;
+}
+
+.opti-funnel-step-chip__index {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 15px;
+	height: 15px;
+	border-radius: 50%;
+	background: #4f46e5;
+	color: #fff;
+	font-size: 9px;
+	font-weight: 700;
+	flex: 0 0 auto;
+}
+
+.opti-funnel-step-chip__name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.opti-funnel-step-chip__sep {
+	color: #9ca3af;
+	font-size: 12px;
+}
+
+.opti-funnel-suggestion-card__nosteps {
+	font-size: 12px;
+	color: #9ca3af;
+	font-style: italic;
+}
+
+.opti-funnel-suggestion-card__actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: auto;
+	padding-top: 4px;
+}
+
+.opti-funnel-suggestion-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 7px 13px;
+	border-radius: 8px;
+	border: 1px solid transparent;
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+	text-decoration: none;
+	transition: all 0.2s;
+}
+
+.opti-funnel-suggestion-btn i,
+.opti-funnel-suggestion-btn svg {
+	width: 14px;
+	height: 14px;
+}
+
+.opti-funnel-suggestion-btn--primary {
+	background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
+	color: #fff;
+}
+
+.opti-funnel-suggestion-btn--primary:hover:not(:disabled) {
+	box-shadow: 0 6px 16px rgba(124, 58, 237, 0.3);
+	transform: translateY(-1px);
+}
+
+.opti-funnel-suggestion-btn--secondary {
+	background: #fff;
+	border-color: #d1d5db;
+	color: #374151;
+}
+
+.opti-funnel-suggestion-btn--secondary:hover:not(:disabled) {
+	border-color: #9ca3af;
+	background: #f9fafb;
+}
+
+.opti-funnel-suggestion-btn--upgrade {
+	background: #fef3c7;
+	border-color: #fcd34d;
+	color: #92400e;
+}
+
+.opti-funnel-suggestion-btn--upgrade:hover {
+	background: #fde68a;
+	color: #78350f;
+}
+
+.opti-funnel-suggestion-btn:disabled {
+	opacity: 0.55;
+	cursor: default;
+	transform: none;
+	box-shadow: none;
+}
+
+.opti-funnel-suggestion-link {
+	font-size: 12px;
+	font-weight: 600;
+	color: #4f46e5;
+	text-decoration: none;
+}
+
+.opti-funnel-suggestion-link:hover {
+	text-decoration: underline;
+}
+
+/* Re-scan sits in the purple page header next to Exclude Spam, so it inherits
+   .filter-btn styling; only the lucide icon size needs a nudge. */
+.opti-behavior-funnels-page .heatmaps-header-actions .opti-funnel-rescan-btn .filter-icon i,
+.opti-behavior-funnels-page .heatmaps-header-actions .opti-funnel-rescan-btn .filter-icon svg {
+	width: 15px;
+	height: 15px;
+}
+
+@media (max-width: 782px) {
+	.opti-funnel-suggestions__grid {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* Smart Insights evidence deep link: anchor the leaking step. */
+.funnel-step-card.is-smart-insights-step {
+	box-shadow: inset 0 0 0 2px #6366f1;
+	border-radius: 10px;
+}

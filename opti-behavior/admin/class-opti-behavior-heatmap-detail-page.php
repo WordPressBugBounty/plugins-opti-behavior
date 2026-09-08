@@ -156,11 +156,24 @@ class Opti_Behavior_Heatmap_Detail_Page {
 			true
 		);
 
+		// Shared filter-badge module (window.OptiBehaviorFilterBadge) — the
+		// "Filters (N)" counter + deep-link URL reflection helpers.
+		$opti_behavior_filter_badge_js = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/opti-behavior-filter-badge.js';
+		wp_enqueue_script(
+			'opti-behavior-filter-badge',
+			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/opti-behavior-filter-badge.js',
+			array(),
+			file_exists( $opti_behavior_filter_badge_js )
+				? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $opti_behavior_filter_badge_js )
+				: OPTI_BEHAVIOR_HEATMAP_VERSION,
+			true
+		);
+
 		// Enqueue detail page JS with cache busting.
 		wp_enqueue_script(
 			'opti-behavior-heatmap-detail',
 			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/heatmap-detail.js',
-			array( 'jquery', 'heatmap-js', 'lucide-icons', 'html2canvas' ),
+			array( 'jquery', 'heatmap-js', 'lucide-icons', 'html2canvas', 'opti-behavior-filter-badge' ),
 			OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . time(),
 			true
 		);

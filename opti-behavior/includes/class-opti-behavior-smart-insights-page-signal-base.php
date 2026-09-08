@@ -99,6 +99,46 @@ abstract class Opti_Behavior_Smart_Insights_Page_Signal_Base {
 	}
 
 	/**
+	 * The metric the "Where is the problem?" section compares segments on.
+	 *
+	 * A signal is the only thing that knows which number it fired on, so it -
+	 * not the segment matrix - decides what a segment split should measure.
+	 * Signals may declare `primary_segment_metric` in their config; otherwise
+	 * the shared map below answers, and an empty return lets the segment matrix
+	 * fall back to its own signal_id map.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return string One of bounce_rate|exit_rate|avg_scroll|avg_time|cta_click_rate, or ''.
+	 */
+	public function get_primary_segment_metric() {
+		$config = $this->get_signal_config();
+		if ( ! empty( $config['primary_segment_metric'] ) ) {
+			return sanitize_key( $config['primary_segment_metric'] );
+		}
+
+		$signal_id = isset( $config['signal_id'] ) ? sanitize_key( $config['signal_id'] ) : '';
+		$map       = array(
+			'basic_bounce_alert'              => 'bounce_rate',
+			'visitor_confusion_pattern'       => 'bounce_rate',
+			'ab_test_opportunity'             => 'bounce_rate',
+			'session_recording_opportunity'   => 'bounce_rate',
+			'traffic_spike_observation'       => 'bounce_rate',
+			'high_exit_rate_page'             => 'exit_rate',
+			'quick_exit_pattern'              => 'exit_rate',
+			'low_scroll_depth_important_page' => 'avg_scroll',
+			'engagement_decay'                => 'avg_time',
+			'high_traffic_low_engagement'     => 'avg_time',
+			'product_page_engagement_issue'   => 'avg_time',
+			'poor_conversion_rate'            => 'cta_click_rate',
+			'conversion_drop_alert'           => 'cta_click_rate',
+			'cta_low_performance'             => 'cta_click_rate',
+		);
+
+		return isset( $map[ $signal_id ] ) ? $map[ $signal_id ] : '';
+	}
+
+	/**
 	 * Evaluate the signal and return a complete insight object when triggered.
 	 *
 	 * @param array $metrics    Entity metrics.

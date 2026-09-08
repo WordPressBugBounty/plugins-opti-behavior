@@ -141,6 +141,13 @@ class Opti_Behavior_Smart_Insights_Generator {
 		$evaluated_signal_ids = array();
 		$evaluated_entity_types = array();
 		$evaluated_signal_ids_by_entity = array();
+		// Bug 5 hardening: the additional-entity loop used to `continue` silently on
+		// every skip, so "a full run stored no funnel/form/error insights" was
+		// indistinguishable from "no signals registered", "no metrics returned" and
+		// "entity filtered out" without adding temporary logging. Each skip now
+		// records an explicit machine-readable reason and the counts behind it,
+		// returned in the generation result so any recurrence is self-diagnosing.
+		$entity_diagnostics = array();
 
 		try {
 			$baseline_args = array();
@@ -263,7 +270,15 @@ class Opti_Behavior_Smart_Insights_Generator {
 
 			foreach ( (array) $additional_entity_types as $entity_type ) {
 				$entity_type = sanitize_key( $entity_type );
-				if ( '' === $entity_type || in_array( $entity_type, array( 'page', 'device' ), true ) || ! $this->should_process_entity_type( $entity_type, $args['entity_types'] ) ) {
+				if ( '' === $entity_type ) {
+					continue;
+				}
+				if ( in_array( $entity_type, array( 'page', 'device' ), true ) ) {
+					$entity_diagnostics[ $entity_type ] = array( 'reason' => 'handled_by_dedicated_block' );
+					continue;
+				}
+				if ( ! $this->should_process_entity_type( $entity_type, $args['entity_types'] ) ) {
+					$entity_diagnostics[ $entity_type ] = array( 'reason' => 'excluded_by_entity_types_arg' );
 					continue;
 				}
 
@@ -276,6 +291,7 @@ class Opti_Behavior_Smart_Insights_Generator {
 				);
 				$entity_signals = $this->filter_signals_by_ids( $entity_signals, $args['signal_ids'] );
 				if ( empty( $entity_signals ) ) {
+					$entity_diagnostics[ $entity_type ] = array( 'reason' => 'no_registered_signals' );
 					continue;
 				}
 				$entity_signal_ids = $this->collect_signal_ids( $entity_signals, $entity_type, $date_range, $args );
@@ -285,8 +301,19 @@ class Opti_Behavior_Smart_Insights_Generator {
 
 				$entity_metrics = $this->get_metrics_for_entity_type( $entity_type, $date_range, $args, $safe_min_sessions, $page_metrics );
 				if ( empty( $entity_metrics ) ) {
+					$entity_diagnostics[ $entity_type ] = array(
+						'reason'  => 'no_metrics_returned',
+						'signals' => count( $entity_signals ),
+					);
 					continue;
 				}
+
+				$entity_diagnostics[ $entity_type ] = array(
+					'reason'     => 'evaluated',
+					'signals'    => count( $entity_signals ),
+					'metrics'    => count( $entity_metrics ),
+					'candidates' => 0,
+				);
 
 				$entity_baselines = method_exists( $this->baseline_calculator, 'get_baselines' ) ? $this->baseline_calculator->get_baselines( $entity_type, $date_range, $baseline_args ) : $baselines;
 				$entity_baselines = wp_parse_args( is_array( $entity_baselines ) ? $entity_baselines : array(), $baselines );
@@ -311,16 +338,30 @@ class Opti_Behavior_Smart_Insights_Generator {
 							'metrics'   => $metrics,
 							'baselines' => $entity_baselines,
 						);
+						++$entity_diagnostics[ $entity_type ]['candidates'];
 					}
 				}
 			}
 
 			$candidate_insights = $this->apply_noise_suppression( $candidate_insights );
+			$candidate_insights = $this->apply_correlation( $candidate_insights, $date_range, $signal_evaluation_args );
+			$candidate_insights = $this->apply_impact_scoring( $candidate_insights, $date_range, $signal_evaluation_args );
+			$candidate_insights = $this->apply_priority_ranking( $candidate_insights );
+			$candidate_insights = $this->apply_noise_suppression_marking( $candidate_insights );
+			$candidate_insights = $this->apply_evidence_refs( $candidate_insights, $date_range, $signal_evaluation_args );
+
+			$story_parent_ids = array();
 
 			foreach ( $candidate_insights as $candidate ) {
 				$insight = $candidate['insight'];
 				$metrics = isset( $candidate['metrics'] ) ? $candidate['metrics'] : array();
 				$current_baselines = isset( $candidate['baselines'] ) ? $candidate['baselines'] : $baselines;
+				$story_role      = isset( $candidate['story_role'] ) ? sanitize_key( $candidate['story_role'] ) : '';
+				$story_scope_key = isset( $candidate['story_scope_key'] ) ? (string) $candidate['story_scope_key'] : '';
+
+				if ( 'child' === $story_role && '' !== $story_scope_key && ! empty( $story_parent_ids[ $story_scope_key ] ) ) {
+					$insight['parent_insight_id'] = (int) $story_parent_ids[ $story_scope_key ];
+				}
 
 				$insight = $this->apply_spam_scope_to_insight( $insight, $args['exclude_spam'] );
 				$insight = $this->apply_historical_persistence_scoring( $insight, $date_range );
@@ -343,6 +384,21 @@ class Opti_Behavior_Smart_Insights_Generator {
 
 				$stored_ids[] = (int) $stored_id;
 				$active_group_keys[] = $this->build_insight_group_key( $insight );
+
+				// Bug 5 hardening: per-entity stored counts, so a run that evaluates
+				// candidates but persists none is distinguishable from one that never
+				// produced candidates at all.
+				$stored_entity_type = isset( $insight['entity_type'] ) ? sanitize_key( $insight['entity_type'] ) : '';
+				if ( '' !== $stored_entity_type && isset( $entity_diagnostics[ $stored_entity_type ] ) ) {
+					$entity_diagnostics[ $stored_entity_type ]['stored'] = isset( $entity_diagnostics[ $stored_entity_type ]['stored'] )
+						? $entity_diagnostics[ $stored_entity_type ]['stored'] + 1
+						: 1;
+				}
+
+				if ( 'primary' === $story_role && '' !== $story_scope_key ) {
+					$story_parent_ids[ $story_scope_key ] = (int) $stored_id;
+				}
+
 				do_action( 'opti_behavior_smart_insight_saved', $insight, (int) $stored_id );
 			}
 
@@ -372,9 +428,17 @@ class Opti_Behavior_Smart_Insights_Generator {
 						$resolved = $this->repository->auto_resolve_stale_insights(
 							$cutoff,
 							array(
-								'signal_id'   => $signal_id,
-								'entity_type' => $entity_type,
-								'spam_scope'  => $auto_resolve_spam_scope,
+								'signal_id'         => $signal_id,
+								'entity_type'       => $entity_type,
+								'spam_scope'        => $auto_resolve_spam_scope,
+								// Bug 5 hardening: never resolve what this very run
+								// just wrote. last_seen_at is not always "now" (the
+								// funnel aggregator sources it from real
+								// funnel_tracking.last_activity), so a backdated
+								// corpus could otherwise make a run resolve its own
+								// fresh output. Mirrors the protection
+								// auto_resolve_unseen_insights() already applies.
+								'active_group_keys' => array_values( array_unique( $active_group_keys ) ),
 							)
 						);
 						if ( ! is_wp_error( $resolved ) ) {
@@ -397,6 +461,11 @@ class Opti_Behavior_Smart_Insights_Generator {
 				'generated_count' => count( array_unique( $stored_ids ) ),
 				'stored_ids'     => array_values( array_unique( $stored_ids ) ),
 				'auto_resolved'  => $auto_resolved,
+				// Bug 5 hardening: per-entity signals/metrics/candidates/stored counts
+				// plus an explicit skip reason, so "the full run stored no
+				// funnel/form/error insights" can be diagnosed from the run result
+				// alone instead of by instrumenting the loop after the fact.
+				'entity_diagnostics' => $entity_diagnostics,
 				'errors'         => array_values( array_unique( $error_messages ) ),
 				'generated_at'   => current_time( 'mysql' ),
 				'exclude_spam'   => null === $args['exclude_spam'] ? null : (bool) $args['exclude_spam'],
@@ -411,6 +480,158 @@ class Opti_Behavior_Smart_Insights_Generator {
 		} finally {
 			delete_transient( $lock_key );
 		}
+	}
+
+	/**
+	 * Re-evaluate one signal against one entity for a period without persisting.
+	 *
+	 * This is the read-only half of `generate_for_period()`: the same registry,
+	 * baselines, aggregators, and rule objects, but nothing is stored, no
+	 * lifecycle transition happens, and no generation lock is taken. It exists so
+	 * a caller can ask "does this exact problem still trigger?" for a later
+	 * window — the post-experiment check of the learning loop — without creating
+	 * or mutating insight rows as a side effect of asking.
+	 *
+	 * @since 1.3.10
+	 *
+	 * @param string $signal_id   Signal ID to evaluate.
+	 * @param string $entity_type Entity type the signal belongs to.
+	 * @param string $entity_id   Entity ID to look for in the aggregated metrics.
+	 * @param string $start_date  Range start (Y-m-d).
+	 * @param string $end_date    Range end (Y-m-d).
+	 * @param array  $args        Optional args (`exclude_spam`, `min_sessions`).
+	 * @return array `array( available, reason, triggered, insight, metrics, date_range )`.
+	 */
+	public function evaluate_signal_for_entity( $signal_id, $entity_type, $entity_id, $start_date, $end_date, $args = array() ) {
+		$signal_id   = sanitize_key( $signal_id );
+		$entity_type = sanitize_key( $entity_type );
+		$entity_id   = is_scalar( $entity_id ) ? (string) $entity_id : '';
+
+		$result = array(
+			'available'  => false,
+			'reason'     => '',
+			'triggered'  => false,
+			'insight'    => null,
+			'metrics'    => array(),
+			'date_range' => array(),
+		);
+
+		if ( '' === $signal_id || '' === $entity_type || '' === $entity_id ) {
+			$result['reason'] = 'invalid_scope';
+			return $result;
+		}
+
+		$date_range = $this->normalize_date_range( $start_date, $end_date );
+		if ( is_wp_error( $date_range ) ) {
+			$result['reason'] = 'invalid_range';
+			return $result;
+		}
+
+		$result['date_range'] = $date_range;
+
+		$defaults = array(
+			'exclude_spam'              => null,
+			'candidate_limit'           => 50,
+			'entity_types'              => array(),
+			'signal_ids'                => array( $signal_id ),
+			'allow_low_volume_entities' => false,
+			'source'                    => 'signal_recheck',
+		);
+		$args     = wp_parse_args( $args, $defaults );
+
+		$signals = $this->signal_registry->for_entity_type(
+			$entity_type,
+			array(
+				'date_range' => $date_range,
+				'args'       => $args,
+			)
+		);
+
+		if ( 'page' === $entity_type ) {
+			$signals = apply_filters( 'opti_behavior_smart_insights_signals', $signals, $date_range, $args );
+		} elseif ( 'device' === $entity_type ) {
+			$signals = apply_filters( 'opti_behavior_smart_insights_device_signals', $signals, $date_range, $args );
+		}
+
+		$signals = $this->filter_signals_by_ids( $signals, array( $signal_id ) );
+		if ( empty( $signals ) ) {
+			$result['reason'] = 'signal_not_registered';
+			return $result;
+		}
+
+		$method = 'evaluate_' . $entity_type;
+		$baseline_args = array();
+		if ( null !== $args['exclude_spam'] ) {
+			$baseline_args['exclude_spam'] = (bool) $args['exclude_spam'];
+		}
+
+		$baselines         = $this->baseline_calculator->calculate( $date_range['from'], $date_range['to'], $baseline_args );
+		$safe_min_sessions = $this->get_safe_min_sessions_threshold( $baselines, $args );
+
+		$aggregation_args = array(
+			'limit'                => max( 1, min( 500, absint( $args['candidate_limit'] ) ) ),
+			'min_sessions'         => $safe_min_sessions,
+			'include_previous'     => true,
+			'include_event_counts' => true,
+		);
+		if ( null !== $args['exclude_spam'] ) {
+			$aggregation_args['exclude_spam'] = (bool) $args['exclude_spam'];
+		}
+
+		if ( 'page' === $entity_type ) {
+			$rows = $this->metric_aggregator->aggregate_page_metrics( $date_range['from'], $date_range['to'], $aggregation_args );
+		} elseif ( 'device' === $entity_type ) {
+			$rows = $this->get_device_metrics_for_period( $date_range, $args, $safe_min_sessions );
+		} else {
+			$rows      = $this->get_metrics_for_entity_type( $entity_type, $date_range, $args, $safe_min_sessions );
+			$baselines = method_exists( $this->baseline_calculator, 'get_baselines' )
+				? wp_parse_args( (array) $this->baseline_calculator->get_baselines( $entity_type, $date_range, $baseline_args ), $baselines )
+				: $baselines;
+			$baselines = apply_filters( 'opti_behavior_smart_insights_baselines_for_entity_type', $baselines, $entity_type, $date_range, $args );
+		}
+
+		if ( empty( $rows ) || ! is_array( $rows ) ) {
+			$result['reason'] = 'no_metrics';
+			return $result;
+		}
+
+		$evaluation_args                 = $args;
+		$evaluation_args['min_sessions'] = $safe_min_sessions;
+		$evaluation_args[ 'all_' . $entity_type . '_metrics' ] = $rows;
+
+		$matched = null;
+		foreach ( $rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			if ( isset( $row['entity_id'] ) && (string) $row['entity_id'] === $entity_id ) {
+				$matched = $row;
+				break;
+			}
+		}
+
+		if ( null === $matched ) {
+			$result['reason'] = 'entity_not_in_metrics';
+			return $result;
+		}
+
+		$result['available'] = true;
+		$result['metrics']   = $matched;
+
+		foreach ( $signals as $signal ) {
+			if ( ! is_object( $signal ) || ! method_exists( $signal, $method ) ) {
+				continue;
+			}
+
+			$insight = $signal->{$method}( $matched, $baselines, $date_range, $evaluation_args );
+			if ( is_array( $insight ) && ! empty( $insight ) ) {
+				$result['triggered'] = true;
+				$result['insight']   = $insight;
+				break;
+			}
+		}
+
+		return $result;
 	}
 
 	/**
@@ -849,8 +1070,15 @@ class Opti_Behavior_Smart_Insights_Generator {
 		}
 
 		$aggregator = new Opti_Behavior_Smart_Insights_Device_Aggregator();
+		$metrics    = $aggregator->aggregate_device_metrics( $date_range['from'], $date_range['to'], $aggregation_args );
 
-		return $aggregator->aggregate_device_metrics( $date_range['from'], $date_range['to'], $aggregation_args );
+		// Device rows used to be the only entity family with no previous-period
+		// lookup at all, so every device insight stored an empty trend.
+		if ( empty( $args['skip_trends'] ) ) {
+			$metrics = $this->attach_entity_trends( $metrics, 'device', 'entity_id', $date_range, $args );
+		}
+
+		return $metrics;
 	}
 
 	/**
@@ -939,7 +1167,21 @@ class Opti_Behavior_Smart_Insights_Generator {
 				break;
 		}
 
-		return apply_filters( 'opti_behavior_smart_insights_metrics_for_entity_type', $metrics, $entity_type, $date_range, $args );
+		$handled_natively = in_array( $entity_type, array( 'source', 'campaign', 'funnel', 'cta' ), true );
+
+		$metrics = apply_filters( 'opti_behavior_smart_insights_metrics_for_entity_type', $metrics, $entity_type, $date_range, $args );
+
+		// Entity families that only exist because a layer above answered the
+		// filter (Pro's form/error/segment/test rows) never reached a trend
+		// attachment, so every one of their insights stored an empty trend and the
+		// modal fell back to "Previous-period trend is not available yet". The
+		// recursive call below re-runs the same filter for the previous window with
+		// skip_trends set, so it terminates after exactly one extra pass.
+		if ( ! $handled_natively && ! empty( $metrics ) && empty( $args['skip_trends'] ) ) {
+			$metrics = $this->attach_entity_trends( $metrics, $entity_type, 'entity_id', $date_range, $args );
+		}
+
+		return $metrics;
 	}
 
 	/**
@@ -963,16 +1205,26 @@ class Opti_Behavior_Smart_Insights_Generator {
 			return $metrics;
 		}
 
-		$previous = $this->get_metrics_for_entity_type(
-			$entity_type,
-			array(
-				'from' => $previous_range['from'],
-				'to'   => $previous_range['to'],
-			),
-			wp_parse_args( array( 'skip_trends' => true ), $args ),
-			0,
-			array()
+		$previous_date_range = array(
+			'from' => $previous_range['from'],
+			'to'   => $previous_range['to'],
 		);
+		$previous_args       = wp_parse_args( array( 'skip_trends' => true ), $args );
+
+		if ( 'device' === $entity_type ) {
+			// Devices come from their own aggregator, not the generic entity path.
+			// `0` as the session floor: the previous window only has to report what
+			// a device measured, not re-qualify as a detection candidate.
+			$previous = $this->get_device_metrics_for_period( $previous_date_range, $previous_args, 0 );
+		} else {
+			$previous = $this->get_metrics_for_entity_type(
+				$entity_type,
+				$previous_date_range,
+				$previous_args,
+				0,
+				array()
+			);
+		}
 
 		foreach ( $metrics as $index => $row ) {
 			$metrics[ $index ]['previous_period_range'] = $previous_range;
@@ -982,8 +1234,12 @@ class Opti_Behavior_Smart_Insights_Generator {
 			$metrics,
 			$previous,
 			$entity_key,
-			array( 'sessions', 'users', 'pageviews', 'bounce_rate', 'avg_scroll_depth', 'avg_time_on_page', 'avg_session_duration', 'conversion_rate', 'conversions', 'entries', 'completion_rate', 'dropoff_rate', 'cta_click_rate', 'click_count', 'starts', 'submits', 'abandonment_rate', 'error_rate' ),
-			array( 'bounce_rate', 'avg_scroll_depth', 'conversion_rate', 'completion_rate', 'dropoff_rate', 'cta_click_rate', 'abandonment_rate', 'error_rate' )
+			// Error, recording and segment entities carry their own metric keys.
+			// Any key missing here is dropped by compare_metrics(), which is why
+			// error insights used to store an empty trend even once the previous
+			// window was fetched for them.
+			array( 'sessions', 'users', 'pageviews', 'bounce_rate', 'exit_rate', 'avg_scroll_depth', 'avg_time_on_page', 'avg_session_duration', 'conversion_rate', 'conversions', 'entries', 'completion_rate', 'dropoff_rate', 'cta_click_rate', 'click_count', 'starts', 'submits', 'abandonment_rate', 'error_rate', 'form_error_rate', 'worst_field_error_rate', 'error_sessions', 'error_count', 'error_session_conversion_rate', 'non_error_session_conversion_rate', 'rage_click_events', 'dead_click_rate', 'recordings', 'recording_watch_rate', 'segment_sessions', 'segment_conversion_rate', 'returning_conversion_rate', 'new_conversion_rate', 'returning_bounce_rate', 'new_bounce_rate' ),
+			array( 'bounce_rate', 'exit_rate', 'avg_scroll_depth', 'conversion_rate', 'completion_rate', 'dropoff_rate', 'cta_click_rate', 'abandonment_rate', 'error_rate', 'form_error_rate', 'worst_field_error_rate', 'error_session_conversion_rate', 'non_error_session_conversion_rate', 'dead_click_rate', 'recording_watch_rate', 'segment_conversion_rate', 'returning_conversion_rate', 'new_conversion_rate', 'returning_bounce_rate', 'new_bounce_rate' )
 		);
 	}
 
@@ -1218,12 +1474,14 @@ class Opti_Behavior_Smart_Insights_Generator {
 	}
 
 	/**
-	 * Suppress low-value repeated observations while preserving high-priority alerts.
+	 * Assign the noise-suppression group key to every candidate.
 	 *
-	 * The repository already deduplicates exact signal/entity/date matches. This
-	 * pass avoids overwhelming Free dashboards with many similar low-priority
-	 * page observations by keeping the strongest examples visible and storing the
-	 * rest with a short suppression window.
+	 * The suppression decision itself lives in
+	 * {@see self::apply_noise_suppression_marking()} because it has to read the
+	 * final, impact-aware priority produced by
+	 * {@see self::apply_priority_ranking()}. This pass only normalizes the group
+	 * key (other steps rely on it) and drops malformed candidates, keeping the
+	 * historical priority ordering the correlator receives.
 	 *
 	 * @param array $candidate_insights Candidate records.
 	 * @return array
@@ -1243,40 +1501,473 @@ class Opti_Behavior_Smart_Insights_Generator {
 			}
 		);
 
-		$visible_per_group = array();
-		$max_visible_low_value = (int) apply_filters( 'opti_behavior_smart_insights_low_value_group_limit', 3 );
-		$max_visible_low_value = max( 1, min( 10, $max_visible_low_value ) );
-
 		foreach ( $candidate_insights as $index => $candidate ) {
 			if ( empty( $candidate['insight'] ) || ! is_array( $candidate['insight'] ) ) {
 				unset( $candidate_insights[ $index ] );
 				continue;
 			}
 
-			$signal_id  = isset( $candidate['insight']['signal_id'] ) ? sanitize_key( $candidate['insight']['signal_id'] ) : 'unknown';
-			$category   = isset( $candidate['insight']['category'] ) ? sanitize_key( $candidate['insight']['category'] ) : 'general';
-			$entity_type= isset( $candidate['insight']['entity_type'] ) ? sanitize_key( $candidate['insight']['entity_type'] ) : 'entity';
-			$group      = $signal_id . ':' . $category . ':' . $entity_type;
-			$priority   = isset( $candidate['insight']['scores']['priority_score'] ) ? (int) $candidate['insight']['scores']['priority_score'] : 0;
+			if ( empty( $candidate_insights[ $index ]['insight']['group_key'] ) ) {
+				$candidate_insights[ $index ]['insight']['group_key'] = substr( $this->build_noise_group( $candidate['insight'] ), 0, 191 );
+			}
+		}
+
+		return array_values( $candidate_insights );
+	}
+
+	/**
+	 * Suppress low-value repeated observations while preserving high-priority alerts.
+	 *
+	 * The repository already deduplicates exact signal/entity/date matches. This
+	 * pass avoids overwhelming Free dashboards with many similar low-priority
+	 * page observations by keeping the strongest examples visible and storing the
+	 * rest with a short suppression window. It runs after priority ranking so the
+	 * decision is taken on the final score, and it never reorders the candidate
+	 * list (story primaries must stay ahead of their children).
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param array $candidate_insights Candidate records.
+	 * @return array
+	 */
+	private function apply_noise_suppression_marking( $candidate_insights ) {
+		if ( empty( $candidate_insights ) || ! is_array( $candidate_insights ) ) {
+			return is_array( $candidate_insights ) ? $candidate_insights : array();
+		}
+
+		$max_visible_low_value = (int) apply_filters( 'opti_behavior_smart_insights_low_value_group_limit', 3 );
+		$max_visible_low_value = max( 1, min( 10, $max_visible_low_value ) );
+
+		$order = array();
+		foreach ( $candidate_insights as $index => $candidate ) {
+			if ( empty( $candidate['insight'] ) || ! is_array( $candidate['insight'] ) ) {
+				continue;
+			}
+
+			$scores          = isset( $candidate['insight']['scores'] ) && is_array( $candidate['insight']['scores'] ) ? $candidate['insight']['scores'] : array();
+			$order[ $index ] = array(
+				'rank'  => isset( $scores['priority_rank'] ) ? (int) $scores['priority_rank'] : PHP_INT_MAX,
+				'score' => isset( $scores['priority_score'] ) ? (int) $scores['priority_score'] : 0,
+			);
+		}
+
+		uasort(
+			$order,
+			function( $left, $right ) {
+				if ( $left['rank'] !== $right['rank'] ) {
+					return $left['rank'] <=> $right['rank'];
+				}
+
+				return $right['score'] <=> $left['score'];
+			}
+		);
+
+		$visible_per_group = array();
+
+		foreach ( array_keys( $order ) as $index ) {
+			$insight = $candidate_insights[ $index ]['insight'];
+			$group   = $this->build_noise_group( $insight );
 
 			if ( ! isset( $visible_per_group[ $group ] ) ) {
 				$visible_per_group[ $group ] = 0;
 			}
 
-			if ( $priority < 60 && $visible_per_group[ $group ] >= $max_visible_low_value ) {
+			if ( $this->is_low_value_insight( $insight ) && $visible_per_group[ $group ] >= $max_visible_low_value ) {
 				$candidate_insights[ $index ]['insight']['suppressed_until'] = gmdate( 'Y-m-d H:i:s', strtotime( '+7 days' ) );
+				$candidate_insights[ $index ]['insight']['detection'] = isset( $candidate_insights[ $index ]['insight']['detection'] ) && is_array( $candidate_insights[ $index ]['insight']['detection'] )
+					? $candidate_insights[ $index ]['insight']['detection']
+					: array();
 				$candidate_insights[ $index ]['insight']['detection']['noise_suppressed'] = true;
 				$candidate_insights[ $index ]['insight']['detection']['noise_suppression_reason'] = 'similar_low_value_observation';
 			} else {
 				$visible_per_group[ $group ]++;
 			}
+		}
 
-			if ( empty( $candidate_insights[ $index ]['insight']['group_key'] ) ) {
-				$candidate_insights[ $index ]['insight']['group_key'] = substr( $group, 0, 191 );
+		return $candidate_insights;
+	}
+
+	/**
+	 * Build the signal/category/entity noise-suppression group key.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param array $insight Insight payload.
+	 * @return string
+	 */
+	private function build_noise_group( $insight ) {
+		$signal_id   = isset( $insight['signal_id'] ) ? sanitize_key( $insight['signal_id'] ) : 'unknown';
+		$category    = isset( $insight['category'] ) ? sanitize_key( $insight['category'] ) : 'general';
+		$entity_type = isset( $insight['entity_type'] ) ? sanitize_key( $insight['entity_type'] ) : 'entity';
+
+		return $signal_id . ':' . $category . ':' . $entity_type;
+	}
+
+	/**
+	 * Whether an insight counts as a low-value repeated observation.
+	 *
+	 * Under `rank_v2` the decision follows the rank-based label (Medium or Low);
+	 * legacy scoring keeps the historical `priority_score < 60` rule so the
+	 * `legacy` priority method reproduces the previous output exactly.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param array $insight Insight payload.
+	 * @return bool
+	 */
+	private function is_low_value_insight( $insight ) {
+		$scores = isset( $insight['scores'] ) && is_array( $insight['scores'] ) ? $insight['scores'] : array();
+
+		if ( isset( $scores['priority_method'] ) && 'rank_v2' === $scores['priority_method'] ) {
+			$label_key = isset( $scores['priority_label_key'] ) ? (string) $scores['priority_label_key'] : '';
+			if ( '' === $label_key && class_exists( 'Opti_Behavior_Smart_Insights_Scorer' ) ) {
+				$label_key = Opti_Behavior_Smart_Insights_Scorer::normalize_label_key( isset( $scores['priority_label'] ) ? $scores['priority_label'] : '' );
+			}
+
+			if ( '' !== $label_key ) {
+				return in_array( $label_key, array( 'medium', 'low' ), true );
 			}
 		}
 
-		return array_values( $candidate_insights );
+		$priority = isset( $scores['priority_score'] ) ? (int) $scores['priority_score'] : 0;
+
+		return $priority < 60;
+	}
+
+	/**
+	 * Re-rank the batch on blended impact-aware priority and label by rank share.
+	 *
+	 * The legacy score saturates: traffic + severity + opportunity all cap out on
+	 * any busy page, so a 3-conversion leak and a 193-visitor leak both land on
+	 * 100/100. This pass blends the measured absolute impact into the score and
+	 * assigns labels by position in the batch instead of by absolute threshold,
+	 * so "Critical" keeps meaning "the worst few items in this batch".
+	 *
+	 * Strictly additive and fail-safe: an unknown priority method, a thrown
+	 * exception, or a count mismatch returns the untouched candidate list.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param array $candidate_insights Candidate records.
+	 * @return array
+	 */
+	private function apply_priority_ranking( $candidate_insights ) {
+		if ( empty( $candidate_insights ) || ! is_array( $candidate_insights ) ) {
+			return is_array( $candidate_insights ) ? $candidate_insights : array();
+		}
+
+		/**
+		 * Filter the Smart Insights priority scoring method.
+		 *
+		 * `rank_v2` blends absolute impact into the score and labels by rank
+		 * share. `legacy` skips the pass entirely and keeps the historical
+		 * absolute-threshold labels.
+		 *
+		 * @since 1.3.9
+		 *
+		 * @param string $method Priority method (`rank_v2` or `legacy`).
+		 */
+		$method = apply_filters( 'opti_behavior_smart_insights_priority_method', 'rank_v2' );
+		if ( 'rank_v2' !== $method ) {
+			return $candidate_insights;
+		}
+
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Scorer' ) ) {
+			return $candidate_insights;
+		}
+
+		try {
+			$ranked = $this->rank_candidates_by_blended_priority( $candidate_insights );
+		} catch ( Exception $e ) {
+			return $candidate_insights;
+		}
+
+		if ( ! is_array( $ranked ) || count( $ranked ) !== count( $candidate_insights ) ) {
+			return $candidate_insights;
+		}
+
+		return $ranked;
+	}
+
+	/**
+	 * Compute blended scores, ranks, percentiles and rank-share labels.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param array $candidate_insights Candidate records.
+	 * @return array
+	 */
+	private function rank_candidates_by_blended_priority( $candidate_insights ) {
+		$sortable = array();
+
+		foreach ( $candidate_insights as $index => $candidate ) {
+			if ( empty( $candidate['insight'] ) || ! is_array( $candidate['insight'] ) ) {
+				continue;
+			}
+
+			$insight    = $candidate['insight'];
+			$scores     = isset( $insight['scores'] ) && is_array( $insight['scores'] ) ? $insight['scores'] : array();
+			$raw        = isset( $scores['priority_score'] ) ? (float) $scores['priority_score'] : 0.0;
+			$confidence = isset( $scores['confidence_score'] ) ? (float) $scores['confidence_score'] : 0.0;
+			$has_impact = isset( $scores['impact']['impact_score'] ) && is_numeric( $scores['impact']['impact_score'] );
+
+			if ( $has_impact ) {
+				$blended = round( ( 0.60 * (float) $scores['impact']['impact_score'] ) + ( 0.30 * $raw ) + ( 0.10 * $confidence ) );
+			} else {
+				// Never let "no impact data" outrank a measured loss.
+				$blended = min( 59, round( ( 0.70 * $raw ) + ( 0.30 * $confidence ) ) );
+			}
+
+			$revenue = isset( $insight['impact']['revenue']['amount'] ) && is_numeric( $insight['impact']['revenue']['amount'] )
+				? (float) $insight['impact']['revenue']['amount']
+				: 0.0;
+
+			$sortable[ $index ] = array(
+				'index'      => (int) $index,
+				'raw'        => (int) round( $raw ),
+				'blended'    => (int) min( 100, max( 0, $blended ) ),
+				'users_lost' => isset( $scores['impact']['users_lost'] ) ? (int) $scores['impact']['users_lost'] : 0,
+				'revenue'    => $revenue,
+				'sessions'   => isset( $insight['metrics']['sessions'] ) ? (int) $insight['metrics']['sessions'] : 0,
+				'sample'     => $this->resolve_observation_sample_size( $insight ),
+				'signal_id'  => isset( $insight['signal_id'] ) ? (string) $insight['signal_id'] : '',
+				'has_impact' => $has_impact,
+			);
+		}
+
+		if ( empty( $sortable ) ) {
+			return $candidate_insights;
+		}
+
+		uasort(
+			$sortable,
+			function( $left, $right ) {
+				if ( $left['blended'] !== $right['blended'] ) {
+					return $right['blended'] <=> $left['blended'];
+				}
+				if ( $left['users_lost'] !== $right['users_lost'] ) {
+					return $right['users_lost'] <=> $left['users_lost'];
+				}
+				if ( $left['revenue'] !== $right['revenue'] ) {
+					return $right['revenue'] <=> $left['revenue'];
+				}
+				if ( $left['sessions'] !== $right['sessions'] ) {
+					return $right['sessions'] <=> $left['sessions'];
+				}
+
+				$signal_comparison = strcmp( $left['signal_id'], $right['signal_id'] );
+
+				return 0 !== $signal_comparison ? $signal_comparison : ( $left['index'] <=> $right['index'] );
+			}
+		);
+
+		$total          = count( $sortable );
+		$critical_count = min( 3, max( 1, (int) ceil( 0.15 * $total ) ) );
+		$critical_count = min( $critical_count, $total );
+		$high_count     = min( $total - $critical_count, (int) round( 0.25 * $total ) );
+		$medium_count   = min( $total - $critical_count - $high_count, (int) round( 0.30 * $total ) );
+
+		$rank = 0;
+		foreach ( $sortable as $index => $entry ) {
+			++$rank;
+
+			if ( $rank <= $critical_count ) {
+				$label_key = 'critical';
+			} elseif ( $rank <= $critical_count + $high_count ) {
+				$label_key = 'high';
+			} elseif ( $rank <= $critical_count + $high_count + $medium_count ) {
+				$label_key = 'medium';
+			} else {
+				$label_key = 'low';
+			}
+
+			$insight           = $candidate_insights[ $index ]['insight'];
+			$insight['scores'] = isset( $insight['scores'] ) && is_array( $insight['scores'] ) ? $insight['scores'] : array();
+
+			// Observation gate: a leak measured on a handful of visitors is an
+			// observation to confirm, never a Critical alert. It only lowers.
+			$observation_only = ! $entry['has_impact'] || $entry['users_lost'] < 5 || $entry['sample'] < 30;
+			if ( $observation_only && in_array( $label_key, array( 'critical', 'high' ), true ) ) {
+				$label_key = 'medium';
+			}
+
+			$insight['scores']['priority_raw']        = $entry['raw'];
+			$insight['scores']['priority_score']      = $entry['blended'];
+			$insight['scores']['priority_label_key']  = $label_key;
+			$insight['scores']['priority_label']      = Opti_Behavior_Smart_Insights_Scorer::get_label_for_key( $label_key );
+			$insight['scores']['priority_rank']       = (int) $rank;
+			$insight['scores']['priority_percentile'] = (int) round( ( ( $total - $rank + 1 ) / $total ) * 100 );
+			$insight['scores']['priority_method']     = 'rank_v2';
+
+			if ( $observation_only ) {
+				$insight['detection'] = isset( $insight['detection'] ) && is_array( $insight['detection'] ) ? $insight['detection'] : array();
+				$insight['detection']['observation_only'] = true;
+				// The sample the gate fired on, so the UI can name it honestly.
+				$insight['detection']['observation_sample'] = (int) $entry['sample'];
+			}
+
+			$candidate_insights[ $index ]['insight'] = $insight;
+		}
+
+		return $candidate_insights;
+	}
+
+	/**
+	 * Correlate candidate signals into stories between evaluation and persistence.
+	 *
+	 * The correlator groups signals that describe the same problem, runs the
+	 * diagnostic playbook probes, and attaches the ranked-cause payload to the
+	 * story primary. This step is strictly additive: any missing class, disabled
+	 * filter, or thrown exception returns the untouched candidate list so
+	 * generation keeps working exactly as before (same graceful-degradation
+	 * contract as the data-availability guards).
+	 *
+	 * @since 1.3.8
+	 *
+	 * @param array $candidate_insights Candidate records.
+	 * @param array $date_range         Date range.
+	 * @param array $args               Generation args.
+	 * @return array
+	 */
+	private function apply_correlation( $candidate_insights, $date_range, $args ) {
+		if ( empty( $candidate_insights ) || ! is_array( $candidate_insights ) ) {
+			return is_array( $candidate_insights ) ? $candidate_insights : array();
+		}
+
+		/**
+		 * Filter whether Smart Insights correlation runs for this generation pass.
+		 *
+		 * @since 1.3.8
+		 *
+		 * @param bool  $enabled    Whether correlation runs.
+		 * @param array $date_range Date range.
+		 * @param array $args       Generation args.
+		 */
+		if ( ! apply_filters( 'opti_behavior_smart_insights_enable_correlation', true, $date_range, $args ) ) {
+			return $candidate_insights;
+		}
+
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Correlator' ) ) {
+			return $candidate_insights;
+		}
+
+		try {
+			$correlator = new Opti_Behavior_Smart_Insights_Correlator();
+			$correlated = $correlator->correlate( $candidate_insights, $date_range, $args );
+		} catch ( Exception $e ) {
+			return $candidate_insights;
+		}
+
+		if ( ! is_array( $correlated ) || count( $correlated ) !== count( $candidate_insights ) ) {
+			return $candidate_insights;
+		}
+
+		return $correlated;
+	}
+
+	/**
+	 * Attach absolute business impact to every candidate before persistence.
+	 *
+	 * Impact scoring answers "how big is this leak in people, not percentages",
+	 * so the insight center can rank largest-leak-first. Like correlation, the
+	 * step is strictly additive: a missing class, a disabled filter, or a thrown
+	 * exception returns the untouched candidate list and every existing card
+	 * renders exactly as before.
+	 *
+	 * @since 1.3.8
+	 *
+	 * @param array $candidate_insights Candidate records.
+	 * @param array $date_range         Date range.
+	 * @param array $args               Generation args.
+	 * @return array
+	 */
+	private function apply_impact_scoring( $candidate_insights, $date_range, $args ) {
+		if ( empty( $candidate_insights ) || ! is_array( $candidate_insights ) ) {
+			return is_array( $candidate_insights ) ? $candidate_insights : array();
+		}
+
+		/**
+		 * Filter whether absolute-impact scoring runs for this generation pass.
+		 *
+		 * @since 1.3.8
+		 *
+		 * @param bool  $enabled    Whether impact scoring runs.
+		 * @param array $date_range Date range.
+		 * @param array $args       Generation args.
+		 */
+		if ( ! apply_filters( 'opti_behavior_smart_insights_enable_impact_scoring', true, $date_range, $args ) ) {
+			return $candidate_insights;
+		}
+
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Impact_Calculator' ) ) {
+			return $candidate_insights;
+		}
+
+		try {
+			$calculator = new Opti_Behavior_Smart_Insights_Impact_Calculator();
+			$scored     = $calculator->apply_to_candidates( $candidate_insights, $date_range, $args );
+		} catch ( Exception $e ) {
+			return $candidate_insights;
+		}
+
+		if ( ! is_array( $scored ) || count( $scored ) !== count( $candidate_insights ) ) {
+			return $candidate_insights;
+		}
+
+		return $scored;
+	}
+
+	/**
+	 * Attach the typed evidence bundle to every candidate before persistence.
+	 *
+	 * Evidence refs turn the aggregate correlation result into clickable proof:
+	 * every reference carries the destination-report context (page, dates,
+	 * segment, spam policy) so the target report opens on the affected subset.
+	 * Like correlation and impact scoring the step is strictly additive: a
+	 * missing class, a disabled filter, an unaddressable scope, or a thrown
+	 * exception leaves the candidate list untouched.
+	 *
+	 * @since 1.3.8
+	 *
+	 * @param array $candidate_insights Candidate records.
+	 * @param array $date_range         Date range.
+	 * @param array $args               Generation args.
+	 * @return array
+	 */
+	private function apply_evidence_refs( $candidate_insights, $date_range, $args ) {
+		if ( empty( $candidate_insights ) || ! is_array( $candidate_insights ) ) {
+			return is_array( $candidate_insights ) ? $candidate_insights : array();
+		}
+
+		/**
+		 * Filter whether typed evidence references are built for this pass.
+		 *
+		 * @since 1.3.8
+		 *
+		 * @param bool  $enabled    Whether the evidence builder runs.
+		 * @param array $date_range Date range.
+		 * @param array $args       Generation args.
+		 */
+		if ( ! apply_filters( 'opti_behavior_smart_insights_enable_evidence_refs', true, $date_range, $args ) ) {
+			return $candidate_insights;
+		}
+
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Evidence_Builder' ) ) {
+			return $candidate_insights;
+		}
+
+		try {
+			$builder  = new Opti_Behavior_Smart_Insights_Evidence_Builder();
+			$enriched = $builder->apply_to_candidates( $candidate_insights, $date_range, $args );
+		} catch ( Exception $e ) {
+			return $candidate_insights;
+		}
+
+		if ( ! is_array( $enriched ) || count( $enriched ) !== count( $candidate_insights ) ) {
+			return $candidate_insights;
+		}
+
+		return $enriched;
 	}
 
 	/**
@@ -1324,7 +2015,13 @@ class Opti_Behavior_Smart_Insights_Generator {
 		$insight['scores']['historical_detections'] = (int) $count;
 		$insight['scores']['priority_score_before_persistence'] = $current_priority;
 		$insight['scores']['priority_score'] = $new_priority;
-		if ( $scorer && method_exists( $scorer, 'get_priority_label' ) ) {
+
+		// Rank-based labels describe a position in the batch, not an absolute
+		// score, so the persistence boost must never re-derive them from the
+		// legacy thresholds (that would clobber the rank label and the
+		// observation cap it already carries).
+		$is_rank_v2 = isset( $insight['scores']['priority_method'] ) && 'rank_v2' === $insight['scores']['priority_method'];
+		if ( $scorer && ! $is_rank_v2 && method_exists( $scorer, 'get_priority_label' ) ) {
 			$insight['scores']['priority_label'] = $scorer->get_priority_label( $new_priority );
 		}
 
@@ -1352,6 +2049,32 @@ class Opti_Behavior_Smart_Insights_Generator {
 		);
 
 		return $insight;
+	}
+
+	/**
+	 * Resolve how many observations back an insight, for the observation gate.
+	 *
+	 * Page, source and segment entities are measured in sessions. Form and
+	 * funnel entities are not: their metric denominators are form starts and
+	 * funnel entries, and their `sessions` metric stays at zero. Falling back to
+	 * those denominators keeps a measured 85-abandonment leak out of the
+	 * "too little traffic to size it" bucket.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param array $insight Insight payload.
+	 * @return int
+	 */
+	private function resolve_observation_sample_size( $insight ) {
+		$metrics = isset( $insight['metrics'] ) && is_array( $insight['metrics'] ) ? $insight['metrics'] : array();
+
+		foreach ( array( 'sessions', 'starts', 'entries', 'pageviews' ) as $key ) {
+			if ( isset( $metrics[ $key ] ) && is_numeric( $metrics[ $key ] ) && (int) $metrics[ $key ] > 0 ) {
+				return (int) $metrics[ $key ];
+			}
+		}
+
+		return 0;
 	}
 
 	/**

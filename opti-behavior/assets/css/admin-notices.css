@@ -81,10 +81,15 @@ div[class*="feedback"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ai-feedback
 div[class*="newsletter"],
 div[class*="subscribe"],
 
-/* Promotional notices (third-party). Allow Opti-Behavior upgrade layouts. */
-div[class*="promo"]:not([class*="opti-behavior"]),
-div[class*="upgrade"]:not([class*="opti-behavior"]):not(.upgrade-card):not(.upgrade-features):not(.upgrade-action):not(.recordings-upgrade-content):not(.upgrade-preview):not(.upgrade-cta):not(.upgrade-description):not(.upgrade-icon):not(.upgrade-title),
-div[class*="premium"]:not([class*="opti-behavior"]),
+/* Promotional notices (third-party). Allow Opti-Behavior upgrade layouts.
+ * The `:not([class^="ob-"])` guard is the same one the plugin-pattern block
+ * below uses: this plugin's own elements are `ob-`-prefixed, NOT
+ * `opti-behavior`-prefixed, so without it every `.ob-*-upgrade-*` element the
+ * plugin renders (the Smart Insights Pro teasers among them) is hidden by its
+ * own notice suppression. */
+div[class*="promo"]:not([class*="opti-behavior"]):not([class^="ob-"]),
+div[class*="upgrade"]:not([class*="opti-behavior"]):not([class^="ob-"]):not(.upgrade-card):not(.upgrade-features):not(.upgrade-action):not(.recordings-upgrade-content):not(.upgrade-preview):not(.upgrade-cta):not(.upgrade-description):not(.upgrade-icon):not(.upgrade-title),
+div[class*="premium"]:not([class*="opti-behavior"]):not([class^="ob-"]),
 
 /* Survey/feedback notices */
 div[class*="survey"],

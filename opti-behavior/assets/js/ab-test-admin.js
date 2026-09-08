@@ -517,6 +517,17 @@
 		var urlParams = new URLSearchParams(window.location.search);
 		var linkedTargetUrl = urlParams.get('target_url') || '';
 		var linkedTargetPostId = parseInt(urlParams.get('target_post_id'), 10) || 0;
+		// Smart Insights story prefill. Only ever present when the builder was
+		// opened from an insight AND no existing test is being edited, so the
+		// classic builder path is untouched.
+		var insightPrefill = ( ! testId ) ? readInsightPrefill($wizard) : null;
+
+		if ( insightPrefill && insightPrefill.target_url && ! linkedTargetUrl ) {
+			linkedTargetUrl = String(insightPrefill.target_url);
+		}
+		if ( insightPrefill && insightPrefill.target_post_id && ! linkedTargetPostId ) {
+			linkedTargetPostId = parseInt(insightPrefill.target_post_id, 10) || 0;
+		}
 
 		// Pre-populate from existing test.
 		if ( testJson && typeof testJson === 'object' ) {
@@ -532,6 +543,10 @@
 			wizardData.test_type = linkedTargetPostId ? 'element' : 'page_split';
 			wizardData.target_url = linkedTargetUrl;
 			wizardData.target_post_id = linkedTargetPostId;
+		}
+
+		if ( insightPrefill && insightPrefill.test_type ) {
+			wizardData.test_type = String(insightPrefill.test_type);
 		}
 
 		// Init variant rows.
@@ -554,7 +569,11 @@
 		// Init goal rows.
 		var goals = ( goalsJson && Array.isArray(goalsJson) ) ? goalsJson : [];
 		if ( goals.length === 0 ) {
-			addGoalRow('page_visit', '');
+			var prefillGoal = ( insightPrefill && insightPrefill.goal && typeof insightPrefill.goal === 'object' ) ? insightPrefill.goal : null;
+			addGoalRow(
+				( prefillGoal && prefillGoal.type ) ? String(prefillGoal.type) : 'page_visit',
+				( prefillGoal && prefillGoal.config ) ? prefillGoal.config : ''
+			);
 		} else {
 			goals.forEach(function(g) {
 				addGoalRow(g.goal_type, g.goal_config || '{}');
@@ -570,6 +589,7 @@
 			updateGoalTypesForTestType(wizardData.test_type);
 		}
 		applySmartInsightsTargetPrefill(linkedTargetUrl, linkedTargetPostId);
+		applyInsightStoryPrefill(insightPrefill);
 
 		// Type selection.
 		$('.opti-ab-type-card input[name="test_type"]').on('change', function() {
@@ -944,6 +964,105 @@
 			$('#opti-ab-step2-title').text( strings.step_target || 'Select Target' );
 			$('#opti-ab-step2-desc').text( strings.step2_desc_page || 'Choose which page or post this test applies to.' );
 		}
+	}
+
+	/**
+	 * Read the Smart Insights story prefill emitted by the builder view.
+	 *
+	 * The payload is produced server-side by the Pro hypothesis builder; Free
+	 * installs never receive one, so this returns null and the wizard behaves
+	 * exactly as before.
+	 *
+	 * @param {jQuery} $wizard Wizard container.
+	 * @return {Object|null} Prefill payload.
+	 */
+	function readInsightPrefill($wizard) {
+		var raw = $wizard.attr('data-insight-prefill');
+		if ( ! raw ) {
+			return null;
+		}
+
+		var parsed = null;
+		try {
+			parsed = JSON.parse(raw);
+		} catch (e) {
+			return null;
+		}
+
+		return ( parsed && typeof parsed === 'object' && ! Array.isArray(parsed) ) ? parsed : null;
+	}
+
+	/**
+	 * Apply the non-target parts of a Smart Insights story prefill.
+	 *
+	 * Target URL/post are handled by applySmartInsightsTargetPrefill(); this
+	 * fills the test name, the statistical settings suggested by the sample-size
+	 * estimate, and surfaces the hypothesis so the user sees what they are about
+	 * to test. Pro listens to the emitted event to apply segment targeting.
+	 *
+	 * @param {Object|null} prefill Prefill payload.
+	 */
+	function applyInsightStoryPrefill(prefill) {
+		if ( ! prefill ) {
+			return;
+		}
+
+		if ( prefill.name && ! $('#opti-ab-test-name').val() ) {
+			$('#opti-ab-test-name').val(String(prefill.name));
+			wizardData.name = String(prefill.name);
+		}
+
+		var minSample = parseInt(prefill.min_sample_size, 10) || 0;
+		if ( minSample > 0 ) {
+			$('#opti-ab-min-sample').val(minSample);
+			wizardData.min_sample_size = minSample;
+		}
+
+		var minDuration = parseInt(prefill.min_duration_days, 10) || 0;
+		if ( minDuration > 0 ) {
+			$('#opti-ab-min-duration').val(minDuration);
+			wizardData.min_duration_days = minDuration;
+		}
+
+		renderInsightPrefillNotice(prefill);
+
+		// Pro applies suggested segment targeting from here.
+		$(document).trigger('opti-ab-insight-prefill', [prefill]);
+	}
+
+	/**
+	 * Render the "started from insight" banner above the wizard.
+	 *
+	 * @param {Object} prefill Prefill payload.
+	 */
+	function renderInsightPrefillNotice(prefill) {
+		var hypothesis = ( prefill.hypothesis && typeof prefill.hypothesis === 'object' ) ? prefill.hypothesis : {};
+		var statement  = String(hypothesis.statement || '').trim();
+		if ( ! statement ) {
+			return;
+		}
+
+		var lines = [];
+		if ( hypothesis.expected_range_label ) {
+			lines.push(String(hypothesis.expected_range_label));
+		}
+		if ( hypothesis.sample_size_label ) {
+			lines.push(String(hypothesis.sample_size_label));
+		}
+
+		// The class name is deliberately plain. notice-cleanup.js removes, and
+		// admin-notices.css hides, any div whose class contains "notice",
+		// "message", "alert", or "-banner" unless it is prefixed ob-/opti-behavior,
+		// so a friendlier-sounding class would make this block vanish on render.
+		var html = '<div class="opti-ab-insight-prefill">';
+		html += '<p class="opti-ab-insight-prefill__title"><strong>' + escHtml( strings.insight_prefill_title || 'Started from a Smart Insight' ) + '</strong></p>';
+		html += '<p class="opti-ab-insight-prefill__statement">' + escHtml(statement) + '</p>';
+		if ( lines.length ) {
+			html += '<p class="opti-ab-insight-prefill__meta description">' + escHtml(lines.join(' — ')) + '</p>';
+		}
+		html += '</div>';
+
+		$('#opti-ab-wizard').before(html);
 	}
 
 	function applySmartInsightsTargetPrefill(targetUrl, targetPostId) {
@@ -1617,10 +1736,17 @@
 							pUrl = targetUrl + ( targetUrl.indexOf('?') === -1 ? '?' : '&' ) +
 								'opti_ab_preview_test=' + currentTestId +
 								'&opti_ab_preview_variant=' + storedVariantId +
+								'&opti_ab_admin_preview=1' +
 								'&opti_ab_cache_bust=' + Date.now();
 						} else {
+							// opti_ab_admin_preview=1: this iframe renders the live
+							// target page inside wp-admin. Without the marker it is
+							// an ordinary tracked visit — the admin gets bucketed,
+							// an impression is recorded, and the iframe left open on
+							// screen fires the time-based goals.
 							pUrl = targetUrl + ( targetUrl.indexOf('?') === -1 ? '?' : '&' ) +
-								'opti_ab_cache_bust=' + Date.now();
+								'opti_ab_admin_preview=1' +
+								'&opti_ab_cache_bust=' + Date.now();
 						}
 						$container.find('.ob-vcard__left').html(
 							'<div class="ob-vcard__left-loader"><div class="ob-vcard__spinner"></div></div>' +
@@ -1641,7 +1767,10 @@
 				// LEFT: preview
 				ctrlHtml += '<div class="ob-vcard__left' + ( ctrlHasUrl ? '' : ' ob-vcard__left--empty' ) + '">';
 				if ( ctrlHasUrl ) {
-					var ctrlPreviewUrl = ctrlTargetUrl + ( ctrlTargetUrl.indexOf('?') === -1 ? '?' : '&' ) + 'opti_ab_cache_bust=' + Date.now();
+					// opti_ab_admin_preview=1 — see the note on the variant preview
+					// URL above: an unmarked iframe is a fully tracked visit.
+					var ctrlPreviewUrl = ctrlTargetUrl + ( ctrlTargetUrl.indexOf('?') === -1 ? '?' : '&' ) +
+						'opti_ab_admin_preview=1&opti_ab_cache_bust=' + Date.now();
 					ctrlHtml += '<div class="ob-vcard__left-loader"><div class="ob-vcard__spinner"></div></div>';
 					ctrlHtml += '<iframe class="ob-vcard__left-iframe" src="' + escAttr(ctrlPreviewUrl) + '" ' +
 						'sandbox="allow-same-origin allow-scripts" loading="lazy" tabindex="-1" title="' + escAttr( strings.preview_original_page || 'Original page' ) + '" ' +
@@ -2151,6 +2280,7 @@
 
 		return {
 			test_id:            parseInt($('#opti-ab-wizard').data('test-id'), 10) || 0,
+			origin_insight_id:  parseInt($('#opti-ab-wizard').data('origin-insight-id'), 10) || 0,
 			name:               wizardData.name || $('#opti-ab-test-name').val(),
 			test_type:          currentType,
 			target_url:         targetUrl,
@@ -2578,7 +2708,12 @@
 		scroll_depth:( strings.goal_conv_scroll_depth || 'Scroll Conversions' ),
 		time_on_page:( strings.goal_conv_time_on_page || 'Time Conversions' ),
 		revenue:     ( strings.goal_conv_revenue || 'Revenue Conversions' ),
-		bounce_rate: ( strings.goal_conv_bounce_rate || 'Bounce Conversions' )
+		bounce_rate: ( strings.goal_conv_bounce_rate || 'Bounce Conversions' ),
+		// WooCommerce goals: without these entries both Woo tabs fell back to
+		// the generic "Conversions" label, so an add-to-cart count and a
+		// purchase count were indistinguishable on the results panel.
+		woo_add_to_cart: ( strings.goal_conv_woo_add_to_cart || 'Add-to-Cart Conversions' ),
+		woo_purchase:    ( strings.goal_conv_woo_purchase || 'Purchases' )
 	};
 
 	/**
@@ -2612,8 +2747,102 @@
 	 */
 	var resultsCache = {};
 
+	/**
+	 * Monotonic token for results requests.
+	 *
+	 * Every goal switch (AJAX or cache) increments this. An in-flight AJAX
+	 * response is only rendered when its token is still the newest one, so a
+	 * slow response for a goal the user has already navigated away from can
+	 * never overwrite the panel — or the active tab — of the goal they are
+	 * actually looking at.
+	 */
+	var resultsRequestToken = 0;
+
 	function getResultsCacheKey(goalId) {
 		return (goalId || '_default') + '_spam_' + getExcludeSpamFlag();
+	}
+
+	/**
+	 * Resolve which goal a results payload belongs to.
+	 *
+	 * The initial load sends no goal_id, so the server echoes back
+	 * active_goal_id = null. In that case the payload describes the primary
+	 * goal, so resolve it from the goals list rather than leaving it null —
+	 * otherwise the tablist cannot mark the right tab active.
+	 *
+	 * @param {Object} data AJAX payload.
+	 * @return {number} Goal ID the payload's numbers belong to (0 if unknown).
+	 */
+	function resolveResultsGoalId(data) {
+		var goalId = parseInt(data.active_goal_id, 10) || 0;
+		if ( goalId ) {
+			return goalId;
+		}
+
+		var goals = data.goals || [];
+		for ( var i = 0; i < goals.length; i++ ) {
+			if ( parseInt(goals[i].is_primary, 10) ) {
+				return parseInt(goals[i].id, 10) || 0;
+			}
+		}
+
+		return goals.length ? ( parseInt(goals[0].id, 10) || 0 ) : 0;
+	}
+
+	/**
+	 * Blank every goal-specific figure currently rendered in the goal panel and
+	 * relabel the conversion metric for the goal that is being loaded.
+	 *
+	 * Without this, the previously-selected goal's numbers stay in the DOM for
+	 * the whole round-trip, so the panel reads as if the newly-activated tab
+	 * had produced them (e.g. the Bounce Rate tab showing Time on Page counts
+	 * labelled "Scroll Conversions").
+	 *
+	 * Visitor counts and test duration are goal-independent and are left alone.
+	 *
+	 * @param {string} goalType Goal type of the goal being loaded.
+	 */
+	function blankGoalMetrics(goalType) {
+		var convLabel   = goalConversionLabels[goalType] || ( strings.conversions || 'Conversions' );
+		var placeholder = '—';
+
+		// Hero cards that depend on the selected goal (NOT #opti-ab-duration or
+		// #opti-ab-total-impressions, which are the same for every goal).
+		$('#opti-ab-best-rate, #opti-ab-sig-hero, #opti-ab-significance-pct').text(placeholder);
+		$('#opti-ab-significance-hint').text( strings.loading || 'Loading…' );
+
+		// Per-variant conversion rate / improvement / significance.
+		$('#opti-ab-variant-cards')
+			.find('.opti-ab-vs-card__rate, .opti-ab-variant-card__rate')
+			.text(placeholder);
+		$('#opti-ab-variant-cards')
+			.find('.opti-ab-vs-card__baseline, .opti-ab-variant-card__improvement, .opti-ab-vs-card__sig, .opti-ab-variant-card__significance, .opti-ab-vs-divider__improvement')
+			.text(placeholder);
+
+		// Per-variant stat rows: blank every value, and relabel the conversion
+		// metric (always the second stat item) for the incoming goal.
+		$('#opti-ab-variant-cards')
+			.find('.opti-ab-vs-card__stats, .opti-ab-variant-card__stats')
+			.each(function() {
+				var $items = $(this).children();
+				$items.each(function(index) {
+					// Index 0 is the goal-independent visitor count — keep it.
+					if ( 0 === index ) {
+						return;
+					}
+					$(this).find('strong').text(placeholder);
+				});
+
+				var $conv = $items.eq(1);
+				if ( ! $conv.length ) {
+					return;
+				}
+				$conv.contents().filter(function() {
+					return 3 === this.nodeType;
+				}).last().each(function() {
+					this.nodeValue = convLabel;
+				});
+			});
 	}
 
 	function initResults() {
@@ -2649,10 +2878,20 @@
 				// Only update if this is a different goal than currently loaded.
 				var currentGoalId = parseInt($('#opti-ab-goal-select').val(), 10) || 0;
 				if ( goalId !== currentGoalId ) {
+					// The clicked tab is the selection of record from now on:
+					// sync it immediately so a slow response for the previous
+					// goal cannot claim the panel, and so the conversion labels
+					// already describe the goal being loaded.
+					activeGoalType = ( goalsById[ goalId ] && goalsById[ goalId ].goal_type ) || activeGoalType;
+					$('#opti-ab-goal-select').val(String(goalId));
+
 					// Check cache first — instant switch if previously loaded.
 					if ( resultsCache[getResultsCacheKey(goalId)] ) {
 						renderFromCache(testId, goalId);
 					} else {
+						// Drop the outgoing goal's figures before the round-trip
+						// so no stale number is ever attributed to this tab.
+						blankGoalMetrics( activeGoalType );
 						showGoalLoadingOverlay();
 						loadResults(testId, goalId);
 					}
@@ -2856,16 +3095,27 @@
 			setExcludeSpamFlag(getExcludeSpamFlag() === '1' ? '0' : '1');
 			loadResults(testId, goalId);
 		});
+		// Token for this request — only the newest one may render.
+		var requestToken = ++resultsRequestToken;
+
 		$.post(ajaxUrl, postData, function(res) {
+			// The user switched goals while this was in flight: cache the
+			// payload for later but never render it, otherwise it would
+			// overwrite the panel — and the active tab — of the goal they are
+			// now looking at.
+			var isStale = ( requestToken !== resultsRequestToken );
+
 			if ( ! res.success ) {
-				removeGoalLoadingOverlay();
-				showToast(res.data && res.data.message ? res.data.message : strings.error, 'error');
+				if ( ! isStale ) {
+					removeGoalLoadingOverlay();
+					showToast(res.data && res.data.message ? res.data.message : strings.error, 'error');
+				}
 				return;
 			}
 
 			var data      = res.data;
 			var goals     = data.goals || [];
-			var activeGId = data.active_goal_id;
+			var activeGId = resolveResultsGoalId(data);
 
 			// Store in cache for instant switching later.
 			var cacheKey = getResultsCacheKey(goalId);
@@ -2886,6 +3136,10 @@
 				}
 			}
 
+			if ( isStale ) {
+				return;
+			}
+
 			populateGoalSelector(goals, activeGId);
 			renderResults(data);
 			removeGoalLoadingOverlay();
@@ -2904,6 +3158,9 @@
 				new CustomEvent( 'opti_ab_results_loaded', { detail: window.OptiABResultsState } )
 			);
 		}).fail(function() {
+			if ( requestToken !== resultsRequestToken ) {
+				return;
+			}
 			removeGoalLoadingOverlay();
 			showToast(strings.error, 'error');
 		});
@@ -2917,9 +3174,17 @@
 	 * @param {number} goalId Goal ID to render from cache.
 	 */
 	function renderFromCache(testId, goalId) {
-		var data      = resultsCache[getResultsCacheKey(goalId)];
-		var goals     = data.goals || [];
-		var activeGId = data.active_goal_id;
+		var data  = resultsCache[getResultsCacheKey(goalId)];
+		var goals = data.goals || [];
+
+		// Rendering from cache supersedes any in-flight request.
+		resultsRequestToken++;
+		removeGoalLoadingOverlay();
+
+		// Prefer the goal the caller asked for: the payload cached on the
+		// initial page load carries active_goal_id = null (no goal_id was
+		// sent), which would otherwise leave the tablist without an active tab.
+		var activeGId = parseInt(goalId, 10) || resolveResultsGoalId(data);
 
 		populateGoalSelector(goals, activeGId);
 		renderResults(data);
@@ -2979,15 +3244,22 @@
 
 		// ── 2. Rebuild goal tab buttons (keep any Pro-injected tabs untouched) ──
 		// Pro-injected tabs have data-panel but no data-goal-id; only remove ours.
+		// A non-goal tab (e.g. Decision Engine) that the user activated while
+		// this payload was in flight must keep the selection — rebuilding the
+		// goal tabs below would otherwise silently steal it back.
+		var nonGoalTabActive = $('#opti-ab-results-tabs [role="tab"].opti-ab-tab--active').not('[data-goal-id]').length > 0;
+
 		$('#opti-ab-results-tabs [data-goal-id]').remove();
 
 		for ( var j = 0; j < goals.length; j++ ) {
 			var goal      = goals[j];
 			var tabLabel  = goal.name || goalTypeLabels[goal.goal_type] || goal.goal_type.replace(/_/g, ' ');
 			var isPrimary = !! parseInt(goal.is_primary, 10);
-			var tabActive = activeGoalId
-				? parseInt(goal.id, 10) === parseInt(activeGoalId, 10)
-				: isPrimary;
+			var tabActive = ! nonGoalTabActive && (
+				activeGoalId
+					? parseInt(goal.id, 10) === parseInt(activeGoalId, 10)
+					: isPrimary
+			);
 
 			var $tab = $('<button></button>')
 				.attr({
@@ -3106,9 +3378,13 @@
 		if ( $panel.find('.opti-ab-goal-loading-overlay').length ) {
 			return; // Already showing.
 		}
+		$panel.attr('aria-busy', 'true');
 		$panel.append(
 			'<div class="opti-ab-goal-loading-overlay">' +
-				'<div class="opti-ab-spinner"></div>' +
+				'<div class="opti-ab-goal-loading-overlay__inner">' +
+					'<div class="opti-ab-spinner"></div>' +
+					'<span>' + escHtml( strings.loading || 'Loading…' ) + '</span>' +
+				'</div>' +
 			'</div>'
 		);
 	}
@@ -3117,6 +3393,7 @@
 	 * Remove the loading overlay from the goal panel.
 	 */
 	function removeGoalLoadingOverlay() {
+		$('#opti-ab-goal-panel').removeAttr('aria-busy');
 		$('#opti-ab-goal-panel .opti-ab-goal-loading-overlay').remove();
 	}
 
@@ -3446,12 +3723,20 @@
 		html += '<div class="ob-res-vcard__left' + ( hasPreview ? '' : ' ob-res-vcard__left--empty' ) + '">';
 		if ( hasPreview ) {
 			var pUrl;
+			// opti_ab_admin_preview=1 keeps these results-page thumbnails out of
+			// the test's own data. The control thumbnail in particular is a plain
+			// frontend load: unmarked, it bucketed the admin, recorded an
+			// impression and — since the card stays on screen — fired the
+			// time_on_page / bounce_rate goals, so merely opening the results page
+			// changed the results being shown.
 			if ( isControl ) {
-				pUrl = targetUrl + ( targetUrl.indexOf('?') === -1 ? '?' : '&' ) + 'opti_ab_cache_bust=' + Date.now();
+				pUrl = targetUrl + ( targetUrl.indexOf('?') === -1 ? '?' : '&' ) +
+					'opti_ab_admin_preview=1&opti_ab_cache_bust=' + Date.now();
 			} else {
 				pUrl = targetUrl + ( targetUrl.indexOf('?') === -1 ? '?' : '&' ) +
 					'opti_ab_preview_test=' + testId +
 					'&opti_ab_preview_variant=' + variantId +
+					'&opti_ab_admin_preview=1' +
 					'&opti_ab_cache_bust=' + Date.now();
 			}
 			html += '<div class="ob-res-vcard__loader"><div class="ob-vcard__spinner"></div></div>';

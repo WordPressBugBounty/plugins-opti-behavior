@@ -1704,7 +1704,7 @@
 				frequency: $('#sc-auto-frequency').val(),
 				conditions: collectConditions(),
 				delete_orphaned_visitors: $('#sc-delete-orphans').is(':checked'),
-				max_rows_per_run: parseInt($('#sc-max-rows-per-run').val(), 10) || 5000,
+				max_rows_per_run: parseInt($('#sc-max-rows-per-run').val(), 10) || 50000,
 				optimize_after_cleanup: $('#sc-schedule-optimize-after-cleanup').is(':checked'),
 				recalculate_spam_before_cleanup: $('#sc-recalculate-spam-before-cleanup').is(':checked'),
 				// Daily heatmap sync auto-repair toggle (separate option server-side, default ON).

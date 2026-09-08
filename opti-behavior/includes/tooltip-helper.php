@@ -1102,6 +1102,18 @@ function opti_behavior_get_funnels_tooltips() {
 			'simple'  => __( 'Click to add another page to track in your funnel.', 'opti-behavior' ),
 			'example' => __( 'Add a checkout step after cart, or a thank-you page after purchase.', 'opti-behavior' ),
 		),
+		'suggested_funnels' => array(
+			'title'   => __( 'Suggested Funnels', 'opti-behavior' ),
+			'content' => __( 'We look at the plugins and pages your site actually uses (store, blog, contact forms, memberships, courses, bookings) and propose ready-made funnels built from your real URLs. Nothing is created until you click Create.', 'opti-behavior' ),
+			'simple'  => __( 'Ready-made funnels for your type of site - one click to create.', 'opti-behavior' ),
+			'example' => __( 'On a WooCommerce store: Shop > Product > Cart > Checkout > Order received.', 'opti-behavior' ),
+		),
+		'rescan_site' => array(
+			'title'   => __( 'Re-scan Site', 'opti-behavior' ),
+			'content' => __( 'Detects your site again from scratch, ignoring the cached result. It also brings back every suggestion you dismissed, so dismissing a card is never permanent.', 'opti-behavior' ),
+			'simple'  => __( 'Look at the site again and restore dismissed suggestions.', 'opti-behavior' ),
+			'example' => __( 'Run it right after installing WooCommerce to get the store funnels offered.', 'opti-behavior' ),
+		),
 	);
 }
 
@@ -2278,4 +2290,304 @@ function opti_behavior_get_ab_testing_tooltips() {
 			'simple'  => '',
 		),
 	);
+}
+
+/**
+ * Get the per-signal Smart Insights tooltips.
+ *
+ * One entry per signal_id that Smart Insights can store, Free and Pro alike.
+ * Pro signal copy lives here on purpose: the Free plugin renders every stored
+ * insight card (including Pro-generated ones) and must be able to explain what
+ * the signal means without loading the Pro signals catalog.
+ *
+ * The `_default` entry is the fallback used for any signal_id not listed here,
+ * so a new signal never renders a card without an explanation.
+ *
+ * @return array Signal id => tooltip definition.
+ */
+function opti_behavior_get_smart_insights_signal_tooltips() {
+	$tooltips = array(
+		'_default' => array(
+			'title'   => __( 'What is this signal?', 'opti-behavior' ),
+			'content' => __( 'Smart Insights compares this page, form, funnel, or audience against your own site baseline for the selected period. A card appears when the difference is large enough and is measured on enough sessions to be trusted.', 'opti-behavior' ),
+			'simple'  => __( 'A behavior pattern that stands out from your normal numbers.', 'opti-behavior' ),
+		),
+
+		// --- Free signals ---------------------------------------------------
+		'basic_bounce_alert' => array(
+			'title'   => __( 'Bounce rate alert', 'opti-behavior' ),
+			'content' => __( 'Measures the share of sessions on a page that end without a second page view. It triggers when a page with enough traffic bounces clearly more than your site baseline for the same period.', 'opti-behavior' ),
+			'simple'  => __( 'Too many visitors leave this page after seeing only that page.', 'opti-behavior' ),
+		),
+		'basic_mobile_bounce_warning' => array(
+			'title'   => __( 'Mobile bounce warning', 'opti-behavior' ),
+			'content' => __( 'Compares the bounce rate of mobile sessions against desktop sessions on the same page. It triggers when mobile bounces noticeably more, which usually points at layout, speed, or tap-target problems on small screens.', 'opti-behavior' ),
+			'simple'  => __( 'Phone visitors leave much faster than desktop visitors.', 'opti-behavior' ),
+		),
+		'high_exit_rate_page' => array(
+			'title'   => __( 'High exit rate page', 'opti-behavior' ),
+			'content' => __( 'Measures how often a page is the last one seen in a session. Unlike bounce rate it also counts visitors who arrived from another page, so it flags pages where journeys stop rather than pages where they start badly.', 'opti-behavior' ),
+			'simple'  => __( 'Visitors reach this page and then stop browsing.', 'opti-behavior' ),
+		),
+		'high_traffic_low_engagement' => array(
+			'title'   => __( 'High traffic, low engagement', 'opti-behavior' ),
+			'content' => __( 'Combines traffic volume with engagement signals such as time on page, scroll depth, and interactions. It triggers when a page receives a lot of visits but visitors do very little once they arrive.', 'opti-behavior' ),
+			'simple'  => __( 'A popular page that visitors barely engage with.', 'opti-behavior' ),
+		),
+		'low_scroll_depth_important_page' => array(
+			'title'   => __( 'Low scroll depth', 'opti-behavior' ),
+			'content' => __( 'Measures how far down a page visitors scroll on average. It triggers on pages with meaningful traffic where most visitors never reach the lower part of the page, so content or calls to action placed there are rarely seen.', 'opti-behavior' ),
+			'simple'  => __( 'Most visitors never scroll far enough to see the bottom of this page.', 'opti-behavior' ),
+		),
+		'traffic_spike_observation' => array(
+			'title'   => __( 'Traffic spike', 'opti-behavior' ),
+			'content' => __( 'Compares session volume for the current period against the previous one. It triggers when traffic rises sharply. This is an observation, not a problem: it is there so you can check whether the extra traffic behaves like your usual audience.', 'opti-behavior' ),
+			'simple'  => __( 'Traffic jumped compared with the period before.', 'opti-behavior' ),
+		),
+
+		// --- Pro signals: engagement and exits --------------------------------
+		'quick_exit_pattern' => array(
+			'title'   => __( 'Quick exit pattern', 'opti-behavior' ),
+			'content' => __( 'Looks at how quickly sessions end after landing. It triggers when an unusual share of visitors leave within the first seconds, before any real reading or interaction can happen.', 'opti-behavior' ),
+			'simple'  => __( 'Visitors leave within seconds of arriving.', 'opti-behavior' ),
+		),
+		'engagement_decay' => array(
+			'title'   => __( 'Engagement decay', 'opti-behavior' ),
+			'content' => __( 'Compares current engagement (time, scroll, interactions) against the same page in the previous period. It triggers when engagement drops over time rather than being low all along, which usually follows a content, layout, or speed change.', 'opti-behavior' ),
+			'simple'  => __( 'This page used to hold attention better than it does now.', 'opti-behavior' ),
+		),
+		'visitor_confusion_pattern' => array(
+			'title'   => __( 'Visitor confusion', 'opti-behavior' ),
+			'content' => __( 'Combines hesitation signals such as erratic scrolling, back-and-forth navigation, and repeated clicking on the same area. It triggers when many sessions show the behavior of people who cannot find what they came for.', 'opti-behavior' ),
+			'simple'  => __( 'Visitors act lost on this page.', 'opti-behavior' ),
+		),
+		'dead_or_rage_click_signal' => array(
+			'title'   => __( 'Dead and rage clicks', 'opti-behavior' ),
+			'content' => __( 'Dead clicks are clicks on something that does nothing. Rage clicks are several fast clicks on the same spot. The signal triggers when either happens often enough on one element to indicate a broken or misleading interface.', 'opti-behavior' ),
+			'simple'  => __( 'Visitors click something that does not react.', 'opti-behavior' ),
+		),
+		'session_recording_opportunity' => array(
+			'title'   => __( 'Session recording opportunity', 'opti-behavior' ),
+			'content' => __( 'Fires when a measured problem has recordings available that show the behavior directly. It does not detect a new issue: it tells you that watching a few real sessions is the fastest way to understand this one.', 'opti-behavior' ),
+			'simple'  => __( 'Recordings exist that show this problem happening.', 'opti-behavior' ),
+		),
+		'ab_test_opportunity' => array(
+			'title'   => __( 'A/B test opportunity', 'opti-behavior' ),
+			'content' => __( 'Fires on pages where traffic is high enough for a split test to reach a usable result, and where a measured weakness gives you something concrete to test. It suggests validating a fix rather than shipping it blind.', 'opti-behavior' ),
+			'simple'  => __( 'This page has enough traffic to test a change properly.', 'opti-behavior' ),
+		),
+
+		// --- Pro signals: conversion and CTA ----------------------------------
+		'cta_low_performance' => array(
+			'title'   => __( 'Low CTA performance', 'opti-behavior' ),
+			'content' => __( 'Measures how many visitors who saw a call to action actually clicked it. It triggers when the click rate is clearly below what comparable elements on your site achieve, after enough impressions to be reliable.', 'opti-behavior' ),
+			'simple'  => __( 'People see this button or link but do not click it.', 'opti-behavior' ),
+		),
+		'poor_conversion_rate' => array(
+			'title'   => __( 'Poor conversion rate', 'opti-behavior' ),
+			'content' => __( 'Compares the conversion rate of a page or flow against your site baseline. It triggers when the rate stays below that baseline over enough sessions that the gap is unlikely to be noise.', 'opti-behavior' ),
+			'simple'  => __( 'Traffic arrives but few visitors complete the goal.', 'opti-behavior' ),
+		),
+		'conversion_drop_alert' => array(
+			'title'   => __( 'Conversion drop', 'opti-behavior' ),
+			'content' => __( 'Compares the current conversion rate against the previous period for the same scope. It triggers on a sudden fall, which usually means something changed recently: a deploy, a price, a tracking break, or a traffic mix shift.', 'opti-behavior' ),
+			'simple'  => __( 'Conversions fell compared with the period before.', 'opti-behavior' ),
+		),
+		'traffic_spike_without_conversion' => array(
+			'title'   => __( 'Traffic spike without conversion', 'opti-behavior' ),
+			'content' => __( 'Triggers when session volume rises sharply while conversions stay flat. The extra visitors behave differently from your usual audience, which typically points at a low-intent source, a campaign mismatch, or bot-like traffic.', 'opti-behavior' ),
+			'simple'  => __( 'More visitors arrived, but the extra visitors do not convert.', 'opti-behavior' ),
+		),
+
+		// --- Pro signals: mobile ----------------------------------------------
+		'mobile_friction_detected' => array(
+			'title'   => __( 'Mobile friction', 'opti-behavior' ),
+			'content' => __( 'Compares mobile sessions against desktop sessions on the same page using engagement, errors, and interaction signals. It triggers when the mobile experience is measurably worse, not merely different.', 'opti-behavior' ),
+			'simple'  => __( 'The mobile version of this page performs worse than desktop.', 'opti-behavior' ),
+		),
+		'mobile_cta_click_rate_lower_than_desktop' => array(
+			'title'   => __( 'Mobile CTA gap', 'opti-behavior' ),
+			'content' => __( 'Compares the click rate of the same call to action on mobile and on desktop. It triggers when mobile clicks clearly lag, which usually means the element is hidden below the fold, too small to tap, or covered by a sticky bar.', 'opti-behavior' ),
+			'simple'  => __( 'The same button gets clicked far less on phones.', 'opti-behavior' ),
+		),
+
+		// --- Pro signals: traffic quality and campaigns ------------------------
+		'low_quality_traffic_source' => array(
+			'title'   => __( 'Low quality traffic source', 'opti-behavior' ),
+			'content' => __( 'Groups sessions by source and compares their engagement and conversion against your site average. It triggers when one source sends enough sessions to be judged and those sessions consistently underperform.', 'opti-behavior' ),
+			'simple'  => __( 'One traffic source brings visitors who do not engage.', 'opti-behavior' ),
+		),
+		'campaign_page_intent_mismatch' => array(
+			'title'   => __( 'Campaign and page mismatch', 'opti-behavior' ),
+			'content' => __( 'Compares what a campaign promises with how its visitors behave on the landing page. It triggers when campaign traffic bounces or disengages much faster than other traffic on the same page, which points at a promise the page does not keep.', 'opti-behavior' ),
+			'simple'  => __( 'Campaign visitors do not find what the ad led them to expect.', 'opti-behavior' ),
+		),
+		'segment_anomaly_detection' => array(
+			'title'   => __( 'Segment anomaly', 'opti-behavior' ),
+			'content' => __( 'Splits sessions by device, browser, country, source, and campaign and looks for one group that behaves very differently from the rest. It triggers only when the group is large enough for the difference to be statistically meaningful.', 'opti-behavior' ),
+			'simple'  => __( 'One audience group behaves very differently from everyone else.', 'opti-behavior' ),
+		),
+		'returning_visitor_opportunity' => array(
+			'title'   => __( 'Returning visitor opportunity', 'opti-behavior' ),
+			'content' => __( 'Compares returning visitors with first-time visitors. It triggers when returning visitors show clearly stronger intent than the experience currently rewards, so a targeted offer or shortcut is likely to pay off.', 'opti-behavior' ),
+			'simple'  => __( 'Your returning visitors are worth more than the page treats them.', 'opti-behavior' ),
+		),
+
+		// --- Pro signals: funnels and commerce ---------------------------------
+		'funnel_dropoff_detected' => array(
+			'title'   => __( 'Funnel drop-off', 'opti-behavior' ),
+			'content' => __( 'Follows visitors from one funnel step to the next. It triggers when one step loses a much larger share of visitors than the steps around it, which isolates where the journey breaks.', 'opti-behavior' ),
+			'simple'  => __( 'One step in the funnel loses far more visitors than the others.', 'opti-behavior' ),
+		),
+		'product_page_to_cart_dropoff' => array(
+			'title'   => __( 'Product page to cart drop-off', 'opti-behavior' ),
+			'content' => __( 'Measures how many product page visitors add an item to the cart. It triggers when that share falls clearly below your store baseline, which usually points at price, stock, shipping information, or a weak add-to-cart action.', 'opti-behavior' ),
+			'simple'  => __( 'Visitors view the product but do not add it to the cart.', 'opti-behavior' ),
+		),
+		'product_page_engagement_issue' => array(
+			'title'   => __( 'Product page engagement issue', 'opti-behavior' ),
+			'content' => __( 'Looks at time, scroll, and interactions on product pages. It triggers when visitors do not reach the information that normally drives a purchase decision, such as images, description, or reviews.', 'opti-behavior' ),
+			'simple'  => __( 'Shoppers do not engage with this product page.', 'opti-behavior' ),
+		),
+		'cart_to_checkout_dropoff' => array(
+			'title'   => __( 'Cart to checkout drop-off', 'opti-behavior' ),
+			'content' => __( 'Measures how many visitors with a filled cart actually start checkout. It triggers when that share is unusually low, which typically points at unexpected costs, an account requirement, or an unclear checkout entry point.', 'opti-behavior' ),
+			'simple'  => __( 'Carts are filled but checkout is never started.', 'opti-behavior' ),
+		),
+		'checkout_to_purchase_dropoff' => array(
+			'title'   => __( 'Checkout to purchase drop-off', 'opti-behavior' ),
+			'content' => __( 'Measures how many visitors who start checkout finish the order. It triggers when the completion share is clearly below baseline, which is the most expensive place on the site to lose someone.', 'opti-behavior' ),
+			'simple'  => __( 'Checkout is started but the order is not completed.', 'opti-behavior' ),
+		),
+		'checkout_friction_detected' => array(
+			'title'   => __( 'Checkout friction', 'opti-behavior' ),
+			'content' => __( 'Combines errors, hesitation, field corrections, and time spent inside the checkout steps. It triggers when the checkout is measurably harder to complete than the rest of the journey, and points at the step responsible.', 'opti-behavior' ),
+			'simple'  => __( 'Something inside checkout is slowing buyers down.', 'opti-behavior' ),
+		),
+
+		// --- Pro signals: forms and errors -------------------------------------
+		'form_abandonment_detected' => array(
+			'title'   => __( 'Form abandonment', 'opti-behavior' ),
+			'content' => __( 'Compares how many visitors start a form against how many submit it. It triggers when a form with enough starts is abandoned much more often than your other forms.', 'opti-behavior' ),
+			'simple'  => __( 'Visitors begin this form but never send it.', 'opti-behavior' ),
+		),
+		'form_error_friction' => array(
+			'title'   => __( 'Form error friction', 'opti-behavior' ),
+			'content' => __( 'Counts validation errors raised while a form is being filled. It triggers when errors are frequent enough to be a design problem rather than normal typing mistakes, for example an unclear format rule.', 'opti-behavior' ),
+			'simple'  => __( 'This form rejects visitors too often before they can submit.', 'opti-behavior' ),
+		),
+		'field_level_friction' => array(
+			'title'   => __( 'Field level friction', 'opti-behavior' ),
+			'content' => __( 'Narrows form problems down to a single field using time spent, corrections, re-entries, and abandonment at that field. It triggers when one field is measurably harder than the rest of the form.', 'opti-behavior' ),
+			'simple'  => __( 'One specific field is where people give up.', 'opti-behavior' ),
+		),
+		'error_impact_on_conversion' => array(
+			'title'   => __( 'Error impact on conversion', 'opti-behavior' ),
+			'content' => __( 'Compares sessions that hit a JavaScript error with sessions that did not, on the same page. It triggers when the error group converts or engages clearly worse, which turns a technical error into a measured business cost.', 'opti-behavior' ),
+			'simple'  => __( 'Sessions that hit this error perform worse than clean sessions.', 'opti-behavior' ),
+		),
+	);
+
+	/**
+	 * Filters the per-signal Smart Insights tooltip copy.
+	 *
+	 * @param array $tooltips Signal id => array with title, content and simple keys.
+	 */
+	return apply_filters( 'opti_behavior_smart_insights_signal_tooltips', $tooltips );
+}
+
+/**
+ * Get the Smart Insights detail-modal section tooltips.
+ *
+ * Keys match the section identifiers used by assets/js/smart-insights.js when it
+ * renders the insight detail modal, so each rendered section heading can carry
+ * the same purple "?" helper used on the settings screens.
+ *
+ * @return array Section key => tooltip definition.
+ */
+function opti_behavior_get_smart_insights_section_tooltips() {
+	$tooltips = array(
+		'impact' => array(
+			'title'   => __( 'Business impact', 'opti-behavior' ),
+			'content' => __( 'Translates the signal into what it costs you: how many sessions or visitors are affected, and where available the estimated lost revenue. Figures are estimates based on your own measured rates for the selected period, not predictions.', 'opti-behavior' ),
+			'simple'  => __( 'What this problem is worth in visitors or money.', 'opti-behavior' ),
+		),
+		'diagnosis' => array(
+			'title'   => __( 'Diagnosis', 'opti-behavior' ),
+			'content' => __( 'The interpretation of the measured numbers: what the data most likely means and why it matters for your site. It explains the finding; it does not add new measurements.', 'opti-behavior' ),
+			'simple'  => __( 'What the numbers most likely mean.', 'opti-behavior' ),
+		),
+		'evidence' => array(
+			'title'   => __( 'Evidence', 'opti-behavior' ),
+			'content' => __( 'The raw metrics behind the card: the measured value, the baseline it is compared with, and the number of sessions the comparison rests on. If the session count is small, treat the finding as directional.', 'opti-behavior' ),
+			'simple'  => __( 'The actual numbers that triggered this insight.', 'opti-behavior' ),
+		),
+		'evidence_refs' => array(
+			'title'   => __( 'Evidence and proof', 'opti-behavior' ),
+			'content' => __( 'Direct links to the recordings, heatmaps, form reports, or error entries that show this behavior. Each link opens the matching report already filtered to the page, period, and segment of this insight.', 'opti-behavior' ),
+			'simple'  => __( 'Open the recordings and reports that prove this finding.', 'opti-behavior' ),
+		),
+		'hypothesis' => array(
+			'title'   => __( 'Hypothesis and next experiment', 'opti-behavior' ),
+			'content' => __( 'A testable explanation of the cause, plus the change worth trying and how to measure it. Treat it as a starting point for an A/B test, not as a confirmed cause.', 'opti-behavior' ),
+			'simple'  => __( 'What to try next, and how to check whether it worked.', 'opti-behavior' ),
+		),
+		'experiment' => array(
+			'title'   => __( 'Experiment result', 'opti-behavior' ),
+			'content' => __( 'The outcome of the test that was run for this insight: whether the metric improved, stayed flat, or got worse after the change, measured against the period before it.', 'opti-behavior' ),
+			'simple'  => __( 'What happened after the change was applied.', 'opti-behavior' ),
+		),
+		'where' => array(
+			'title'   => __( 'Where is the problem?', 'opti-behavior' ),
+			'content' => __( 'Splits the affected sessions by device, browser, country, traffic source, and campaign to show whether one audience carries the problem or whether it is spread evenly. If it is spread evenly, the page itself is the cause, not a segment.', 'opti-behavior' ),
+			'simple'  => __( 'Which audience group actually has this problem.', 'opti-behavior' ),
+		),
+		'where_pulse' => array(
+			'title'   => __( 'Segment health', 'opti-behavior' ),
+			'content' => __( 'One dot per audience group. Red means the group carries the problem, amber means it is worth watching, green means it behaves normally, and gray means too few sessions were measured to judge it. The counter shows how many groups cleared the data floor.', 'opti-behavior' ),
+			'simple'  => __( 'Red carries the problem, amber is borderline, green is fine, gray is not measurable.', 'opti-behavior' ),
+		),
+		'where_outliers' => array(
+			'title'   => __( 'Segments that differ most', 'opti-behavior' ),
+			'content' => __( 'Each card compares one audience group with everyone else on the same metric. The paired bars show both values, the arrow shows whether the group got better or worse between the first and second half of the period, and the small chart shows the daily values. Cards marked "Combined" describe a pair such as one browser on one country, detected because neither part alone explained the problem. Clicking a card re-scopes the chart and the report links to that group.', 'opti-behavior' ),
+			'simple'  => __( 'One card per audience group, compared against everyone else.', 'opti-behavior' ),
+		),
+		'where_mix' => array(
+			'title'   => __( 'Did the audience change?', 'opti-behavior' ),
+			'content' => __( 'Compares the share each country, source, or device holds this period against the previous one. A large shift means your audience composition changed, so a metric can move without any page changing. Shown only when the shift is big enough and measured on enough sessions.', 'opti-behavior' ),
+			'simple'  => __( 'Whether the metric moved because your audience changed, not the page.', 'opti-behavior' ),
+		),
+		'context' => array(
+			'title'   => __( 'Context', 'opti-behavior' ),
+			'content' => __( 'The scope of the finding: the period analyzed, the page or entity involved, the confidence level, and how often this insight has recurred. Read it before acting so you know exactly what the numbers cover.', 'opti-behavior' ),
+			'simple'  => __( 'What period, page, and reliability this insight covers.', 'opti-behavior' ),
+		),
+		'next_action' => array(
+			'title'   => __( 'Next action', 'opti-behavior' ),
+			'content' => __( 'The single highest-value step for this insight, chosen from the full recommendation list. Start here when you only have time for one change.', 'opti-behavior' ),
+			'simple'  => __( 'The one thing to do first.', 'opti-behavior' ),
+		),
+		'related_reports' => array(
+			'title'   => __( 'Related reports', 'opti-behavior' ),
+			'content' => __( 'Shortcuts into the reports that hold the underlying data: heatmaps, recordings, funnels, forms, and traffic reports. Each link carries the page, period, and segment of this insight, so you land on the matching view instead of the report home.', 'opti-behavior' ),
+			'simple'  => __( 'Open the full reports behind this insight.', 'opti-behavior' ),
+		),
+		'recommendations' => array(
+			'title'   => __( 'Recommended actions', 'opti-behavior' ),
+			'content' => __( 'Concrete changes matched to this signal type, ordered by expected effect. They are suggestions based on common causes for this pattern, so check them against what you know about the page before applying one.', 'opti-behavior' ),
+			'simple'  => __( 'Changes worth trying, most promising first.', 'opti-behavior' ),
+		),
+		'causes' => array(
+			'title'   => __( 'Likely causes', 'opti-behavior' ),
+			'content' => __( 'The explanations that most often produce this pattern. Causes marked as measured were confirmed against your own data; the others are candidates to rule out one by one.', 'opti-behavior' ),
+			'simple'  => __( 'What usually causes a pattern like this.', 'opti-behavior' ),
+		),
+	);
+
+	/**
+	 * Filters the Smart Insights detail-modal section tooltip copy.
+	 *
+	 * @param array $tooltips Section key => array with title, content and simple keys.
+	 */
+	return apply_filters( 'opti_behavior_smart_insights_section_tooltips', $tooltips );
 }

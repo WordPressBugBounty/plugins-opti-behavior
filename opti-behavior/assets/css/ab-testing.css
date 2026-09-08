@@ -4063,15 +4063,32 @@ body.opti-ab-diff-open {
 .opti-ab-goal-loading-overlay {
 	position: absolute;
 	inset: 0;
-	background: rgba(255, 255, 255, 0.75);
+	/* Near-opaque on purpose: at 75% the outgoing goal's numbers stayed
+	   readable through the overlay, so a slow tab switch looked as if the
+	   newly-selected goal had produced them. */
+	background: rgba(255, 255, 255, 0.97);
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	justify-content: center;
 	z-index: 10;
 	border-radius: 12px;
-	backdrop-filter: blur(2px);
-	-webkit-backdrop-filter: blur(2px);
+	backdrop-filter: blur(6px);
+	-webkit-backdrop-filter: blur(6px);
 	animation: optiAbOverlayFadeIn 0.15s ease-out;
+}
+
+/* The goal panel is far taller than the viewport, so a centred spinner lands
+   off-screen and the panel just looks frozen. Stick it to the viewport. */
+.opti-ab-goal-loading-overlay__inner {
+	position: sticky;
+	top: 38vh;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	color: #475569;
+	font-size: 13px;
+	font-weight: 600;
 }
 
 @keyframes optiAbOverlayFadeIn {
@@ -5140,3 +5157,21 @@ body.opti-ab-diff-open {
 	}
 }
 
+
+/* A/B builder - Smart Insights story prefill banner (Milestone 6). */
+.opti-ab-insight-prefill {
+	background: #eef2ff;
+	border: 1px solid #c7d2fe;
+	border-left: 4px solid #6366f1;
+	border-radius: 6px;
+	margin: 0 0 16px;
+	padding: 12px 16px;
+}
+
+.opti-ab-insight-prefill__title {
+	margin-bottom: 4px;
+}
+
+.opti-ab-insight-prefill__statement {
+	margin: 0;
+}

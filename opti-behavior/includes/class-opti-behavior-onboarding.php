@@ -32,8 +32,39 @@ class Opti_Behavior_Onboarding {
 	/** WordPress option: stores the user's selected goal from step 2. */
 	const OPTION_GOAL = 'opti_behavior_onboarding_goal';
 
+	/**
+	 * WordPress option: '1' when the user ticked the auto-create opt-in in the
+	 * onboarding modal, '0' otherwise. Recorded for support/analytics only —
+	 * the creation itself is done by `optibehavior_create_recommended_funnels`,
+	 * whose step-signature guard is the authoritative idempotency mechanism.
+	 *
+	 * @since 1.8.4
+	 */
+	const OPTION_CREATE_FUNNELS = 'opti_behavior_onboarding_create_funnels';
+
+	/**
+	 * WordPress option: the recipe id the selected goal(s) mapped to, so the
+	 * Funnels page / support can tell which funnel the user came for.
+	 *
+	 * @since 1.8.4
+	 */
+	const OPTION_GOAL_RECIPE = 'opti_behavior_onboarding_goal_recipe';
+
+	/**
+	 * Query parameter that forces the popup to render for visual debugging.
+	 *
+	 * Debug-only: honoured solely when `WP_DEBUG` is on and the current user is
+	 * an administrator, so it is inert on production sites.
+	 *
+	 * @since 1.9.0
+	 */
+	const PREVIEW_PARAM = 'ob_preview_onboarding';
+
 	/** @var self|null Singleton instance. */
 	private static $instance = null;
+
+	/** @var array|null Memoized offered Free recipes (see get_recommended_recipes()). */
+	private $recommended_recipes = null;
 
 	/**
 	 * Initialize the singleton.
@@ -89,6 +120,13 @@ class Opti_Behavior_Onboarding {
 	 * @return bool
 	 */
 	public function should_show() {
+		// Debug-only preview (?ob_preview_onboarding=1): render regardless of
+		// consent / dismissal / existing sessions so the modal can be inspected
+		// on a site that already has data. Never persists anything.
+		if ( $this->is_preview_request() ) {
+			return true;
+		}
+
 		// Must have consent.
 		if ( ! class_exists( 'Opti_Behavior_Welcome' ) || ! Opti_Behavior_Welcome::has_consent() ) {
 			return false;
@@ -107,6 +145,183 @@ class Opti_Behavior_Onboarding {
 		$has_sessions = $wpdb->get_var( "SELECT EXISTS( SELECT 1 FROM `" . $wpdb->prefix . "optibehavior_sessions` LIMIT 1 )" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
 		return ! (bool) $has_sessions;
+	}
+
+	/**
+	 * Whether the debug-only preview may be used at all on this request.
+	 *
+	 * Two independent gates, both required:
+	 * 1. `WP_DEBUG` is enabled (development install only).
+	 * 2. The current user is a logged-in administrator.
+	 *
+	 * @since 1.9.0
+	 * @return bool
+	 */
+	public function preview_allowed() {
+		if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG ) {
+			return false;
+		}
+
+		if ( ! is_user_logged_in() || ! current_user_can( 'manage_options' ) ) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Whether this request asks for the debug-only onboarding preview.
+	 *
+	 * @since 1.9.0
+	 * @return bool
+	 */
+	public function is_preview_request() {
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only debug flag; capability + WP_DEBUG gated below.
+		$opti_behavior_requested = isset( $_GET[ self::PREVIEW_PARAM ] ) ? sanitize_text_field( wp_unslash( $_GET[ self::PREVIEW_PARAM ] ) ) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		if ( '1' !== $opti_behavior_requested ) {
+			return false;
+		}
+
+		return $this->preview_allowed();
+	}
+
+	// -------------------------------------------------------------------------
+	// Auto-funnel opt-in (spec.md §2.3-3, locked decision 1)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Goal (step 2) → candidate recipe ids, best match first.
+	 *
+	 * The goals the modal asks about are *feature* goals, not site types, so the
+	 * map is only a preference order: the recipe actually highlighted is the
+	 * first candidate that the detector really offers for this site. A goal with
+	 * no offered candidate falls back to the highest-priority offered recipe.
+	 *
+	 * @since 1.8.4
+	 * @return array<string, string[]>
+	 */
+	public function get_goal_recipe_map() {
+		$map = array(
+			'funnels'      => array( 'woo_purchase', 'edd_digital_purchase', 'membership_subscription', 'lead_generation', 'signup', 'blog_engagement' ),
+			'forms'        => array( 'lead_generation', 'signup', 'woo_cart_recovery' ),
+			'analytics'    => array( 'blog_engagement', 'woo_purchase', 'lead_generation' ),
+			'heatmaps'     => array( 'woo_purchase', 'blog_engagement', 'lead_generation' ),
+			'recordings'   => array( 'woo_cart_recovery', 'signup', 'blog_engagement' ),
+			'user-journey' => array( 'woo_purchase', 'blog_engagement', 'signup' ),
+			'errors'       => array( 'woo_cart_recovery', 'signup', 'lead_generation' ),
+			'ai-insights'  => array( 'woo_purchase', 'lead_generation', 'blog_engagement' ),
+		);
+
+		/**
+		 * Filter the onboarding goal → recipe candidate map.
+		 *
+		 * @since 1.8.4
+		 *
+		 * @param array<string, string[]> $map Goal slug => ordered recipe ids.
+		 */
+		$map = apply_filters( 'opti_behavior_onboarding_goal_recipes', $map );
+
+		return is_array( $map ) ? $map : array();
+	}
+
+	/**
+	 * The recipes the opt-in would actually create for this site.
+	 *
+	 * This mirrors `Opti_Behavior_Funnel_Auto_Builder::create_recommended()`
+	 * exactly — the endpoint the opt-in calls — so the funnel names printed in
+	 * the checkbox description are the funnels the user really gets:
+	 * offered recipes, minus dismissed ones, minus Pro-tier ones while the Pro
+	 * gate is closed (the endpoint skips those server-side as `locked`).
+	 *
+	 * On a Free site this is exactly the Free set of spec.md §2.4.
+	 *
+	 * @since 1.8.4
+	 * @return array[] Entries of { id, label, description }.
+	 */
+	public function get_recommended_recipes() {
+		if ( null !== $this->recommended_recipes ) {
+			return $this->recommended_recipes;
+		}
+
+		$this->recommended_recipes = array();
+
+		// The autoloader does not cover Opti_Behavior_Funnel_* — require explicitly.
+		if ( defined( 'OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR' ) ) {
+			require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-funnel-site-detector.php';
+			require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-funnel-recipes.php';
+			require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-funnel-auto-builder.php';
+		}
+
+		if ( ! class_exists( 'Opti_Behavior_Funnel_Site_Detector' ) || ! class_exists( 'Opti_Behavior_Funnel_Recipes' ) ) {
+			return $this->recommended_recipes;
+		}
+
+		// Read-only use of the builder (tier gate + dismissal list); no
+		// persister is needed because nothing is written here.
+		$builder   = class_exists( 'Opti_Behavior_Funnel_Auto_Builder' ) ? new Opti_Behavior_Funnel_Auto_Builder() : null;
+		$pro_open  = $builder ? $builder->pro_available() : false;
+		$dismissed = $builder ? $builder->get_dismissed() : array();
+		$context   = Opti_Behavior_Funnel_Site_Detector::instance()->detect();
+		$available = Opti_Behavior_Funnel_Recipes::instance()->get_available( $context );
+
+		foreach ( $available as $recipe ) {
+			if ( in_array( (string) $recipe['id'], (array) $dismissed, true ) ) {
+				continue;
+			}
+
+			if ( Opti_Behavior_Funnel_Recipes::TIER_FREE !== $recipe['tier'] && ! $pro_open ) {
+				continue;
+			}
+
+			$this->recommended_recipes[] = array(
+				'id'          => (string) $recipe['id'],
+				'label'       => (string) $recipe['label'],
+				'description' => (string) $recipe['description'],
+			);
+		}
+
+		return $this->recommended_recipes;
+	}
+
+	/**
+	 * Map the selected goal(s) to one offered recipe id.
+	 *
+	 * @since 1.8.4
+	 *
+	 * @param string|string[] $goals Goal slug, or comma-separated list / array of them.
+	 * @return string Recipe id, or '' when this site is offered no Free recipe.
+	 */
+	public function map_goals_to_recipe( $goals ) {
+		$recommended = $this->get_recommended_recipes();
+		if ( empty( $recommended ) ) {
+			return '';
+		}
+
+		$offered = wp_list_pluck( $recommended, 'id' );
+
+		if ( ! is_array( $goals ) ) {
+			$goals = explode( ',', (string) $goals );
+		}
+
+		$map = $this->get_goal_recipe_map();
+
+		foreach ( $goals as $goal ) {
+			$goal = trim( (string) $goal );
+			if ( '' === $goal || empty( $map[ $goal ] ) ) {
+				continue;
+			}
+
+			foreach ( (array) $map[ $goal ] as $candidate ) {
+				if ( in_array( $candidate, $offered, true ) ) {
+					return (string) $candidate;
+				}
+			}
+		}
+
+		// No goal matched an offered recipe — fall back to the top-priority one.
+		return (string) $offered[0];
 	}
 
 	/**
@@ -139,18 +354,28 @@ class Opti_Behavior_Onboarding {
 			'opti-behavior-onboarding',
 			'optiBehaviorOnboarding',
 			array(
-				'ajaxUrl'     => admin_url( 'admin-ajax.php' ),
-				'nonce'       => wp_create_nonce( 'opti_behavior_dismiss_onboarding' ),
-				'settingsUrl' => admin_url( 'admin.php?page=opti-behavior-settings&settings_tab=scheduled-reports' ),
-				'i18n'        => array(
-					'step1of4'         => __( 'Step 1 of 4', 'opti-behavior' ),
-					'step2of4'         => __( 'Step 2 of 4', 'opti-behavior' ),
-					'step3of4'         => __( 'Step 3 of 4', 'opti-behavior' ),
-					'step4of4'         => __( 'Step 4 of 4', 'opti-behavior' ),
-					'btnContinue'      => __( 'Continue', 'opti-behavior' ),
-					'btnGoDashboard'   => __( 'Go to Dashboard', 'opti-behavior' ),
-					'setupComplete'    => __( 'Setup complete', 'opti-behavior' ),
+				'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
+				'nonce'        => wp_create_nonce( 'opti_behavior_dismiss_onboarding' ),
+				'settingsUrl'  => admin_url( 'admin.php?page=opti-behavior-settings&settings_tab=scheduled-reports' ),
+				// Auto-funnel opt-in: the bulk-create endpoint lives on the
+				// funnels page class and uses its own nonce (spec.md §4.2).
+				'funnelsNonce' => wp_create_nonce( 'opti_behavior_funnels' ),
+				'recommended'  => $this->get_recommended_recipes(),
+				'goalRecipes'  => $this->get_goal_recipe_map(),
+				// Debug preview: the popup runs read-only — no dismissal is
+				// recorded and no funnel is ever created (see onboarding-popup.js).
+				'preview'      => $this->is_preview_request(),
+				'i18n'         => array(
+					'step1of4'          => __( 'Step 1 of 4', 'opti-behavior' ),
+					'step2of4'          => __( 'Step 2 of 4', 'opti-behavior' ),
+					'step3of4'          => __( 'Step 3 of 4', 'opti-behavior' ),
+					'step4of4'          => __( 'Step 4 of 4', 'opti-behavior' ),
+					'btnContinue'       => __( 'Continue', 'opti-behavior' ),
+					'btnGoDashboard'    => __( 'Go to Dashboard', 'opti-behavior' ),
+					'setupComplete'     => __( 'Setup complete', 'opti-behavior' ),
 					'setupCompleteDesc' => __( 'Your dashboard is ready. Data will appear as visitors arrive on your site.', 'opti-behavior' ),
+					/* translators: %s: funnel name matching the selected goal. */
+					'goalMatch'         => __( 'Best match for your goal: %s', 'opti-behavior' ),
 				),
 			)
 		);
@@ -168,7 +393,23 @@ class Opti_Behavior_Onboarding {
 			wp_send_json_error( 'Unauthorized', 403 );
 		}
 
+		// Debug preview (see PREVIEW_PARAM): second line of defence — the popup
+		// JS already skips this request in preview mode, but should it ever be
+		// sent, answer without persisting anything.
+		$opti_behavior_is_preview = ( isset( $_POST['preview'] ) && '1' === (string) sanitize_text_field( wp_unslash( $_POST['preview'] ) ) );
+		if ( $opti_behavior_is_preview && $this->preview_allowed() ) {
+			wp_send_json_success(
+				array(
+					'preview'        => true,
+					'create_funnels' => false,
+					'goal_recipe'    => '',
+				)
+			);
+		}
+
 		update_option( self::OPTION_DISMISSED, '1', false );
+
+		$opti_behavior_goal = '';
 
 		// Store selected goal for analytics (optional).
 		if ( ! empty( $_POST['goal'] ) ) {
@@ -176,7 +417,25 @@ class Opti_Behavior_Onboarding {
 			update_option( self::OPTION_GOAL, $opti_behavior_goal, false );
 		}
 
-		wp_send_json_success();
+		// Auto-funnel opt-in (locked decision 1): record the choice only. The
+		// funnels themselves are created by the separate
+		// `optibehavior_create_recommended_funnels` request the popup fires when
+		// the box is ticked; that endpoint's signature guard makes a second
+		// onboarding run a no-op instead of a duplicate.
+		$opti_behavior_create_funnels = ( isset( $_POST['create_funnels'] ) && '1' === (string) sanitize_text_field( wp_unslash( $_POST['create_funnels'] ) ) );
+		update_option( self::OPTION_CREATE_FUNNELS, $opti_behavior_create_funnels ? '1' : '0', false );
+
+		$opti_behavior_goal_recipe = $this->map_goals_to_recipe( $opti_behavior_goal );
+		if ( '' !== $opti_behavior_goal_recipe ) {
+			update_option( self::OPTION_GOAL_RECIPE, $opti_behavior_goal_recipe, false );
+		}
+
+		wp_send_json_success(
+			array(
+				'create_funnels' => $opti_behavior_create_funnels,
+				'goal_recipe'    => $opti_behavior_goal_recipe,
+			)
+		);
 	}
 
 	/**
@@ -371,6 +630,34 @@ class Opti_Behavior_Onboarding {
 								</div>
 							</div>
 						</div>
+
+						<?php $opti_behavior_recommended = $this->get_recommended_recipes(); ?>
+						<?php if ( ! empty( $opti_behavior_recommended ) ) : ?>
+							<?php
+							// Pre-checked by default: finishing the setup with the box
+							// still ticked creates the recommended set. Unticking it, or
+							// skipping/closing the popup, still creates nothing.
+							$opti_behavior_recipe_labels = wp_list_pluck( $opti_behavior_recommended, 'label' );
+							?>
+							<div class="ob-optin-box">
+								<label class="ob-optin-row" for="ob-createFunnels">
+									<input type="checkbox" id="ob-createFunnels" class="ob-optin-check" value="1" checked="checked" />
+									<span class="ob-optin-text">
+										<span class="ob-optin-title"><?php esc_html_e( 'Create the recommended funnels for my site', 'opti-behavior' ); ?></span>
+										<span class="ob-optin-desc">
+											<?php
+											printf(
+												/* translators: %s: comma-separated list of funnel names. */
+												esc_html__( 'Based on what we detected on your site: %s. You can edit or delete them at any time.', 'opti-behavior' ),
+												esc_html( implode( ', ', $opti_behavior_recipe_labels ) )
+											);
+											?>
+										</span>
+										<span class="ob-optin-match" id="ob-createFunnelsMatch" hidden></span>
+									</span>
+								</label>
+							</div>
+						<?php endif; ?>
 					</div>
 
 					<!-- STEP 3: Email reports -->

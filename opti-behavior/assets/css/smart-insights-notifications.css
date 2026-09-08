@@ -354,11 +354,55 @@
 	line-height: 1.35;
 }
 
+/* Severity pulse dot: same colour language as the Smart Insights modal pulse
+   strip (broken red, watch amber, healthy green) so one glance reads the same
+   in both surfaces. */
+.ob-si-notification-pulse {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 999px;
+	background: #10b981;
+	box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.16);
+}
+
+.ob-si-notification-pulse.is-critical,
+.ob-si-notification-pulse.is-high {
+	background: #e24b4a;
+	box-shadow: 0 0 0 3px rgba(226, 75, 74, 0.18);
+}
+
+.ob-si-notification-pulse.is-medium {
+	background: #f59e0b;
+	box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+}
+
+.ob-si-notification-category,
+.ob-si-notification-status {
+	padding: 3px 7px;
+	border-radius: 999px;
+	background: #f1f5f9;
+	color: #475569;
+	font-size: 10px;
+	font-weight: 800;
+	letter-spacing: 0.02em;
+	white-space: nowrap;
+	max-width: 120px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.ob-si-notification-status {
+	background: transparent;
+	color: #64748b;
+	padding-left: 0;
+	padding-right: 0;
+}
+
 .ob-si-notification-metric {
-	display: flex;
-	justify-content: space-between;
-	gap: 10px;
-	margin: 0 0 10px;
+	display: grid;
+	gap: 4px;
+	margin: 0 0 9px;
 	padding: 8px 10px;
 	border-radius: 10px;
 	background: #f8fafc;
@@ -368,6 +412,116 @@
 
 .ob-si-notification-metric strong {
 	color: #111827;
+}
+
+.ob-si-notification-metric-head {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: baseline;
+}
+
+.ob-si-notification-metric-label {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 700;
+}
+
+.ob-si-notification-metric-value {
+	color: #111827;
+	font-size: 14px;
+	font-weight: 900;
+	white-space: nowrap;
+}
+
+.ob-si-notification-delta {
+	padding: 2px 6px;
+	border-radius: 999px;
+	background: #eef2f7;
+	color: #475569;
+	font-size: 10px;
+	font-weight: 900;
+	white-space: nowrap;
+	cursor: default;
+}
+
+.ob-si-notification-delta.is-worse {
+	background: #fee2e2;
+	color: #b91c1c;
+}
+
+.ob-si-notification-delta.is-better {
+	background: #dcfce7;
+	color: #15803d;
+}
+
+.ob-si-notification-metric-foot {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+	justify-content: space-between;
+	color: #64748b;
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.ob-si-notification-metric-secondary strong {
+	font-weight: 800;
+}
+
+.ob-si-notification-card-foot {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 10px;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.ob-si-notification-scores {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 4px 10px;
+	align-items: center;
+	color: #64748b;
+	font-size: 10px;
+	font-weight: 700;
+}
+
+.ob-si-notification-priority {
+	display: inline-flex;
+	gap: 5px;
+	align-items: center;
+	cursor: default;
+}
+
+.ob-si-notification-priority-track {
+	display: inline-block;
+	width: 42px;
+	height: 5px;
+	border-radius: 999px;
+	background: #e2e8f0;
+	overflow: hidden;
+}
+
+.ob-si-notification-priority-fill {
+	display: block;
+	height: 100%;
+	border-radius: 999px;
+	background: linear-gradient(90deg, #6d28d9, #4c1d95);
+}
+
+.ob-si-notification-card.is-critical .ob-si-notification-priority-fill,
+.ob-si-notification-card.is-high .ob-si-notification-priority-fill {
+	background: linear-gradient(90deg, #f97316, #dc2626);
+}
+
+.ob-si-notification-priority-value,
+.ob-si-notification-confidence strong {
+	color: #1f2937;
+	font-weight: 900;
 }
 
 .ob-si-notification-open,

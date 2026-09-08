@@ -476,6 +476,11 @@ class Opti_Behavior_Heatmap_Database {
 		// them from recorded pageviews so the Exit Page filter works.
 		$this->migrate_backfill_session_exit_pages();
 
+		// Always run the pageviews.exit_page FLAG backfill (checks internally if
+		// needed). Different column from the one above: a tinyint marking the last
+		// pageview of each session, which nothing ever wrote (Bug 3).
+		$this->migrate_backfill_pageview_exit_flags();
+
 		// One-time aggregate resync after the 1.7.5 allow-list page-identity fix
 		// (checks internally if needed).
 		$this->migrate_resync_heatmap_aggregates_for_allowlist();
@@ -1459,6 +1464,112 @@ class Opti_Behavior_Heatmap_Database {
 
 		update_option( 'opti_behavior_exit_pages_backfilled', '1', false );
 		$debug_manager->log( 'Exit-page backfill complete', 'info', 'database' );
+	}
+
+	/**
+	 * One-time backfill of the pageviews.exit_page FLAG.
+	 *
+	 * Bug 3: `{prefix}optibehavior_pageviews.exit_page` (tinyint) was never written
+	 * by any code path, so the Smart Insights aggregator's
+	 * `COUNT(DISTINCT CASE WHEN pv.exit_page = 1 ...)` was always 0, every page
+	 * reported exit_rate 0/null, and `high_exit_rate_page` could not trigger.
+	 * Going forward the AJAX handler maintains the flag on every pageview insert
+	 * (sync_pageview_exit_flag()); this repairs historical rows by marking the LAST
+	 * pageview of each session (max view_time, id as tiebreaker).
+	 *
+	 * Distinct from migrate_backfill_session_exit_pages(), which fills the TEXT
+	 * `sessions.exit_page` URL column.
+	 *
+	 * Batched by session id so the pageviews table — the largest in the schema —
+	 * is never locked by one statement. Idempotent: the option flag is written only
+	 * after the pass fully drains, so an interrupted run resumes on a later
+	 * admin_init.
+	 *
+	 * @since 1.0.9
+	 */
+	public function migrate_backfill_pageview_exit_flags() {
+		global $wpdb;
+
+		if ( get_option( 'opti_behavior_pageview_exit_flags_backfilled' ) ) {
+			return;
+		}
+
+		$pageviews_table = $wpdb->prefix . 'optibehavior_pageviews';
+
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix (never user input), values bound via $wpdb->prepare(); one-time data migration.
+		if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $pageviews_table ) ) ) {
+			return;
+		}
+
+		// Mid-upgrade installs may not have the column yet: try again next time.
+		$has_column = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s',
+				DB_NAME,
+				$pageviews_table,
+				'exit_page'
+			)
+		);
+		if ( ! $has_column ) {
+			return;
+		}
+
+		$debug_manager = $this->core->get_debug_manager();
+		$batch_size    = 2000;
+		$max_batches   = 20; // Per-request cap; an unfinished run resumes next admin_init.
+
+		for ( $batch = 0; $batch < $max_batches; $batch++ ) {
+			// Sessions that have pageviews but no exit flag on any of them yet.
+			$session_ids = $wpdb->get_col(
+				$wpdb->prepare(
+					"SELECT session_id
+					 FROM {$pageviews_table}
+					 WHERE session_id IS NOT NULL AND session_id <> ''
+					 GROUP BY session_id
+					 HAVING MAX(exit_page) = 0
+					 LIMIT %d",
+					$batch_size
+				)
+			);
+
+			if ( empty( $session_ids ) ) {
+				break;
+			}
+
+			$placeholders = implode( ',', array_fill( 0, count( $session_ids ), '%s' ) );
+
+			// Correlated subquery picks each session's last pageview and rides the
+			// pageviews session_id index; the IN() batch keeps the statement short.
+			$wpdb->query(
+				$wpdb->prepare(
+					"UPDATE {$pageviews_table} pv
+					 INNER JOIN (
+						SELECT session_id, MAX(view_time) AS last_view
+						FROM {$pageviews_table}
+						WHERE session_id IN ( {$placeholders} )
+						GROUP BY session_id
+					 ) last_pv ON last_pv.session_id = pv.session_id AND last_pv.last_view = pv.view_time
+					 SET pv.exit_page = 1",
+					$session_ids
+				)
+			);
+
+			$debug_manager->log( 'Pageview exit-flag backfill: marked batch of ' . count( $session_ids ) . ' session(s)', 'info', 'database' );
+
+			if ( count( $session_ids ) < $batch_size ) {
+				break;
+			}
+
+			if ( $batch === $max_batches - 1 ) {
+				// Cap hit with a full batch: more rows likely remain. Leave the flag
+				// unset so the next admin_init continues the backfill.
+				return;
+			}
+		}
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		update_option( 'opti_behavior_pageview_exit_flags_backfilled', '1', false );
+		$debug_manager->log( 'Pageview exit-flag backfill complete', 'info', 'database' );
 	}
 
 	/**
@@ -3409,6 +3520,13 @@ class Opti_Behavior_Heatmap_Database {
 			scores_json                 longtext             NOT NULL,
 			segment_json                longtext             DEFAULT NULL,
 			trend_json                  longtext             DEFAULT NULL,
+			parent_insight_id           bigint(20)  UNSIGNED DEFAULT NULL,
+			correlation_json            longtext             DEFAULT NULL,
+			evidence_refs_json          longtext             DEFAULT NULL,
+			hypothesis_json             longtext             DEFAULT NULL,
+			experiment_json             longtext             DEFAULT NULL,
+			impact_json                 longtext             DEFAULT NULL,
+			outcome_json                longtext             DEFAULT NULL,
 			interpretation              text                 NOT NULL,
 			why_it_matters              text                 NOT NULL,
 			likely_causes_json          longtext             NOT NULL,
@@ -3432,7 +3550,8 @@ class Opti_Behavior_Heatmap_Database {
 			KEY idx_entity (entity_type, entity_id(191)),
 			KEY idx_group_key (group_key),
 			KEY idx_visibility_status (visibility_tier, status),
-			KEY idx_suppressed_until (suppressed_until)
+			KEY idx_suppressed_until (suppressed_until),
+			KEY idx_parent_insight (parent_insight_id)
 			) " . $charset_collate
 		);
 	}
@@ -4044,7 +4163,7 @@ class Opti_Behavior_Heatmap_Database {
 				'min_duration'          => 5,    // Remove sessions shorter than 5 seconds.
 				'min_duration_age_days' => 1,    // Only if older than 1 day.
 			),
-			'max_rows_per_run'         => 5000,  // Keep cron cleanup bounded.
+			'max_rows_per_run'         => 50000, // Keep cron cleanup bounded.
 			'optimize_after_cleanup'   => false, // Manual cleanup defaults to optimize; scheduled cleanup opts in.
 			'recalculate_spam_before_cleanup' => false,
 			'last_run'                 => null,

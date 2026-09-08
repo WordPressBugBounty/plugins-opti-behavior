@@ -178,6 +178,7 @@ class Opti_Behavior_AB_Test_Page {
 			'status_completed' => __( 'Completed', 'opti-behavior' ),
 			'status_deleted'   => __( 'Deleted', 'opti-behavior' ),
 			'pro_required'     => __( 'This feature requires Opti-Behavior Pro.', 'opti-behavior' ),
+			'insight_prefill_title' => __( 'Started from a Smart Insight', 'opti-behavior' ),
 			'step_type'        => __( 'Test Type', 'opti-behavior' ),
 			'step_target'      => __( 'Target', 'opti-behavior' ),
 			'step_variants'    => __( 'Variants', 'opti-behavior' ),
@@ -464,6 +465,8 @@ class Opti_Behavior_AB_Test_Page {
 			'goal_conv_time_on_page' => __( 'Time Conversions', 'opti-behavior' ),
 			'goal_conv_revenue'      => __( 'Revenue Conversions', 'opti-behavior' ),
 			'goal_conv_bounce_rate'  => __( 'Bounce Conversions', 'opti-behavior' ),
+			'goal_conv_woo_add_to_cart' => __( 'Add-to-Cart Conversions', 'opti-behavior' ),
+			'goal_conv_woo_purchase'    => __( 'Purchases', 'opti-behavior' ),
 			'conversions'            => __( 'Conversions', 'opti-behavior' ),
 
 			// WooCommerce variant modal.
@@ -998,6 +1001,58 @@ class Opti_Behavior_AB_Test_Page {
 	}
 
 	/**
+	 * Read the Smart Insight the builder was opened from.
+	 *
+	 * @since 1.3.9
+	 * @return int Insight ID, 0 when the builder was opened normally.
+	 */
+	private function get_builder_origin_insight_id() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only deep-link state.
+		return isset( $_GET['origin_insight_id'] ) ? absint( wp_unslash( $_GET['origin_insight_id'] ) ) : 0;
+	}
+
+	/**
+	 * Resolve the builder prefill for an insight-originated test.
+	 *
+	 * Free core owns the contract but never fills it: the hypothesis and the
+	 * suggested experiment setup are produced by the Smart Insights Pro
+	 * hypothesis builder. When nothing answers the filter the builder renders
+	 * exactly as before.
+	 *
+	 * @since 1.3.9
+	 *
+	 * @param int $insight_id Originating insight ID.
+	 * @param int $test_id    Test being edited (prefill only applies to new tests).
+	 * @return array Prefill payload, empty when unavailable.
+	 */
+	private function get_builder_insight_prefill( $insight_id, $test_id = 0 ) {
+		$insight_id = absint( $insight_id );
+		if ( ! $insight_id || $test_id ) {
+			return array();
+		}
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return array();
+		}
+
+		/**
+		 * Filter the A/B builder prefill for a Smart Insight story.
+		 *
+		 * Providers return `array( name, test_type, target_url, target_post_id,
+		 * description, goal, min_sample_size, min_duration_days, targeting,
+		 * hypothesis )`. An empty array leaves the builder untouched.
+		 *
+		 * @since 1.3.9
+		 *
+		 * @param array $prefill    Prefill payload.
+		 * @param int   $insight_id Originating Smart Insight ID.
+		 */
+		$prefill = apply_filters( 'opti_behavior_ab_builder_insight_prefill', array(), $insight_id );
+
+		return is_array( $prefill ) ? $prefill : array();
+	}
+
+	/**
 	 * Render the test builder wizard.
 	 *
 	 * @param int $test_id Test ID (0 for new test).
@@ -1028,6 +1083,9 @@ class Opti_Behavior_AB_Test_Page {
 		if ( $opti_ab_is_element_test && '' === $opti_ab_target_url_value && $opti_ab_selected_target && ! empty( $opti_ab_selected_target['url'] ) ) {
 			$opti_ab_target_url_value = $opti_ab_selected_target['url'];
 		}
+
+		$opti_ab_origin_insight_id = $this->get_builder_origin_insight_id();
+		$opti_ab_insight_prefill   = $this->get_builder_insight_prefill( $opti_ab_origin_insight_id, $test_id );
 		?>
 		<!-- Purple gradient header for builder -->
 		<div class="opti-ab-subpage-header">
@@ -1108,7 +1166,9 @@ class Opti_Behavior_AB_Test_Page {
 			data-test-id="<?php echo esc_attr( $test_id ); ?>"
 			data-test="<?php echo $test ? esc_attr( wp_json_encode( $test ) ) : ''; ?>"
 			data-variants="<?php echo esc_attr( wp_json_encode( $variants ) ); ?>"
-			data-goals="<?php echo esc_attr( wp_json_encode( $goals ) ); ?>">
+			data-goals="<?php echo esc_attr( wp_json_encode( $goals ) ); ?>"
+			data-origin-insight-id="<?php echo esc_attr( $opti_ab_origin_insight_id ); ?>"
+			data-insight-prefill="<?php echo $opti_ab_insight_prefill ? esc_attr( wp_json_encode( $opti_ab_insight_prefill ) ) : ''; ?>">
 
 			<!-- Step 1: Test Type -->
 			<div class="opti-ab-wizard-panel active" data-step="1">

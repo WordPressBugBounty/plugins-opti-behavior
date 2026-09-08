@@ -15,6 +15,13 @@
     var total   = 4;
     var selectedGoals = [];
 
+    /*
+     * Debug preview (?ob_preview_onboarding=1, WP_DEBUG + admin only): the modal
+     * is rendered for visual inspection on a site that already has data, so it
+     * must stay read-only — no dismissal is recorded and no funnel is created.
+     */
+    var isPreview = !!optiBehaviorOnboarding.preview;
+
     var labels     = [
         optiBehaviorOnboarding.i18n.step1of4,
         optiBehaviorOnboarding.i18n.step2of4,
@@ -82,8 +89,63 @@
         if (current < total - 1) {
             goTo(current + 1);
         } else {
-            dismiss();
+            // Only this path finishes the setup, so only this path may honour
+            // the auto-funnel opt-in.
+            dismiss({ finish: true });
         }
+    }
+
+    /* ── goal → recipe mapping (mirrors the PHP map) ──────────── */
+
+    function offeredRecipeIds() {
+        var list = optiBehaviorOnboarding.recommended || [];
+        var ids  = [];
+        for (var i = 0; i < list.length; i++) {
+            ids.push(list[i].id);
+        }
+        return ids;
+    }
+
+    function recipeLabel(id) {
+        var list = optiBehaviorOnboarding.recommended || [];
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].id === id) { return list[i].label; }
+        }
+        return '';
+    }
+
+    /**
+     * First recipe actually offered for this site among the candidates of the
+     * selected goals. Empty string when nothing matches.
+     */
+    function goalRecipeId() {
+        var map     = optiBehaviorOnboarding.goalRecipes || {};
+        var offered = offeredRecipeIds();
+
+        for (var g = 0; g < selectedGoals.length; g++) {
+            var candidates = map[selectedGoals[g]] || [];
+            for (var c = 0; c < candidates.length; c++) {
+                if (offered.indexOf(candidates[c]) !== -1) { return candidates[c]; }
+            }
+        }
+        return '';
+    }
+
+    /** Show which offered funnel best matches the current goal selection. */
+    function refreshGoalMatch() {
+        var note = el('ob-createFunnelsMatch');
+        if (!note) { return; }
+
+        var label = recipeLabel(goalRecipeId());
+
+        if (!label) {
+            note.hidden = true;
+            note.textContent = '';
+            return;
+        }
+
+        note.textContent = (optiBehaviorOnboarding.i18n.goalMatch || '%s').replace('%s', label);
+        note.hidden = false;
     }
 
     /* ── toggle a goal (Step 2 — multi-select) ────────────────── */
@@ -101,13 +163,54 @@
             selectedGoals.splice(idx, 1);
             btn.classList.remove('selected');
         }
+
+        refreshGoalMatch();
+    }
+
+    /* ── auto-create opt-in (pre-checked by default) ──────────── */
+
+    function wantsRecommendedFunnels() {
+        var box = el('ob-createFunnels');
+        return !!(box && box.checked);
+    }
+
+    /**
+     * Create the recommended Free funnel set through the funnels bulk endpoint.
+     * Only ever called when the setup was finished with the opt-in box still
+     * ticked; the endpoint itself dedupes by step signature, so a second
+     * onboarding run creates nothing.
+     */
+    function createRecommendedFunnels() {
+        if (!optiBehaviorOnboarding.funnelsNonce) { return Promise.resolve(); }
+
+        var data = new FormData();
+        data.append('action', 'optibehavior_create_recommended_funnels');
+        data.append('nonce', optiBehaviorOnboarding.funnelsNonce);
+
+        return fetch(optiBehaviorOnboarding.ajaxUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: data
+        });
     }
 
     /* ── dismiss popup (AJAX) ────────────────────────────────── */
 
-    function dismiss() {
+    /**
+     * Close the popup.
+     *
+     * @param {{finish: boolean}} [opts] `finish: true` only for the last-step
+     *        button — skipping or closing the popup never creates funnels, even
+     *        though the opt-in box is pre-checked.
+     */
+    function dismiss(opts) {
         var overlay = document.querySelector('.ob-setup-overlay');
         if (!overlay) { return; }
+
+        var isFinish = !!(opts && opts.finish);
+
+        // Read the opt-in before the modal markup is replaced below.
+        var createFunnels = isFinish && wantsRecommendedFunnels();
 
         // Show success screen briefly
         var modal = overlay.querySelector('.ob-setup-modal');
@@ -122,17 +225,28 @@
                 '</div>';
         }
 
-        // AJAX call to dismiss
-        var data = new FormData();
-        data.append('action', 'opti_behavior_dismiss_onboarding');
-        data.append('_wpnonce', optiBehaviorOnboarding.nonce);
-        data.append('goal', selectedGoals.join(','));
+        // Preview mode is read-only: never persist the dismissal and never
+        // create funnels — only play the closing animation below.
+        if (!isPreview) {
+            // AJAX call to dismiss
+            var data = new FormData();
+            data.append('action', 'opti_behavior_dismiss_onboarding');
+            data.append('_wpnonce', optiBehaviorOnboarding.nonce);
+            data.append('goal', selectedGoals.join(','));
+            data.append('create_funnels', createFunnels ? '1' : '0');
 
-        fetch(optiBehaviorOnboarding.ajaxUrl, {
-            method: 'POST',
-            credentials: 'same-origin',
-            body: data
-        });
+            fetch(optiBehaviorOnboarding.ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: data
+            }).then(function () {
+                // The recommended set is created only when the setup was finished
+                // with the opt-in box still ticked.
+                if (createFunnels) {
+                    return createRecommendedFunnels();
+                }
+            })['catch'](function () { /* dismissal already persisted server-side */ });
+        }
 
         // Fade out after short delay
         setTimeout(function () {

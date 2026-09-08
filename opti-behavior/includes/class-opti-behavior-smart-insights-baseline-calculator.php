@@ -74,6 +74,26 @@ class Opti_Behavior_Smart_Insights_Baseline_Calculator {
 			$baseline = $this->enrich_daily_stats_baseline_with_raw_metrics( $baseline, $start_date, $end_date, $args );
 		}
 
+		$baseline = $this->normalize_baseline( $baseline, $start_date, $end_date );
+
+		/**
+		 * Filter the computed site baselines.
+		 *
+		 * Neutral extension point (Bug 1): the Free plugin owns no site-wide
+		 * conversion definition, so `site_avg_conversion_rate` stays null here and
+		 * layers that DO own one (Pro) populate it. Single choke point covering every
+		 * source path (daily_stats, raw tables, backfilled) so a consumer cannot see
+		 * an un-filtered baseline. Values are re-normalized afterwards, so a filter
+		 * may return raw floats.
+		 *
+		 * @since 1.0.9
+		 * @param array  $baseline   Normalized baseline.
+		 * @param string $start_date Start datetime.
+		 * @param string $end_date   End datetime.
+		 * @param array  $args       Calculation args (carries exclude_spam scope).
+		 */
+		$baseline = apply_filters( 'opti_behavior_smart_insights_baselines', $baseline, $start_date, $end_date, $args );
+
 		return $this->normalize_baseline( $baseline, $start_date, $end_date );
 	}
 

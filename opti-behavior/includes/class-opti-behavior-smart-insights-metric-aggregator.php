@@ -102,6 +102,14 @@ class Opti_Behavior_Smart_Insights_Metric_Aggregator {
 		$scroll_samples_expr      = $has_scroll_depth ? 'COUNT(NULLIF(pv.scroll_depth, 0))' : '0';
 		$avg_time_expr            = $has_time_on_page ? 'AVG(NULLIF(pv.time_on_page, 0))' : 'NULL';
 		$time_samples_expr        = $has_time_on_page ? 'COUNT(NULLIF(pv.time_on_page, 0))' : '0';
+		// Dispersion for the average metrics: sum and sum of squares over the same
+		// non-zero samples AVG()/COUNT() already use. They cost nothing extra (same
+		// grouped scan) and are what a Welch t test needs to say whether a
+		// before/after change in scroll depth or time on page is real.
+		$scroll_sum_expr          = $has_scroll_depth ? 'SUM(NULLIF(pv.scroll_depth, 0))' : 'NULL';
+		$scroll_sum_sq_expr       = $has_scroll_depth ? 'SUM(POW(NULLIF(pv.scroll_depth, 0), 2))' : 'NULL';
+		$time_sum_expr            = $has_time_on_page ? 'SUM(NULLIF(pv.time_on_page, 0))' : 'NULL';
+		$time_sum_sq_expr         = $has_time_on_page ? 'SUM(POW(NULLIF(pv.time_on_page, 0), 2))' : 'NULL';
 		$session_duration_expr    = $has_duration ? 'AVG(NULLIF(s.duration, 0))' : 'NULL';
 		$spam_clause              = ! empty( $args['exclude_spam'] ) ? $this->get_spam_exclusion_clause( 's' ) : '';
 
@@ -117,8 +125,12 @@ class Opti_Behavior_Smart_Insights_Metric_Aggregator {
 				{$exit_sessions_expr} AS exit_sessions,
 				{$avg_scroll_expr} AS avg_scroll_depth,
 				{$scroll_samples_expr} AS scroll_depth_samples,
+				{$scroll_sum_expr} AS scroll_depth_sum,
+				{$scroll_sum_sq_expr} AS scroll_depth_sum_squares,
 				{$avg_time_expr} AS avg_time_on_page,
 				{$time_samples_expr} AS time_on_page_samples,
+				{$time_sum_expr} AS time_on_page_sum,
+				{$time_sum_sq_expr} AS time_on_page_sum_squares,
 				{$session_duration_expr} AS avg_session_duration_fallback,
 				MAX(pv.view_time) AS last_seen_at
 			FROM {$pageviews_table} pv
@@ -172,14 +184,30 @@ class Opti_Behavior_Smart_Insights_Metric_Aggregator {
 				'exit_rate_reliability'      => $this->get_exit_rate_reliability( $has_exit_page, $pageviews, $exit_sessions ),
 				'avg_scroll_depth'           => $scroll_depth_samples > 0 ? round( (float) $row['avg_scroll_depth'], 2 ) : null,
 				'scroll_depth_samples'       => $scroll_depth_samples,
+				// Dispersion pair (sum, sum of squares) over the same samples the
+				// average was computed on. Null when the column or the samples are
+				// missing, which is what the outcome loop reads as "no Welch t".
+				'scroll_depth_sum'           => $scroll_depth_samples > 0 && isset( $row['scroll_depth_sum'] ) ? (float) $row['scroll_depth_sum'] : null,
+				'scroll_depth_sum_squares'   => $scroll_depth_samples > 0 && isset( $row['scroll_depth_sum_squares'] ) ? (float) $row['scroll_depth_sum_squares'] : null,
 				'scroll_depth_coverage'      => $scroll_coverage,
 				'scroll_depth_complete'      => $scroll_coverage >= 50,
 				'avg_time_on_page'           => $avg_time_on_page > 0 ? round( $avg_time_on_page, 2 ) : null,
 				'time_on_page_samples'       => $time_samples,
+				// Only real time-on-page samples carry dispersion; the session-duration
+				// fallback used when $time_samples is 0 has none.
+				'time_on_page_sum'           => $time_samples > 0 && isset( $row['time_on_page_sum'] ) ? (float) $row['time_on_page_sum'] : null,
+				'time_on_page_sum_squares'   => $time_samples > 0 && isset( $row['time_on_page_sum_squares'] ) ? (float) $row['time_on_page_sum_squares'] : null,
 				'time_on_page_coverage'      => $time_coverage,
 				'time_on_page_complete'      => $time_coverage >= 50,
 				'time_on_page_fallback_used' => 0 === $time_samples && $avg_time_on_page > 0,
 				'top_page_sessions'          => $top_page_sessions,
+				// Bug 1 — neutral placeholders. The Free plugin owns no conversion
+				// definition, so both stay null here and the layer that does own one
+				// (Pro, via `opti_behavior_smart_insights_page_metrics`) fills them.
+				// null means "no conversion source at all"; a layer that HAS a source
+				// must emit 0 / 0.0 for zero-conversion pages, never null, or the
+				// worst pages stay invisible to detect_poor_conversion_rate().
+				'conversions'                => null,
 				'conversion_rate'            => null,
 				'cta_click_rate'             => null,
 				'click_count'                => 0,
@@ -194,14 +222,15 @@ class Opti_Behavior_Smart_Insights_Metric_Aggregator {
 			$metrics = $this->append_page_event_metrics( $metrics, $start_date, $end_date, $args );
 		}
 
-		if ( ! empty( $args['include_previous'] ) ) {
-			$previous_args = $args;
-			$previous_args['include_previous']    = false;
-			$previous_args['include_event_counts'] = ! empty( $args['include_event_counts'] );
-			$metrics = $this->append_previous_period_metrics( $metrics, $start_date, $end_date, $previous_args );
-		}
-
-		return apply_filters(
+		// The enrichment filter runs BEFORE the trend snapshot, never after.
+		// attach_entity_trends() freezes current-vs-previous pairs for every metric
+		// key it is given; the previous rows are already enriched (they come from the
+		// recursive get_page_metrics() call below, which re-applies this filter), so
+		// applying it here is what makes the CURRENT side of every pair enriched too.
+		// Applying it afterwards left trend[<filtered key>]['current'] permanently
+		// null for every key a filtering layer owns — conversions/conversion_rate in
+		// practice, but the ordering is wrong for any such key.
+		$metrics = apply_filters(
 			'opti_behavior_smart_insights_page_metrics',
 			$metrics,
 			array(
@@ -210,6 +239,15 @@ class Opti_Behavior_Smart_Insights_Metric_Aggregator {
 			),
 			$args
 		);
+
+		if ( ! empty( $args['include_previous'] ) ) {
+			$previous_args = $args;
+			$previous_args['include_previous']    = false;
+			$previous_args['include_event_counts'] = ! empty( $args['include_event_counts'] );
+			$metrics = $this->append_previous_period_metrics( $metrics, $start_date, $end_date, $previous_args );
+		}
+
+		return $metrics;
 	}
 
 	/**
@@ -297,7 +335,20 @@ class Opti_Behavior_Smart_Insights_Metric_Aggregator {
 			return $metrics;
 		}
 
-		$previous_metrics = $this->get_page_metrics( $previous_range['from'], $previous_range['to'], $args );
+		// The current period's candidate filters must not be re-applied to the
+		// previous period. `min_sessions` is a *detection* threshold ("is this page
+		// worth evaluating now"), and `limit` is a candidate cap; carrying either
+		// into the lookup window silently dropped the previous row of every page
+		// whose traffic was below the threshold back then, which is exactly the
+		// page a trend is interesting for. The result was `previous: null` on every
+		// metric and "Previous-period trend is not available yet" in the modal.
+		// The current period already decided WHICH pages matter; the previous
+		// period only has to answer WHAT they measured.
+		$previous_args                 = $args;
+		$previous_args['min_sessions'] = 0;
+		$previous_args['limit']        = max( 1, min( 500, absint( $args['limit'] ) * 2 ) );
+
+		$previous_metrics = $this->get_page_metrics( $previous_range['from'], $previous_range['to'], $previous_args );
 
 		foreach ( $metrics as $index => $row ) {
 			$metrics[ $index ]['previous_period_range'] = $previous_range;
@@ -307,7 +358,13 @@ class Opti_Behavior_Smart_Insights_Metric_Aggregator {
 			$metrics,
 			$previous_metrics,
 			'page_key',
-			array( 'sessions', 'users', 'pageviews', 'bounce_rate', 'exit_rate', 'avg_scroll_depth', 'avg_time_on_page', 'click_count', 'cta_click_count', 'cta_click_rate' ),
+			// Bug 1 — 'conversions'/'conversion_rate' are listed so trend_pair() takes
+			// the fast path instead of falling back to previous_period_metrics. Both
+			// sides are enriched by the time this runs: the previous rows by the
+			// recursive get_page_metrics() call above, the current rows by the
+			// page-metrics filter that get_page_metrics() now applies before calling
+			// this method.
+			array( 'sessions', 'users', 'pageviews', 'bounce_rate', 'exit_rate', 'avg_scroll_depth', 'avg_time_on_page', 'click_count', 'cta_click_count', 'cta_click_rate', 'conversions', 'conversion_rate' ),
 			array( 'bounce_rate', 'exit_rate', 'avg_scroll_depth', 'cta_click_rate' )
 		);
 	}

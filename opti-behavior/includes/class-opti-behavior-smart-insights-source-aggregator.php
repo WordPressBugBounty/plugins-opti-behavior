@@ -52,6 +52,13 @@ class Opti_Behavior_Smart_Insights_Source_Aggregator {
 		);
 		$args     = wp_parse_args( $args, $defaults );
 
+		// Resolve the spam scope to an explicit boolean before it is used, so the
+		// value handed to the enrichment filter is exactly the scope this
+		// aggregation applied (callers may pass an explicit null). A layer that
+		// enriches these rows must not widen or narrow that scope, or its numerator
+		// would no longer match the `sessions` denominator computed below.
+		$args['exclude_spam'] = ! empty( $args['exclude_spam'] );
+
 		$start_date   = $this->normalize_start_datetime( $start_date );
 		$end_date     = $this->normalize_end_datetime( $end_date );
 		$limit        = max( 1, min( 500, absint( $args['limit'] ) ) );
@@ -92,37 +99,98 @@ class Opti_Behavior_Smart_Insights_Source_Aggregator {
 			return array();
 		}
 
+		// `conversions` and `conversion_rate` are NEUTRAL placeholders, mirroring the
+		// page aggregator. The Free plugin owns no conversion definition, so both
+		// stay null here and the layer that does own one fills them through the
+		// filter below. null means "no conversion source at all"; a layer that HAS a
+		// source must emit 0 / 0.0 for zero-conversion sources, never null, or the
+		// worst-performing sources stay invisible to the detectors' has_number().
 		$metrics = array();
 		foreach ( $rows as $row ) {
 			$sessions = max( 0, (int) $row['sessions'] );
 			$metrics[] = array(
-				'source_key'              => sanitize_text_field( (string) $row['source_key'] ),
-				'source_label'            => sanitize_text_field( (string) $row['source_label'] ),
-				'source_type'             => sanitize_key( (string) $row['source_type'] ),
-				'entity_type'             => 'source',
-				'entity_id'               => sanitize_text_field( (string) $row['source_key'] ),
-				'entity_label'            => sanitize_text_field( (string) $row['source_label'] ),
-				'sessions'                => $sessions,
-				'users'                   => max( 0, (int) $row['users'] ),
-				'pageviews'               => max( 0, (int) $row['pageviews'] ),
-				'bounce_sessions'         => max( 0, (int) $row['bounce_sessions'] ),
-				'bounce_rate'             => $sessions > 0 ? round( ( (int) $row['bounce_sessions'] / $sessions ) * 100, 2 ) : null,
-				'avg_session_duration'    => ! empty( $row['avg_session_duration'] ) ? round( (float) $row['avg_session_duration'], 2 ) : null,
-				'conversion_rate'         => null,
-				'avg_scroll_depth'        => null,
-				'tracking_data_complete'  => $sessions > 0,
-				'last_seen_at'            => isset( $row['last_seen_at'] ) ? (string) $row['last_seen_at'] : '',
+				'source_key'             => sanitize_text_field( (string) $row['source_key'] ),
+				'source_label'           => sanitize_text_field( (string) $row['source_label'] ),
+				'source_type'            => sanitize_key( (string) $row['source_type'] ),
+				'entity_type'            => 'source',
+				'entity_id'              => sanitize_text_field( (string) $row['source_key'] ),
+				'entity_label'           => sanitize_text_field( (string) $row['source_label'] ),
+				'sessions'               => $sessions,
+				'users'                  => max( 0, (int) $row['users'] ),
+				'pageviews'              => max( 0, (int) $row['pageviews'] ),
+				'bounce_sessions'        => max( 0, (int) $row['bounce_sessions'] ),
+				'bounce_rate'            => $sessions > 0 ? round( ( (int) $row['bounce_sessions'] / $sessions ) * 100, 2 ) : null,
+				'avg_session_duration'   => ! empty( $row['avg_session_duration'] ) ? round( (float) $row['avg_session_duration'], 2 ) : null,
+				'conversions'            => null,
+				'conversion_rate'        => null,
+				'avg_scroll_depth'       => null,
+				'tracking_data_complete' => $sessions > 0,
+				'last_seen_at'           => isset( $row['last_seen_at'] ) ? (string) $row['last_seen_at'] : '',
 			);
 		}
 
+		// $args is passed through so an enriching layer can reuse the exact spam
+		// scope this aggregation used; mixing scopes would make a source rate and
+		// the site baseline incomparable.
 		return apply_filters(
 			'opti_behavior_smart_insights_source_metrics',
 			$metrics,
 			array(
 				'start' => $start_date,
 				'end'   => $end_date,
-			)
+			),
+			$args
 		);
+	}
+
+	/**
+	 * Map session ids to the source key this aggregator groups them under.
+	 *
+	 * Source classification (utm / referrer host / direct) is a Free concept and
+	 * lives in exactly one place — the SQL expression used by get_source_metrics().
+	 * This helper exposes that same expression per session so a layer enriching
+	 * source rows through `opti_behavior_smart_insights_source_metrics` can key its
+	 * own aggregates identically instead of re-implementing the classification.
+	 *
+	 * @since 1.3.4
+	 * @param string[] $session_ids Session ids.
+	 * @return array<string,string> Session id => source key.
+	 */
+	public function get_source_keys_for_sessions( $session_ids ) {
+		global $wpdb;
+
+		$session_ids = array_values( array_unique( array_filter( array_map( 'strval', (array) $session_ids ) ) ) );
+		if ( empty( $session_ids ) ) {
+			return array();
+		}
+
+		$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
+		if ( ! $this->table_exists( $sessions_table ) ) {
+			return array();
+		}
+
+		$source_expr = $this->get_source_expr( 's' );
+		$map         = array();
+
+		foreach ( array_chunk( $session_ids, 500 ) as $chunk ) {
+			$placeholders = implode( ', ', array_fill( 0, count( $chunk ), '%s' ) );
+
+			// phpcs:disable WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- $placeholders is a generated %s list matching $chunk one-for-one.
+			$rows = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT s.id AS session_id, {$source_expr} AS source_key FROM {$sessions_table} s WHERE s.id IN ({$placeholders})",
+					$chunk
+				),
+				ARRAY_A
+			);
+			// phpcs:enable WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+
+			foreach ( (array) $rows as $row ) {
+				$map[ (string) $row['session_id'] ] = (string) $row['source_key'];
+			}
+		}
+
+		return $map;
 	}
 
 	/**

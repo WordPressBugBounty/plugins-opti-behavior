@@ -236,6 +236,23 @@
 		// bucketing and this tracker agree without cookies or client storage.
 		ensureAnonBroker();
 
+		// ADMIN PREVIEW GUARD. The visual editor iframe
+		// (`opti_ab_visual_editor=1`) and the heatmap variant preview
+		// (`opti_ab_preview_variant`) FORCE a variant server-side instead of
+		// bucketing the visitor, and the renderer marks every emitted entry
+		// with `preview: true`. Those page loads are not visits: recording an
+		// impression there adds a phantom row for the previewed variant only
+		// (never for Control), permanently skewing an element test's audience
+		// and conversion rate — and it fires on DRAFT tests too, because the
+		// preview handlers load the test regardless of status. Bail before any
+		// impression is recorded or any goal tracker is bound, while leaving
+		// window.optiBehaviorAB in place for the heatmap reporter and removing
+		// the anti-flicker class so the preview renders.
+		if ( variants.some( function( v ) { return !! v.preview; } ) ) {
+			document.documentElement.classList.remove( 'opti-ab-loading' );
+			return;
+		}
+
 		// Record impressions for all active tests.
 		// DEF-AB-PV-FIX: Skip variants emitted only because the current page
 		// matches a page_visit goal URL (`v.goal_only === true`). Recording

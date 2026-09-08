@@ -474,6 +474,70 @@
     padding: 0 !important;
 }
 
+/* ── Auto-funnel opt-in (Step 2) ─────────────────────────────── */
+.ob-setup-modal .ob-optin-box {
+    background: #f8fafc !important;
+    border: 1.5px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    padding: 12px !important;
+    margin-bottom: 4px !important;
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+}
+
+.ob-setup-modal .ob-optin-row {
+    display: flex !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+    cursor: pointer;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+}
+
+.ob-setup-modal .ob-optin-check {
+    margin: 2px 0 0 0 !important;
+    width: 16px !important;
+    height: 16px !important;
+    min-width: 16px;
+    flex: 0 0 auto;
+}
+
+.ob-setup-modal .ob-optin-text {
+    display: block !important;
+    height: auto !important;
+}
+
+.ob-setup-modal .ob-optin-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #1e293b;
+    display: block !important;
+    margin-bottom: 3px !important;
+}
+
+.ob-setup-modal .ob-optin-desc {
+    font-size: 11px;
+    color: #64748b;
+    line-height: 1.4;
+    display: block !important;
+}
+
+.ob-setup-modal .ob-optin-match {
+    font-size: 11px;
+    font-weight: 500;
+    color: #7c3aed;
+    line-height: 1.4;
+    margin-top: 4px !important;
+    display: block !important;
+}
+
+.ob-setup-modal .ob-optin-match[hidden] {
+    display: none !important;
+}
+
 /* ── Wow box (Step 3) ────────────────────────────────────────── */
 .ob-setup-modal .ob-wow-box {
     background: #f8fafc !important;

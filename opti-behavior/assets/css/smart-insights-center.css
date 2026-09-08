@@ -1,0 +1,1562 @@
+/**
+ * Smart Insights Center — page-scoped redesign layer.
+ *
+ * Loaded ONLY on the Smart Insights screen, after dashboard.css and
+ * dashboard_styles.css, so every rule here wins the cascade without editing the
+ * two stylesheets that the Analytics dashboard shares.
+ *
+ * Rules:
+ * - Every selector is scoped under .ob-smart-insights-center-page (the page
+ *   wrapper on the .wrap element) so no other screen can be affected.
+ * - No class is renamed or removed; this file only restyles existing hooks that
+ *   the JS renderers and the Playwright suites depend on.
+ *
+ * Sections:
+ *   1. Design tokens
+ *   2. Shared primitives (surfaces, labels, chips, numerals, links)
+ *   3. Weekly CRO Summary card
+ *   4. Responsive
+ *
+ * @package Opti_Behavior
+ */
+
+/* ==========================================================================
+   1. Design tokens
+   ========================================================================== */
+
+.ob-smart-insights-center-page {
+	/* Spacing scale (4px base). */
+	--ob-si-space-1: 4px;
+	--ob-si-space-2: 8px;
+	--ob-si-space-3: 12px;
+	--ob-si-space-4: 16px;
+	--ob-si-space-5: 20px;
+	--ob-si-space-6: 24px;
+
+	/* Radius scale. */
+	--ob-si-radius-sm: 6px;
+	--ob-si-radius-md: 10px;
+	--ob-si-radius-lg: 14px;
+	--ob-si-radius-pill: 999px;
+
+	/* One elevation system: rest + hover. */
+	--ob-si-shadow-rest: 0 1px 2px rgba(15, 23, 42, 0.06);
+	--ob-si-shadow-hover: 0 4px 12px rgba(15, 23, 42, 0.10);
+
+	/* Neutral surfaces and borders. */
+	--ob-si-surface: #ffffff;
+	--ob-si-surface-muted: #f8fafc;
+	--ob-si-surface-sunken: #f1f5f9;
+	--ob-si-border: #e2e8f0;
+	--ob-si-border-strong: #cbd5e1;
+
+	/* Text ramp. */
+	--ob-si-text: #0f172a;
+	--ob-si-text-muted: #475569;
+	--ob-si-text-faint: #64748b;
+
+	/* Single accent (existing plugin indigo family). */
+	--ob-si-accent: #4f46e5;
+	--ob-si-accent-strong: #4338ca;
+	--ob-si-accent-soft: #eef2ff;
+	--ob-si-accent-border: #c7d2fe;
+
+	/* Severity semantics (unchanged meaning). */
+	--ob-si-critical: #b91c1c;
+	--ob-si-critical-soft: #fef2f2;
+	--ob-si-critical-border: #fecaca;
+	--ob-si-high: #c2410c;
+	--ob-si-high-soft: #fff7ed;
+	--ob-si-high-border: #fed7aa;
+	--ob-si-medium: #a16207;
+	--ob-si-medium-soft: #fefce8;
+	--ob-si-medium-border: #fde68a;
+	--ob-si-low: #0f766e;
+	--ob-si-low-soft: #f0fdfa;
+	--ob-si-low-border: #99f6e4;
+
+	/* Outcome semantics (worse / better / steady). */
+	--ob-si-worse: #b91c1c;
+	--ob-si-worse-soft: #fef2f2;
+	--ob-si-worse-border: #fecaca;
+	--ob-si-better: #047857;
+	--ob-si-better-soft: #ecfdf5;
+	--ob-si-better-border: #a7f3d0;
+	--ob-si-steady: #475569;
+	--ob-si-steady-soft: #f8fafc;
+	--ob-si-steady-border: #cbd5e1;
+
+	/* Next-action / success surface. */
+	--ob-si-success-surface: #f0fdf4;
+	--ob-si-success-border: #bbf7d0;
+	--ob-si-success-text: #065f46;
+
+	/* Typography scale. */
+	--ob-si-fs-micro: 10px;
+	--ob-si-fs-label: 11px;
+	--ob-si-fs-meta: 12px;
+	--ob-si-fs-body: 13px;
+	--ob-si-fs-title: 15px;
+	--ob-si-fs-stat: 24px;
+	--ob-si-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+	/* Shared panel geometry so every panel in the page reads as one system. */
+	--ob-si-panel-padding: 14px 16px;
+}
+
+/* ==========================================================================
+   2. Shared primitives
+   ========================================================================== */
+
+/* Numbers must never render with irregular figure widths ("1 466"). */
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics strong,
+.ob-smart-insights-center-page .ob-smart-insights-brief-amount,
+.ob-smart-insights-center-page .ob-smart-insights-summary-chip,
+.ob-smart-insights-center-page .ob-smart-insights-summary-more {
+	font-family: var(--ob-si-font);
+	font-variant-numeric: tabular-nums lining-nums;
+	-moz-font-feature-settings: "tnum" 1, "lnum" 1;
+	font-feature-settings: "tnum" 1, "lnum" 1;
+}
+
+/* One uppercase micro-label treatment for every panel eyebrow. */
+.ob-smart-insights-center-page .ob-smart-insights-briefing-lead > span,
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action > span,
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section h3,
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics small {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-label);
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	line-height: 1.2;
+	margin: 0;
+	text-transform: uppercase;
+}
+
+/* One chip system: identical height, radius and label size everywhere. */
+.ob-smart-insights-center-page .ob-smart-insights-brief-state,
+.ob-smart-insights-center-page .ob-smart-insights-outcome-chip,
+.ob-smart-insights-center-page .ob-smart-insights-summary-chip {
+	align-items: center;
+	border-radius: var(--ob-si-radius-pill);
+	border-style: solid;
+	border-width: 1px;
+	box-sizing: border-box;
+	display: inline-flex;
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+	gap: var(--ob-si-space-1);
+	justify-content: center;
+	letter-spacing: 0.05em;
+	line-height: 1;
+	min-height: 20px;
+	padding: 0 9px;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+
+/* Consistent, keyboard-visible affordance on every summary link. */
+.ob-smart-insights-center-page .ob-smart-insights-summary-link {
+	border-radius: var(--ob-si-radius-sm);
+	color: var(--ob-si-accent);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	text-decoration: none;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-link:hover,
+.ob-smart-insights-center-page .ob-smart-insights-summary-link:focus {
+	color: var(--ob-si-accent-strong);
+	text-decoration: underline;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-link:focus-visible {
+	box-shadow: 0 0 0 2px var(--ob-si-accent-soft), 0 0 0 4px var(--ob-si-accent);
+	outline: none;
+}
+
+/* ==========================================================================
+   3. Weekly CRO Summary card
+   ========================================================================== */
+
+/* Composition: analyst briefing (left) + compact KPI tiles (right) on row 1,
+   recommended action + trend watch as equal-height panels on row 2, and the
+   scope note as a full-width footnote. DOM order is untouched. */
+.ob-smart-insights-center-page .ob-smart-insights-summary-report.is-briefing {
+	align-items: stretch;
+	display: grid;
+	gap: var(--ob-si-space-3);
+	grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+	grid-template-rows: auto auto auto;
+}
+
+/* --- Shared panel shell ------------------------------------------------- */
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-lead,
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action,
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section {
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-lg);
+	box-shadow: var(--ob-si-shadow-rest);
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	gap: var(--ob-si-space-2);
+	padding: var(--ob-si-panel-padding);
+}
+
+/* --- Analyst briefing (row 1, left) ------------------------------------- */
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-lead {
+	background: linear-gradient(180deg, var(--ob-si-surface-muted) 0%, var(--ob-si-surface) 46%);
+	grid-column: 1;
+	grid-row: 1;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-lead > strong {
+	color: var(--ob-si-text);
+	display: block;
+	font-size: var(--ob-si-fs-title);
+	font-weight: 700;
+	line-height: 1.35;
+	margin: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-list {
+	display: flex;
+	flex-direction: column;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+/* Each brief line is one aligned row: title | amount | state | chip | link.
+   The title takes the remaining width and truncates, so the numeric and state
+   columns line up across all three rows instead of wrapping raggedly. */
+.ob-smart-insights-center-page .ob-smart-insights-brief-list li {
+	align-items: center;
+	border-top: 1px solid var(--ob-si-border);
+	column-gap: var(--ob-si-space-3);
+	display: flex;
+	flex-wrap: nowrap;
+	margin: 0;
+	min-height: 38px;
+	padding: var(--ob-si-space-2) 0;
+	row-gap: var(--ob-si-space-1);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-list li:first-child {
+	border-top: 0;
+	padding-top: var(--ob-si-space-1);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-list li:last-child {
+	padding-bottom: var(--ob-si-space-1);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-lead .ob-smart-insights-brief-title {
+	color: var(--ob-si-text);
+	flex: 1 1 auto;
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+	letter-spacing: normal;
+	line-height: 1.35;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	text-transform: none;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-lead .ob-smart-insights-brief-amount {
+	color: var(--ob-si-text-muted);
+	display: block;
+	flex: 0 0 auto;
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	letter-spacing: normal;
+	min-width: 124px;
+	text-align: right;
+	text-transform: none;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-lead .ob-smart-insights-brief-state {
+	display: inline-flex;
+	flex: 0 0 auto;
+	min-width: 72px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-state {
+	background: var(--ob-si-steady-soft);
+	border-color: var(--ob-si-steady-border);
+	color: var(--ob-si-steady);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-state.is-worse {
+	background: var(--ob-si-worse-soft);
+	border-color: var(--ob-si-worse-border);
+	color: var(--ob-si-worse);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-state.is-better,
+.ob-smart-insights-center-page .ob-smart-insights-brief-state.is-resolved {
+	background: var(--ob-si-better-soft);
+	border-color: var(--ob-si-better-border);
+	color: var(--ob-si-better);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-state.is-new {
+	background: var(--ob-si-accent-soft);
+	border-color: var(--ob-si-accent-border);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-list .ob-smart-insights-summary-link {
+	flex: 0 0 auto;
+	margin-left: 0;
+}
+
+/* --- KPI stat tiles (row 1, right) --------------------------------------- */
+
+/* 2x2 of short, equal-height tiles. The old single tall row left ~80% of each
+   box empty because it stretched to the height of the briefing column. */
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics {
+	align-content: stretch;
+	align-self: stretch;
+	display: grid;
+	gap: var(--ob-si-space-3);
+	grid-column: 2;
+	grid-row: 1;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-rows: repeat(2, minmax(74px, 1fr));
+	margin: 0;
+	max-height: 210px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics span {
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	box-shadow: var(--ob-si-shadow-rest);
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	gap: var(--ob-si-space-2);
+	justify-content: space-between;
+	min-width: 0;
+	padding: var(--ob-si-space-3) var(--ob-si-space-4);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics small {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics strong {
+	color: var(--ob-si-text);
+	display: block;
+	font-size: var(--ob-si-fs-stat);
+	font-weight: 700;
+	letter-spacing: -0.01em;
+	line-height: 1.05;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics .is-mover strong {
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+	line-height: 1.3;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* --- Recommended action (row 2, left) ------------------------------------ */
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action {
+	background: var(--ob-si-success-surface);
+	border-color: var(--ob-si-success-border);
+	grid-column: 1;
+	grid-row: 2;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action > span {
+	color: var(--ob-si-success-text);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action strong {
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	color: var(--ob-si-text);
+	display: -webkit-box;
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+	line-height: 1.45;
+	overflow: hidden;
+}
+
+/* Link pinned to the bottom so it aligns with the trend-watch panel footer. */
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action .ob-smart-insights-summary-link {
+	align-self: flex-start;
+	margin-top: auto;
+}
+
+/* --- Trend watch / recurring patterns (row 2, right) --------------------- */
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-grid {
+	align-items: stretch;
+	display: grid;
+	gap: var(--ob-si-space-3);
+	grid-column: 2;
+	grid-row: 2;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section h3 {
+	color: var(--ob-si-text-faint);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ob-si-space-2);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-item {
+	align-items: center;
+	background: var(--ob-si-surface-muted);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	box-sizing: border-box;
+	column-gap: var(--ob-si-space-3);
+	display: flex;
+	flex-wrap: wrap;
+	min-height: 44px;
+	padding: var(--ob-si-space-2) var(--ob-si-space-3);
+	row-gap: var(--ob-si-space-1);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-item-main {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-item-main strong {
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+	line-height: 1.35;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-item-meta {
+	align-items: center;
+	display: flex;
+	flex: 0 0 auto;
+	gap: var(--ob-si-space-2);
+}
+
+/* "+N more issues" sits on the panel floor so both row-2 panels end level. */
+.ob-smart-insights-center-page .ob-smart-insights-summary-more {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	margin: auto 0 0;
+	padding-top: var(--ob-si-space-2);
+}
+
+/* --- Scope footnote (row 3, full width) ---------------------------------- */
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-scope {
+	border-top: 1px solid var(--ob-si-border);
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+	grid-column: 1 / -1;
+	grid-row: 3;
+	line-height: 1.5;
+	margin: 0;
+	padding-top: var(--ob-si-space-3);
+}
+
+/* ==========================================================================
+   4. Responsive
+   ========================================================================== */
+
+@media (max-width: 1100px) {
+	.ob-smart-insights-center-page .ob-smart-insights-summary-report.is-briefing {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-lead,
+	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics,
+	.ob-smart-insights-center-page .ob-smart-insights-summary-next-action,
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-grid,
+	.ob-smart-insights-center-page .ob-smart-insights-summary-scope {
+		grid-column: 1;
+		grid-row: auto;
+	}
+
+	/* Full width: the four tiles read best as one compact row again. */
+	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics {
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		grid-template-rows: minmax(74px, auto);
+		max-height: none;
+	}
+}
+
+@media (max-width: 782px) {
+	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-rows: repeat(2, minmax(74px, auto));
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-brief-list li {
+		flex-wrap: wrap;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-lead .ob-smart-insights-brief-title {
+		flex: 1 1 100%;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-lead .ob-smart-insights-brief-amount {
+		min-width: 0;
+		text-align: left;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-brief-list .ob-smart-insights-summary-link {
+		margin-left: auto;
+	}
+}
+
+/* ==========================================================================
+   5. Insight center cards
+   ========================================================================== */
+
+/* --- Shell: one calm surface, three aligned zones ------------------------ */
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card {
+	align-items: stretch;
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-lg);
+	box-shadow: var(--ob-si-shadow-rest);
+	gap: var(--ob-si-space-3) var(--ob-si-space-5);
+	grid-template-columns: minmax(0, 1.2fr) minmax(250px, 0.7fr) minmax(230px, 0.56fr);
+	padding: var(--ob-si-space-4) var(--ob-si-space-4) var(--ob-si-space-3) calc(var(--ob-si-space-4) + 8px);
+	transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card:hover {
+	border-color: var(--ob-si-border-strong);
+	box-shadow: var(--ob-si-shadow-hover);
+	transform: none;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.is-locked-preview {
+	background: linear-gradient(180deg, var(--ob-si-surface) 0%, #faf5ff 100%);
+	border-color: #e9d5ff;
+}
+
+/* Severity rail as an inset accent bar instead of a full-bleed edge. */
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-severity-rail {
+	border-radius: var(--ob-si-radius-pill);
+	bottom: 14px;
+	left: 9px;
+	top: 14px;
+	width: 4px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.is-critical .ob-smart-insights-severity-rail { background: var(--ob-si-critical); }
+.ob-smart-insights-center-page .ob-smart-insights-center-card.is-high .ob-smart-insights-severity-rail { background: var(--ob-si-high); }
+.ob-smart-insights-center-page .ob-smart-insights-center-card.is-medium .ob-smart-insights-severity-rail { background: var(--ob-si-medium); }
+.ob-smart-insights-center-page .ob-smart-insights-center-card.is-low .ob-smart-insights-severity-rail { background: var(--ob-si-accent); }
+
+/* Hairline separators make the three zones read as one composed system. */
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-evidence-zone,
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-action-zone {
+	border-left: 1px solid var(--ob-si-border);
+	padding-left: var(--ob-si-space-5);
+}
+
+/* --- Primary zone --------------------------------------------------------- */
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-center-main {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ob-si-space-2);
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card h3 {
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-title);
+	font-weight: 700;
+	letter-spacing: -0.01em;
+	line-height: 1.3;
+	margin: 0;
+}
+
+/* One chip system for every chip on the card. */
+.ob-smart-insights-center-page .ob-smart-insights-category-chip,
+.ob-smart-insights-center-page .ob-smart-insights-status-chip,
+.ob-smart-insights-center-page .ob-smart-insights-entity-type-chip,
+.ob-smart-insights-center-page .ob-smart-insights-recurrence-chip,
+.ob-smart-insights-center-page .ob-smart-insights-story-chip,
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-badge {
+	align-items: center;
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-pill);
+	box-sizing: border-box;
+	display: inline-flex;
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+	gap: var(--ob-si-space-1);
+	letter-spacing: 0.05em;
+	line-height: 1;
+	min-height: 20px;
+	padding: 0 9px;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-category-chip {
+	background: var(--ob-si-accent-soft);
+	border-color: var(--ob-si-accent-border);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-status-chip {
+	background: var(--ob-si-surface-muted);
+	color: var(--ob-si-text-muted);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-recurrence-chip {
+	background: var(--ob-si-surface-sunken);
+	color: var(--ob-si-text-muted);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-story-chip {
+	background: #f5f3ff;
+	border-color: #ddd6fe;
+	color: #6d28d9;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-story-chip .ob-smart-insights-story-count {
+	align-items: center;
+	background: #6d28d9;
+	border-radius: var(--ob-si-radius-pill);
+	color: #ffffff;
+	display: inline-flex;
+	font-size: 9px;
+	justify-content: center;
+	line-height: 1;
+	min-width: 14px;
+	padding: 2px 4px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-badge.is-locked {
+	background: #f5f3ff;
+	border-color: #ddd6fe;
+	color: #7c3aed;
+}
+
+/* Business-impact line: quieter banner, aligned interior. */
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-impact-line {
+	background: var(--ob-si-high-soft);
+	border: 1px solid var(--ob-si-high-border);
+	border-left: 3px solid var(--ob-si-high);
+	border-radius: var(--ob-si-radius-md);
+	padding: var(--ob-si-space-2) var(--ob-si-space-3);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-impact-line.is-observation {
+	background: var(--ob-si-surface-muted);
+	border-color: var(--ob-si-border);
+	border-left-color: var(--ob-si-border-strong);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-impact-label {
+	color: var(--ob-si-high);
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-impact-line.is-observation .ob-smart-insights-impact-label {
+	color: var(--ob-si-text-faint);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-impact-headline {
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-body);
+	font-variant-numeric: tabular-nums lining-nums;
+	font-weight: 700;
+}
+
+/* Cause chips: neutral pills, measured share as the only highlighted part. */
+.ob-smart-insights-center-page .ob-smart-insights-cause-chip {
+	align-items: center;
+	background: var(--ob-si-surface-muted);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-pill);
+	display: inline-flex;
+	font-size: var(--ob-si-fs-label);
+	font-weight: 600;
+	gap: var(--ob-si-space-1);
+	line-height: 1;
+	min-height: 20px;
+	padding: 0 9px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-cause-share {
+	color: var(--ob-si-accent-strong);
+	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+}
+
+/* Stage tracker dots inherit the token palette. */
+.ob-smart-insights-center-page .ob-smart-insights-stage-step .ob-smart-insights-stage-dot {
+	background: var(--ob-si-border-strong);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-stage-step.is-done .ob-smart-insights-stage-dot {
+	background: var(--ob-si-better);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-stage-step.is-current .ob-smart-insights-stage-dot {
+	background: var(--ob-si-accent);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-explanation {
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-meta);
+	line-height: 1.45;
+}
+
+/* Also-detected group: one sunken block instead of loose underlined links. */
+.ob-smart-insights-center-page .ob-smart-insights-center-children {
+	background: var(--ob-si-surface-muted);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	padding: var(--ob-si-space-2) var(--ob-si-space-3);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-children-label {
+	color: var(--ob-si-text-faint);
+	display: block;
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	margin-bottom: var(--ob-si-space-1);
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-children ul {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-children li {
+	margin: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-child-open {
+	color: var(--ob-si-accent);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	text-align: left;
+	text-decoration: none;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-child-open:hover,
+.ob-smart-insights-center-page .ob-smart-insights-child-open:focus {
+	color: var(--ob-si-accent-strong);
+	text-decoration: underline;
+}
+
+/* --- Evidence zone: uniform KPI micro tiles ------------------------------- */
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-evidence-zone {
+	align-content: center;
+	align-self: center;
+	gap: var(--ob-si-space-2);
+	grid-auto-rows: 1fr;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-evidence-microcard {
+	background: var(--ob-si-surface-muted);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	box-shadow: none;
+	gap: var(--ob-si-space-1);
+	justify-content: start;
+	min-height: 58px;
+	padding: var(--ob-si-space-2) var(--ob-si-space-3);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-evidence-microcard.is-primary {
+	background: var(--ob-si-accent-soft);
+	border-color: var(--ob-si-accent-border);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-evidence-microcard-label {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-evidence-microcard-value-row strong {
+	font-size: 16px;
+	font-variant-numeric: tabular-nums lining-nums;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-evidence-microcard.is-primary .ob-smart-insights-evidence-microcard-value-row strong {
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-evidence-microcard-value-row small {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-micro);
+	font-variant-numeric: tabular-nums;
+}
+
+/* --- Action zone: eyebrow + copy on top, CTA pinned to the floor ---------- */
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-next-panel {
+	align-items: stretch;
+	background: var(--ob-si-success-surface);
+	border: 1px solid var(--ob-si-success-border);
+	border-radius: var(--ob-si-radius-md);
+	display: flex;
+	flex-direction: column;
+	gap: var(--ob-si-space-2);
+	padding: var(--ob-si-space-3);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-next-panel.is-disabled,
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-next-panel.is-plain {
+	background: var(--ob-si-surface-muted);
+	border-color: var(--ob-si-border);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-next-panel.is-locked {
+	background: #faf5ff;
+	border-color: #e9d5ff;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-next-copy span {
+	color: var(--ob-si-success-text);
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	margin-bottom: var(--ob-si-space-1);
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-next-copy strong {
+	-webkit-line-clamp: 3;
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+	line-height: 1.45;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-next-panel .ob-smart-insights-report-cta {
+	align-items: center;
+	background: var(--ob-si-accent);
+	border-color: var(--ob-si-accent);
+	border-radius: var(--ob-si-radius-sm);
+	color: #ffffff;
+	display: inline-flex;
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	gap: var(--ob-si-space-2);
+	justify-content: center;
+	margin-top: auto;
+	min-height: 32px;
+	white-space: nowrap;
+	width: 100%;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-next-panel .ob-smart-insights-report-cta:hover,
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-next-panel .ob-smart-insights-report-cta:focus {
+	background: var(--ob-si-accent-strong);
+	border-color: var(--ob-si-accent-strong);
+	color: #ffffff;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-next-report {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-label);
+	line-height: 1.4;
+	margin-top: auto;
+	max-width: none;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-next-report span {
+	color: var(--ob-si-text-muted);
+	font-weight: 700;
+}
+
+/* --- Footer: meta on one baseline, controls on the other end -------------- */
+
+.ob-smart-insights-center-page .ob-smart-insights-center-footer {
+	border-top: 1px solid var(--ob-si-border);
+	gap: var(--ob-si-space-3);
+	margin-top: var(--ob-si-space-1);
+	padding-top: var(--ob-si-space-2);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-footer .ob-smart-insights-card-footer-meta {
+	align-items: center;
+	color: var(--ob-si-text-faint);
+	display: flex;
+	flex-wrap: wrap;
+	font-size: var(--ob-si-fs-meta);
+	gap: var(--ob-si-space-2) var(--ob-si-space-3);
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-footer .ob-smart-insights-card-footer-meta > span {
+	white-space: nowrap;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-footer .ob-smart-insights-card-footer-meta > span strong {
+	color: var(--ob-si-text-muted);
+	font-weight: 700;
+}
+
+/* Priority meter: severity-coloured fill on a soft track. */
+.ob-smart-insights-center-page .ob-smart-insights-priority-meter small {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-priority-meter strong {
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-meta);
+	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-priority-meter b {
+	background: var(--ob-si-surface-sunken);
+	border-radius: var(--ob-si-radius-pill);
+	flex: 0 0 56px;
+	height: 5px;
+	overflow: hidden;
+	width: 56px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-priority-meter i {
+	background: var(--ob-si-steady);
+	border-radius: var(--ob-si-radius-pill);
+	display: block;
+	height: 100%;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-priority-meter.is-critical i { background: var(--ob-si-critical); }
+.ob-smart-insights-center-page .ob-smart-insights-priority-meter.is-high i { background: var(--ob-si-high); }
+.ob-smart-insights-center-page .ob-smart-insights-priority-meter.is-medium i { background: var(--ob-si-medium); }
+.ob-smart-insights-center-page .ob-smart-insights-priority-meter.is-low i { background: var(--ob-si-accent); }
+
+.ob-smart-insights-center-page .ob-smart-insights-center-footer .ob-smart-insights-card-actions .button {
+	background: var(--ob-si-surface);
+	border-color: var(--ob-si-border-strong);
+	border-radius: var(--ob-si-radius-sm);
+	color: var(--ob-si-accent-strong);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	min-height: 30px;
+	padding: 2px 12px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-footer .ob-smart-insights-card-actions .button:hover,
+.ob-smart-insights-center-page .ob-smart-insights-center-footer .ob-smart-insights-card-actions .button:focus {
+	border-color: var(--ob-si-accent);
+	box-shadow: 0 0 0 1px var(--ob-si-accent);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-footer .ob-smart-insights-status-control select {
+	border-color: var(--ob-si-border-strong);
+	border-radius: var(--ob-si-radius-sm);
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-meta);
+	min-height: 30px;
+}
+
+/* --- Card responsive (mirrors the base 1179 / 767 collapse points) -------- */
+
+@media (max-width: 1179px) {
+	.ob-smart-insights-center-page .ob-smart-insights-center-card {
+		grid-template-columns: minmax(0, 1fr) minmax(250px, 0.8fr);
+	}
+
+	/* Stacked: evidence moves under the primary zone, so its separator dies. */
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-evidence-zone {
+		border-left: 0;
+		padding-left: 0;
+	}
+}
+
+@media (max-width: 767px) {
+	.ob-smart-insights-center-page .ob-smart-insights-center-card {
+		gap: var(--ob-si-space-3);
+		grid-template-columns: minmax(0, 1fr);
+		padding: var(--ob-si-space-4) var(--ob-si-space-3) var(--ob-si-space-3) calc(var(--ob-si-space-3) + 8px);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-action-zone {
+		border-left: 0;
+		padding-left: 0;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-smart-insights-evidence-zone {
+		grid-auto-rows: auto;
+	}
+}
+
+/* ==========================================================================
+   6. Detail modal
+   ==========================================================================
+   The modal node is appended to document.body, outside the
+   .ob-smart-insights-center-page wrapper, so the token set is redeclared on
+   the modal root. This stylesheet is only enqueued on the Smart Insights
+   screen, which keeps these rules page-scoped in practice. */
+
+.ob-smart-insights-modal {
+	--ob-si-space-1: 4px;
+	--ob-si-space-2: 8px;
+	--ob-si-space-3: 12px;
+	--ob-si-space-4: 16px;
+	--ob-si-space-5: 20px;
+	--ob-si-space-6: 24px;
+	--ob-si-radius-sm: 6px;
+	--ob-si-radius-md: 10px;
+	--ob-si-radius-lg: 14px;
+	--ob-si-radius-pill: 999px;
+	--ob-si-shadow-rest: 0 1px 2px rgba(15, 23, 42, 0.06);
+	--ob-si-shadow-hover: 0 4px 12px rgba(15, 23, 42, 0.10);
+	--ob-si-surface: #ffffff;
+	--ob-si-surface-muted: #f8fafc;
+	--ob-si-surface-sunken: #f1f5f9;
+	--ob-si-border: #e2e8f0;
+	--ob-si-border-strong: #cbd5e1;
+	--ob-si-text: #0f172a;
+	--ob-si-text-muted: #475569;
+	--ob-si-text-faint: #64748b;
+	--ob-si-accent: #4f46e5;
+	--ob-si-accent-strong: #4338ca;
+	--ob-si-accent-soft: #eef2ff;
+	--ob-si-accent-border: #c7d2fe;
+	--ob-si-critical: #b91c1c;
+	--ob-si-critical-soft: #fef2f2;
+	--ob-si-critical-border: #fecaca;
+	--ob-si-high: #c2410c;
+	--ob-si-high-soft: #fff7ed;
+	--ob-si-high-border: #fed7aa;
+	--ob-si-medium: #a16207;
+	--ob-si-medium-soft: #fefce8;
+	--ob-si-medium-border: #fde68a;
+	--ob-si-low: #0f766e;
+	--ob-si-low-soft: #f0fdfa;
+	--ob-si-low-border: #99f6e4;
+	--ob-si-success-surface: #f0fdf4;
+	--ob-si-success-border: #bbf7d0;
+	--ob-si-success-text: #065f46;
+	--ob-si-fs-micro: 10px;
+	--ob-si-fs-label: 11px;
+	--ob-si-fs-meta: 12px;
+	--ob-si-fs-body: 13px;
+	--ob-si-fs-title: 15px;
+	--ob-si-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* One typeface, one numeral system, everywhere in the dialog. */
+.ob-smart-insights-modal .ob-smart-insights-modal-panel {
+	border-radius: var(--ob-si-radius-lg);
+	font-family: var(--ob-si-font);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail strong,
+.ob-smart-insights-modal .ob-smart-insights-detail dd {
+	font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* --- Header ---------------------------------------------------------------- */
+
+.ob-smart-insights-modal .ob-smart-insights-detail-header {
+	align-items: flex-start;
+	border-bottom: 1px solid var(--ob-si-border);
+	gap: var(--ob-si-space-4);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-header h2 {
+	color: var(--ob-si-text);
+	font-size: 20px;
+	font-weight: 700;
+	letter-spacing: -0.015em;
+	line-height: 1.3;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-subtitle {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-subtitle-separator {
+	color: var(--ob-si-border-strong);
+}
+
+/* Header chips join the shared chip system. */
+.ob-smart-insights-modal .ob-smart-insights-detail-chip {
+	align-items: center;
+	background: var(--ob-si-surface-muted);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-pill);
+	box-sizing: border-box;
+	color: var(--ob-si-text-muted);
+	display: inline-flex;
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+	gap: var(--ob-si-space-1);
+	letter-spacing: 0.05em;
+	line-height: 1;
+	min-height: 20px;
+	padding: 0 9px;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-chip.is-priority.is-critical {
+	background: var(--ob-si-critical-soft);
+	border-color: var(--ob-si-critical-border);
+	color: var(--ob-si-critical);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-chip.is-priority.is-high {
+	background: var(--ob-si-high-soft);
+	border-color: var(--ob-si-high-border);
+	color: var(--ob-si-high);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-chip.is-priority.is-medium {
+	background: var(--ob-si-medium-soft);
+	border-color: var(--ob-si-medium-border);
+	color: var(--ob-si-medium);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-chip.is-priority.is-low {
+	background: var(--ob-si-low-soft);
+	border-color: var(--ob-si-low-border);
+	color: var(--ob-si-low);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-chip.is-category {
+	background: var(--ob-si-accent-soft);
+	border-color: var(--ob-si-accent-border);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-chip.is-locked {
+	background: #f5f3ff;
+	border-color: #ddd6fe;
+	color: #7c3aed;
+}
+
+/* Priority meter segments. */
+.ob-smart-insights-modal .ob-smart-insights-priority-label {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-priority-segment {
+	background: var(--ob-si-surface-sunken);
+	border-radius: var(--ob-si-radius-pill);
+	display: inline-block;
+	height: 5px;
+	width: 16px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-priority.is-critical .ob-smart-insights-priority-segment.is-active { background: var(--ob-si-critical); }
+.ob-smart-insights-modal .ob-smart-insights-detail-priority.is-high .ob-smart-insights-priority-segment.is-active { background: var(--ob-si-high); }
+.ob-smart-insights-modal .ob-smart-insights-detail-priority.is-medium .ob-smart-insights-priority-segment.is-active { background: var(--ob-si-medium); }
+.ob-smart-insights-modal .ob-smart-insights-detail-priority.is-low .ob-smart-insights-priority-segment.is-active { background: var(--ob-si-accent); }
+
+.ob-smart-insights-modal .ob-smart-insights-priority-value strong {
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 700;
+}
+
+/* --- Section rhythm -------------------------------------------------------- */
+
+.ob-smart-insights-modal .ob-smart-insights-detail-section {
+	margin: 0 0 var(--ob-si-space-5);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-section > h3 {
+	border-bottom: 1px solid var(--ob-si-border);
+	color: var(--ob-si-text-faint);
+	font-family: var(--ob-si-font);
+	font-size: var(--ob-si-fs-label);
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	line-height: 1.2;
+	margin: 0 0 var(--ob-si-space-3);
+	padding-bottom: var(--ob-si-space-2);
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-diagnosis-copy p {
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-body);
+	line-height: 1.55;
+	margin: 0 0 var(--ob-si-space-2);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-why {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+	font-style: normal;
+}
+
+/* --- Evidence: the same KPI tile system as the cards ----------------------- */
+
+.ob-smart-insights-modal .ob-smart-insights-evidence.is-detail-evidence .ob-smart-insights-evidence-item {
+	background: var(--ob-si-surface-muted);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	box-shadow: none;
+	display: grid;
+	gap: 2px;
+	padding: var(--ob-si-space-3) var(--ob-si-space-4);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-evidence.is-detail-evidence .ob-smart-insights-evidence-item span {
+	color: var(--ob-si-text-faint);
+	font-family: var(--ob-si-font);
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-evidence.is-detail-evidence .ob-smart-insights-evidence-item strong {
+	color: var(--ob-si-text);
+	font-family: var(--ob-si-font);
+	font-size: 18px;
+	font-variant-numeric: tabular-nums lining-nums;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+	line-height: 1.15;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-evidence.is-detail-evidence .ob-smart-insights-evidence-item small {
+	color: var(--ob-si-text-faint);
+	font-family: var(--ob-si-font);
+	font-size: var(--ob-si-fs-label);
+	font-variant-numeric: tabular-nums;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-evidence.is-detail-evidence .ob-smart-insights-evidence-item.is-primary {
+	background: var(--ob-si-accent-soft);
+	border-color: var(--ob-si-accent-border);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-evidence.is-detail-evidence .ob-smart-insights-evidence-item.is-primary strong {
+	color: var(--ob-si-accent-strong);
+	font-size: 24px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-evidence.is-detail-evidence .ob-smart-insights-evidence-item.is-muted strong {
+	color: var(--ob-si-text-muted);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-evidence-table.is-flat {
+	display: grid;
+	gap: var(--ob-si-space-2);
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	margin-top: var(--ob-si-space-2);
+}
+
+/* --- Sidebar: context facts ------------------------------------------------ */
+
+.ob-smart-insights-modal .ob-smart-insights-context-facts {
+	background: var(--ob-si-surface-muted);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	margin: 0;
+	padding: var(--ob-si-space-1) var(--ob-si-space-3);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-context-fact {
+	align-items: baseline;
+	border-top: 1px solid var(--ob-si-border);
+	display: flex;
+	gap: var(--ob-si-space-3);
+	justify-content: space-between;
+	padding: var(--ob-si-space-2) 0;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-context-fact:first-child {
+	border-top: 0;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-context-fact dt {
+	color: var(--ob-si-text-faint);
+	flex: 0 0 auto;
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	margin: 0;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-context-fact dd {
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	margin: 0;
+	min-width: 0;
+	text-align: right;
+}
+
+/* --- Sidebar: next action -------------------------------------------------- */
+
+.ob-smart-insights-modal .ob-smart-insights-detail-section.is-next .ob-smart-insights-action-callout {
+	align-items: flex-start;
+	background: var(--ob-si-success-surface);
+	border: 1px solid var(--ob-si-success-border);
+	border-radius: var(--ob-si-radius-md);
+	display: flex;
+	gap: var(--ob-si-space-3);
+	padding: var(--ob-si-space-3);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-section.is-next .ob-smart-insights-action-callout strong {
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+	line-height: 1.5;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-action-icon {
+	align-items: center;
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-success-border);
+	border-radius: var(--ob-si-radius-sm);
+	color: var(--ob-si-success-text);
+	display: inline-flex;
+	flex: 0 0 auto;
+	height: 26px;
+	justify-content: center;
+	width: 26px;
+}
+
+/* --- Sidebar: related report cards ---------------------------------------- */
+
+.ob-smart-insights-modal .ob-smart-insights-report-card-list {
+	display: grid;
+	gap: var(--ob-si-space-2);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-report-card {
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	box-shadow: none;
+	display: block;
+	padding: var(--ob-si-space-3);
+	text-decoration: none;
+	transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.ob-smart-insights-modal a.ob-smart-insights-report-card:hover,
+.ob-smart-insights-modal a.ob-smart-insights-report-card:focus {
+	border-color: var(--ob-si-accent);
+	box-shadow: var(--ob-si-shadow-hover);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-report-card-copy,
+.ob-smart-insights-modal .ob-smart-insights-report-card-status {
+	color: var(--ob-si-text-muted);
+	display: block;
+	font-size: var(--ob-si-fs-meta);
+	line-height: 1.45;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-report-card-status {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-label);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-report-card-meta {
+	color: var(--ob-si-text-faint);
+	display: flex;
+	flex-wrap: wrap;
+	font-size: var(--ob-si-fs-label);
+	gap: var(--ob-si-space-1) var(--ob-si-space-3);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-report-card-action {
+	color: var(--ob-si-accent);
+	display: inline-block;
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 700;
+	margin-top: var(--ob-si-space-1);
+}
+
+/* --- Footer ---------------------------------------------------------------- */
+
+.ob-smart-insights-modal .ob-smart-insights-detail-footer {
+	align-items: center;
+	border-top: 1px solid var(--ob-si-border);
+	gap: var(--ob-si-space-3);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-footer-meta {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-footer-meta strong {
+	color: var(--ob-si-text-muted);
+	font-weight: 700;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-footer-separator {
+	color: var(--ob-si-border-strong);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-footer .ob-smart-insights-report-cta {
+	align-items: center;
+	background: var(--ob-si-accent);
+	border-color: var(--ob-si-accent);
+	border-radius: var(--ob-si-radius-sm);
+	color: #ffffff;
+	display: inline-flex;
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	gap: var(--ob-si-space-2);
+	justify-content: center;
+	min-height: 32px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-footer .ob-smart-insights-report-cta:hover,
+.ob-smart-insights-modal .ob-smart-insights-detail-footer .ob-smart-insights-report-cta:focus {
+	background: var(--ob-si-accent-strong);
+	border-color: var(--ob-si-accent-strong);
+	color: #ffffff;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-footer select {
+	border-color: var(--ob-si-border-strong);
+	border-radius: var(--ob-si-radius-sm);
+	font-size: var(--ob-si-fs-meta);
+	min-height: 32px;
+}
+
+/* --- Modal polish ---------------------------------------------------------- */
+
+/* Neutral sidebar: the aside is a quiet column, not a tinted slab. */
+.ob-smart-insights-modal .ob-smart-insights-detail-side {
+	background: var(--ob-si-surface-muted);
+	border-radius: var(--ob-si-radius-md);
+}
+
+/* The impact section heading already says "Business impact"; the inner
+   banner label would repeat it verbatim inside the same section. */
+.ob-smart-insights-modal .ob-smart-insights-detail-section.is-impact .ob-smart-insights-impact-line .ob-smart-insights-impact-label {
+	display: none;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-section.is-impact .ob-smart-insights-impact-line {
+	background: var(--ob-si-high-soft);
+	border: 1px solid var(--ob-si-high-border);
+	border-left: 3px solid var(--ob-si-high);
+	border-radius: var(--ob-si-radius-md);
+	padding: var(--ob-si-space-3);
+}
+
+/* Impact facts: label-value rows on one shared baseline. */
+.ob-smart-insights-modal .ob-smart-insights-impact-facts {
+	display: grid;
+	gap: var(--ob-si-space-2);
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	list-style: none;
+	margin: var(--ob-si-space-3) 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-impact-facts li {
+	background: var(--ob-si-surface-muted);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	display: grid;
+	gap: 2px;
+	margin: 0;
+	padding: var(--ob-si-space-2) var(--ob-si-space-3);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-impact-facts li span {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-impact-facts li strong {
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-title);
+	font-variant-numeric: tabular-nums lining-nums;
+	font-weight: 700;
+}
+
+/* Related report card: white surface, green reserved for the state chip. */
+.ob-smart-insights-modal .ob-smart-insights-report-card.is-current,
+.ob-smart-insights-modal .ob-smart-insights-report-card.is-primary {
+	background: var(--ob-si-surface);
+	border-color: var(--ob-si-accent-border);
+}
+
+/* Sidebar surfaces: kill the warm tint, keep the quiet-column contrast.
+   Padding matters: these boxes carry a visible border, so without it the
+   section title sits flush against (and appears sliced by) the border. */
+.ob-smart-insights-modal .ob-smart-insights-detail-side .ob-smart-insights-detail-section {
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-border);
+	box-shadow: none;
+	padding: 12px 14px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-side .ob-smart-insights-action-callout {
+	background: var(--ob-si-success-surface);
+	border-color: var(--ob-si-success-border);
+	box-shadow: none;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-side .ob-smart-insights-report-card {
+	background: var(--ob-si-surface);
+	border-color: var(--ob-si-border);
+	box-shadow: none;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail-side a.ob-smart-insights-report-card.is-current {
+	border-color: var(--ob-si-accent-border);
+}

@@ -200,6 +200,7 @@
 		}
 		return {
 			funnelId: params.get('funnel_id') || '',
+			funnelStep: params.get('funnel_step') || '',
 			device: params.get('device') || params.get('device_type') || '',
 			source: params.get('source') || '',
 			campaign: params.get('campaign') || '',
@@ -230,9 +231,46 @@
 			state.customEndDateTime = ctx.cohortEndAt;
 		}
 		const validDevices = ['all', 'desktop', 'mobile', 'tablet'];
-		if (ctx.device && validDevices.indexOf(ctx.device) !== -1) {
-			state.device = ctx.device;
+		// Deep links carry the stored column casing ("Mobile"); the funnel state
+		// enum is lower-case, so match on the normalized form.
+		const device = String(ctx.device || '').trim().toLowerCase();
+		if (device && validDevices.indexOf(device) !== -1) {
+			state.device = device;
 		}
+	}
+
+	// URL param => funnel advanced-filters field, for links that arrive already
+	// scoped to a segment. Only fields the funnel query really filters by are
+	// read; everything else stays context-only.
+	const FUNNEL_INCOMING_FILTER_PARAMS = [
+		['device_type', 'device_type'],
+		['browser', 'browser'],
+		['country', 'country'],
+		['os', 'os'],
+		['utm_source', 'utm_source'],
+		['utm_campaign', 'utm_campaign'],
+		['utm_medium', 'utm_medium'],
+		['traffic_channel', 'traffic_channel'],
+		['visitor_type', 'visitor_type'],
+		['referrer', 'referrer'],
+		['entry_page', 'entry_page']
+	];
+
+	function readFunnelIncomingFilterScope() {
+		const scope = {};
+		let params;
+		try {
+			params = new URLSearchParams(window.location.search);
+		} catch (e) {
+			return scope;
+		}
+		FUNNEL_INCOMING_FILTER_PARAMS.forEach(function(pair) {
+			const value = ('' + (params.get(pair[0]) || '')).trim();
+			// Internal segment keys ("utm:google") are never column values.
+			if (value === '' || /^(utm|referrer|campaign):/i.test(value)) return;
+			scope[pair[1]] = value;
+		});
+		return scope;
 	}
 
 	// =========================================================================
@@ -1202,8 +1240,16 @@
 			const dropoutCenter = (iconCenterPx / barHeightPx) * 100;
 			const replayIcon = buildStepReplayIcon(funnelId, step.step_number, step.abandoned, dropoutCenter);
 
+			// Smart Insights evidence links carry the leaking step so the card
+			// that triggered the insight is visually anchored on arrival.
+			const isAnchoredStep = smartInsightsFunnelContext
+				&& String(smartInsightsFunnelContext.funnelId) === String(funnelId)
+				&& String(smartInsightsFunnelContext.funnelStep) !== ''
+				&& String(smartInsightsFunnelContext.funnelStep) === String(step.step_number);
+			const anchorClass = isAnchoredStep ? ' is-smart-insights-step' : '';
+
 			const stepHtml = `
-				<div class="funnel-step-card">
+				<div class="funnel-step-card${anchorClass}">
 					<div class="funnel-step-header">
 						<div class="step-circle">${step.step_number}</div>
 						<div class="step-title" title="${escapeHtml(step.step_name)}">${escapeHtml(step.step_name)}</div>
@@ -1671,7 +1717,50 @@
 				}
 			});
 		};
+
+		/**
+		 * Open the builder pre-filled with a recipe (spec.md §2.3 "Customize").
+		 *
+		 * The suggestions panel (assets/js/funnel-suggestions.js) hands over a
+		 * name, a description and the recipe's generated steps; everything else is
+		 * the normal "Build New Funnel" flow, so saving goes through the SAME
+		 * validation and save path as a hand-built funnel (the created row is then
+		 * `source = manual`, which is correct: the user edited it).
+		 *
+		 * @param {string} name        Pre-filled funnel name.
+		 * @param {string} description Pre-filled description.
+		 * @param {Array}  steps       Step objects { name, match_type, url_pattern }.
+		 */
+		window.optiFunnelOpenBuilderWithSteps = function(name, description, steps) {
+			editingFunnelId = null;
+			resetFunnelBuilder();
+			$('#funnel-builder-title').text(_s.buildNewFunnel || 'Build New Funnel');
+			$('#funnel-name').val(name || '').prop('disabled', false);
+			$('#funnel-description').val(description || '').prop('disabled', false);
+			if (Array.isArray(steps) && steps.length > 0) {
+				populateBuilderSteps({ steps: steps });
+			}
+			$('#save-funnel-builder').prop('disabled', false).text(_s.saveFunnel || 'Save Funnel');
+			$('#funnel-builder-modal').css('display', 'flex').addClass('show');
+		};
 	}
+
+	/**
+	 * Re-render the funnel list after an external mutation (a funnel created
+	 * from the suggestions panel). Returns false when the list markup is not on
+	 * the page (empty state) — the caller then has to reload so the server can
+	 * print it.
+	 *
+	 * @return {boolean} Whether the list was refreshed in place.
+	 */
+	window.optiFunnelRefreshList = function() {
+		if ($('#opti-funnel-list-container').length === 0) {
+			return false;
+		}
+		currentPage = 1;
+		loadFunnelsSummary();
+		return true;
+	};
 
 	// =========================================================================
 	// Funnel actions (edit / duplicate / delete / reset)
@@ -1931,6 +2020,10 @@
 		// Seed this funnel's period state (detail default = Last 30 Days, matches dashboard).
 		const state = getFunnelState(funnelId);
 		state.period = '30days';
+		// ...unless the URL arrived from a Smart Insights deep link carrying the
+		// cohort the insight was measured on. Overwriting it here would show a
+		// different window than the link promised.
+		applySmartInsightsFunnelDefaults();
 
 		setupFunnelDetailPeriod(funnelId);
 		if (advancedPro) {
@@ -1982,6 +2075,11 @@
 
 		// Pre-fill the date pickers for the seeded period on first render (like dashboard).
 		prefillFunnelDetailDates(state);
+		// Keep the period select on the seeded state. Without this a deep link
+		// carrying a custom cohort renders its dates while the control still
+		// reads "Last 30 Days". Default state is 30days, i.e. the markup's own
+		// selected option, so an ordinary load is unchanged.
+		$period.val(state.period);
 
 		// Date pickers + Apply stay ALWAYS visible (matches dashboard control bar).
 		// Non-custom period → reload immediately; custom → wait for Apply.
@@ -2096,6 +2194,12 @@
 					FUI.annotateStaticSelect('filter-traffic-channel', data.traffic_channels, 'value');
 					if (suggestInputs.entry_pages) suggestInputs.entry_pages.setItems(data.entry_pages);
 					if (suggestInputs.referrers) suggestInputs.referrers.setItems(data.referrers);
+					// populateSelect() rebuilds the options and only preserves
+					// picks by exact value, so a deep-link value that differs in
+					// case would be lost. Re-apply against the canonical options.
+					syncPanelToIncomingScope();
+					// The re-applied picks can change the active count.
+					refreshToggleBadge();
 				})
 				.catch(function() {
 					if (optionsSig === sig) optionsSig = '';
@@ -2111,19 +2215,93 @@
 		}
 		toggleBtn.addEventListener('click', function() { setPanelOpen(!isPanelOpen()); });
 
-		function updateToggleBadge(count) {
-			let badge = toggleBtn.querySelector('.filter-active-badge');
-			if (count > 0) {
-				if (!badge) {
-					badge = document.createElement('span');
-					badge.className = 'filter-active-badge';
-					toggleBtn.appendChild(badge);
-				}
-				badge.textContent = String(count);
-			} else if (badge) {
-				badge.remove();
-			}
+		// Active-filter counter on the Filters toggle, delegated to the shared
+		// badge module so every report screen shows the same "Filters (N)". The
+		// count is derived from the controls (a filter is active when it differs
+		// from its "All ..." default) plus the one scope that lives outside the
+		// panel: a custom analysis window, including the one a Smart Insights
+		// deep link carries.
+		const FB = window.OptiBehaviorFilterBadge || null;
+		const badgeFields = Object.keys(FUNNEL_FILTER_FIELD_IDS).map(function(field) {
+			return FUNNEL_FILTER_FIELD_IDS[field];
+		});
+
+		function customRangeActive() {
+			const periodEl = document.getElementById('funnel-detail-period');
+			return periodEl && periodEl.value === 'custom' ? 1 : 0;
 		}
+
+		function refreshToggleBadge() {
+			if (!FB) return 0;
+			return FB.render(toggleBtn, FB.countFields(badgeFields) + customRangeActive());
+		}
+
+		// Legacy signature kept for the existing call sites; the count argument is
+		// ignored now that the badge is recomputed from the controls.
+		function updateToggleBadge() {
+			return refreshToggleBadge();
+		}
+
+		badgeFields.forEach(function(id) {
+			const el = document.getElementById(id);
+			if (!el) return;
+			el.addEventListener('change', refreshToggleBadge);
+			el.addEventListener('input', refreshToggleBadge);
+		});
+		const periodSelect = document.getElementById('funnel-detail-period');
+		if (periodSelect) periodSelect.addEventListener('change', refreshToggleBadge);
+
+		// ---- Incoming deep-link scope ------------------------------------
+		// A Smart Insights funnel link can arrive already scoped to a segment.
+		// Show that scope in the panel AND apply it to the funnel query, so the
+		// report matches what the link promised. Values are matched
+		// case-insensitively (the link carries the internal key casing);
+		// MySQL's collation already matches either way, so this is only about
+		// the visible selection.
+		function selectFieldValue(el, value) {
+			if (!el || value === undefined || value === null || value === '') return;
+			const wanted = ('' + value).trim();
+			if (el.tagName !== 'SELECT') {
+				el.value = wanted;
+				return;
+			}
+			let match = null;
+			Array.prototype.forEach.call(el.options, function(o) {
+				if (!match && o.value !== '' && ('' + o.value).toLowerCase() === wanted.toLowerCase()) match = o;
+			});
+			if (!match) {
+				match = document.createElement('option');
+				match.value = wanted;
+				match.textContent = wanted;
+				el.appendChild(match);
+			}
+			if (el.multiple) {
+				match.selected = true;
+			} else {
+				el.value = match.value;
+			}
+			if (typeof el._obIconSync === 'function') el._obIconSync();
+		}
+
+		function syncPanelToIncomingScope() {
+			const scope = window.optiBehaviorFunnelIncomingFilterScope || {};
+			const fields = Object.keys(scope);
+			if (!fields.length) return false;
+			fields.forEach(function(field) {
+				if (!FUNNEL_FILTER_FIELD_IDS[field]) return;
+				selectFieldValue(document.getElementById(FUNNEL_FILTER_FIELD_IDS[field]), scope[field]);
+			});
+			return true;
+		}
+
+		window.optiBehaviorFunnelIncomingFilterScope = readFunnelIncomingFilterScope();
+		if (syncPanelToIncomingScope()) {
+			window.optiBehaviorFunnelAdvancedFilters = Object.assign({}, window.optiBehaviorFunnelIncomingFilterScope);
+			setPanelOpen(true);
+		}
+		// Runs unconditionally: a deep link can scope the funnel by analysis
+		// window alone (no segment), which still deserves a badge.
+		refreshToggleBadge();
 
 		const applyBtn = document.getElementById('apply-advanced-filters');
 		if (applyBtn) {

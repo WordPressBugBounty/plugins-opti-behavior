@@ -15,6 +15,52 @@ window.optiBehaviorCurrentForceRefreshFlag = window.optiBehaviorCurrentForceRefr
 // shared filter-UI module opti-behavior-filter-ui.js (enqueued as a
 // dependency of this file). Also exposed as OptiBehaviorFilterUI.browserIconSVG.
 
+// Smart Insights (and any other deep link) can arrive with the segment the
+// link promised already in the query string. Decode it into the advanced-
+// filters field names BEFORE the payload below is built, so the very first
+// widget request is scoped and the dashboard never renders site-wide data
+// under a link that said "Mobile". Only fields the dashboard can genuinely
+// filter by are read; unmapped params (page_id, insight_id, ...) stay
+// context-only. Empty object when no param is present, so an ordinary page
+// load behaves exactly as before.
+window.optiBehaviorIncomingFilterScope = window.optiBehaviorIncomingFilterScope || (function() {
+	// Incoming param => advanced-filters field. Order matters: the first
+	// param that carries a value wins for a given field, so the explicit
+	// destination-native name (device_type) beats the generic alias (device).
+	const INCOMING_FILTER_PARAMS = [
+		['device_type', 'device_type'],
+		['device', 'device_type'],
+		['browser', 'browser'],
+		['country', 'country'],
+		['os', 'os'],
+		['utm_source', 'utm_source'],
+		['utm_campaign', 'utm_campaign'],
+		['utm_medium', 'utm_medium'],
+		['traffic_channel', 'traffic_channel'],
+		['visitor_type', 'visitor_type'],
+		['referrer', 'referrer'],
+		['entry_page', 'entry_page'],
+		['exit_page', 'exit_page']
+	];
+	const scope = {};
+	let params;
+	try {
+		params = new URLSearchParams(window.location.search);
+	} catch (e) {
+		return scope;
+	}
+	INCOMING_FILTER_PARAMS.forEach(function(pair) {
+		if (Object.prototype.hasOwnProperty.call(scope, pair[1])) return;
+		const value = ('' + (params.get(pair[0]) || '')).trim();
+		// Internal segment keys ("utm:google", "campaign:x|y|z") are never
+		// column values; the link builder sends the decoded form alongside
+		// them, so anything still carrying the prefix is skipped here.
+		if (value === '' || value.indexOf(':') === 0 || /^(utm|referrer|campaign):/i.test(value)) return;
+		scope[pair[1]] = value;
+	});
+	return scope;
+})();
+
 // Advanced Filters panel state (FREE Analytics Dashboard "Filters" toggle).
 // Flat object of allow-listed field => scalar value, e.g. { browser: 'Chrome' }.
 // Empty object = unfiltered. Read by the widget loader below to append
@@ -22,7 +68,7 @@ window.optiBehaviorCurrentForceRefreshFlag = window.optiBehaviorCurrentForceRefr
 // of the current filters into each widget's cache/in-flight signature so a
 // filter change is always treated as a new request instead of reusing a
 // stale cached/in-flight response.
-window.optiBehaviorAdvancedFilters = window.optiBehaviorAdvancedFilters || {};
+window.optiBehaviorAdvancedFilters = window.optiBehaviorAdvancedFilters || Object.assign({}, window.optiBehaviorIncomingFilterScope);
 window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash || function() {
 	const filters = window.optiBehaviorAdvancedFilters || {};
 	const keys = Object.keys(filters).sort();
@@ -64,6 +110,22 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 				banner.className = 'smart-insights-context-chip';
 				banner.style.cssText = 'margin:12px 0;padding:10px 12px;border-radius:10px;background:#eef2ff;color:#3730a3;font-weight:600;';
 				banner.textContent = 'Smart Insights context: analytics opened for ' + contextLabel;
+				// Name the filters the link actually pre-applied. Field labels are
+				// read from the panel's own (already translated) <label> elements
+				// so this adds no new untranslated copy.
+				const applied = window.optiBehaviorIncomingFilterScope || {};
+				const appliedNames = Object.keys(applied).map(function(field) {
+					const id = window.optiBehaviorAdvancedFilterFieldIds && window.optiBehaviorAdvancedFilterFieldIds[field];
+					const label = id ? document.querySelector('label[for="' + id + '"]') : null;
+					return (label ? label.textContent.trim() : field) + ': ' + applied[field];
+				});
+				if (appliedNames.length) {
+					const note = document.createElement('span');
+					note.className = 'smart-insights-context-chip-filters';
+					note.style.cssText = 'display:block;margin-top:4px;font-weight:500;';
+					note.textContent = appliedNames.join(' · ');
+					banner.appendChild(note);
+				}
 				const target = document.querySelector('.wrap, .opti-behavior-dashboard, #wpbody-content') || document.body;
 				target.insertBefore(banner, target.firstChild);
 			}
@@ -3448,6 +3510,10 @@ x = Math.min(x, maxX);
 				utm_medium: 'filter-utm-medium'
 			};
 
+			// Exposed so the Smart Insights context chip can name the pre-applied
+			// filters using the panel's own translated <label> text.
+			window.optiBehaviorAdvancedFilterFieldIds = FIELD_IDS;
+
 			// Scope signature of the last successful options fetch. Options are
 			// count-annotated and scoped to the dashboard's date range + spam
 			// toggle, so a change in any of those must trigger a refetch the
@@ -3507,6 +3573,53 @@ x = Math.min(x, maxX);
 			enhanceIconSelect('filter-utm-source', 'utm');
 			enhanceIconSelect('filter-utm-medium', 'utm');
 
+			// ---- Incoming deep-link scope ------------------------------------
+			// window.optiBehaviorAdvancedFilters was already seeded from the URL
+			// at the top of this file (so the first widget request is scoped);
+			// what is left is to make the panel SHOW that scope, otherwise the
+			// UI reads "All ..." while the data is filtered. Values are matched
+			// case-insensitively against the live option list because the link
+			// carries the internal segment key casing ("mobile") while the
+			// column value is "Mobile"; MySQL's collation already matches both,
+			// so this is a label concern only.
+			function selectFieldValue(el, value) {
+				if (!el || value === undefined || value === null || value === '') return;
+				const wanted = ('' + value).trim();
+				if (el.tagName !== 'SELECT') {
+					el.value = wanted;
+					return;
+				}
+				let match = null;
+				Array.prototype.forEach.call(el.options, function(o) {
+					if (!match && o.value !== '' && ('' + o.value).toLowerCase() === wanted.toLowerCase()) match = o;
+				});
+				if (!match) {
+					// Option lists are capped/lazily loaded; keep the promised
+					// value visible instead of silently falling back to "All".
+					match = document.createElement('option');
+					match.value = wanted;
+					match.textContent = wanted;
+					el.appendChild(match);
+				}
+				if (el.multiple) {
+					match.selected = true;
+				} else {
+					el.value = match.value;
+				}
+				if (typeof el._obIconSync === 'function') el._obIconSync();
+			}
+
+			function syncPanelToIncomingScope() {
+				const scope = window.optiBehaviorIncomingFilterScope || {};
+				const fields = Object.keys(scope);
+				if (!fields.length) return false;
+				fields.forEach(function(field) {
+					if (!FIELD_IDS[field]) return;
+					selectFieldValue(document.getElementById(FIELD_IDS[field]), scope[field]);
+				});
+				return true;
+			}
+
 			// Populate every dropdown/datalist from live, count-aggregated data
 			// (option values chosen from real rows in the DB, labels annotated
 			// with per-option session counts: "Chrome (123)"). Fetched lazily on
@@ -3561,6 +3674,13 @@ x = Math.min(x, maxX);
 						populateSuggestions('entry_pages', data.entry_pages);
 						populateSuggestions('exit_pages', data.exit_pages);
 						populateSuggestions('referrers', data.referrers);
+						// populateSelect() rebuilds the option list and only
+						// preserves picks by exact value, so a deep-link value
+						// that differs in case would be dropped here. Re-apply
+						// it against the freshly populated, canonical options.
+						syncPanelToIncomingScope();
+						// The re-applied picks can change the active count.
+						refreshToggleBadge();
 					})
 					.catch(function() {
 						// Allow a retry on next panel open - but only if no newer
@@ -3585,19 +3705,52 @@ x = Math.min(x, maxX);
 				setPanelOpen(!isPanelOpen());
 			});
 
-			function updateToggleBadge(count) {
-				let badge = toggleBtn.querySelector('.filter-active-badge');
-				if (count > 0) {
-					if (!badge) {
-						badge = document.createElement('span');
-						badge.className = 'filter-active-badge';
-						toggleBtn.appendChild(badge);
-					}
-					badge.textContent = String(count);
-				} else if (badge) {
-					badge.remove();
-				}
+			// Active-filter counter on the Filters toggle. Counting is delegated to
+			// the shared badge module so every report screen shows the same
+			// "Filters (N)" affordance; the extra() below adds the one scope that
+			// lives OUTSIDE the panel: a custom analysis window (either picked in
+			// the toolbar or carried by a Smart Insights deep link).
+			const FB = window.OptiBehaviorFilterBadge || null;
+			const badgeFields = Object.keys(FIELD_IDS).map(function(field) { return FIELD_IDS[field]; });
+
+			function customRangeActive() {
+				const periodEl = document.getElementById('dashboard-period');
+				return periodEl && periodEl.value === 'custom' ? 1 : 0;
 			}
+
+			function refreshToggleBadge() {
+				if (!FB) return 0;
+				return FB.render(
+					toggleBtn,
+					FB.countFields(badgeFields) + customRangeActive()
+				);
+			}
+
+			// Legacy signature kept for the call sites below: the count argument is
+			// ignored because the badge is now derived from the controls themselves
+			// (a filter is "active" when it differs from its "All ..." default),
+			// which keeps the badge correct after Apply, Reset AND a deep-link
+			// arrival without three different counting rules.
+			function updateToggleBadge() {
+				return refreshToggleBadge();
+			}
+
+			// Recount as soon as any panel control changes, so the badge tracks the
+			// panel live instead of only after Apply.
+			badgeFields.forEach(function(id) {
+				const el = document.getElementById(id);
+				if (!el) return;
+				el.addEventListener('change', refreshToggleBadge);
+				el.addEventListener('input', refreshToggleBadge);
+			});
+
+			// A deep link arriving with a segment already applied opens the panel
+			// so the pre-applied values are visible without a click. No params =>
+			// nothing runs and the panel keeps its default closed/empty state.
+			if (syncPanelToIncomingScope()) {
+				setPanelOpen(true);
+			}
+			refreshToggleBadge();
 
 			// Since 1.8.1.2 the server computes ALL six daily_history series live
 			// when a filter is active (traffic from the filtered timeseries,

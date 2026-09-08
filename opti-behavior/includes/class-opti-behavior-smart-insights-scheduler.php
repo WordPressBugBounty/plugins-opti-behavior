@@ -29,6 +29,17 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 	const LOCK_TRANSIENT  = 'opti_behavior_smart_insights_scheduler_lock';
 
 	/**
+	 * Daily outcome-verification hook ("did the fix work?").
+	 *
+	 * Independent of the generation settings: an insight a human resolved still
+	 * deserves its before/after measurement even when automatic generation is
+	 * switched off, and the job is bounded to a small batch per run.
+	 *
+	 * @since 1.4.0
+	 */
+	const OUTCOME_HOOK = 'opti_behavior_smart_insights_outcome_check';
+
+	/**
 	 * Get default scheduler settings.
 	 *
 	 * @return array
@@ -164,6 +175,8 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 
 		$settings = is_array( $settings ) ? self::normalize_settings( $settings ) : self::get_settings();
 
+		self::ensure_outcome_check_scheduled();
+
 		if ( empty( $settings['enabled'] ) ) {
 			wp_clear_scheduled_hook( Opti_Behavior_Smart_Insights_Generator::CRON_HOOK );
 			wp_clear_scheduled_hook( self::BATCH_HOOK );
@@ -188,6 +201,73 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 		wp_clear_scheduled_hook( Opti_Behavior_Smart_Insights_Generator::CRON_HOOK );
 
 		return (bool) wp_schedule_event( self::get_first_run_timestamp( $settings ), $recurrence, Opti_Behavior_Smart_Insights_Generator::CRON_HOOK );
+	}
+
+	/**
+	 * Make sure the daily outcome-verification event exists.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return bool
+	 */
+	public static function ensure_outcome_check_scheduled() {
+		if ( wp_next_scheduled( self::OUTCOME_HOOK ) ) {
+			return true;
+		}
+
+		// Runs well after generation (03:45) so a same-day refresh has finished.
+		return (bool) wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', self::OUTCOME_HOOK );
+	}
+
+	/**
+	 * Run one bounded outcome-verification batch.
+	 *
+	 * Every failure mode degrades to a summary with `skipped`, never to a fatal
+	 * on a cron request.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param object|null $generator Optional generator override.
+	 * @return array Run summary.
+	 */
+	public static function run_outcome_check( $generator = null ) {
+		$summary = array(
+			'checked'      => 0,
+			'improved'     => 0,
+			'worse'        => 0,
+			'no_change'    => 0,
+			'inconclusive' => 0,
+			'skipped'      => 0,
+		);
+
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Outcome_Evaluator' ) ) {
+			$summary['skipped'] = 1;
+
+			return $summary;
+		}
+
+		try {
+			$evaluator = new Opti_Behavior_Smart_Insights_Outcome_Evaluator( null, self::get_generator( $generator ) );
+
+			/**
+			 * Filter the per-run outcome-check batch size.
+			 *
+			 * @since 1.4.0
+			 *
+			 * @param int $limit Rows measured per run.
+			 */
+			$limit = (int) apply_filters( 'opti_behavior_smart_insights_outcome_batch_limit', Opti_Behavior_Smart_Insights_Outcome_Evaluator::BATCH_LIMIT );
+
+			return $evaluator->run_check( array( 'limit' => $limit ) );
+		} catch ( Exception $e ) {
+			$summary['skipped'] = 1;
+
+			return $summary;
+		} catch ( Error $e ) {
+			$summary['skipped'] = 1;
+
+			return $summary;
+		}
 	}
 
 	/**

@@ -255,24 +255,100 @@
 		return '<time class="ob-si-notification-time"' + title + ' aria-label="' + escapeHtml((i18n.detected || 'Detected') + ': ' + (exact || visible)) + '">' + escapeHtml(visible) + '</time>';
 	}
 
+	function sanitizeToken(value, fallback) {
+		var token = String(value === null || value === undefined ? '' : value).toLowerCase().replace(/[^a-z0-9_-]/g, '');
+
+		return token || fallback;
+	}
+
+	// The enriched metric block is the card's headline answer: "how bad, compared
+	// to what". Every field is optional because older insights (and locked Pro
+	// previews) carry no comparison, so each piece degrades to nothing on its own
+	// instead of printing an empty row.
+	function renderItemMetric(item) {
+		var primary = item.primary_metric || null;
+		var secondary = item.secondary_metric || null;
+		var head = '';
+		var foot = '';
+
+		if (primary && primary.label && primary.value) {
+			var delta = primary.delta
+				? '<span class="ob-si-notification-delta is-' + escapeHtml(sanitizeToken(primary.sentiment, 'neutral')) + ' is-' + escapeHtml(sanitizeToken(primary.direction, 'flat')) + '"' +
+					(primary.hint ? ' title="' + escapeHtml(primary.hint) + '"' : '') + '>' + escapeHtml(primary.delta) + '</span>'
+				: '';
+
+			head = '<div class="ob-si-notification-metric-head">' +
+				'<span class="ob-si-notification-metric-label">' + escapeHtml(primary.label) + '</span>' +
+				'<span class="ob-si-notification-metric-value">' + escapeHtml(primary.value) + '</span>' +
+				delta +
+			'</div>';
+
+			if (primary.comparison) {
+				foot += '<span class="ob-si-notification-metric-baseline">' + escapeHtml(primary.comparison) + '</span>';
+			}
+		} else if (item.metric_label && item.metric_value) {
+			head = '<div class="ob-si-notification-metric-head">' +
+				'<span class="ob-si-notification-metric-label">' + escapeHtml(item.metric_label) + '</span>' +
+				'<span class="ob-si-notification-metric-value">' + escapeHtml(item.metric_value) + '</span>' +
+			'</div>';
+		}
+
+		if (secondary && secondary.label && secondary.value) {
+			foot += '<span class="ob-si-notification-metric-secondary">' + escapeHtml(secondary.label) + ' <strong>' + escapeHtml(secondary.value) + '</strong></span>';
+		}
+
+		if (!head && !foot) {
+			return '';
+		}
+
+		return '<div class="ob-si-notification-metric">' + head +
+			(foot ? '<div class="ob-si-notification-metric-foot">' + foot + '</div>' : '') +
+		'</div>';
+	}
+
+	function renderItemScores(item) {
+		var score = parseInt(item.priority_score, 10) || 0;
+		var html = '';
+
+		if (score > 0) {
+			html += '<span class="ob-si-notification-priority" title="' + escapeHtml(item.priority_score_aria || '') + '">' +
+				'<span class="ob-si-notification-priority-label">' + escapeHtml(i18n.priority || 'Priority') + '</span>' +
+				'<span class="ob-si-notification-priority-track" aria-hidden="true"><span class="ob-si-notification-priority-fill" style="width:' + Math.max(4, Math.min(100, score)) + '%"></span></span>' +
+				'<span class="ob-si-notification-priority-value">' + escapeHtml(item.priority_score_label || String(score)) + '</span>' +
+			'</span>';
+		}
+
+		if (item.confidence_label) {
+			html += '<span class="ob-si-notification-confidence">' + escapeHtml(i18n.confidence || 'Confidence') + ': <strong>' + escapeHtml(item.confidence_label) + '</strong></span>';
+		}
+
+		return html ? '<div class="ob-si-notification-scores">' + html + '</div>' : '';
+	}
+
 	function renderItem(item) {
-		var severity = String(item.severity || 'Low').toLowerCase().replace(/[^a-z0-9_-]/g, '');
-		var metric = item.metric_label && item.metric_value ? '<p class="ob-si-notification-metric"><span>' + escapeHtml(item.metric_label) + '</span><strong>' + escapeHtml(item.metric_value) + '</strong></p>' : '';
+		var severity = sanitizeToken(item.severity, 'low');
 		var locked = item.is_locked_preview ? '<span class="ob-si-notification-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>' : '';
 		var severityLabel = item.severity_label || item.severity || i18n.low || 'Low';
 		var statusLabel = item.status_label || item.status || i18n.statusNew || 'New';
+		var categoryLabel = item.category_label || item.category || '';
+		var category = categoryLabel ? '<span class="ob-si-notification-category">' + escapeHtml(categoryLabel) + '</span>' : '';
 
 		return '<article class="ob-si-notification-card is-' + escapeHtml(severity) + '">' +
 			'<div class="ob-si-notification-card-meta">' +
+				'<span class="ob-si-notification-pulse is-' + escapeHtml(severity) + '" aria-hidden="true"></span>' +
 				'<span class="ob-si-notification-severity">' + escapeHtml(severityLabel) + '</span>' +
-				'<span>' + escapeHtml(i18n.status || 'Status') + ': ' + escapeHtml(statusLabel) + '</span>' +
+				category +
+				'<span class="ob-si-notification-status" title="' + escapeHtml(i18n.status || 'Status') + '">' + escapeHtml(statusLabel) + '</span>' +
 				locked +
 				renderItemTime(item) +
 			'</div>' +
 			'<h3>' + escapeHtml(item.title || 'Smart Insight') + '</h3>' +
 			'<p class="ob-si-notification-entity">' + escapeHtml(item.entity_label || 'Site-wide') + '</p>' +
-			metric +
-			'<a class="ob-si-notification-open" href="' + escapeHtml(item.detail_url || '#') + '">' + escapeHtml(i18n.openInsight || 'Open insight') + '</a>' +
+			renderItemMetric(item) +
+			'<div class="ob-si-notification-card-foot">' +
+				renderItemScores(item) +
+				'<a class="ob-si-notification-open" href="' + escapeHtml(item.detail_url || '#') + '">' + escapeHtml(i18n.openInsight || 'Open insight') + '</a>' +
+			'</div>' +
 		'</article>';
 	}
 

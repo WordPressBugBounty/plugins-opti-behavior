@@ -65,6 +65,25 @@ class Opti_Behavior_AB_Test_Renderer {
 	private $ob_active = false;
 
 	/**
+	 * Whether this request is an ADMIN PREVIEW of a variant rather than a real
+	 * visit — i.e. the visual editor iframe (`opti_ab_visual_editor=1`) or the
+	 * heatmap variant preview (`opti_ab_preview_variant`).
+	 *
+	 * Both preview handlers force a specific variant into $current_variants,
+	 * bypassing the bucketer. The server therefore records no impression, but
+	 * without this flag output_variant_data_script() still emits a normal
+	 * `window.optiBehaviorAB` entry and ab-test-tracker.js records the
+	 * impression (and binds goal trackers) client-side — inflating the
+	 * previewed variant's audience with phantom admin rows, on running AND
+	 * draft tests alike. When true the emitted entries carry `preview: true`
+	 * so the tracker skips impression recording and goal binding.
+	 *
+	 * @since 1.9.0
+	 * @var bool
+	 */
+	private $preview_mode = false;
+
+	/**
 	 * Guards against re-running load_active_tests() on requests that produced
 	 * an empty $active_tests but a non-empty $goal_only_tests (where the legacy
 	 * `if ( ! empty( $this->active_tests ) ) return;` short-circuit would
@@ -100,6 +119,11 @@ class Opti_Behavior_AB_Test_Renderer {
 	 * @since 1.3.0
 	 */
 	public function init() {
+		// Admin preview iframes (builder + results variant cards): suppress
+		// client-side impression/goal tracking. Must run before every other
+		// template_redirect handler so the flag is set whatever path renders.
+		add_action( 'template_redirect', array( $this, 'flag_admin_preview_request' ), 0 );
+
 		// Heatmap variant preview: force-apply a specific variant in the heatmap iframe.
 		add_action( 'template_redirect', array( $this, 'handle_heatmap_variant_preview' ), 0 );
 
@@ -151,6 +175,48 @@ class Opti_Behavior_AB_Test_Renderer {
 	 *
 	 * @since 1.3.1
 	 */
+	/**
+	 * Flag the request as an ADMIN PREVIEW iframe (`opti_ab_admin_preview=1`).
+	 *
+	 * The A/B builder (step 3 variant cards) and the results page variant cards
+	 * embed the live target page in <iframe>s. The CONTROL card — and any card
+	 * whose variant has no stored changes — used to load the bare target URL,
+	 * i.e. an ordinary, fully tracked frontend request made from inside
+	 * wp-admin. The bucketer assigned the admin a variant and
+	 * ab-test-tracker.js recorded an impression; because the iframe then stays
+	 * open on the results screen, its time-based goals (time_on_page,
+	 * bounce_rate, and scroll_depth once the admin scrolled) fired conversions
+	 * too. Every visit to the results page therefore mutated the very numbers
+	 * it was displaying.
+	 *
+	 * Unlike the forced-variant previews this path must keep NORMAL bucketing
+	 * (the control card has to show the unmodified page as any visitor sees
+	 * it), so it only raises the preview flag: rendering is untouched, but
+	 * output_variant_data_script() marks the emitted entries and the tracker
+	 * records nothing.
+	 *
+	 * Capability-gated like the other preview handlers: a logged-out visitor
+	 * appending the parameter must not be able to opt out of being measured.
+	 *
+	 * @since 1.9.0
+	 */
+	public function flag_admin_preview_request() {
+		if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
+			return;
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( empty( $_GET['opti_ab_admin_preview'] ) ) {
+			return;
+		}
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		$this->preview_mode = true;
+	}
+
 	public function handle_heatmap_variant_preview() {
 		if ( is_admin() || wp_doing_ajax() || wp_doing_cron() ) {
 			return;
@@ -202,6 +268,10 @@ class Opti_Behavior_AB_Test_Renderer {
 
 		// Force this variant into current_variants — bypasses the bucketer.
 		$this->current_variants[ $test_id ] = $target_variant;
+
+		// Admin preview, not a real visit: the frontend tracker must not record
+		// an impression or bind goal trackers for this forced assignment.
+		$this->preview_mode = true;
 
 		// Ensure the test is in the active_tests array.
 		$opti_behavior_found = false;
@@ -286,6 +356,12 @@ class Opti_Behavior_AB_Test_Renderer {
 		// Pre-populate current_variants — get_current_variant() returns this
 		// immediately without calling the bucketer, so no impression is recorded.
 		$this->current_variants[ $test_id ] = $target_variant;
+
+		// ...but the CLIENT-side tracker would still record one from the
+		// emitted window.optiBehaviorAB entry. Flag the request as a preview so
+		// output_variant_data_script() marks the entry and ab-test-tracker.js
+		// skips impression recording and goal binding inside the editor iframe.
+		$this->preview_mode = true;
 
 		// Ensure this test is in active_tests so content filters apply correctly.
 		$opti_behavior_found = false;
@@ -1189,12 +1265,26 @@ class Opti_Behavior_AB_Test_Renderer {
 
 		$data = array();
 		foreach ( $this->current_variants as $test_id => $variant ) {
-			$data[] = array(
+			$opti_behavior_entry = array(
 				'test_id'    => (int) $test_id,
 				'variant_id' => (int) $variant->id,
 				'is_control' => (bool) $variant->is_control,
 				'sort_order' => (int) $variant->sort_order,
 			);
+
+			// Admin preview (visual editor iframe / heatmap variant preview):
+			// the variant was FORCED, not bucketed. Mark the entry so
+			// ab-test-tracker.js skips the impression and the goal trackers.
+			// Without this, every visual-editor session adds a phantom
+			// impression for the edited variant only — never for Control —
+			// which permanently skews the element test's audience and
+			// conversion rate (and pollutes DRAFT tests too, since the preview
+			// handlers load the test regardless of status).
+			if ( $this->preview_mode ) {
+				$opti_behavior_entry['preview'] = true;
+			}
+
+			$data[] = $opti_behavior_entry;
 		}
 
 		// DEF-AB-PV-FIX: Emit a "goal_only" entry for each test whose

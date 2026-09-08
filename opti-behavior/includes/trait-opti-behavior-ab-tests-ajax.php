@@ -756,6 +756,16 @@ trait Opti_Behavior_AB_Tests_Ajax {
 		unset( $test_input['min_duration_days'] );
 		unset( $test_input['traffic_percentage'] );
 
+		// Smart Insights origin link. The builder carries it when the test was
+		// started from an insight story; it is written once and never cleared by
+		// a later wizard save so the learning loop keeps its back-reference.
+		$opti_ab_origin_insight_id = isset( $test_input['origin_insight_id'] ) ? absint( $test_input['origin_insight_id'] ) : 0;
+		if ( $opti_ab_origin_insight_id > 0 ) {
+			$test_input['origin_insight_id'] = $opti_ab_origin_insight_id;
+		} else {
+			unset( $test_input['origin_insight_id'] );
+		}
+
 		// Create or update test.
 		if ( $test_id ) {
 			$result = $manager->update_test( $test_id, $test_input );
@@ -913,6 +923,23 @@ trait Opti_Behavior_AB_Tests_Ajax {
 					'test_id' => $test_id,
 				) );
 			}
+		}
+
+		if ( $opti_ab_origin_insight_id > 0 && $test_id > 0 ) {
+			/**
+			 * Fires when an A/B test is saved from a Smart Insight story.
+			 *
+			 * Lets the Smart Insights layer write the reciprocal experiment link
+			 * (`experiment_json.test_id`) on the originating insight row.
+			 *
+			 * @since 1.3.9
+			 *
+			 * @param int   $test_id    Saved test ID.
+			 * @param int   $insight_id Originating Smart Insight ID.
+			 * @param array $test_input Sanitized test fields that were saved.
+			 * @param bool  $launched   Whether the test was launched by this save.
+			 */
+			do_action( 'opti_behavior_ab_test_linked_to_insight', $test_id, $opti_ab_origin_insight_id, $test_input, (bool) $should_launch );
 		}
 
 		// DEF-AB-017/018/019 fix: release the per-test-id save lock before responding.
