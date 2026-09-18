@@ -3,7 +3,7 @@
  * Plugin Name: Opti-Behavior – Self-Hosted Heatmaps, Session Recordings, Funnels, A/B Testing & Smart Insights
  * Plugin URI:  https://optiuser.com/
  * Description: Self-hosted heatmaps, funnels, A/B WooCommerce testing, behavior analytics & Smart Insights for WordPress. Own your data and optimize what users do.
- * Version:     1.9.0.7
+ * Version:     1.9.1
  * Author:      OptiUser
  * Author URI:  https://optiuser.com/
  * License:     GPLv2 or later
@@ -81,7 +81,7 @@ if ( defined( 'OPTI_BEHAVIOR_HEATMAP' ) ) {
 }
 
 // Define plugin constants.
-define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.9.0.7' );
+define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.9.1' );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR', OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'includes/' );

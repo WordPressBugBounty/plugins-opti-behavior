@@ -249,6 +249,13 @@ class Opti_Behavior_Heatmap_Engagement_Counters {
 		if ( ! defined( 'OPTI_BEHAVIOR_PRO_VERSION' ) ) {
 			return true;
 		}
+		// Capability flag: the consolidated Pro 1.9.1 release reads the counters
+		// but sorts below MIN_PRO_VERSION (the internal build that introduced
+		// them), and an older Pro also numbered 1.9.1 does not — only the flag
+		// tells them apart.
+		if ( defined( 'OPTI_BEHAVIOR_PRO_ENGAGEMENT_COUNTERS' ) && OPTI_BEHAVIOR_PRO_ENGAGEMENT_COUNTERS ) {
+			return true;
+		}
 		return self::is_pro_version_compatible( OPTI_BEHAVIOR_PRO_VERSION );
 	}
 
