@@ -528,9 +528,23 @@ class Opti_Behavior_Heatmap_Core {
 	private function init_hooks() {
 		add_action( 'admin_init', array( $this, 'admin_init' ) );
 		add_action( 'opti_behavior_heatmap_cron_daily', array( $this, 'opti_behavior_heatmap_cron_daily' ) );
+		add_action( 'opti_behavior_files_tier_continue', array( $this, 'run_heavy_files_tier' ) );
+		add_action( 'opti_behavior_recording_fallback_continue', array( $this, 'run_recording_files_fallback' ) );
+		add_action( 'opti_behavior_spam_tier_run', array( $this, 'run_daily_spam_tier' ) );
+		add_action( 'opti_behavior_db_size_cap_run', array( 'Opti_Behavior_DB_Size_Cap', 'run_tick' ) );
+		add_action( 'opti_behavior_db_schema_migration_run', array( 'Opti_Behavior_DB_Schema_Migration', 'run_tick' ) );
+		// 1.9.5: heatmaps only for pages that matter + one-time archive-page prune.
+		if ( class_exists( 'Opti_Behavior_Heatmap_Page_Type_Prune' ) ) {
+			Opti_Behavior_Heatmap_Page_Type_Prune::register_hooks();
+		}
+		add_action( Opti_Behavior_Heatmap_Engagement_Counters::TICK_HOOK, array( 'Opti_Behavior_Heatmap_Engagement_Counters', 'run_tick' ) );
 		add_action( 'opti_behavior_aggregate_daily_stats', array( $this, 'aggregate_daily_stats' ) );
 		add_action( 'opti_behavior_send_scheduled_reports', array( $this, 'process_scheduled_reports' ) );
 		add_action( 'opti_behavior_scheduled_smart_cleanup', array( $this, 'run_scheduled_smart_cleanup' ) );
+		// Cleanup Tasks run tracker: every run of a registry task hook (cron or
+		// "Run now") ends in one Cleanup History entry with its stats. Late
+		// init so Pro has appended its rows through the registry filter.
+		add_action( 'init', array( 'Opti_Behavior_Cleanup_Task_Registry', 'maybe_register_run_tracking' ), 99 );
 		// Backup cron for the 3-hour debug auto-disable (lazy check in the
 		// debug manager constructor remains authoritative on every request).
 		add_action( Opti_Behavior_Heatmap_Debug_Manager::AUTO_DISABLE_CRON_HOOK, array( $this->debug_manager, 'handle_auto_disable_event' ) );
@@ -712,6 +726,13 @@ class Opti_Behavior_Heatmap_Core {
 			// (guarded by an option flag) so it is safe to call on every admin_init.
 			$this->database->migrate_null_ip_to_anonymous();
 
+			// One-time data migration: re-normalise url2 (strip srsltid/gbraid/... +
+			// trailing slash) so one physical page stops splitting into several
+			// page rows. Idempotent (guarded by an option flag).
+			if ( method_exists( $this->database, 'migrate_url2_canonical_normalization' ) ) {
+				$this->database->migrate_url2_canonical_normalization();
+			}
+
 			// One-time data migration: backfill empty/NULL page titles (e.g. from older
 			// Pro session-recording stub inserts) so they no longer render as
 			// "Untitled Page". Idempotent (guarded by an option flag).
@@ -851,6 +872,17 @@ class Opti_Behavior_Heatmap_Core {
 
 			// Self-heal the scheduled report worker when report schedules exist.
 			$this->ensure_scheduled_reports_cron( true );
+
+			// Keep the Conditional Cleanup cron event in sync with the saved
+			// "Enable automatic cleanup" flag. Deactivation clears every plugin
+			// cron hook and reactivation only re-arms this one on a FRESH
+			// install, so an enabled install could otherwise sit with no event
+			// behind a checked box. Never touches the admin's settings; only
+			// arms/clears the event to match them. Cheap: one option read + one
+			// cron-array read.
+			if ( $this->database && method_exists( $this->database, 'ensure_scheduled_smart_cleanup_cron' ) ) {
+				$this->database->ensure_scheduled_smart_cleanup_cron();
+			}
 
 		// Register scripts and styles
 		$this->register_assets();
@@ -1116,6 +1148,18 @@ class Opti_Behavior_Heatmap_Core {
 			$this->dashboard->maybe_schedule_heatmap_rebuild_migration();
 		}
 
+		// Engagement counters (1.9.2): zero-touch schema seed for sites whose
+		// wp-admin is never opened (database->setup() only runs on admin
+		// requests), then resume backfill / legacy scroll-move row purge if a
+		// one-off tick was lost (also re-arms after a Pro update flips the
+		// lean-mode gate open).
+		if ( class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' ) && ! Opti_Behavior_Heatmap_Engagement_Counters::columns_ready() ) {
+			Opti_Behavior_Heatmap_Engagement_Counters::ensure_schema();
+		}
+		if ( class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' ) ) {
+			Opti_Behavior_Heatmap_Engagement_Counters::maybe_schedule_tick( 30 );
+		}
+
 		// Self-serve heatmap index backfill (Task 1) for sites whose wp-admin is
 		// never opened: same detection/arming as admin_init, so the agg_*/daily
 		// index backlog still converges with zero manual steps.
@@ -1137,6 +1181,15 @@ class Opti_Behavior_Heatmap_Core {
 		// event — smaller cron-table footprint, nothing new to unschedule on
 		// deactivate/uninstall). Both are bounded-batch.
 		$this->run_daily_tiered_retention();
+
+		// 1.9.3: size caps (oldest raw rows first) then schema upkeep
+		// (redundant index drop, InnoDB conversion, OPTIMIZE reclaim).
+		if ( class_exists( 'Opti_Behavior_DB_Size_Cap' ) ) {
+			Opti_Behavior_DB_Size_Cap::run_tick();
+		}
+		if ( class_exists( 'Opti_Behavior_DB_Schema_Migration' ) ) {
+			Opti_Behavior_DB_Schema_Migration::run_tick();
+		}
 
 		$this->database->cleanup_pages();
 		if ( $this->debug_manager ) {
@@ -1167,46 +1220,33 @@ class Opti_Behavior_Heatmap_Core {
 	 */
 	public function run_daily_tiered_retention() {
 		$summary = array(
-			'spam_sessions_deleted'  => 0,
-			'heatmap_files_archived' => 0,
-			'aggregate_rows_pruned'  => 0,
+			'spam_sessions_deleted'   => 0,
+			'heatmap_files_archived'  => 0,
+			'heatmap_files_capped'    => false,
+			'recording_files_deleted' => 0,
+			'aggregate_rows_pruned'   => 0,
 		);
 
 		if ( ! class_exists( 'Opti_Behavior_Retention_Policy' ) ) {
 			return $summary;
 		}
 
-		// --- 1. Spam/bot tier: daily bounded cascade purge. ---
-		if ( Opti_Behavior_Retention_Policy::is_spam_daily_enabled()
-			&& class_exists( 'Opti_Behavior_Smart_Cleanup_Service' ) ) {
-			$service = new Opti_Behavior_Smart_Cleanup_Service();
-			if ( method_exists( $service, 'run_daily_spam_cleanup' ) ) {
-				$spam_result                      = $service->run_daily_spam_cleanup();
-				$summary['spam_sessions_deleted'] = isset( $spam_result['sessions_deleted'] ) ? absint( $spam_result['sessions_deleted'] ) : 0;
-			}
-		}
+		// --- 1. Spam/bot tier: daily bounded cascade purge (own task row +
+		// continuation while capped, see run_daily_spam_tier()). ---
+		$spam_result                      = $this->run_daily_spam_tier();
+		$summary['spam_sessions_deleted'] = $spam_result['sessions_deleted'];
 
 		// --- 2. Heavy-files tier: heatmap raw files (archive, never delete). ---
-		$files_days = Opti_Behavior_Retention_Policy::get_effective_files_retention_days();
-		$raw_days   = Opti_Behavior_Retention_Policy::get_raw_retention_days();
-		// Only needed when files expire EARLIER than the DB cascade would
-		// remove them anyway (files < raw, or raw disabled while files set).
-		$files_expire_early = $files_days > 0 && ( $raw_days < 1 || $files_days < $raw_days );
-		if ( $files_expire_early && class_exists( 'Opti_Behavior_Heatmap_Storage' ) ) {
-			$storage = Opti_Behavior_Heatmap_Storage::get_instance();
-			if ( method_exists( $storage, 'archive_heatmap_files_older_than' ) ) {
-				$cutoff_ts = time() - ( $files_days * DAY_IN_SECONDS );
-				/**
-				 * Bound the number of heatmap files archived per daily tick.
-				 *
-				 * @since 1.9.1
-				 * @param int $max_files Max files moved per run.
-				 */
-				$max_files = absint( apply_filters( 'opti_behavior_files_tier_max_files_per_run', 2000 ) );
-				$result    = $storage->archive_heatmap_files_older_than( $cutoff_ts, $max_files );
-				$summary['heatmap_files_archived'] = isset( $result['archived'] ) ? absint( $result['archived'] ) : 0;
-			}
-		}
+		$files_tier                        = $this->run_heavy_files_tier();
+		$summary['heatmap_files_archived'] = $files_tier['archived'];
+		$summary['heatmap_files_capped']   = $files_tier['capped'];
+
+		// --- 2b. Recording files fallback (Pro inactive / license-gated). ---
+		// The Pro archiver owns recordings/ retention. When nothing is attached
+		// to its cron hook the files would otherwise outlive the files window
+		// until the raw cascade (or forever with raw retention = 0).
+		$fallback                           = $this->run_recording_files_fallback();
+		$summary['recording_files_deleted'] = $fallback['deleted'];
 
 		// --- 3. Optional aggregates cap (default 0 = kept FOREVER). ---
 		$agg_months = Opti_Behavior_Retention_Policy::get_aggregates_retention_months();
@@ -1215,6 +1255,177 @@ class Opti_Behavior_Heatmap_Core {
 		}
 
 		return $summary;
+	}
+
+	/**
+	 * Heavy-files tier pass: archive heatmap JSON older than the files window.
+	 *
+	 * Bounded per call (file cap + time budget, resume cursor inside the
+	 * storage helper). While a pass is capped a one-off continuation runs a
+	 * minute later, so busy sites drain the backlog the same day instead of
+	 * falling further behind at a fixed number of files per day.
+	 *
+	 * @since 2026-09-13
+	 * @return array{archived:int,capped:bool}
+	 */
+	public function run_heavy_files_tier() {
+		$result = array(
+			'archived' => 0,
+			'capped'   => false,
+		);
+
+		if ( ! class_exists( 'Opti_Behavior_Retention_Policy' ) || ! class_exists( 'Opti_Behavior_Heatmap_Storage' ) ) {
+			return $result;
+		}
+
+		$files_days = Opti_Behavior_Retention_Policy::get_effective_files_retention_days();
+		$raw_days   = Opti_Behavior_Retention_Policy::get_raw_retention_days();
+		// Only needed when files expire EARLIER than the DB cascade would
+		// remove them anyway (files < raw, or raw disabled while files set).
+		$files_expire_early = $files_days > 0 && ( $raw_days < 1 || $files_days < $raw_days );
+		if ( ! $files_expire_early ) {
+			return $result;
+		}
+
+		$storage = Opti_Behavior_Heatmap_Storage::get_instance();
+		if ( ! method_exists( $storage, 'archive_heatmap_files_older_than' ) ) {
+			return $result;
+		}
+
+		$cutoff_ts = time() - ( $files_days * DAY_IN_SECONDS );
+		/**
+		 * Bound the number of heatmap files archived per call.
+		 *
+		 * @since 1.9.1
+		 * @param int $max_files Max files moved per run.
+		 */
+		$max_files = absint( apply_filters( 'opti_behavior_files_tier_max_files_per_run', 2000 ) );
+		$archive   = $storage->archive_heatmap_files_older_than( $cutoff_ts, $max_files );
+
+		$result['archived'] = isset( $archive['archived'] ) ? absint( $archive['archived'] ) : 0;
+		$result['capped']   = ! empty( $archive['capped'] );
+
+		if ( $result['capped'] && ! wp_next_scheduled( 'opti_behavior_files_tier_continue' ) ) {
+			wp_schedule_single_event( time() + MINUTE_IN_SECONDS, 'opti_behavior_files_tier_continue' );
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Recording-files retention fallback: delete `recordings/` files older
+	 * than the effective files window when NO handler is attached to the Pro
+	 * archiver hook (`opti_behavior_cleanup_old_files`) — i.e. Pro is
+	 * deactivated, or its runtime was skipped (license gate closed, memory
+	 * guard) before the archiver could be wired.
+	 *
+	 * Skips itself whenever the Pro archiver is live, so the two never race
+	 * on the same tree. Bounded per call; while capped a one-off continuation
+	 * runs a minute later so a big backlog drains the same day.
+	 *
+	 * No DB stubbing here: Free's raw cascade removes the rows on its own
+	 * window, and a re-activated Pro archiver stubs by date on its next run.
+	 *
+	 * @since 1.9.x (Cleanup audit 2026-09-13)
+	 * @return array{deleted:int,bytes:int,capped:bool,skipped:string}
+	 */
+	public function run_recording_files_fallback() {
+		$result = array(
+			'deleted' => 0,
+			'bytes'   => 0,
+			'capped'  => false,
+			'skipped' => '',
+		);
+
+		if ( has_action( 'opti_behavior_cleanup_old_files' ) ) {
+			$result['skipped'] = 'pro_archiver_active';
+			return $result;
+		}
+		if ( ! class_exists( 'Opti_Behavior_Retention_Policy' ) ) {
+			$result['skipped'] = 'no_policy';
+			return $result;
+		}
+		$files_days = Opti_Behavior_Retention_Policy::get_effective_files_retention_days();
+		if ( $files_days < 1 ) {
+			$result['skipped'] = 'retention_disabled';
+			return $result;
+		}
+
+		$storage = $this->file_storage;
+		if ( ! $storage && class_exists( 'Opti_Behavior_Heatmap_File_Storage' ) ) {
+			$storage = new Opti_Behavior_Heatmap_File_Storage( $this->debug_manager );
+		}
+		if ( ! $storage || ! method_exists( $storage, 'delete_recording_files_older_than' ) ) {
+			$result['skipped'] = 'no_storage';
+			return $result;
+		}
+
+		// Same clock as the recordings/{Y/m/d/H} partition (current_time).
+		$cutoff = current_time( 'timestamp' ) - ( $files_days * DAY_IN_SECONDS );
+		$sweep  = $storage->delete_recording_files_older_than(
+			$cutoff,
+			array(
+				'max_dirs'    => absint( apply_filters( 'opti_behavior_recording_fallback_max_dirs', 200 ) ),
+				'time_budget' => (float) apply_filters( 'opti_behavior_recording_fallback_time_budget', 20 ),
+			)
+		);
+		$result['deleted'] = isset( $sweep['deleted'] ) ? absint( $sweep['deleted'] ) : 0;
+		$result['bytes']   = isset( $sweep['bytes'] ) ? absint( $sweep['bytes'] ) : 0;
+		$result['capped']  = ! empty( $sweep['capped'] );
+
+		if ( $result['capped'] && ! wp_next_scheduled( 'opti_behavior_recording_fallback_continue' ) ) {
+			wp_schedule_single_event( time() + MINUTE_IN_SECONDS, 'opti_behavior_recording_fallback_continue' );
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Spam/bot tier pass: the automatic twin of the "Clean Bot/Spam Traffic"
+	 * button. Same selection (every session whose traffic_type is in the
+	 * shared Traffic Behavior bot set), same cascade (rows + recording and
+	 * heatmap files), bounded per call. The only deliberate difference: the
+	 * bot-visit LOG table is pruned at 30 days instead of truncated, so the
+	 * dashboard keeps its recent bot history.
+	 *
+	 * Runs inside the daily tiered pass AND on its own one-off hook
+	 * `opti_behavior_spam_tier_run` (Cleanup Tasks "Run now" + continuation
+	 * while a pass is capped), so a bot flood larger than one run's cap
+	 * drains the same day instead of accumulating.
+	 *
+	 * @since 1.9.x (Cleanup audit 2026-09-13)
+	 * @return array{sessions_deleted:int,capped:bool,skipped:string}
+	 */
+	public function run_daily_spam_tier() {
+		$result = array(
+			'sessions_deleted' => 0,
+			'capped'           => false,
+			'skipped'          => '',
+		);
+
+		if ( ! class_exists( 'Opti_Behavior_Retention_Policy' ) || ! class_exists( 'Opti_Behavior_Smart_Cleanup_Service' ) ) {
+			$result['skipped'] = 'missing_class';
+			return $result;
+		}
+		if ( ! Opti_Behavior_Retention_Policy::is_spam_daily_enabled() ) {
+			$result['skipped'] = 'disabled';
+			return $result;
+		}
+		$service = new Opti_Behavior_Smart_Cleanup_Service();
+		if ( ! method_exists( $service, 'run_daily_spam_cleanup' ) ) {
+			$result['skipped'] = 'no_service';
+			return $result;
+		}
+
+		$spam_result                = $service->run_daily_spam_cleanup();
+		$result['sessions_deleted'] = isset( $spam_result['sessions_deleted'] ) ? absint( $spam_result['sessions_deleted'] ) : 0;
+		$result['capped']           = ! empty( $spam_result['capped'] ) && empty( $spam_result['aborted'] );
+
+		if ( $result['capped'] && ! wp_next_scheduled( 'opti_behavior_spam_tier_run' ) ) {
+			wp_schedule_single_event( time() + MINUTE_IN_SECONDS, 'opti_behavior_spam_tier_run' );
+		}
+
+		return $result;
 	}
 
 	/**
@@ -1579,6 +1790,12 @@ class Opti_Behavior_Heatmap_Core {
 	 */
 	public function ab_cleanup_old_data() {
 		if ( ! class_exists( 'Opti_Behavior_AB_Test_Database' ) ) {
+			Opti_Behavior_Cleanup_Task_Registry::report_run(
+				array(
+					'status' => 'skipped',
+					'note'   => __( 'A/B testing is not loaded — nothing was deleted.', 'opti-behavior' ),
+				)
+			);
 			return;
 		}
 
@@ -1587,12 +1804,33 @@ class Opti_Behavior_Heatmap_Core {
 		// the master raw retention setting now drives A/B raw cleanup.
 		$retention_days = Opti_Behavior_Retention_Policy::get_raw_retention_days();
 		if ( $retention_days < 1 ) {
+			Opti_Behavior_Cleanup_Task_Registry::report_run(
+				array(
+					'status' => 'skipped',
+					'note'   => __( 'Data retention is set to keep data forever — no A/B data was deleted.', 'opti-behavior' ),
+				)
+			);
 			return; // Retention disabled — keep raw A/B data.
 		}
 
 		$this->debug_manager->log( sprintf( 'Running A/B data cleanup (retention: %d days)', $retention_days ), 'info', 'ab-cron' );
-		$deleted = Opti_Behavior_AB_Test_Database::cleanup_old_data( $retention_days );
+		$rows_by_table = Opti_Behavior_AB_Test_Database::cleanup_old_data_by_table( $retention_days );
+		$deleted       = array_sum( $rows_by_table );
 		$this->debug_manager->log( sprintf( 'A/B cleanup deleted %d rows', $deleted ), 'info', 'ab-cron' );
+
+		Opti_Behavior_Cleanup_Task_Registry::report_run(
+			array(
+				'status'         => 'completed',
+				'events_deleted' => $deleted,
+				'rows_by_table'  => $rows_by_table,
+				'note'           => sprintf(
+					/* translators: 1: rows deleted, 2: retention window in days */
+					__( '%1$d raw A/B row(s) older than %2$d days deleted; aggregated results kept.', 'opti-behavior' ),
+					$deleted,
+					$retention_days
+				),
+			)
+		);
 	}
 
 	public function process_scheduled_reports() {
@@ -1949,6 +2187,8 @@ class Opti_Behavior_Heatmap_Core {
 			'opti_behavior_ab_aggregate_daily',              // A/B Testing daily aggregation.
 			'opti_behavior_ab_auto_winner_check',            // A/B Testing hourly auto-winner check.
 			'opti_behavior_ab_cleanup',                      // A/B Testing daily cleanup.
+			'opti_behavior_db_size_cap_run',             // 'opti_behavior_db_size_cap_run' (one-off, run-now + continuation).
+			'opti_behavior_db_schema_migration_run',     // 'opti_behavior_db_schema_migration_run' (one-off).
 			'opti_behavior_daily_heartbeat',                 // Free tracker daily heartbeat.
 			// --- One-off events ---------------------------------------------------
 			'opti_behavior_debug_auto_disable',              // Opti_Behavior_Heatmap_Debug_Manager::AUTO_DISABLE_CRON_HOOK.
@@ -1964,6 +2204,15 @@ class Opti_Behavior_Heatmap_Core {
 			'opti_behavior_heavy_migrations',                // Opti_Behavior_Heatmap_Database::HEAVY_MIGRATIONS_CRON_HOOK.
 			'opti_behavior_dimension_backfill',              // Opti_Behavior_Dimension_Aggregates::BACKFILL_HOOK.
 			'opti_behavior_deep_integrity_check',            // Opti_Behavior_Heatmap_Data_Protection::DEEP_CHECK_CRON_HOOK.
+			'opti_behavior_files_tier_continue',             // Heavy-files tier continuation (run_heavy_files_tier()).
+			'opti_behavior_recording_fallback_continue',     // Recording-files fallback continuation (run_recording_files_fallback()).
+			'opti_behavior_spam_tier_run',                   // Spam/bot tier run-now + continuation (run_daily_spam_tier()).
+			'opti_behavior_engagement_counters_tick',        // Opti_Behavior_Heatmap_Engagement_Counters::TICK_HOOK (backfill + purge).
+			'opti_behavior_page_type_prune_run',             // 1.9.5 archive-page prune run-now + continuation.
+			'opti_behavior_page_type_prune_restore',         // 1.9.5 archive-page prune restore pass.
+			'opti_behavior_page_type_prune_purge',           // 1.9.5 archive-page prune purge pass.
+			'opti_behavior_heatmap_migration_batch',         // Heatmap file-storage migration batch worker.
+			'opti_behavior_recording_orphan_sweep',          // Orphaned recording-file sweep (scheduled by Pro, cleared by Free).
 		);
 
 		/**
@@ -2008,6 +2257,12 @@ class Opti_Behavior_Heatmap_Core {
 		$settings = get_option( 'opti_behavior_auto_cleanup_settings', array() );
 
 		if ( empty( $settings['enabled'] ) ) {
+			Opti_Behavior_Cleanup_Task_Registry::report_run(
+				array(
+					'status' => 'skipped',
+					'note'   => __( 'Automatic cleanup is turned off — nothing was deleted.', 'opti-behavior' ),
+				)
+			);
 			return;
 		}
 
@@ -2018,7 +2273,15 @@ class Opti_Behavior_Heatmap_Core {
 			'weekly'  => 7 * DAY_IN_SECONDS,
 			'monthly' => 30 * DAY_IN_SECONDS,
 		);
-		if ( $last_run > 0 && ( time() - $last_run ) < $intervals[ $frequency ] ) {
+		// One hour of grace: the daily event fires ~24h after the previous
+		// run finished, which a strict comparison skipped every other day.
+		if ( $last_run > 0 && ( time() - $last_run ) < ( $intervals[ $frequency ] - HOUR_IN_SECONDS ) ) {
+			Opti_Behavior_Cleanup_Task_Registry::report_run(
+				array(
+					'status' => 'skipped',
+					'note'   => __( 'Not due yet for the configured frequency — nothing was deleted.', 'opti-behavior' ),
+				)
+			);
 			return;
 		}
 

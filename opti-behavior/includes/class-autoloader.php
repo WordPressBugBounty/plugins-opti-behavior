@@ -42,6 +42,9 @@ class Opti_Behavior_Heatmap_Autoloader {
 		'Opti_Behavior_Heatmap_Options'         => 'includes/class-opti-behavior-heatmap-options.php',
 		'Opti_Behavior_Heatmap_Database'        => 'includes/class-opti-behavior-heatmap-database.php',
 		'Opti_Behavior_Heatmap_DB_Lock'         => 'includes/class-opti-behavior-heatmap-db-lock.php',
+		'Opti_Behavior_DB_Size_Cap'             => 'includes/class-opti-behavior-db-size-cap.php',
+		'Opti_Behavior_DB_Schema_Migration'     => 'includes/class-opti-behavior-db-schema-migration.php',
+		'Opti_Behavior_Heatmap_Page_Type_Prune' => 'includes/class-opti-behavior-heatmap-page-type-prune.php',
 		'Opti_Behavior_Heatmap_Session'         => 'includes/class-opti-behavior-heatmap-session.php',
 		'Opti_Behavior_Heatmap_Analytics'       => 'includes/class-opti-behavior-heatmap-analytics.php',
 		'Opti_Behavior_Heatmap_Data_Protection' => 'includes/class-opti-behavior-heatmap-data-protection.php',
@@ -61,6 +64,8 @@ class Opti_Behavior_Heatmap_Autoloader {
 		'Opti_Behavior_Ingest_Gate'             => 'includes/class-opti-behavior-ingest-gate.php',
 		'Opti_Behavior_Stats_Repository'        => 'includes/class-opti-behavior-stats-repository.php',
 		'Opti_Behavior_Smart_Cleanup_Service'    => 'includes/class-opti-behavior-smart-cleanup-service.php',
+		// Unified Cleanup Tasks panel (Danger Zone → Smart Cleanup).
+		'Opti_Behavior_Cleanup_Task_Registry'   => 'includes/class-opti-behavior-cleanup-task-registry.php',
 		// Unified Retention Protocol (master retention + aggregate history).
 		'Opti_Behavior_Retention_Policy'        => 'includes/class-opti-behavior-retention-policy.php',
 		'Opti_Behavior_Dimension_Aggregates'    => 'includes/class-opti-behavior-dimension-aggregates.php',
@@ -137,12 +142,14 @@ class Opti_Behavior_Heatmap_Autoloader {
 			&& strpos( $class_name, 'Opti_Behavior_Report_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_Consent_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_Smart_Cleanup_' ) !== 0
+			&& strpos( $class_name, 'Opti_Behavior_Cleanup_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_Smart_Insights_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_AB_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_IP_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_Ingest_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_Retention_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_Dimension_' ) !== 0
+			&& strpos( $class_name, 'Opti_Behavior_DB_' ) !== 0
 		) {
 			return;
 		}

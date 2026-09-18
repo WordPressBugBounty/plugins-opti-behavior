@@ -514,7 +514,11 @@ class Opti_Behavior_Welcome {
 
 		delete_transient( 'opti_behavior_trial_failed' );
 
-		echo '<div class="notice notice-warning is-dismissible"><p>';
+		// The class name MUST carry "opti-behavior": assets/js/notice-cleanup.js
+		// strips every `.notice-warning` that is not ours from our own screens, and
+		// this notice is one-shot (the transient is consumed above), so a stripped
+		// render is a notice the user never sees again (QA-B-GATE-021).
+		echo '<div id="opti-behavior-trial-failed-notice" class="notice notice-warning is-dismissible opti-behavior-notice"><p>';
 		printf(
 			/* translators: %s: link to Pro page */
 			esc_html__( 'The Pro Trial could not be activated automatically. You can %s to start your trial manually.', 'opti-behavior' ),

@@ -355,15 +355,5 @@
 		});
 	});
 
-	// Handle delete form confirmations
-	document.addEventListener('submit', function(e){
-		var form = e.target.closest('.optibehavior-delete-form');
-		if(form){
-			var msg = form.getAttribute('data-confirm');
-			if(msg && !confirm(msg)){
-				e.preventDefault();
-			}
-		}
-	});
 })();
 

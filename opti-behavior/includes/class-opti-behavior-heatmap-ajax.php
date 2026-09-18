@@ -223,7 +223,46 @@ class Opti_Behavior_Heatmap_Ajax {
 
 		$page_ids = array_values( array_unique( array_filter( $page_ids ) ) );
 
-		return array_slice( $page_ids, 0, 100 );
+		return $this->expand_sibling_page_ids( array_slice( $page_ids, 0, 100 ) );
+	}
+
+	/**
+	 * Expand page IDs with sibling rows that share the same canonical URL
+	 * (same heatmap file directory). See
+	 * Opti_Behavior_Heatmap_Database::get_sibling_page_ids() for the why.
+	 * Memoised per request; falls back to the input on any failure.
+	 *
+	 * @param array $page_ids Page IDs.
+	 * @return array Page IDs incl. siblings.
+	 */
+	private function expand_sibling_page_ids( $page_ids ) {
+		static $memo = array();
+
+		$page_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $page_ids ) ) ) );
+		if ( empty( $page_ids ) ) {
+			return array();
+		}
+
+		$key = implode( ',', $page_ids );
+		if ( isset( $memo[ $key ] ) ) {
+			return $memo[ $key ];
+		}
+
+		$expanded = $page_ids;
+		if ( class_exists( 'Opti_Behavior_Heatmap_Core' ) ) {
+			$core     = Opti_Behavior_Heatmap_Core::get_instance();
+			$database = ( $core && method_exists( $core, 'get_database' ) ) ? $core->get_database() : null;
+			if ( $database && method_exists( $database, 'get_sibling_page_ids' ) ) {
+				$siblings = $database->get_sibling_page_ids( $page_ids );
+				if ( is_array( $siblings ) && ! empty( $siblings ) ) {
+					$expanded = $siblings;
+				}
+			}
+		}
+
+		$memo[ $key ] = $expanded;
+
+		return $expanded;
 	}
 
 	/**
@@ -237,7 +276,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$page_ids = ! empty( $filters['page_ids'] ) && is_array( $filters['page_ids'] ) ? $filters['page_ids'] : array();
 		array_unshift( $page_ids, absint( $page_id ) );
 
-		return array_values( array_unique( array_filter( array_map( 'absint', $page_ids ) ) ) );
+		return $this->expand_sibling_page_ids( array_values( array_unique( array_filter( array_map( 'absint', $page_ids ) ) ) ) );
 	}
 
 	/**
@@ -375,10 +414,7 @@ class Opti_Behavior_Heatmap_Ajax {
 					GROUP BY session_id
 				) {$scroll_alias} ON {$recording_alias}.session_id = {$scroll_alias}.session_id
 				LEFT JOIN (
-					SELECT session_id, COUNT(*) AS scroll_count
-					FROM {$wpdb->prefix}optibehavior_events
-					WHERE event IN (32,33)
-					GROUP BY session_id
+					" . Opti_Behavior_Heatmap_Engagement_Counters::session_counts_subquery_sql() . "
 				) {$scroll_alias}_events ON {$recording_alias}.session_id = {$scroll_alias}_events.session_id",
 			// Ghost-session tolerance: do not require a sessions-table row here.
 			// Missing session rows (cleanup/retention/ingestion gaps) must fall
@@ -1437,6 +1473,45 @@ class Opti_Behavior_Heatmap_Ajax {
 	}
 
 	/**
+	 * Heatmap layers that are a paid Pro feature.
+	 *
+	 * The `opti-behavior-heatmap-detail` slug is shared with Free: the CLICK
+	 * layer — and every endpoint that only feeds it — stays available in every
+	 * licence state. Only the layers listed here are Pro.
+	 *
+	 * @since 1.9.0.7
+	 * @return string[]
+	 */
+	private function pro_heatmap_layers() {
+		return array( 'move', 'mousemove', 'scroll', 'attention' );
+	}
+
+	/**
+	 * Gate a single heatmap LAYER instead of the whole shared endpoint.
+	 *
+	 * Emits the Pro guard's JSON 403 only when a Pro layer is requested while
+	 * the guard refuses `heatmap_detail`. Click-tier requests — and every
+	 * request on a Free-only stack, where no guard exists — are never denied.
+	 *
+	 * @since 1.9.0.7
+	 * @param string $type Requested heatmap type.
+	 * @return void
+	 */
+	private function require_heatmap_layer_access( $type ) {
+		$type = strtolower( trim( (string) $type ) );
+
+		if ( ! in_array( $type, $this->pro_heatmap_layers(), true ) ) {
+			return;
+		}
+
+		if ( ! function_exists( 'opti_behavior_pro_require_access' ) ) {
+			return;
+		}
+
+		opti_behavior_pro_require_access( 'heatmap_detail' );
+	}
+
+	/**
 	 * Get heatmap data AJAX handler.
 	 */
 	public function ajax_get_heatmap_data() {
@@ -1448,15 +1523,16 @@ class Opti_Behavior_Heatmap_Ajax {
 			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
-		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
-			opti_behavior_pro_require_access( 'heatmap_detail' );
-		}
 
 		// Get parameters.
 		$page_id      = isset( $_POST['page_id'] ) ? absint( $_POST['page_id'] ) : 0;
 		$page_ids     = $this->get_request_page_ids( $_POST, $page_id );
 		$device       = isset( $_POST['device'] ) ? sanitize_text_field( wp_unslash( $_POST['device'] ) ) : 'desktop';
 		$type         = isset( $_POST['type'] ) ? sanitize_text_field( wp_unslash( $_POST['type'] ) ) : 'click';
+
+		// Free tier owns the CLICK layer on this shared slug; only the Pro
+		// layers (move / scroll / attention) are licence-gated.
+		$this->require_heatmap_layer_access( $type );
 		$date_range   = isset( $_POST['date_range'] ) ? sanitize_text_field( wp_unslash( $_POST['date_range'] ) ) : 'all';
 		$country      = isset( $_POST['country'] ) ? sanitize_text_field( wp_unslash( $_POST['country'] ) ) : '';
 		$browser      = isset( $_POST['browser'] ) ? sanitize_text_field( wp_unslash( $_POST['browser'] ) ) : '';
@@ -2048,9 +2124,6 @@ class Opti_Behavior_Heatmap_Ajax {
 			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
-		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
-			opti_behavior_pro_require_access( 'heatmap_detail' );
-		}
 
 		// Get parameters.
 		$page_id      = isset( $_POST['page_id'] ) ? absint( $_POST['page_id'] ) : 0;
@@ -2140,6 +2213,14 @@ class Opti_Behavior_Heatmap_Ajax {
 	 * @return bool
 	 */
 	private function top_elements_access_allowed() {
+		// The Pro feature guard is the single source of truth when it is
+		// present: a revoked licence locks the panel even if the cached access
+		// context still looks paid.
+		if ( class_exists( 'Opti_Behavior_Pro_Feature_Guard' )
+			&& ! Opti_Behavior_Pro_Feature_Guard::can_access( 'heatmap_detail' ) ) {
+			return false;
+		}
+
 		if ( ! function_exists( 'opti_behavior_pro_get_access_context' ) ) {
 			return false;
 		}
@@ -2600,9 +2681,6 @@ class Opti_Behavior_Heatmap_Ajax {
 			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
-		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
-			opti_behavior_pro_require_access( 'heatmap_detail' );
-		}
 
 		// Get parameters.
 		$page_id  = isset( $_POST['page_id'] ) ? absint( $_POST['page_id'] ) : 0;
@@ -2633,9 +2711,6 @@ class Opti_Behavior_Heatmap_Ajax {
 			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
-		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
-			opti_behavior_pro_require_access( 'heatmap_detail' );
-		}
 
 		// Get parameters.
 		$page_id      = isset( $_POST['page_id'] ) ? absint( $_POST['page_id'] ) : 0;
@@ -2719,9 +2794,6 @@ class Opti_Behavior_Heatmap_Ajax {
 			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
-		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
-			opti_behavior_pro_require_access( 'heatmap_detail' );
-		}
 
 		// Get parameters. The pill respects the page's Period selector (master
 		// decision 2026-08-13: default All time) so it stays equal to the
@@ -3519,15 +3591,16 @@ class Opti_Behavior_Heatmap_Ajax {
 			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
-		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
-			opti_behavior_pro_require_access( 'heatmap_detail' );
-		}
 
 		// Get parameters.
 		$page_id      = isset( $_POST['page_id'] ) ? absint( $_POST['page_id'] ) : 0;
 		$page_ids     = $this->get_request_page_ids( $_POST, $page_id );
 		$device       = isset( $_POST['device'] ) ? sanitize_text_field( wp_unslash( $_POST['device'] ) ) : 'desktop';
 		$type         = isset( $_POST['type'] ) ? sanitize_text_field( wp_unslash( $_POST['type'] ) ) : 'click';
+
+		// Free tier owns the CLICK layer on this shared slug; only the Pro
+		// layers (move / scroll / attention) are licence-gated.
+		$this->require_heatmap_layer_access( $type );
 		$date_range   = isset( $_POST['date_range'] ) ? sanitize_text_field( wp_unslash( $_POST['date_range'] ) ) : 'all';
 		$batch        = isset( $_POST['batch'] ) ? absint( $_POST['batch'] ) : 1;
 		$batch_size   = isset( $_POST['batch_size'] ) ? absint( $_POST['batch_size'] ) : 100;
@@ -3598,9 +3671,6 @@ class Opti_Behavior_Heatmap_Ajax {
 			wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'opti-behavior' ) ) );
 		}
 
-		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
-			opti_behavior_pro_require_access( 'heatmap_detail' );
-		}
 
 		// Get parameters.
 		$page_id    = isset( $_POST['page_id'] ) ? absint( $_POST['page_id'] ) : 0;
@@ -6984,9 +7054,6 @@ class Opti_Behavior_Heatmap_Ajax {
 			wp_send_json_error( array( 'message' => 'Insufficient permissions' ) );
 		}
 
-		if ( function_exists( 'opti_behavior_pro_require_access' ) ) {
-			opti_behavior_pro_require_access( 'heatmap_detail' );
-		}
 
 		// Get and validate the URL.
 		$url = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';

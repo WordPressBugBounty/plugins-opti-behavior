@@ -2316,7 +2316,7 @@ body.opti-behavior_page_opti-behavior-settings #wpfooter {
 }
 
 /* File Storage Notice */
-.storage-file-notice {
+.ob-storage-file-notice {
 	display: flex;
 	align-items: flex-start;
 	gap: 10px;
@@ -2329,7 +2329,7 @@ body.opti-behavior_page_opti-behavior-settings #wpfooter {
 	font-size: 13px;
 }
 
-.storage-file-notice i {
+.ob-storage-file-notice i {
 	width: 18px;
 	height: 18px;
 	flex-shrink: 0;
@@ -2733,6 +2733,8 @@ body.opti-behavior_page_opti-behavior-settings #wpfooter {
 	font-size: 11px;
 	font-weight: 600;
 	text-transform: uppercase;
+	background: #f3f4f6;
+	color: #374151;
 }
 
 .cleanup-history-repeat {
@@ -2758,6 +2760,70 @@ body.opti-behavior_page_opti-behavior-settings #wpfooter {
 .cleanup-history-stats {
 	color: #374151;
 	font-weight: 500;
+}
+
+.cleanup-history-item {
+	flex-wrap: wrap;
+}
+
+.cleanup-history-trigger,
+.cleanup-history-status {
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 11px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.cleanup-history-trigger-manual {
+	background: #fef3c7;
+	color: #92400e;
+}
+
+.cleanup-history-trigger-scheduled {
+	background: #dbeafe;
+	color: #1e40af;
+}
+
+.cleanup-history-status-badge-completed {
+	background: #dcfce7;
+	color: #166534;
+}
+
+.cleanup-history-status-badge-queued {
+	background: #e0e7ff;
+	color: #3730a3;
+}
+
+.cleanup-history-status-badge-partial {
+	background: #ffedd5;
+	color: #9a3412;
+}
+
+.cleanup-history-status-badge-aborted {
+	background: #fee2e2;
+	color: #991b1b;
+}
+
+.cleanup-history-status-badge-skipped {
+	background: #f3f4f6;
+	color: #4b5563;
+}
+
+.cleanup-history-details {
+	flex-basis: 100%;
+}
+
+.cleanup-history-notes {
+	margin: 4px 0 0;
+	padding: 0;
+	list-style: none;
+	color: #4b5563;
+	font-size: 12px;
+}
+
+.cleanup-history-empty {
+	margin: 0;
 }
 
 /* Danger Zone Sub-Tabs */
@@ -4648,3 +4714,257 @@ body.opti-behavior_page_opti-behavior-settings #wpfooter {
 	padding: 0 12px 12px;
 }
 
+
+/* =====================================================================
+   Unified Cleanup Tasks panel (Danger Zone → Smart Cleanup)
+   ===================================================================== */
+.cleanup-tasks-table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-top: 8px;
+	font-size: 13px;
+}
+
+.cleanup-tasks-table th,
+.cleanup-tasks-table td {
+	text-align: left;
+	vertical-align: top;
+	padding: 8px 10px;
+	border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.cleanup-tasks-table th {
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.cleanup-tasks-table .ct-col-task {
+	width: 40%;
+}
+
+.cleanup-tasks-table .cleanup-task-desc {
+	margin: 4px 0 0;
+}
+
+/* Honest schedule-state explanation under the Next run value. */
+.cleanup-tasks-table .ct-next-note {
+	display: block;
+	margin-top: 4px;
+	font-size: 11px;
+	line-height: 1.5;
+	opacity: 0.75;
+}
+
+.cleanup-task-disabled .ct-col-task strong,
+.cleanup-task-disabled .ob-ct-frequency,
+.cleanup-task-disabled .ob-ct-next,
+.cleanup-task-disabled .ob-ct-last {
+	opacity: 0.6;
+}
+
+.cleanup-task-badge {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 10px;
+	font-size: 11px;
+	line-height: 1.6;
+	background: rgba(148, 163, 184, 0.2);
+	white-space: nowrap;
+}
+
+.cleanup-task-badge-off {
+	background: rgba(239, 68, 68, 0.15);
+}
+
+.cleanup-task-configure,
+.cleanup-task-link {
+	white-space: nowrap;
+}
+
+/* Cleanup Tasks action column: the "Run now" <button> and the
+   "Preview & run" <a> share one box so the column reads as a single set. */
+/* Per-task "what exactly is removed" disclosure (collapsed by default). */
+.cleanup-task-details {
+	margin: 2px 0 0;
+}
+
+.cleanup-task-details > summary {
+	display: inline-flex;
+	align-items: center;
+	gap: 14px;
+	cursor: pointer;
+	list-style: none;
+	font-size: 13px;
+}
+
+.cleanup-task-details > summary::-webkit-details-marker {
+	display: none;
+}
+
+.cleanup-task-details-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: #2271b1;
+}
+
+.cleanup-task-details-toggle::after {
+	content: "";
+	width: 6px;
+	height: 6px;
+	border-right: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	transform: rotate(-45deg);
+	transition: transform 0.15s ease;
+}
+
+.cleanup-task-details[open] .cleanup-task-details-toggle::after {
+	transform: rotate(45deg);
+}
+
+.cleanup-task-details > summary:hover .cleanup-task-details-toggle {
+	text-decoration: underline;
+}
+
+.cleanup-task-details ul {
+	margin: 8px 0 2px;
+	padding: 8px 12px 8px 26px;
+	list-style: disc;
+	font-size: 12px;
+	line-height: 1.45;
+	color: #4b5563;
+	background: #f8f9fa;
+	border: 1px solid #e5e7eb;
+	border-radius: 6px;
+}
+
+.cleanup-task-details li {
+	margin: 0 0 3px;
+}
+
+.cleanup-task-details li:last-child {
+	margin-bottom: 0;
+}
+
+.cleanup-tasks-run-all {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	margin: 0 0 14px;
+}
+
+.cleanup-tasks-run-all .ob-cleanup-task-msg {
+	margin-top: 0;
+	max-width: none;
+}
+
+/* Run all modal: task checklist + neutral info note. */
+.ob-run-all-task-list {
+	list-style: none;
+	margin: 12px 0 16px;
+	padding: 12px 14px;
+	background: #f8f9fa;
+	border: 1px solid #e5e7eb;
+	border-radius: 8px;
+}
+
+.ob-run-all-task-list li {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	padding: 5px 0;
+	font-size: 13px;
+	color: #111827;
+}
+
+.ob-run-all-task-list li svg {
+	width: 16px;
+	height: 16px;
+	flex: 0 0 16px;
+	color: #16a34a;
+}
+
+.ob-run-all-note {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	font-size: 12px;
+	color: #4b5563;
+}
+
+.ob-run-all-note svg {
+	width: 14px;
+	height: 14px;
+	flex: 0 0 14px;
+	margin-top: 2px;
+}
+
+.cleanup-tasks-run-all .btn-secondary,
+.ob-ct-action .btn-secondary {
+	box-sizing: border-box;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	min-width: 150px;
+	height: 40px;
+	padding: 0 16px;
+	font-family: inherit;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1;
+	color: #111827;
+	text-decoration: none;
+	vertical-align: middle;
+}
+
+.ob-ct-action .btn-secondary:hover,
+.ob-ct-action .btn-secondary:focus {
+	color: #111827;
+	text-decoration: none;
+}
+
+.ob-ct-action .btn-secondary .btn-icon,
+.ob-ct-action .btn-secondary .btn-icon svg {
+	width: 16px;
+	height: 16px;
+	flex: 0 0 16px;
+}
+
+.ob-cleanup-task-msg {
+	display: block;
+	margin-top: 6px;
+	font-size: 12px;
+	opacity: 0.85;
+	max-width: 220px;
+}
+
+.cleanup-tasks-cron-warning {
+	color: #b45309;
+}
+
+@media (max-width: 782px) {
+	.cleanup-tasks-table thead {
+		display: none;
+	}
+
+	.cleanup-tasks-table,
+	.cleanup-tasks-table tbody,
+	.cleanup-tasks-table tr,
+	.cleanup-tasks-table td {
+		display: block;
+		width: auto;
+	}
+
+	.cleanup-tasks-table tr {
+		border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+		padding: 6px 0;
+	}
+
+	.cleanup-tasks-table td {
+		border-bottom: none;
+		padding: 4px 0;
+	}
+}

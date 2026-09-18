@@ -315,6 +315,16 @@ class Opti_Behavior_Heatmap_Dashboard {
 	const HEATMAP_ORPHAN_PURGE_CRON_HOOK = 'opti_behavior_heatmap_orphan_purge_daily';
 
 	/**
+	 * Option: consecutive lock-miss deferrals of the `_orphaned/` purge tick.
+	 * Reset on any tick that gets the lock; bounds the 5-minute retry loop so
+	 * a pass that can never take the shared lock ends visibly ("skipped" +
+	 * warning) instead of re-queueing itself forever.
+	 *
+	 * @since 1.9.x (Cleanup audit 2026-09-13)
+	 */
+	const HEATMAP_ORPHAN_PURGE_DEFER_OPTION = 'opti_behavior_heatmap_orphan_purge_lock_misses';
+
+	/**
 	 * Constructor
 	 *
 	 * @param Opti_Behavior_Heatmap_Core $heatmap opti-behavior Heatmap instance.
@@ -435,6 +445,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 		add_action( 'wp_ajax_optibehavior_storage_stats_tables', array( $this, 'ajax_storage_stats_tables' ) );
 		add_action( 'wp_ajax_optibehavior_storage_stats_counts', array( $this, 'ajax_storage_stats_counts' ) );
 		add_action( 'wp_ajax_optibehavior_storage_stats_files', array( $this, 'ajax_storage_stats_files' ) );
+		// Lean events migration (1.9.2): run one backfill/purge/optimize tick now.
+		add_action( 'wp_ajax_optibehavior_engagement_migration_run', array( $this, 'ajax_engagement_migration_run' ) );
 		// Delete data by date range AJAX handler
 		add_action( 'wp_ajax_optibehavior_delete_data_by_range', array( $this, 'ajax_delete_data_by_range' ) );
 		// Smart Data Cleanup AJAX handlers
@@ -442,12 +454,18 @@ class Opti_Behavior_Heatmap_Dashboard {
 		add_action( 'wp_ajax_optibehavior_smart_cleanup_execute', array( $this, 'ajax_smart_cleanup_execute' ) );
 		add_action( 'wp_ajax_optibehavior_bot_cleanup', array( $this, 'ajax_bot_cleanup' ) );
 		add_action( 'wp_ajax_optibehavior_save_auto_cleanup', array( $this, 'ajax_save_auto_cleanup_settings' ) );
+		// Unified Cleanup Tasks panel (Danger Zone → Smart Cleanup).
+		add_action( 'wp_ajax_optibehavior_cleanup_tasks_overview', array( $this, 'ajax_cleanup_tasks_overview' ) );
+		add_action( 'wp_ajax_optibehavior_cleanup_task_run', array( $this, 'ajax_cleanup_task_run' ) );
+		add_action( 'wp_ajax_optibehavior_cleanup_tasks_run_all', array( $this, 'ajax_cleanup_tasks_run_all' ) );
 		// Suppress third-party admin notices on opti-behavior Analytics admin pages only
 		add_action( 'admin_head', array( $this, 'suppress_admin_notices' ), 1 );
 		// Add custom menu icon CSS
 		add_action( 'admin_head', array( $this, 'add_menu_icon_css' ) );
 		// AJAX endpoint for Heatmaps table (sorting/pagination)
-		add_action( 'wp_ajax_optibehavior_heatmaps_sessions', array( $this, 'ajax_heatmaps_sessions' ) );
+		// 1.9.0.7 (QA-B-HEAT-060): `optibehavior_heatmaps_sessions` was
+		// unregistered — no JS ever called it; the session counts ship inside
+		// the `optibehavior_heatmaps_table` payload.
 		add_action( 'wp_ajax_optibehavior_heatmaps_table', array( $this, 'ajax_heatmaps_table' ) );
 		add_action( 'wp_ajax_optibehavior_heatmaps_stats', array( $this, 'ajax_heatmaps_stats' ) );
 		// Debug log AJAX handlers
@@ -1529,14 +1547,11 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * Render simplified heatmap table
 	 */
 	private function render_simplified_heatmap_table() {
-		// Handle delete action
-		if (!empty($_POST['optibehavior_delete_page_id'])) {
-			$del_id = intval( wp_unslash( $_POST['optibehavior_delete_page_id'] ) );
-			if (isset($_POST['_wpnonce']) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'optibehavior_delete_heatmap_' . $del_id)) {
-				$this->heatmap->get_database()->delete_data(array($del_id));
-				echo '<div class="notice notice-success"><p>' . esc_html__('Heatmap data deleted.', 'opti-behavior') . '</p></div>';
-			}
-		}
+			// 1.9.0.7 (QA-B-HEAT-060): the `optibehavior_delete_page_id` POST
+			// handler that used to live here was unreachable — the Heatmaps
+			// page renders an AJAX shell and never emits that form. Deleting a
+			// heatmap goes through the `optibehavior_delete_heatmap` AJAX
+			// action instead.
 
 			// Performance: render shell only; populate via AJAX
 			?>
@@ -4286,7 +4301,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Prepared; identifiers hard-coded.
 		$found = $wpdb->get_var(
 			$wpdb->prepare(
-				"SELECT page_id FROM {$table}
+				"SELECT 1 FROM {$table}
 				WHERE (agg_synced_at IS NULL OR agg_spam_state <> %d)
 					AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)
 				LIMIT 1",
@@ -4294,7 +4309,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 			)
 		);
 
-		return ! empty( $found );
+		// Existence probe: SELECT 1 so a legitimate page_id of 0 (url-only
+		// mapping rows) cannot be mistaken for "no stale rows" by empty().
+		return null !== $found;
 	}
 
 	/**
@@ -4882,7 +4899,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Prepared; identifiers hard-coded.
 		$found = $wpdb->get_var(
 			$wpdb->prepare(
-				"SELECT page_id FROM {$table}
+				"SELECT 1 FROM {$table}
 				WHERE (daily_synced_at IS NULL OR daily_spam_state <> %d)
 					AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)
 				LIMIT 1",
@@ -4890,7 +4907,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 			)
 		);
 
-		return ! empty( $found );
+		// Existence probe: SELECT 1 so a legitimate page_id of 0 (url-only
+		// mapping rows) cannot be mistaken for "no stale rows" by empty().
+		return null !== $found;
 	}
 
 	/**
@@ -5551,6 +5570,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		global $wpdb;
 		$daily_table = $wpdb->prefix . 'optibehavior_heatmap_daily';
+		$pages_table = $wpdb->prefix . 'optibehavior_heatmap_pages';
 
 		$exclude_sql = '';
 		$params      = array( $day_start, $day_end );
@@ -5558,24 +5578,33 @@ class Opti_Behavior_Heatmap_Dashboard {
 			// The live-merged pages may already hold write-time daily rows —
 			// exclude them here so every page is sourced from exactly one of
 			// the two exact computations (no double count).
-			$exclude_sql = ' AND page_id NOT IN (' . implode( ',', array_fill( 0, count( $merge_ids ), '%d' ) ) . ')';
+			$exclude_sql = ' AND d.page_id NOT IN (' . implode( ',', array_fill( 0, count( $merge_ids ), '%d' ) ) . ')';
 			$params      = array_merge( $params, $merge_ids );
 		}
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Prepared with placeholders; identifiers hard-coded. Indexed O(pages) SUM by design.
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT page_id,
-					SUM(click_pc) AS click_pc, SUM(click_mobile) AS click_mobile,
-					SUM(att_pc) AS att_pc, SUM(att_mobile) AS att_mobile,
-					SUM(break_pc) AS break_pc, SUM(break_mobile) AS break_mobile,
-					SUM(sessions_desktop) AS sessions_desktop,
-					SUM(sessions_mobile) AS sessions_mobile,
-					SUM(sessions_tablet) AS sessions_tablet,
-					MAX(last_event_ts) AS last_event_ts, MAX(day) AS max_day
-				FROM {$daily_table}
-				WHERE day BETWEEN %s AND %s{$exclude_sql}
-				GROUP BY page_id",
+				// EXISTS on the mapping table (semi-join, never fans out even
+				// though page_id carries a non-unique index): the per-day
+				// index is not
+				// cascaded on every page deletion, so orphaned daily rows
+				// (page deleted / pruned, index rows left behind) would be
+				// counted here as phantom pages the live scan cannot see —
+				// the list total then disagrees with the live path and the
+				// rows render with no URL or title.
+				"SELECT d.page_id AS page_id,
+					SUM(d.click_pc) AS click_pc, SUM(d.click_mobile) AS click_mobile,
+					SUM(d.att_pc) AS att_pc, SUM(d.att_mobile) AS att_mobile,
+					SUM(d.break_pc) AS break_pc, SUM(d.break_mobile) AS break_mobile,
+					SUM(d.sessions_desktop) AS sessions_desktop,
+					SUM(d.sessions_mobile) AS sessions_mobile,
+					SUM(d.sessions_tablet) AS sessions_tablet,
+					MAX(d.last_event_ts) AS last_event_ts, MAX(d.day) AS max_day
+				FROM {$daily_table} d
+				WHERE EXISTS (SELECT 1 FROM {$pages_table} p WHERE p.page_id = d.page_id)
+					AND d.day BETWEEN %s AND %s{$exclude_sql}
+				GROUP BY d.page_id",
 				$params
 			)
 		);
@@ -5722,10 +5751,52 @@ class Opti_Behavior_Heatmap_Dashboard {
 	}
 
 	/**
+	 * List the RECURRING events currently scheduled for a cron hook.
+	 *
+	 * wp_next_scheduled()/wp_get_schedule() inspect only the EARLIEST event on
+	 * a hook. Hooks that mix a recurring watchdog with one-off continuation
+	 * events (auto-repair, registry backfill) need a full cron-array scan:
+	 * while a continuation is pending it is almost always the earliest event,
+	 * its schedule is false, and an earliest-event guard wrongly concludes the
+	 * recurrence is missing — re-adding a duplicate recurring event on every
+	 * admin_init (observed live: 14+ duplicate daily backfill events).
+	 * One-off events (empty schedule) are deliberately excluded.
+	 *
+	 * @since 1.9.x
+	 * @param string $hook Cron hook name.
+	 * @return array<int,array{0:int,1:string}> List of [timestamp, schedule] pairs.
+	 */
+	private function get_recurring_events_for_hook( $hook ) {
+		$recurring = array();
+		$crons     = function_exists( '_get_cron_array' ) ? _get_cron_array() : array();
+
+		foreach ( (array) $crons as $timestamp => $hooks ) {
+			if ( ! is_array( $hooks ) || ! isset( $hooks[ $hook ] ) ) {
+				continue;
+			}
+			foreach ( (array) $hooks[ $hook ] as $event ) {
+				if ( is_array( $event ) && ! empty( $event['schedule'] ) ) {
+					$recurring[] = array( (int) $timestamp, (string) $event['schedule'] );
+				}
+			}
+		}
+
+		return $recurring;
+	}
+
+	/**
 	 * Self-heal the daily heatmap sync auto-repair cron event according to the
 	 * Danger Zone toggle: schedule (daily) when enabled, clear when disabled.
-	 * Mirrors {@see self::ensure_heatmap_sync_reconcile_cron()} — safe to call
-	 * on every admin_init and from the settings save handler.
+	 * Safe to call on every admin_init and from the settings save handler.
+	 *
+	 * Duplicate-proof: decides from the full recurring-event scan
+	 * ({@see self::get_recurring_events_for_hook()}), never from the earliest
+	 * event, so a pending one-off continuation can no longer trick the guard
+	 * into stacking duplicate daily events. Anything other than exactly one
+	 * daily recurring event (duplicates, wrong recurrence, missing) is cleared
+	 * wholesale and re-armed as a single daily event — self-heals installs
+	 * that accumulated duplicates under the old guard. Clearing also drops
+	 * pending continuations; the fresh daily event re-chains them.
 	 *
 	 * @since 1.8.x
 	 * @return void
@@ -5739,21 +5810,16 @@ class Opti_Behavior_Heatmap_Dashboard {
 			return;
 		}
 
-		$next     = wp_next_scheduled( $hook );
-		$schedule = $next ? wp_get_schedule( $hook ) : false;
+		$recurring = $this->get_recurring_events_for_hook( $hook );
 
-		if ( $next && false === $schedule ) {
-			// A one-off continuation event exists but the recurring daily event
-			// does not; leave the continuation alone and add the recurrence.
-			$next = false;
-		} elseif ( $next && $recurrence !== $schedule ) {
-			wp_clear_scheduled_hook( $hook );
-			$next = false;
+		// Healthy steady state: exactly one recurring event with the right
+		// recurrence. Leave it (and any pending continuation) alone.
+		if ( 1 === count( $recurring ) && $recurrence === $recurring[0][1] ) {
+			return;
 		}
 
-		if ( ! $next ) {
-			wp_schedule_event( time() + HOUR_IN_SECONDS, $recurrence, $hook );
-		}
+		wp_clear_scheduled_hook( $hook );
+		wp_schedule_event( time() + HOUR_IN_SECONDS, $recurrence, $hook );
 	}
 
 	/**
@@ -5761,7 +5827,19 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * recurrence acts as a light watchdog once the initial backlog is drained;
 	 * catch-up speed comes from 1-minute single-event continuations scheduled by
 	 * {@see self::run_heatmap_registry_backfill()} while work remains. Safe to
-	 * call on every admin_init (mirrors ensure_heatmap_sync_reconcile_cron()).
+	 * call on every admin_init.
+	 *
+	 * Duplicate-proof: decides from the full recurring-event scan
+	 * ({@see self::get_recurring_events_for_hook()}), never from the earliest
+	 * event. The old earliest-event guard saw a pending one-off continuation
+	 * (schedule === false), concluded the daily recurrence was missing, and
+	 * added a NEW daily event on every admin_init/admin-ajax request during a
+	 * backlog drain — 14+ duplicate daily events accumulated live. Anything
+	 * other than exactly one daily recurring event (duplicates, wrong
+	 * recurrence, missing) is cleared wholesale and re-armed as a single daily
+	 * event — self-heals installs that accumulated duplicates under the old
+	 * guard. Clearing also drops pending continuations; the fresh daily event
+	 * fires within a minute and re-chains the drain.
 	 *
 	 * @since 1.9.x
 	 * @return void
@@ -5770,23 +5848,18 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$hook       = self::HEATMAP_BACKFILL_CRON_HOOK;
 		$recurrence = 'daily';
 
-		$next     = wp_next_scheduled( $hook );
-		$schedule = $next ? wp_get_schedule( $hook ) : false;
+		$recurring = $this->get_recurring_events_for_hook( $hook );
 
-		if ( $next && false === $schedule ) {
-			// A one-off continuation exists but the recurring daily event does
-			// not; leave the continuation alone and add the recurrence.
-			$next = false;
-		} elseif ( $next && $recurrence !== $schedule ) {
-			wp_clear_scheduled_hook( $hook );
-			$next = false;
+		// Healthy steady state: exactly one recurring event with the right
+		// recurrence. Leave it (and any pending continuation) alone.
+		if ( 1 === count( $recurring ) && $recurrence === $recurring[0][1] ) {
+			return;
 		}
 
-		if ( ! $next ) {
-			// Kick off soon so a freshly-updated install starts healing its
-			// backlog within a minute instead of waiting a full day.
-			wp_schedule_event( time() + MINUTE_IN_SECONDS, $recurrence, $hook );
-		}
+		wp_clear_scheduled_hook( $hook );
+		// Kick off soon so a freshly-updated install starts healing its
+		// backlog within a minute instead of waiting a full day.
+		wp_schedule_event( time() + MINUTE_IN_SECONDS, $recurrence, $hook );
 	}
 
 	/**
@@ -5865,6 +5938,32 @@ class Opti_Behavior_Heatmap_Dashboard {
 			}
 
 			// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin tables from $wpdb->prefix; the spam fragment is built by the shared filter from an esc_sql allow-list; values below are bound via prepare().
+			if ( class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' ) && Opti_Behavior_Heatmap_Engagement_Counters::is_lean() ) {
+				// Lean events mode (1.9.2): scroll/move rows are no longer in the
+				// events table, so candidate pages come from the per-page daily
+				// index (fed by the JSON write path, already spam-filtered at
+				// write time via the session's traffic verdict).
+				$daily_table = $wpdb->prefix . 'optibehavior_heatmap_daily';
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Cron-time backfill scan; no caching.
+				$candidates = $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT d.page_id AS page_id,
+							SUM(d.click_pc + d.click_mobile) AS click_count,
+							SUM(d.att_pc + d.att_mobile) AS move_count,
+							SUM(d.break_pc + d.break_mobile) AS scroll_count
+						FROM {$daily_table} d
+						LEFT JOIN {$registry_table} hp ON hp.page_id = d.page_id
+						WHERE d.page_id > %d
+							AND hp.page_id IS NULL
+						GROUP BY d.page_id
+						HAVING (click_count + move_count + scroll_count) > 0
+						ORDER BY d.page_id ASC
+						LIMIT %d",
+						$cursor,
+						self::HEATMAP_BACKFILL_BATCH_SIZE
+					)
+				);
+			} else {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Cron-time backfill scan; no caching.
 			$candidates = $wpdb->get_results(
 				$wpdb->prepare(
@@ -5887,6 +5986,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					self::HEATMAP_BACKFILL_BATCH_SIZE
 				)
 			);
+			}
 			// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 			if ( empty( $candidates ) ) {
@@ -6525,18 +6625,131 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$result  = $service->run_batch();
 
 		if ( $result['locked'] ) {
+			$reason = isset( $result['reason'] ) ? (string) $result['reason'] : 'lock_miss';
+
+			// Recovery hold (restore-from-archive ran within its 24 h window):
+			// nothing can be purged until it lapses. Say so and stop — the
+			// next daily tick retries; a 5-minute loop for up to a day would
+			// only hide the reason behind an endless "Queued".
+			if ( 'recovery_hold' === $reason ) {
+				delete_option( self::HEATMAP_ORPHAN_PURGE_DEFER_OPTION );
+				$hold_until = class_exists( 'Opti_Behavior_Heatmap_Orphan_Restore' )
+					? (int) get_option( Opti_Behavior_Heatmap_Orphan_Restore::HOLD_OPTION, 0 )
+					: 0;
+				$this->report_orphan_purge_run(
+					array(
+						'status' => 'skipped',
+						'note'   => $hold_until > time()
+							? sprintf(
+								/* translators: %s: site-local date/time when the recovery hold lapses. */
+								__( 'Skipped: an archive restore ran recently, so the purge is on hold until %s. It resumes with the next daily run.', 'opti-behavior' ),
+								wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $hold_until )
+							)
+							: __( 'Skipped: an archive restore ran recently, so the purge is on hold. It resumes with the next daily run.', 'opti-behavior' ),
+					)
+				);
+				return $result;
+			}
+
 			// Backfill/reconcile/repair/rebuild/report holds the shared
 			// advisory lock: retry the same tick later instead of losing
-			// today's purge pass.
+			// today's purge pass — but bounded. After MAX consecutive misses
+			// give the day up visibly instead of re-queueing forever.
+			$misses = absint( get_option( self::HEATMAP_ORPHAN_PURGE_DEFER_OPTION, 0 ) ) + 1;
+			$max    = max( 1, absint( apply_filters( 'opti_behavior_heatmap_orphan_purge_max_lock_misses', 12 ) ) );
+			if ( $misses >= $max ) {
+				delete_option( self::HEATMAP_ORPHAN_PURGE_DEFER_OPTION );
+				$this->report_orphan_purge_run(
+					array(
+						'status'  => 'skipped',
+						'warning' => sprintf(
+							/* translators: %d: number of consecutive attempts. */
+							__( 'Gave up after %d attempts: another heatmap maintenance pass held the shared lock every time (backfill, reconcile, repair or rebuild). The purge retries with the next daily run; if this repeats, check the Heatmap tools for a pass that never finishes.', 'opti-behavior' ),
+							$misses
+						),
+					)
+				);
+				return $result;
+			}
+			update_option( self::HEATMAP_ORPHAN_PURGE_DEFER_OPTION, $misses, false );
 			$this->schedule_heatmap_orphan_purge_continuation( 5 * MINUTE_IN_SECONDS );
+			$this->report_orphan_purge_run(
+				array(
+					'status' => 'deferred',
+					'note'   => sprintf(
+						/* translators: 1: attempt number, 2: max attempts. */
+						__( 'Deferred (attempt %1$d of %2$d): another heatmap maintenance pass holds the shared lock — retrying in 5 minutes.', 'opti-behavior' ),
+						$misses,
+						$max
+					),
+				)
+			);
 			return $result;
 		}
 
+		delete_option( self::HEATMAP_ORPHAN_PURGE_DEFER_OPTION );
+
 		if ( ! $result['complete'] ) {
+			$progress = $service->get_progress();
 			$this->schedule_heatmap_orphan_purge_continuation( MINUTE_IN_SECONDS );
+			// The continuation tick logs the whole pass once it drains; the
+			// note keeps the queued history entry honest meanwhile.
+			$this->report_orphan_purge_run(
+				array(
+					'status' => 'deferred',
+					'note'   => sprintf(
+						/* translators: 1: folders checked so far, 2: total folders, 3: deleted so far. */
+						__( 'In progress: %1$d of %2$d archive folder(s) checked, %3$d deleted so far — continuing in 1 minute.', 'opti-behavior' ),
+						absint( $progress['scanned'] ),
+						absint( $progress['total_dirs'] ),
+						absint( $progress['deleted'] )
+					),
+				)
+			);
+			return $result;
 		}
 
+		if ( $result['disabled'] ) {
+			$this->report_orphan_purge_run(
+				array(
+					'status' => 'skipped',
+					'note'   => __( 'Archive retention is set to 0 days (purge disabled) — nothing was deleted.', 'opti-behavior' ),
+				)
+			);
+			return $result;
+		}
+
+		$progress = $service->get_progress();
+		$this->report_orphan_purge_run(
+			array(
+				'status'        => 'completed',
+				'files_deleted' => absint( $progress['deleted'] ),
+				'note'          => sprintf(
+					/* translators: 1: archive folders scanned, 2: folders deleted, 3: folders kept, 4: retention days */
+					__( 'Scanned %1$d archive folder(s): %2$d deleted, %3$d kept (retention %4$d days).', 'opti-behavior' ),
+					absint( $progress['scanned'] ),
+					absint( $progress['deleted'] ),
+					absint( $progress['kept'] ),
+					absint( $progress['retention_days'] )
+				),
+			)
+		);
+
 		return $result;
+	}
+
+	/**
+	 * Report an `_orphaned/` purge tick to the Cleanup Task run tracker
+	 * (no-op outside a tracked cron run).
+	 *
+	 * @since 1.9.x
+	 * @param array $result Run result.
+	 * @return void
+	 */
+	private function report_orphan_purge_run( array $result ) {
+		if ( class_exists( 'Opti_Behavior_Cleanup_Task_Registry' ) ) {
+			Opti_Behavior_Cleanup_Task_Registry::report_run( $result );
+		}
 	}
 
 	/**
@@ -6550,12 +6763,39 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 */
 	public function schedule_heatmap_orphan_purge_continuation( $delay ) {
 		if ( ! function_exists( 'wp_schedule_single_event' ) ) {
-			return;
+			return false;
 		}
-		if ( wp_next_scheduled( self::HEATMAP_ORPHAN_PURGE_CRON_HOOK ) ) {
-			return;
+		$delay = max( 1, (int) $delay );
+		$hook  = self::HEATMAP_ORPHAN_PURGE_CRON_HOOK;
+
+		// This hook carries BOTH the daily recurring event and its one-off
+		// continuations, so `wp_next_scheduled( $hook )` is always truthy —
+		// guarding on it meant the continuation was never queued and a pass
+		// larger than one 20 s budget only advanced once per day, showing
+		// "running" forever with no Last run (live-site audit 2026-09-13).
+		// Dedupe on pending ONE-OFF events only; the recurring event counts
+		// only when it is due sooner than the continuation itself.
+		$oneoff_pending = 0;
+		$next_recurring = null;
+		foreach ( (array) _get_cron_array() as $timestamp => $hooks ) {
+			if ( ! is_array( $hooks ) || ! isset( $hooks[ $hook ] ) ) {
+				continue;
+			}
+			foreach ( (array) $hooks[ $hook ] as $event ) {
+				if ( ! empty( $event['schedule'] ) ) {
+					$next_recurring = null === $next_recurring ? (int) $timestamp : min( $next_recurring, (int) $timestamp );
+				} else {
+					++$oneoff_pending;
+				}
+			}
 		}
-		wp_schedule_single_event( time() + max( 1, (int) $delay ), self::HEATMAP_ORPHAN_PURGE_CRON_HOOK );
+		if ( $oneoff_pending > 0 ) {
+			return false;
+		}
+		if ( null !== $next_recurring && $next_recurring <= time() + $delay ) {
+			return false; // The daily event picks the pass up first.
+		}
+		return (bool) wp_schedule_single_event( time() + $delay, $hook );
 	}
 
 	/**
@@ -6582,19 +6822,39 @@ class Opti_Behavior_Heatmap_Dashboard {
 			return;
 		}
 
-		$next     = wp_next_scheduled( $hook );
-		$schedule = $next ? wp_get_schedule( $hook ) : false;
-
-		if ( $next && false === $schedule ) {
-			// A one-off continuation event exists but the recurring daily event
-			// does not; leave the continuation alone and add the recurrence.
-			$next = false;
-		} elseif ( $next && $recurrence !== $schedule ) {
-			wp_clear_scheduled_hook( $hook );
-			$next = false;
+		// This hook carries BOTH the recurring daily event and the one-off
+		// continuation ticks, so `wp_next_scheduled()` / `wp_get_schedule()`
+		// describe whichever event is due first. With a continuation pending
+		// they reported "no recurring event" and every admin_init added ANOTHER
+		// daily event, so the cron array accumulated dozens of duplicate daily
+		// rows (QA-B-SCHEMA-019, live audit 2026-09-16). Scan the cron array and
+		// only ever look at RECURRING entries for this hook.
+		$recurring   = array();
+		$wrong_recur = false;
+		foreach ( (array) _get_cron_array() as $timestamp => $hooks ) {
+			if ( ! is_array( $hooks ) || ! isset( $hooks[ $hook ] ) ) {
+				continue;
+			}
+			foreach ( (array) $hooks[ $hook ] as $event ) {
+				if ( empty( $event['schedule'] ) ) {
+					continue; // One-off continuation; left alone.
+				}
+				$recurring[] = (int) $timestamp;
+				if ( $recurrence !== (string) $event['schedule'] ) {
+					$wrong_recur = true;
+				}
+			}
 		}
 
-		if ( ! $next ) {
+		if ( $wrong_recur || count( $recurring ) > 1 ) {
+			// Wrong recurrence, or duplicates left behind by an older build:
+			// drop every event on the hook and re-add exactly one. A pending
+			// continuation is re-queued by the next purge pass.
+			wp_clear_scheduled_hook( $hook );
+			$recurring = array();
+		}
+
+		if ( empty( $recurring ) ) {
 			wp_schedule_event( time() + HOUR_IN_SECONDS, $recurrence, $hook );
 		}
 	}
@@ -11267,12 +11527,6 @@ class Opti_Behavior_Heatmap_Dashboard {
 		return $map;
 	}
 
-		public function ajax_heatmaps_sessions(){
-			return $this->ajax_heatmaps_sessions_impl();
-		}
-
-
-
 		private function batch_sessions_counts($urls, $start_date=null, $end_date=null){
 			global $wpdb;
 			if (empty($urls)) {
@@ -12816,10 +13070,15 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * @param string $end_date   Range end.
 	 * @return array|null Summed daily_stats columns for the pre-raw segment.
 	 */
-	private function get_pre_raw_daily_stats_rollup( $start_date, $end_date ) {
+	private function get_pre_raw_daily_stats_rollup( $start_date, $end_date, $ignore_spam_exclusion = false ) {
 		global $wpdb;
 
-		if ( $this->is_spam_excluded() ) {
+		// daily_stats has no human-only scroll columns, so the rollup is
+		// normally suppressed while spam exclusion is on. Callers that would
+		// otherwise report 0 for a pre-raw range (Avg Scroll Depth — the
+		// aggregate is the ONLY surviving source there, QA-B-DASH-007) opt out
+		// of that guard and accept the small bot-traffic bias instead.
+		if ( ! $ignore_spam_exclusion && $this->is_spam_excluded() ) {
 			return null;
 		}
 
@@ -13198,8 +13457,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 				$filter_sql  = $this->build_advanced_filters_sql( $filters );
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
-				$avg = $wpdb->get_var( $wpdb->prepare(
-					"SELECT AVG(scroll_depth) FROM (
+				$raw = $wpdb->get_row( $wpdb->prepare(
+					"SELECT COALESCE(SUM(scroll_depth), 0) AS total, COUNT(*) AS cnt FROM (
 						SELECT pv.scroll_depth FROM " . $wpdb->prefix . "optibehavior_pageviews pv
 						INNER JOIN " . $wpdb->prefix . "optibehavior_sessions s ON pv.session_id = s.id
 						LEFT JOIN " . $wpdb->prefix . "optibehavior_visitors v ON s.visitor_id = v.id
@@ -13208,8 +13467,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 					) sampled",
 					array_merge( array( $start_date, $end_date ), $filter_sql['params'] )
 				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-				) );
-				return $avg !== null ? round( floatval( $avg ), 1 ) : 0;
+				), ARRAY_A );
+				return $this->merge_pre_raw_scroll_rollup( $raw, $start_date, $end_date );
 			}
 
 			// Check if spam exclusion is enabled
@@ -13220,8 +13479,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 				// Regression marker: AND pv.scroll_depth > 0 AND s.traffic_type IN.
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-				$avg = $wpdb->get_var( $wpdb->prepare(
-					"SELECT AVG(scroll_depth) FROM (
+				$raw = $wpdb->get_row( $wpdb->prepare(
+					"SELECT COALESCE(SUM(scroll_depth), 0) AS total, COUNT(*) AS cnt FROM (
 						SELECT pv.scroll_depth FROM " . $wpdb->prefix . "optibehavior_pageviews pv
 						INNER JOIN " . $wpdb->prefix . "optibehavior_sessions s ON pv.session_id = s.id
 						WHERE pv.view_time BETWEEN %s AND %s AND pv.scroll_depth > 0" . $spam_clause . "
@@ -13230,8 +13489,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 					$start_date,
 					$end_date
 				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-				) );
-				return $avg !== null ? round( floatval( $avg ), 1 ) : 0;
+				), ARRAY_A );
+				return $this->merge_pre_raw_scroll_rollup( $raw, $start_date, $end_date );
 			}
 
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
@@ -13246,19 +13505,37 @@ class Opti_Behavior_Heatmap_Dashboard {
 			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			), ARRAY_A );
 
-			$total = is_array( $raw ) ? floatval( $raw['total'] ) : 0;
-			$cnt   = is_array( $raw ) ? intval( $raw['cnt'] ) : 0;
+			return $this->merge_pre_raw_scroll_rollup( $raw, $start_date, $end_date );
 
-			// Unified Retention Protocol: merge aggregated scroll history for
-			// days older than the raw retention window (weighted combine).
-			$rollup = $this->get_pre_raw_daily_stats_rollup( $start_date, $end_date );
-			if ( is_array( $rollup ) && absint( $rollup['scroll_depth_count'] ) > 0 ) {
-				$total += floatval( $rollup['total_scroll_depth'] );
-				$cnt   += absint( $rollup['scroll_depth_count'] );
-			}
+	}
 
-			return $cnt > 0 ? round( $total / $cnt, 1 ) : 0;
+	/**
+	 * Weighted-combine a raw scroll SUM/COUNT with the pre-raw daily_stats rollup.
+	 *
+	 * Unified Retention Protocol: days older than the raw retention window only
+	 * survive in `optibehavior_daily_stats`, so every branch of
+	 * get_avg_scroll_depth() — unfiltered, spam-excluded and advanced-filtered —
+	 * has to merge the rollup or the widget reads 0 for a pre-raw range
+	 * (QA-B-DASH-007).
+	 *
+	 * @since 1.9.0.7
+	 *
+	 * @param array|null $raw        Row with `total` + `cnt` from the raw query.
+	 * @param string     $start_date Start date-time.
+	 * @param string     $end_date   End date-time.
+	 * @return float
+	 */
+	private function merge_pre_raw_scroll_rollup( $raw, $start_date, $end_date ) {
+		$total = is_array( $raw ) ? floatval( $raw['total'] ) : 0;
+		$cnt   = is_array( $raw ) ? intval( $raw['cnt'] ) : 0;
 
+		$rollup = $this->get_pre_raw_daily_stats_rollup( $start_date, $end_date, true );
+		if ( is_array( $rollup ) && absint( $rollup['scroll_depth_count'] ) > 0 ) {
+			$total += floatval( $rollup['total_scroll_depth'] );
+			$cnt   += absint( $rollup['scroll_depth_count'] );
+		}
+
+		return $cnt > 0 ? round( $total / $cnt, 1 ) : 0;
 	}
 
 	/**
@@ -15315,6 +15592,31 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 
 	/**
+	 * Whether the DB server supports window functions (ROW_NUMBER() OVER …):
+	 * MySQL >= 8.0.2, MariaDB >= 10.2. Older servers are still common on shared
+	 * hosting and returned an SQL error on every realtime poll. Cached per
+	 * request; filterable (`opti_behavior_supports_window_functions`) for tests.
+	 *
+	 * @since 1.9.0.6
+	 * @return bool
+	 */
+	private function supports_window_functions() {
+		static $supported = null;
+		if ( null === $supported ) {
+			global $wpdb;
+			$info = (string) $wpdb->db_server_info();
+			if ( false !== stripos( $info, 'mariadb' ) ) {
+				// e.g. "10.6.12-MariaDB" or "5.5.5-10.6.12-MariaDB-log".
+				preg_match( '/(\d+\.\d+\.\d+)-MariaDB/i', $info, $m );
+				$supported = ! empty( $m[1] ) && version_compare( $m[1], '10.2.0', '>=' );
+			} else {
+				$supported = version_compare( (string) $wpdb->db_version(), '8.0.2', '>=' );
+			}
+		}
+		return (bool) apply_filters( 'opti_behavior_supports_window_functions', $supported );
+	}
+
+	/**
 	 * Get active visitors
 	 *
 	 * @return int
@@ -15322,8 +15624,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 	private function get_active_visitors() {
 		global $wpdb;
 
-		// Consider visitors active if they had activity in the last 10 minutes
-		$cutoff = gmdate( 'Y-m-d H:i:s', time() - 600 );
+		// Consider visitors active if they had activity in the last 10 minutes.
+		// 1.9.0.7: the writers stamp start_time/end_time with current_time( 'mysql' )
+		// (site-local), so the cutoff MUST be built on the same clock. gmdate() alone
+		// shifted the whole window by the site's UTC offset — behind UTC the widget
+		// under-reported, ahead of UTC rows stayed "active" long after they ended.
+		$cutoff = gmdate( 'Y-m-d H:i:s', strtotime( current_time( 'mysql' ) ) - 600 );
 
 		// Get spam exclusion clause
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
@@ -15335,6 +15641,35 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
+		// 1.9.0.6: (a) `end_time > X OR start_time > X` could not use an index, so
+		// every 5 s poll full-scanned optibehavior_sessions while heartbeats were
+		// updating it — rewritten so both branches are index ranges
+		// (idx_sessions_end_time + idx_spam_filter prefix); (b) ROW_NUMBER() needs
+		// MySQL 8 / MariaDB 10.2 — older servers got an SQL error on every poll,
+		// GROUP BY fallback below (a tie on the same second may list a visitor
+		// twice there; harmless for a "right now" widget).
+		$window_ls = '(s.end_time > %s OR (s.end_time IS NULL AND s.start_time > %s))';
+		if ( $this->supports_window_functions() ) {
+			$ls_sql          = "SELECT s.id as session_id, s.visitor_id, s.entry_page, s.start_time, s.end_time, s.ip,
+					ROW_NUMBER() OVER (PARTITION BY s.visitor_id ORDER BY COALESCE(s.end_time, s.start_time) DESC) as rn
+				FROM {$wpdb->prefix}optibehavior_sessions s
+				WHERE {$window_ls}{$spam_clause}";
+			$ls_placeholders = 2;
+		} else {
+			$ls_sql          = "SELECT s.id as session_id, s.visitor_id, s.entry_page, s.start_time, s.end_time, s.ip, 1 as rn
+				FROM {$wpdb->prefix}optibehavior_sessions s
+				INNER JOIN (
+					SELECT s.visitor_id, MAX(COALESCE(s.end_time, s.start_time)) as last_activity
+					FROM {$wpdb->prefix}optibehavior_sessions s
+					WHERE {$window_ls}{$spam_clause}
+					GROUP BY s.visitor_id
+				) lv ON lv.visitor_id = s.visitor_id AND COALESCE(s.end_time, s.start_time) = lv.last_activity
+				WHERE {$window_ls}{$spam_clause}";
+			$ls_placeholders = 4;
+		}
+		// + 2 for the latest-pageview subquery window below.
+		$cutoff_args = array_fill( 0, $ls_placeholders + 2, $cutoff );
+
 		$results = $wpdb->get_results( $wpdb->prepare(
 			"SELECT
 				ls.session_id,
@@ -15349,12 +15684,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				COALESCE(latest_pv.url, ls.entry_page) as current_page,
 				COALESCE(latest_pv.title, p.title, 'Unknown Page') as page_title,
 				COALESCE(ls.end_time, ls.start_time) as last_activity
-			FROM (
-				SELECT s.id as session_id, s.visitor_id, s.entry_page, s.start_time, s.end_time, s.ip,
-					ROW_NUMBER() OVER (PARTITION BY s.visitor_id ORDER BY COALESCE(s.end_time, s.start_time) DESC) as rn
-				FROM " . $wpdb->prefix . "optibehavior_sessions s
-				WHERE (s.end_time > %s OR s.start_time > %s)" . $spam_clause . "
-			) ls
+			FROM ( " . $ls_sql . " ) ls
 			LEFT JOIN " . $wpdb->prefix . "optibehavior_visitors v ON ls.visitor_id = v.id
 			LEFT JOIN " . $wpdb->prefix . "optibehavior_pages p ON p.id = (
 				SELECT MIN(p2.id) FROM " . $wpdb->prefix . "optibehavior_pages p2
@@ -15373,7 +15703,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					SELECT pv.session_id, MAX(pv.view_time) as max_view_time
 					FROM " . $wpdb->prefix . "optibehavior_pageviews pv
 					INNER JOIN " . $wpdb->prefix . "optibehavior_sessions rs
-						ON rs.id = pv.session_id AND (rs.end_time > %s OR rs.start_time > %s)
+						ON rs.id = pv.session_id AND (rs.end_time > %s OR (rs.end_time IS NULL AND rs.start_time > %s))
 					GROUP BY pv.session_id
 				) pv2 ON pv1.session_id = pv2.session_id AND pv1.view_time = pv2.max_view_time
 				WHERE pv1.id = (
@@ -15384,10 +15714,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			WHERE ls.rn = 1
 			ORDER BY last_activity DESC
 			LIMIT 50",
-			$cutoff,
-			$cutoff,
-			$cutoff,
-			$cutoff
+			$cutoff_args
 // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 
@@ -15407,7 +15734,15 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		$visitors = array();
 		foreach ( $results as $row ) {
-			$last_activity = strtotime($row->end_time ?: $row->start_time);
+			// The stored value is site-local (current_time( 'mysql' )); WordPress runs
+			// PHP in UTC, so it has to be converted before it can be compared with
+			// time() or re-localised by date_i18n() — otherwise "time ago" and the
+			// printed clock are both off by the site's UTC offset (1.9.0.7).
+			$activity_local = $row->end_time ?: $row->start_time;
+			$last_activity  = strtotime( get_gmt_from_date( $activity_local ) );
+			if ( ! $last_activity ) {
+				$last_activity = strtotime( $activity_local );
+			}
 			$time_ago = $this->time_ago($last_activity);
 
 			// Get page title with proper fallback logic
@@ -15455,12 +15790,19 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$country_name = $row->country_name ?: ($country_code !== 'UN' ? $this->get_country_name($country_code) : 'Unknown');
 			$visitors[] = array(
 				'session_id'   => $row->session_id,
+				// The whole tie-breaking contract (ROW_NUMBER per visitor_id) is about
+				// visitors, so the realtime row exposes the visitor it belongs to.
+				'visitor_id'   => isset( $row->visitor_id ) ? (string) $row->visitor_id : '',
 				'country'      => $country_name,
 				'country_code' => $country_code,
 				'flag'         => $country_flag($country_code),
 				'page_title'   => $page_title,
 				'current_url'  => $current_page,
 				'visited_at'   => date_i18n('j-M H:i', $last_activity),
+				// Canonical UTC instant (ISO-8601) so the browser can re-format the
+				// row in the viewer's own timezone instead of trusting the two
+				// server-rendered strings above.
+				'visited_at_utc' => gmdate( 'c', $last_activity ),
 				'time_ago'     => $time_ago,
 				'ip'           => $visitor_ip,
 				'device_type'  => $row->device_type ?: 'Desktop'
@@ -15749,7 +16091,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 			// Check permissions
 			if ( ! current_user_can( 'manage_options' ) ) {
-				wp_die( 'Insufficient permissions' );
+				wp_die( esc_html__( 'Insufficient permissions', 'opti-behavior' ) );
 			}
 
 			// Check we're on the settings page
@@ -15763,7 +16105,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$log_file = $debug_manager->get_log_file_path();
 
 			if ( ! file_exists( $log_file ) ) {
-				wp_die( 'Log file not found' );
+				wp_die( esc_html__( 'Log file not found', 'opti-behavior' ) );
 			}
 
 			// Set headers for download
@@ -15839,6 +16181,15 @@ class Opti_Behavior_Heatmap_Dashboard {
 				'include_form_analytics'    => isset( $_POST['include_form_analytics'] ) ? 1 : 0,
 				'recipients'                => isset( $_POST['recipients'] ) ? sanitize_textarea_field( wp_unslash( $_POST['recipients'] ) ) : '',
 			);
+
+			// Server-side Pro gate: the modal only marks these sections disabled
+			// client-side, so a crafted (or replayed) POST could persist report
+			// sections Free cannot render. Zero them unless Pro is active.
+			if ( ! function_exists( 'opti_behavior_pro_active' ) || ! opti_behavior_pro_active() ) {
+				foreach ( array( 'include_recordings_stats', 'include_errors', 'include_form_analytics', 'include_user_journeys' ) as $pro_section ) {
+					$data[ $pro_section ] = 0;
+				}
+			}
 
 			$scheduler = new Opti_Behavior_Report_Scheduler( $this->heatmap );
 
@@ -15960,15 +16311,20 @@ class Opti_Behavior_Heatmap_Dashboard {
 			}
 
 			$from_name = isset( $_POST['from_name'] ) ? sanitize_text_field( wp_unslash( $_POST['from_name'] ) ) : '';
-			$from_email = isset( $_POST['from_email'] ) ? sanitize_email( wp_unslash( $_POST['from_email'] ) ) : '';
+			// Validate the RAW submitted value: sanitize_email() turns "nope" into
+			// an empty string, so validating afterwards silently accepted every
+			// invalid address and persisted an empty from-address instead.
+			$from_email_raw = isset( $_POST['from_email'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['from_email'] ) ) ) : '';
 			$email_method = isset( $_POST['email_method'] ) && in_array( $_POST['email_method'], array( 'wp_mail', 'smtp' ), true )
 				? sanitize_text_field( wp_unslash( $_POST['email_method'] ) )
 				: 'wp_mail';
 
 			// Validate email if provided
-			if ( ! empty( $from_email ) && ! is_email( $from_email ) ) {
+			if ( '' !== $from_email_raw && ! is_email( $from_email_raw ) ) {
 				wp_send_json_error( __( 'Invalid email address', 'opti-behavior' ) );
 			}
+
+			$from_email = '' !== $from_email_raw ? sanitize_email( $from_email_raw ) : '';
 
 			// Build a plain array of changed values to pass to save()
 			$new_options = array(

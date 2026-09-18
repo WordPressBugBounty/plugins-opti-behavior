@@ -39,6 +39,38 @@ class Opti_Behavior_Smart_Cleanup_Service {
 	const DEFAULT_BATCH_SIZE = 500;
 
 	/**
+	 * Transient holding the cached {@see self::count_bot_records_breakdown()}
+	 * result that feeds the Manual Cleanup counter. The settings page must not
+	 * run a COUNT(*) while rendering (QA-B-SET-073), so the danger-zone sizes
+	 * endpoint short-caches the breakdown — but the counter sits next to a
+	 * destructive button, so every path that adds or removes bot records has to
+	 * drop the cache instead of leaving a stale number on screen for a minute
+	 * (QA-B-SET-044).
+	 *
+	 * @since 1.9.0.7
+	 * @var string
+	 */
+	const BOT_BREAKDOWN_CACHE_KEY = 'opti_behavior_danger_bot_breakdown';
+
+	/**
+	 * Drop the cached Manual Cleanup bot/spam breakdown.
+	 *
+	 * @since 1.9.0.7
+	 * @return void
+	 */
+	public static function invalidate_bot_breakdown_cache() {
+		delete_transient( self::BOT_BREAKDOWN_CACHE_KEY );
+	}
+
+	/**
+	 * Append-only recording sidecar suffixes (appended to the base file path).
+	 *
+	 * @since 2026-09-13
+	 * @var string[]
+	 */
+	const RECORDING_SIDECAR_SUFFIXES = array( '.oblog', '.obidx', '.obtmp' );
+
+	/**
 	 * Default maximum number of sessions scheduled cleanup can delete per cron run.
 	 *
 	 * @since 1.2.7
@@ -69,6 +101,25 @@ class Opti_Behavior_Smart_Cleanup_Service {
 	 * @var int
 	 */
 	const OPTIMIZATION_MIN_FREE_BYTES = 10485760;
+
+	/**
+	 * Maximum Cleanup History entries kept (every cleanup task now logs each
+	 * run, so 20 entries covered only a few days).
+	 *
+	 * @since 1.9.x
+	 * @var int
+	 */
+	const CLEANUP_LOG_LIMIT = 50;
+
+	/**
+	 * Grace (seconds) under the configured cadence before a scheduled run is
+	 * considered "not due": a daily cron fires ~24h after the previous run
+	 * finished, which a strict comparison would skip every other day.
+	 *
+	 * @since 1.9.x
+	 * @var int
+	 */
+	const SCHEDULE_CADENCE_GRACE = 3600;
 
 	/**
 	 * Return the canonical session-child cleanup map.
@@ -349,6 +400,22 @@ class Opti_Behavior_Smart_Cleanup_Service {
 	 * @return int Number of bot cleanup records.
 	 */
 	public function count_bot_sessions() {
+		$breakdown = $this->count_bot_records_breakdown();
+		return $breakdown['total'];
+	}
+
+	/**
+	 * Bot cleanup records, split by what the automatic daily tier does with
+	 * them: `sessions` (bot/spam/automated sessions — deleted by the tier and
+	 * by the manual button) vs `bot_visits` (rows of the bot-visit LOG for
+	 * bots refused at the door — pruned at 30 days by the tier, truncated by
+	 * the manual button). Shown separately so a large log never reads as
+	 * "the automatic cleanup is not running".
+	 *
+	 * @since 1.9.x (Cleanup audit 2026-09-13)
+	 * @return array{sessions:int,bot_visits:int,total:int}
+	 */
+	public function count_bot_records_breakdown() {
 		global $wpdb;
 		$sessions_table   = esc_sql( $wpdb->prefix . 'optibehavior_sessions' );
 		$bot_visits_table = esc_sql( $wpdb->prefix . 'optibehavior_bot_visits' );
@@ -367,7 +434,11 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			$bot_count = $wpdb->get_var( "SELECT COUNT(*) FROM " . $bot_visits_table );
 		}
 
-		return absint( $session_count ) + absint( $bot_count );
+		return array(
+			'sessions'   => absint( $session_count ),
+			'bot_visits' => absint( $bot_count ),
+			'total'      => absint( $session_count ) + absint( $bot_count ),
+		);
 	}
 
 	/**
@@ -781,6 +852,8 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			delete_option( 'optibehavior_bot_cleanup_files_deleted' );
 			delete_option( 'optibehavior_bot_cleanup_orphaned_visitors_deleted' );
 
+			self::invalidate_bot_breakdown_cache();
+
 			return array(
 				'status'                    => 'completed',
 				'total'                     => $total,
@@ -796,6 +869,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		}
 
 		$deleted_count = $this->cascade_delete_sessions( $session_ids );
+		self::invalidate_bot_breakdown_cache();
 		$this->accumulate_cleanup_batch_result( 'optibehavior_bot_cleanup', $this->get_last_cascade_result() );
 		$prev_deleted  = get_option( 'optibehavior_bot_cleanup_deleted', 0 );
 		update_option( 'optibehavior_bot_cleanup_deleted', $prev_deleted + $deleted_count, false );
@@ -826,10 +900,11 @@ class Opti_Behavior_Smart_Cleanup_Service {
 	 * the manual Bot & Spam Cleanup) through the canonical session cascade, so
 	 * child tables AND files stay in sync. Bounded: loops small batches up to
 	 * a per-run session cap; leftovers are picked up by the next daily tick.
-	 * `bot_visits` log rows and orphaned visitors are NOT touched here — the
-	 * manual Bot & Spam Cleanup keeps those extras; this daily pass only ages
-	 * out raw spam sessions (dashboard bot-traffic % survives via the
-	 * `daily_stats.spam_sessions`/`automated_sessions` aggregates).
+	 * `bot_visits` crawler log rows older than 30 days (filterable) are pruned
+	 * via prune_bot_visits_log(); orphaned visitors are NOT touched here — the
+	 * manual Bot & Spam Cleanup keeps that extra (dashboard bot-traffic %
+	 * survives via the `daily_stats.spam_sessions`/`automated_sessions`
+	 * aggregates).
 	 *
 	 * @since 1.9.1 (Tiered Retention)
 	 * @since 2026-08-16 Mass-delete circuit breaker: aborts when spam-typed
@@ -875,6 +950,14 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		$placeholders   = implode( ',', array_fill( 0, count( $traffic_types ), '%s' ) );
 		$rows_by_table  = array();
 
+		// Crawler log rows age out on their own short window, independent of
+		// whether any spam sessions are pending.
+		$result['bot_visits_deleted'] = $this->prune_bot_visits_log();
+		if ( $result['bot_visits_deleted'] > 0 ) {
+			$rows_by_table['optibehavior_bot_visits'] = $result['bot_visits_deleted'];
+			self::invalidate_bot_breakdown_cache();
+		}
+
 		$matched_spam = (int) $wpdb->get_var(
 			$wpdb->prepare(
 				'SELECT COUNT(*) FROM ' . $sessions_table . ' WHERE traffic_type IN (' . $placeholders . ')',
@@ -883,6 +966,21 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		);
 
 		if ( $matched_spam < 1 ) {
+			if ( $result['bot_visits_deleted'] > 0 ) {
+				$this->clear_analytics_caches();
+				$this->add_cleanup_log(
+					'auto',
+					0,
+					0,
+					0,
+					array(
+						'rows_by_table' => $rows_by_table,
+						'trigger'       => 'spam_daily_tier',
+						'capped'        => false,
+						'status'        => 'completed',
+					)
+				);
+			}
 			return $result;
 		}
 
@@ -948,7 +1046,8 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			$result['capped'] = $remaining > 0;
 		}
 
-		if ( $result['sessions_deleted'] > 0 ) {
+		if ( $result['sessions_deleted'] > 0 || $result['bot_visits_deleted'] > 0 ) {
+			self::invalidate_bot_breakdown_cache();
 			$this->clear_analytics_caches();
 			$this->add_cleanup_log(
 				'auto',
@@ -965,6 +1064,70 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Prune crawler log rows (`optibehavior_bot_visits`) older than a short window.
+	 *
+	 * The bot tracker inserts one row per crawler hit, so on busy sites the
+	 * table grows by thousands of rows a day. Before this, only the manual
+	 * Bot & Spam Cleanup (TRUNCATE) and the detailed-data retention window
+	 * (365 days by default) removed them, so the "Currently detected" counter
+	 * kept climbing even though the daily spam tier ran. Recent rows are kept
+	 * so the dashboard bot-traffic share stays accurate for recent ranges.
+	 * Deletes in bounded batches; leftovers are picked up by the next tick.
+	 *
+	 * @since 2026-09-13
+	 * @return int Rows deleted.
+	 */
+	private function prune_bot_visits_log() {
+		global $wpdb;
+
+		if ( ! $this->table_exists( 'optibehavior_bot_visits' ) ) {
+			return 0;
+		}
+
+		/**
+		 * Days of crawler log rows kept by the daily spam tier (0 = never prune).
+		 *
+		 * @since 2026-09-13
+		 * @param int $days Default 30.
+		 */
+		$days = absint( apply_filters( 'opti_behavior_bot_visits_retention_days', 30 ) );
+		if ( $days < 1 ) {
+			return 0;
+		}
+
+		/**
+		 * Max crawler log rows deleted per daily run.
+		 *
+		 * @since 2026-09-13
+		 * @param int $max_rows Default 200000.
+		 */
+		$max_rows   = max( 1000, absint( apply_filters( 'opti_behavior_bot_visits_prune_max_rows_per_run', 200000 ) ) );
+		$batch_size = 5000;
+		$table      = esc_sql( $wpdb->prefix . 'optibehavior_bot_visits' );
+		// visit_time is written with current_time( 'mysql' ) (site-local time).
+		$cutoff     = wp_date( 'Y-m-d H:i:s', time() - ( $days * DAY_IN_SECONDS ) );
+		$deleted    = 0;
+
+		while ( $deleted < $max_rows ) {
+			$affected = $wpdb->query(
+				$wpdb->prepare(
+					'DELETE FROM ' . $table . ' WHERE visit_time < %s LIMIT %d',
+					$cutoff,
+					min( $batch_size, $max_rows - $deleted )
+				)
+			);
+
+			if ( ! $affected ) {
+				break;
+			}
+
+			$deleted += (int) $affected;
+		}
+
+		return $deleted;
 	}
 
 	/**
@@ -1322,6 +1485,17 @@ class Opti_Behavior_Smart_Cleanup_Service {
 				);
 			}
 
+			// Lean events mode (1.9.2): scroll/move activity no longer leaves
+			// event rows, so also treat a page with daily-index points as live.
+			if ( 0 === $live && $this->table_exists( 'optibehavior_heatmap_daily' ) ) {
+				$live += (int) $wpdb->get_var(
+					$wpdb->prepare(
+						"SELECT COUNT(*) FROM {$wpdb->prefix}optibehavior_heatmap_daily WHERE page_id = %d AND (click_pc + click_mobile + att_pc + att_mobile + break_pc + break_mobile) > 0 LIMIT 1",
+						$page_id
+					)
+				);
+			}
+
 			if ( 0 === $live ) {
 				$removed += $storage->archive_page_hash_directories( $page_id ) > 0 ? 1 : 0;
 			}
@@ -1403,10 +1577,12 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		global $wpdb;
 		$options_table = esc_sql( $wpdb->prefix . 'options' );
 
-		$wpdb->query( "DELETE FROM " . $options_table . " WHERE option_name LIKE '_transient_optibehavior_%'" );
-		$wpdb->query( "DELETE FROM " . $options_table . " WHERE option_name LIKE '_transient_timeout_optibehavior_%'" );
-		$wpdb->query( "DELETE FROM " . $options_table . " WHERE option_name LIKE '_transient_opti_behavior_%'" );
-		$wpdb->query( "DELETE FROM " . $options_table . " WHERE option_name LIKE '_transient_timeout_opti_behavior_%'" );
+		// 1.9.0.6: index-friendly, delete-by-name helper instead of four
+		// unescaped `LIKE '_transient_…'` full scans (this runs from the daily
+		// cleanup cron too, i.e. inside a visitor request on most hosts).
+		if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+			opti_behavior_delete_transients_by_prefix( array( 'optibehavior_', 'opti_behavior_' ) );
+		}
 
 		if ( $this->table_exists( 'optibehavior_visitor_daily_stats' ) && $this->table_exists( 'optibehavior_sessions' ) ) {
 			$summary_table  = esc_sql( $wpdb->prefix . 'optibehavior_visitor_daily_stats' );
@@ -1670,15 +1846,33 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		$settings = $this->normalize_auto_cleanup_settings( get_option( 'opti_behavior_auto_cleanup_settings', array() ) );
 
 		if ( empty( $settings['enabled'] ) ) {
+			$this->report_cleanup_task_run(
+				array(
+					'status' => 'skipped',
+					'note'   => __( 'Automatic cleanup is turned off — nothing was deleted.', 'opti-behavior' ),
+				)
+			);
 			return;
 		}
 
 		if ( $this->should_skip_scheduled_cleanup_for_frequency( $settings ) ) {
+			$this->report_cleanup_task_run(
+				array(
+					'status' => 'skipped',
+					'note'   => __( 'Not due yet for the configured frequency — nothing was deleted.', 'opti-behavior' ),
+				)
+			);
 			return;
 		}
 
 		$conditions = isset( $settings['conditions'] ) ? $settings['conditions'] : array();
 		if ( empty( $conditions ) ) {
+			$this->report_cleanup_task_run(
+				array(
+					'status' => 'skipped',
+					'note'   => __( 'No cleanup conditions are saved — nothing was deleted.', 'opti-behavior' ),
+				)
+			);
 			return;
 		}
 
@@ -1720,6 +1914,14 @@ class Opti_Behavior_Smart_Cleanup_Service {
 				'warnings'                      => $warnings,
 			);
 			update_option( 'opti_behavior_auto_cleanup_settings', $settings );
+
+			$this->report_cleanup_task_run(
+				array(
+					'status'   => 'completed',
+					'warnings' => $warnings,
+					'note'     => __( 'No sessions matched the saved cleanup rules.', 'opti-behavior' ),
+				)
+			);
 			return;
 		}
 
@@ -2017,9 +2219,40 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			'max_rows_per_run'                => isset( $settings['max_rows_per_run'] ) ? $this->sanitize_scheduled_max_rows( $settings['max_rows_per_run'] ) : self::DEFAULT_SCHEDULED_MAX_ROWS,
 			'optimize_after_cleanup'          => ! empty( $settings['optimize_after_cleanup'] ),
 			'recalculate_spam_before_cleanup' => ! empty( $settings['recalculate_spam_before_cleanup'] ),
-			'last_run'                        => isset( $settings['last_run'] ) ? $settings['last_run'] : null,
+			'last_run'                        => self::normalize_last_run( isset( $settings['last_run'] ) ? $settings['last_run'] : null ),
 			'last_result'                     => isset( $settings['last_result'] ) && is_array( $settings['last_result'] ) ? $settings['last_result'] : array(),
 		);
+	}
+
+	/**
+	 * Coerce a saved `last_run` value to the site-local timestamp the writers
+	 * produce with `current_time( 'timestamp' )`.
+	 *
+	 * Older builds stored a MySQL datetime string here. A string reached
+	 * `wp_date()` in the settings view, which returns false for a non-numeric
+	 * timestamp — the "Last run" line then rendered its icon with no date at
+	 * all, and the cadence throttle read `intval( '2026-08-23 …' ) = 2026`.
+	 * WordPress pins PHP's default timezone to UTC, so `strtotime()` on a
+	 * site-local datetime string yields exactly the same site-local epoch
+	 * convention as `current_time( 'timestamp' )`.
+	 *
+	 * @since 1.9.x
+	 * @param mixed $value Raw stored value.
+	 * @return int|null Site-local epoch, or null when never run.
+	 */
+	public static function normalize_last_run( $value ) {
+		if ( is_numeric( $value ) ) {
+			$timestamp = (int) $value;
+			return $timestamp > 0 ? $timestamp : null;
+		}
+
+		if ( ! is_string( $value ) || '' === trim( $value ) ) {
+			return null;
+		}
+
+		$timestamp = strtotime( trim( $value ) );
+
+		return ( false === $timestamp || $timestamp <= 0 ) ? null : (int) $timestamp;
 	}
 
 	/**
@@ -2043,7 +2276,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		);
 		$interval = isset( $intervals[ $frequency ] ) ? $intervals[ $frequency ] : $intervals['daily'];
 
-		return ( time() - $last_run ) < $interval;
+		return ( time() - $last_run ) < ( $interval - self::SCHEDULE_CADENCE_GRACE );
 	}
 
 	/**
@@ -2185,12 +2418,32 @@ class Opti_Behavior_Smart_Cleanup_Service {
 	 * @param array  $details          Optional detailed cleanup result.
 	 */
 	public function add_cleanup_log( $type, $sessions_deleted, $events_deleted = 0, $files_deleted = 0, $details = array() ) {
+		$details = is_array( $details ) ? $details : array();
+
+		// Inside a tracked Cleanup Task run (cron hook of a registry task), the
+		// handler's own entries fold into the run's single history entry, so a
+		// run shows up once — with every stat — under its task name.
+		if ( class_exists( 'Opti_Behavior_Cleanup_Task_Registry' )
+			&& Opti_Behavior_Cleanup_Task_Registry::is_tracking_run()
+			&& ( ! isset( $details['status'] ) || 'queued' !== $details['status'] ) ) {
+			Opti_Behavior_Cleanup_Task_Registry::report_run(
+				array_merge(
+					$details,
+					array(
+						'sessions_deleted' => $sessions_deleted,
+						'events_deleted'   => $events_deleted,
+						'files_deleted'    => isset( $details['files_deleted'] ) ? $details['files_deleted'] : $files_deleted,
+					)
+				)
+			);
+			return;
+		}
+
 		$logs = get_option( 'opti_behavior_cleanup_logs', array() );
 		if ( ! is_array( $logs ) ) {
 			$logs = array();
 		}
 
-		$details = is_array( $details ) ? $details : array();
 		$entry   = array(
 			'timestamp'                 => current_time( 'mysql' ),
 			'type'                      => sanitize_text_field( $type ),
@@ -2204,6 +2457,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			'status'                    => isset( $details['status'] ) ? sanitize_key( $details['status'] ) : 'completed',
 			'trigger'                   => isset( $details['trigger'] ) ? sanitize_key( $details['trigger'] ) : '',
 			'warnings'                  => isset( $details['warnings'] ) && is_array( $details['warnings'] ) ? array_values( array_map( 'sanitize_text_field', $details['warnings'] ) ) : array(),
+			'notes'                     => isset( $details['notes'] ) && is_array( $details['notes'] ) ? array_values( array_map( 'sanitize_text_field', $details['notes'] ) ) : array(),
 		);
 
 		$entry['signature']       = $this->build_cleanup_log_signature( $entry );
@@ -2223,7 +2477,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			}
 
 			$logs[0] = $entry;
-			$logs    = array_slice( $logs, 0, 20 );
+			$logs    = array_slice( $logs, 0, self::CLEANUP_LOG_LIMIT );
 			update_option( 'opti_behavior_cleanup_logs', $logs, false );
 			return;
 		}
@@ -2233,8 +2487,22 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			$entry
 		);
 
-		$logs = array_slice( $logs, 0, 20 );
+		$logs = array_slice( $logs, 0, self::CLEANUP_LOG_LIMIT );
 		update_option( 'opti_behavior_cleanup_logs', $logs, false );
+	}
+
+	/**
+	 * Report a result to the Cleanup Task run tracker (no-op outside a
+	 * tracked cron run).
+	 *
+	 * @since 1.9.x
+	 * @param array $result Run result, see Opti_Behavior_Cleanup_Task_Registry::report_run().
+	 * @return void
+	 */
+	private function report_cleanup_task_run( $result ) {
+		if ( class_exists( 'Opti_Behavior_Cleanup_Task_Registry' ) ) {
+			Opti_Behavior_Cleanup_Task_Registry::report_run( $result );
+		}
 	}
 
 	/**
@@ -2816,23 +3084,44 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			}
 
 			$candidate = $this->is_absolute_path( $path ) ? $path : $base_dir . ltrim( $path, '/\\' );
-			$real      = realpath( $candidate );
-			if ( false === $real || ! is_file( $real ) ) {
-				continue;
+
+			// Append-only recordings keep sidecars next to the base file
+			// (`.oblog` NDJSON log, `.obidx` counters, `.obtmp` compaction
+			// temp). They share its path plus a suffix and must go with it,
+			// even when the base file itself is already gone.
+			foreach ( self::RECORDING_SIDECAR_SUFFIXES as $suffix ) {
+				$this->delete_contained_file( $candidate . $suffix, $base_norm );
 			}
 
-			$real_norm = $this->normalize_path_for_compare( $real );
-			if ( 0 !== strpos( $real_norm, $base_norm ) ) {
-				continue;
-			}
-
-			wp_delete_file( $real );
-			if ( ! is_file( $real ) ) {
+			if ( $this->delete_contained_file( $candidate, $base_norm ) ) {
 				++$deleted;
 			}
 		}
 
 		return $deleted;
+	}
+
+	/**
+	 * Delete one file when it exists and resolves inside the data store.
+	 *
+	 * @since 2026-09-13
+	 * @param string $candidate Absolute candidate path.
+	 * @param string $base_norm Normalized store root with trailing slash.
+	 * @return bool True when the file was deleted.
+	 */
+	private function delete_contained_file( $candidate, $base_norm ) {
+		$real = realpath( $candidate );
+		if ( false === $real || ! is_file( $real ) ) {
+			return false;
+		}
+
+		if ( 0 !== strpos( $this->normalize_path_for_compare( $real ), $base_norm ) ) {
+			return false;
+		}
+
+		wp_delete_file( $real );
+
+		return ! is_file( $real );
 	}
 
 	/**

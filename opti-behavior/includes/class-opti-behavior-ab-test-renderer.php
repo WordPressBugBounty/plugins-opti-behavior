@@ -686,14 +686,14 @@ class Opti_Behavior_AB_Test_Renderer {
 
 		// Generic constant honored by WP Rocket, W3TC, WP Super Cache, etc.
 		if ( ! defined( 'DONOTCACHEPAGE' ) ) {
-			define( 'DONOTCACHEPAGE', true );
+			define( 'DONOTCACHEPAGE', true ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- Cross-plugin standard constant honoured by WP Super Cache, W3TC, WP Rocket, etc.; must keep this exact name.
 		}
 
 		// WP Rocket: explicit belt-and-braces on top of DONOTCACHEPAGE.
 		add_filter( 'do_rocket_generate_caching_files', '__return_false', PHP_INT_MAX );
 
 		// LiteSpeed Cache.
-		do_action( 'litespeed_control_set_nocache', 'opti-behavior: active A/B test on this page' );
+		do_action( 'litespeed_control_set_nocache', 'opti-behavior: active A/B test on this page' ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Third-party hook owned by LiteSpeed Cache (its documented no-cache API); not a hook defined by this plugin.
 
 		// Prevent browser/CDN caching of visitor-specific HTML.
 		if ( ! headers_sent() ) {
@@ -1442,6 +1442,20 @@ class Opti_Behavior_AB_Test_Renderer {
 			}
 
 			if ( $matches ) {
+				/**
+				 * Last-chance veto before a matched test is served on this request.
+				 *
+				 * Pro hooks this to apply audience targeting rules and the
+				 * schedule active-window to EVERY test type (element,
+				 * page_split, shortcode) — not only WooCommerce tests.
+				 *
+				 * @since 1.9.5
+				 * @param bool   $should_serve Whether the test may be served.
+				 * @param object $test         Test row.
+				 */
+				if ( ! apply_filters( 'opti_behavior_ab_should_serve_test', true, $test ) ) {
+					continue;
+				}
 				$this->active_tests[] = $test;
 			}
 		}

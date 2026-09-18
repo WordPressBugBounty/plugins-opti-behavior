@@ -331,7 +331,12 @@ class Opti_Behavior_AB_Test_Bucketer {
 		}
 
 		// Check the global Opti-Behavior consent setting.
-		$consent_mode = get_option( 'opti_behavior_heatmap_option', array() );
+		// The settings page writes this option through maybe_serialize(), so on
+		// installs saved that way the stored row is a serialized STRING and a
+		// plain get_option() never yields the array (every other reader in Free
+		// and Pro already unwraps it the same way). Tolerant on both formats —
+		// no migration needed. (QA-B-SET-091)
+		$consent_mode = maybe_unserialize( get_option( 'opti_behavior_heatmap_option', array() ) );
 		if ( is_array( $consent_mode ) && isset( $consent_mode['require_consent'] ) && ! $consent_mode['require_consent'] ) {
 			return true;
 		}

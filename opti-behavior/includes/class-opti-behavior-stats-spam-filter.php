@@ -297,9 +297,18 @@ class Opti_Behavior_Stats_Spam_Filter {
 			(CASE WHEN COALESCE({$page_alias}.page_count, 0) > 0 THEN COALESCE({$page_alias}.scroll_count, 0) ELSE COALESCE({$event_alias}.scroll_count, 0) END),
 			COALESCE({$event_alias}.scroll_count, 0)
 		)";
+		// The recording's own click_count is a first-class engagement source, not a
+		// last-resort fallback. Before 1.9.0.7 it was only consulted when the session
+		// had NO heatmap-event row at all, so a session that produced scroll events
+		// but no click events scored 0 clicks and was excluded as spam even though its
+		// recording had recorded real clicks — this zeroed the recorded-sessions KPI
+		// scope (DKPI-003). GREATEST() keeps the existing counter-based value as the
+		// primary source and only ever RAISES it, so the gate can admit more genuine
+		// sessions but can never newly exclude one that passed before.
 		$click_sql         = "GREATEST(
 			(CASE WHEN COALESCE({$page_alias}.page_count, 0) > 0 THEN COALESCE({$page_alias}.click_count, 0) WHEN {$event_alias}.session_id IS NULL THEN COALESCE({$recording_clicks}, 0) ELSE COALESCE({$event_alias}.click_count, 0) END),
-			COALESCE({$event_alias}.click_count, 0)
+			COALESCE({$event_alias}.click_count, 0),
+			COALESCE({$recording_clicks}, 0)
 		)";
 
 		// Ghost-session tolerance: the WHERE below must NOT require a sessions-table
@@ -327,13 +336,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 					GROUP BY session_id
 				) {$page_alias} ON {$recording_session} = {$page_alias}.session_id
 				LEFT JOIN (
-					SELECT
-						session_id,
-						SUM(CASE WHEN event IN (32,33) THEN 1 ELSE 0 END) AS scroll_count,
-						SUM(CASE WHEN event IN (16,17) THEN 1 ELSE 0 END) AS click_count
-					FROM {$wpdb->prefix}optibehavior_events
-					WHERE event IN (16,17,32,33)
-					GROUP BY session_id
+					" . Opti_Behavior_Heatmap_Engagement_Counters::session_counts_subquery_sql() . "
 				) {$event_alias} ON {$recording_session} = {$event_alias}.session_id",
 			'where'     => "(1=1
 				{$traffic_where}
@@ -367,7 +370,11 @@ class Opti_Behavior_Stats_Spam_Filter {
 			return null;
 		}
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Uses fixed plugin tables from $wpdb->prefix; session IDs are passed through placeholders.
+		// Static derived-table SQL (fixed plugin table names only); with `true` it
+		// carries exactly one `%s` — the 4th placeholder of the prepare() below.
+		$events_sql = Opti_Behavior_Heatmap_Engagement_Counters::session_counts_subquery_sql( true );
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Uses fixed plugin tables from $wpdb->prefix; $events_sql is a static fragment holding the 4th %s; session IDs are passed through placeholders.
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
 				"SELECT
@@ -406,14 +413,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 					GROUP BY session_id
 				) sp ON s.id = sp.session_id
 				LEFT JOIN (
-					SELECT
-						session_id,
-						COUNT(*) AS has_events,
-						SUM(CASE WHEN event IN (32,33) THEN 1 ELSE 0 END) AS scroll_count,
-						SUM(CASE WHEN event IN (16,17) THEN 1 ELSE 0 END) AS click_count
-					FROM {$wpdb->prefix}optibehavior_events
-					WHERE session_id = %s AND event IN (16,17,32,33)
-					GROUP BY session_id
+					{$events_sql}
 				) ev ON s.id = ev.session_id
 				WHERE s.id = %s
 				LIMIT 1",
@@ -423,6 +423,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 				$session_id
 			)
 		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! $row ) {
 			return null;
@@ -982,20 +983,31 @@ class Opti_Behavior_Stats_Spam_Filter {
 	public static function clear_traffic_classification_caches() {
 		global $wpdb;
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Bulk transient invalidation by fixed option-name patterns cannot be expressed via the transient API.
-		$wpdb->query(
-			"DELETE FROM {$wpdb->options}
-			WHERE option_name LIKE '_transient_opti_behavior_traffic_class_%'
-			OR option_name LIKE '_transient_timeout_opti_behavior_traffic_class_%'
-			OR option_name IN (
-				'_transient_opti_behavior_frontend_stats_today',
-				'_transient_timeout_opti_behavior_frontend_stats_today',
-				'_transient_opti_behavior_frontend_stats_last7days',
-				'_transient_timeout_opti_behavior_frontend_stats_last7days',
-				'_transient_opti_behavior_frontend_stats_last30days',
-				'_transient_timeout_opti_behavior_frontend_stats_last30days'
-			)"
-		);
+		// Fixed-name transients: delete_transient() is a no-op (no query) when
+		// the key is not cached/stored, and deletes by exact name otherwise.
+		foreach ( array( 'opti_behavior_frontend_stats_today', 'opti_behavior_frontend_stats_last7days', 'opti_behavior_frontend_stats_last30days' ) as $transient ) {
+			delete_transient( $transient );
+		}
+
+		// Hashed traffic_class_* keys. 1.9.0.6: the former
+		// `DELETE … LIKE '_transient_opti_behavior_traffic_class_%'` started with
+		// an unescaped `_` wildcard, defeated the option_name index and locked
+		// wp_options under load (customer crash report). Use the shared
+		// index-friendly SELECT-then-DELETE-by-name helper; fall back to an
+		// escaped LIKE only if the helper file is not loaded.
+		if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+			opti_behavior_delete_transients_by_prefix( array( 'opti_behavior_traffic_class_' ) );
+		} else {
+			$like = $wpdb->esc_like( 'opti_behavior_traffic_class_' ) . '%';
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Bulk transient invalidation by fixed option-name prefix cannot be expressed via the transient API; pattern bound through prepare().
+			$wpdb->query(
+				$wpdb->prepare(
+					"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
+					$wpdb->esc_like( '_transient_' ) . $like,
+					$wpdb->esc_like( '_transient_timeout_' ) . $like
+				)
+			);
+		}
 
 		// Bug #3 (Part B) fix: the dashboard's Sessions/Visitors/Page Views KPI
 		// cards read from a SEPARATE 900s-TTL transient family

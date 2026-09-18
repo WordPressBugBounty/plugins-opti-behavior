@@ -256,8 +256,9 @@ trait Opti_Behavior_AB_Tests_Ajax {
 		$test_id = isset( $_POST['test_id'] ) ? absint( $_POST['test_id'] ) : 0;
 		$goal_id = isset( $_POST['goal_id'] ) ? absint( $_POST['goal_id'] ) : null;
 
-		$manager = Opti_Behavior_AB_Test_Manager::get_instance();
-		$data    = $manager->get_results( $test_id, $goal_id, $this->resolve_ab_spam_exclusion_from_request() );
+		$manager      = Opti_Behavior_AB_Test_Manager::get_instance();
+		$exclude_spam = $this->resolve_ab_spam_exclusion_from_request();
+		$data         = $manager->get_results( $test_id, $goal_id, $exclude_spam );
 
 		if ( is_wp_error( $data ) ) {
 			wp_send_json_error( array( 'message' => $data->get_error_message() ) );
@@ -265,6 +266,35 @@ trait Opti_Behavior_AB_Tests_Ajax {
 
 		// Fetch goals for the test so JS can build a goal selector.
 		$goals = Opti_Behavior_AB_Test_Database::get_goals( $test_id );
+
+		// QA-B-AB-012 / QA-B-AB-075: the results view used to fire one full
+		// admin-ajax round trip per goal tab, so every tab paid the whole
+		// WordPress bootstrap again (measured ~8 s per tab on a 20-goal test).
+		// The per-goal numbers themselves cost only a few milliseconds, so the
+		// first load now returns every goal's payload and the admin JS serves
+		// each tab from its own cache. Only the initial request (no goal_id)
+		// prefetches; a goal-specific request stays cheap.
+		$goal_results = array();
+		if ( empty( $goal_id ) && count( $goals ) > 1 ) {
+			foreach ( $goals as $opti_ab_goal ) {
+				$opti_ab_goal_id = (int) $opti_ab_goal->id;
+				$opti_ab_payload = $manager->get_results( $test_id, $opti_ab_goal_id, $exclude_spam );
+				if ( is_wp_error( $opti_ab_payload ) ) {
+					continue;
+				}
+
+				// `test` and `goals` are goal-independent and are filled in by
+				// the admin JS from the main payload, so they are not repeated
+				// once per goal here.
+				$goal_results[] = array(
+					'results'               => $opti_ab_payload['variants'],
+					'significance'          => $opti_ab_payload['significance'],
+					'significance_progress' => $opti_ab_payload['progress'],
+					'daily_stats'           => $opti_ab_payload['daily_stats'],
+					'active_goal_id'        => $opti_ab_goal_id,
+				);
+			}
+		}
 
 		// Enrich the test object with the target product/page name so the
 		// admin Goal Configuration card can label WooCommerce goals (add-to-cart,
@@ -290,6 +320,7 @@ trait Opti_Behavior_AB_Tests_Ajax {
 			'daily_stats'           => $data['daily_stats'],
 			'goals'                 => $goals,
 			'active_goal_id'        => $goal_id,
+			'goal_results'          => $goal_results,
 		) );
 	}
 
@@ -902,12 +933,48 @@ trait Opti_Behavior_AB_Tests_Ajax {
 
 		// Save goals.
 		if ( ! empty( $goals_input ) && is_array( $goals_input ) ) {
+			// QA-F-AB-004/005: validate the whole incoming goal set BEFORE the stored
+			// goals are dropped, so a rejected payload leaves the saved goals intact,
+			// and release the per-test save mutex before every error response.
+			$opti_ab_goal_limits = Opti_Behavior_AB_Test_Database::get_free_limits();
+			$opti_ab_max_goals   = ( function_exists( 'opti_behavior_pro_active' ) && opti_behavior_pro_active() )
+				? 20
+				: absint( $opti_ab_goal_limits['max_goals_per_test'] );
+
+			if ( count( $goals_input ) > $opti_ab_max_goals ) {
+				if ( $test_id > 0 ) {
+					delete_transient( 'opti_ab_save_lock_' . $test_id );
+				}
+				wp_send_json_error(
+					array(
+						'message' => sprintf(
+							/* translators: %d: max goals */
+							__( 'Maximum %d goals allowed per test.', 'opti-behavior' ),
+							$opti_ab_max_goals
+						),
+					)
+				);
+			}
+
+			foreach ( $goals_input as $opti_ab_gd ) {
+				$opti_ab_goal_check = $manager->validate_goal( $test_id, $opti_ab_gd );
+				if ( is_wp_error( $opti_ab_goal_check ) ) {
+					if ( $test_id > 0 ) {
+						delete_transient( 'opti_ab_save_lock_' . $test_id );
+					}
+					wp_send_json_error( array( 'message' => $opti_ab_goal_check->get_error_message() ) );
+				}
+			}
+
 			Opti_Behavior_AB_Test_Database::delete_goals_for_test( $test_id );
 
 			foreach ( $goals_input as $opti_ab_gd ) {
 				$opti_ab_gd['test_id'] = $test_id;
 				$result = $manager->add_goal( $test_id, $opti_ab_gd );
 				if ( is_wp_error( $result ) ) {
+					if ( $test_id > 0 ) {
+						delete_transient( 'opti_ab_save_lock_' . $test_id );
+					}
 					wp_send_json_error( array( 'message' => $result->get_error_message() ) );
 				}
 			}
@@ -917,6 +984,9 @@ trait Opti_Behavior_AB_Tests_Ajax {
 		if ( $should_launch ) {
 			$start_result = $manager->start_test( $test_id );
 			if ( is_wp_error( $start_result ) ) {
+				if ( $test_id > 0 ) {
+					delete_transient( 'opti_ab_save_lock_' . $test_id );
+				}
 				// Test is saved but couldn't start — return the error with the test ID.
 				wp_send_json_error( array(
 					'message' => $start_result->get_error_message(),

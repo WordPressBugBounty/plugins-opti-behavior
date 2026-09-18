@@ -90,6 +90,14 @@ class Opti_Behavior_Retention_Policy {
 	const MAX_AGGREGATES_RETENTION_MONTHS = 120;
 
 	/**
+	 * DB size caps (1.9.3): 0 = off. Enforced by Opti_Behavior_DB_Size_Cap by
+	 * aging out the OLDEST raw data first, never dashboard summaries.
+	 */
+	const DEFAULT_DB_MAX_MB    = 0;
+	const DEFAULT_TABLE_MAX_MB = 0;
+	const MAX_CAP_MB           = 1000000;
+
+	/**
 	 * Return the stored retention settings, seeding + migrating on first read.
 	 *
 	 * Migration: installs that had the legacy month-based
@@ -117,6 +125,8 @@ class Opti_Behavior_Retention_Policy {
 				'spam_daily_enabled'          => true,
 				'files_retention_days'        => self::DEFAULT_FILES_RETENTION_DAYS,
 				'aggregates_retention_months' => self::DEFAULT_AGGREGATES_RETENTION_MONTHS,
+				'db_max_mb'                   => self::DEFAULT_DB_MAX_MB,
+				'table_max_mb'                => self::DEFAULT_TABLE_MAX_MB,
 			);
 			$settings = self::validate_tiers( $settings );
 			update_option( self::OPTION, $settings, false );
@@ -168,6 +178,8 @@ class Opti_Behavior_Retention_Policy {
 		$settings['spam_daily_enabled']          = ! empty( $settings['spam_daily_enabled'] );
 		$settings['insights_prune_months']       = min( 120, absint( isset( $settings['insights_prune_months'] ) ? $settings['insights_prune_months'] : self::DEFAULT_INSIGHTS_PRUNE_MONTHS ) );
 		$settings['aggregates_retention_months'] = min( self::MAX_AGGREGATES_RETENTION_MONTHS, absint( isset( $settings['aggregates_retention_months'] ) ? $settings['aggregates_retention_months'] : self::DEFAULT_AGGREGATES_RETENTION_MONTHS ) );
+		$settings['db_max_mb']                   = min( self::MAX_CAP_MB, absint( isset( $settings['db_max_mb'] ) ? $settings['db_max_mb'] : self::DEFAULT_DB_MAX_MB ) );
+		$settings['table_max_mb']                = min( self::MAX_CAP_MB, absint( isset( $settings['table_max_mb'] ) ? $settings['table_max_mb'] : self::DEFAULT_TABLE_MAX_MB ) );
 
 		return $settings;
 	}
@@ -319,6 +331,27 @@ class Opti_Behavior_Retention_Policy {
 	 * @since 1.9.1 (Tiered Retention)
 	 * @return int
 	 */
+	/**
+	 * Whole-plugin DB cap in MB (all optibehavior tables, data + indexes). 0 = off.
+	 *
+	 * @return int
+	 */
+	public static function get_db_max_mb() {
+		$settings = self::get_settings();
+		return isset( $settings['db_max_mb'] ) ? absint( $settings['db_max_mb'] ) : 0;
+	}
+
+	/**
+	 * Per-table cap in MB applied to every raw (sweepable) table. 0 = off.
+	 * Override a single table with the `opti_behavior_table_max_mb` filter.
+	 *
+	 * @return int
+	 */
+	public static function get_table_max_mb() {
+		$settings = self::get_settings();
+		return isset( $settings['table_max_mb'] ) ? absint( $settings['table_max_mb'] ) : 0;
+	}
+
 	public static function get_aggregates_retention_months() {
 		$settings = self::get_settings();
 

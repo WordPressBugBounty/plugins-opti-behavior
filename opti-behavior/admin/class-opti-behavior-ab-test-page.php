@@ -45,6 +45,10 @@ class Opti_Behavior_AB_Test_Page {
 	private function init_hooks() {
 		add_action( 'admin_menu', array( $this, 'register_menu' ), 12 );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
+		// Self-heal a drifted A/B cron slot from admin loads only; activation
+		// alone never repairs an install upgraded from an older version
+		// (QA-B-AB-019). Costs one cron-array read.
+		add_action( 'admin_init', array( 'Opti_Behavior_AB_Test_Manager', 'ensure_cron_schedules' ) );
 	}
 
 	/**
@@ -1048,8 +1052,100 @@ class Opti_Behavior_AB_Test_Page {
 		 * @param int   $insight_id Originating Smart Insight ID.
 		 */
 		$prefill = apply_filters( 'opti_behavior_ab_builder_insight_prefill', array(), $insight_id );
+		$prefill = is_array( $prefill ) ? $prefill : array();
 
-		return is_array( $prefill ) ? $prefill : array();
+		// QA-B-AB-073: no provider answered (Free install, or Pro without a
+		// stored hypothesis). The deep link still carries real context, so fall
+		// back to the insight row itself instead of dropping the origin
+		// silently - the builder then renders `data-insight-prefill` and the
+		// "Started from a Smart Insight" notice like any other prefill.
+		if ( empty( $prefill ) ) {
+			$prefill = $this->build_insight_prefill_fallback( $insight_id );
+		}
+
+		return $prefill;
+	}
+
+	/**
+	 * Build a minimal builder prefill straight from a Smart Insight row.
+	 *
+	 * Carries only what Free can know for sure: the subject of the insight as
+	 * the suggested test name, and its hypothesis statement (or, when the story
+	 * has no stored hypothesis yet, its interpretation) for the banner.
+	 *
+	 * @since 1.9.0.8
+	 *
+	 * @param int $insight_id Originating Smart Insight ID.
+	 * @return array Prefill payload, empty when the insight is unusable.
+	 */
+	private function build_insight_prefill_fallback( $insight_id ) {
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Repository' ) ) {
+			return array();
+		}
+
+		$repository = new Opti_Behavior_Smart_Insights_Repository();
+		$insight    = $repository->get_insight( absint( $insight_id ) );
+
+		if ( empty( $insight ) || ! is_array( $insight ) ) {
+			return array();
+		}
+
+		// An `ab_test_opportunity` story carries its suggested experiment in
+		// `experiment_json` (hypothesis + target). Read it too, otherwise a
+		// deep link from such an insight renders no prefill at all.
+		$experiment = ( ! empty( $insight['experiment'] ) && is_array( $insight['experiment'] ) ) ? $insight['experiment'] : array();
+
+		$experiment_statement = '';
+		if ( ! empty( $experiment['hypothesis'] ) ) {
+			if ( is_array( $experiment['hypothesis'] ) && ! empty( $experiment['hypothesis']['statement'] ) ) {
+				$experiment_statement = (string) $experiment['hypothesis']['statement'];
+			} elseif ( is_string( $experiment['hypothesis'] ) ) {
+				$experiment_statement = $experiment['hypothesis'];
+			}
+		}
+
+		$statement = '';
+		if ( ! empty( $insight['hypothesis'] ) && is_array( $insight['hypothesis'] ) && ! empty( $insight['hypothesis']['statement'] ) ) {
+			$statement = (string) $insight['hypothesis']['statement'];
+		} elseif ( '' !== $experiment_statement ) {
+			$statement = $experiment_statement;
+		} elseif ( ! empty( $insight['interpretation'] ) ) {
+			$statement = (string) $insight['interpretation'];
+		} elseif ( ! empty( $insight['why_it_matters'] ) ) {
+			$statement = (string) $insight['why_it_matters'];
+		}
+
+		$statement = trim( wp_strip_all_tags( $statement ) );
+		if ( '' === $statement ) {
+			return array();
+		}
+
+		$label = '';
+		if ( ! empty( $insight['entity_label'] ) ) {
+			$label = (string) $insight['entity_label'];
+		} elseif ( ! empty( $insight['signal_name'] ) ) {
+			$label = (string) $insight['signal_name'];
+		} elseif ( ! empty( $insight['title'] ) ) {
+			$label = (string) $insight['title'];
+		}
+
+		$prefill = array(
+			'hypothesis' => array( 'statement' => $statement ),
+		);
+
+		if ( '' !== $label ) {
+			$prefill['name'] = sanitize_text_field( $label );
+		}
+
+		if ( ! empty( $experiment['target_url'] ) && is_string( $experiment['target_url'] ) ) {
+			$prefill['target_url'] = esc_url_raw( $experiment['target_url'] );
+		}
+
+		if ( ! empty( $experiment['target_post_id'] ) ) {
+			$prefill['target_post_id'] = absint( $experiment['target_post_id'] );
+		}
+
+		return $prefill;
 	}
 
 	/**

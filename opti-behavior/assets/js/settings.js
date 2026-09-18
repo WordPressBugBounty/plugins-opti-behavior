@@ -1188,6 +1188,14 @@
 				if (isNaN(aggMonths) || aggMonths < 0) {
 					aggMonths = 0;
 				}
+				var dbMaxMb = parseInt($('#sc-db-max-mb').val(), 10);
+				if (isNaN(dbMaxMb) || dbMaxMb < 0) {
+					dbMaxMb = 0;
+				}
+				var tableMaxMb = parseInt($('#sc-table-max-mb').val(), 10);
+				if (isNaN(tableMaxMb) || tableMaxMb < 0) {
+					tableMaxMb = 0;
+				}
 				var $drStatus = $('#opti-behavior-data-retention-status');
 				$drSaveBtn.prop('disabled', true);
 				$.ajax({
@@ -1200,7 +1208,9 @@
 						insights_months: insightsMonths,
 						spam_daily: spamDaily,
 						files_days: filesDays,
-						aggregates_months: aggMonths
+						aggregates_months: aggMonths,
+						db_max_mb: dbMaxMb,
+						table_max_mb: tableMaxMb
 					},
 					success: function(response) {
 						$drSaveBtn.prop('disabled', false);
@@ -1212,6 +1222,12 @@
 							}
 							if (typeof response.data.spam_daily !== 'undefined') {
 								$('#sc-spam-daily-enabled').prop('checked', !!parseInt(response.data.spam_daily, 10));
+							}
+							if (typeof response.data.db_max_mb !== 'undefined') {
+								$('#sc-db-max-mb').val(parseInt(response.data.db_max_mb, 10) || 0);
+							}
+							if (typeof response.data.table_max_mb !== 'undefined') {
+								$('#sc-table-max-mb').val(parseInt(response.data.table_max_mb, 10) || 0);
 							}
 							if (typeof response.data.aggregates_months !== 'undefined') {
 								var savedAgg = parseInt(response.data.aggregates_months, 10) || 0;
@@ -2555,6 +2571,227 @@
 		// Fire both requests in parallel on load.
 		loadTables();
 		loadFiles();
+	});
+
+	// =====================================================================
+	// Unified Cleanup Tasks panel (Danger Zone → Scheduled Auto-Cleanup).
+	// Run-now queues an immediate one-off cron event of the task's own hook
+	// server-side; this JS only posts the whitelisted task id and reflects
+	// the queued/duplicate-guard responses. i18n strings come from data
+	// attributes rendered on the table (no new localize payload needed).
+	// =====================================================================
+	jQuery(function($) {
+		var $panel = $('#opti-behavior-cleanup-tasks-panel');
+		if (!$panel.length || typeof opti_behaviorSettings === 'undefined' || !opti_behaviorSettings.smartCleanupNonce) {
+			return;
+		}
+
+		var $table = $('#opti-behavior-cleanup-tasks-table');
+
+		function i18n(key, fallback) {
+			var value = $table.data(key);
+			return (typeof value === 'string' && value !== '') ? value : fallback;
+		}
+
+		function applyOverviewRow(task) {
+			var $row = $panel.find('[data-cleanup-task-row="' + task.id + '"]');
+			if (!$row.length) {
+				return;
+			}
+			var nextText;
+			if (task.queued) {
+				nextText = i18n('i18nQueued', 'Queued — runs shortly');
+			} else if (task.next_run_display) {
+				nextText = task.next_run_display;
+			} else if (task.kind === 'one-off') {
+				nextText = task.status || '—';
+			} else {
+				nextText = i18n('i18nNotScheduled', 'Not scheduled');
+			}
+			$row.find('.ob-ct-next .ct-next-value').text(nextText);
+			// Honest schedule-state note (empty string = nothing to explain).
+			var $note = $row.find('.ob-ct-next .ct-next-note');
+			if (task.next_run_note) {
+				$note.text(task.next_run_note).show();
+			} else {
+				$note.text('').hide();
+			}
+			$row.find('.ob-ct-last').text(task.last_run_display || '—');
+			if (task.frequency) {
+				$row.find('.ob-ct-frequency').text(task.frequency);
+			}
+		}
+
+		var $history = $('#opti-behavior-cleanup-history');
+
+		function refreshOverview(done) {
+			$.post(opti_behaviorSettings.ajaxUrl || ajaxurl, {
+				action: 'optibehavior_cleanup_tasks_overview',
+				nonce: opti_behaviorSettings.smartCleanupNonce
+			}).done(function(response) {
+				var data = (response && response.success && response.data) ? response.data : null;
+				if (data && data.tasks) {
+					data.tasks.forEach(applyOverviewRow);
+				}
+				if (data && typeof data.history_html === 'string' && $history.length) {
+					$history.html(data.history_html);
+					if (window.lucide && typeof window.lucide.createIcons === 'function') {
+						window.lucide.createIcons();
+					}
+				}
+				if (done) {
+					done(data);
+				}
+			}).fail(function() {
+				if (done) {
+					done(null);
+				}
+			});
+		}
+
+		// After "Run now", keep re-syncing the rows and the Cleanup History
+		// until the background job has replaced its "Queued" marker with the
+		// run's results (continuation ticks included), capped at ~2 minutes.
+		var RUN_WATCH_MAX_POLLS = 40;
+		var RUN_WATCH_INTERVAL = 3000;
+
+		function watchRun(taskId, attempt) {
+			setTimeout(function() {
+				refreshOverview(function(data) {
+					var stillQueued = !data;
+					if (data && data.tasks) {
+						data.tasks.forEach(function(task) {
+							if (task.id === taskId && task.queued) {
+								stillQueued = true;
+							}
+						});
+					}
+					if ($history.find('[data-history-type="' + taskId + '"][data-history-status="queued"]').length) {
+						stillQueued = true;
+					}
+					if (stillQueued && attempt < RUN_WATCH_MAX_POLLS) {
+						watchRun(taskId, attempt + 1);
+					}
+				});
+			}, attempt === 0 ? 2500 : RUN_WATCH_INTERVAL);
+		}
+
+		// Configure / settings anchors may target cards on another Danger Zone
+		// sub-tab (e.g. Data Retention lives on Smart Cleanup while this panel
+		// lives on Scheduled Auto-Cleanup), and may point at or into a
+		// collapsed <details> block (the Conditional Cleanup expert rules).
+		// Activate the owning sub-tab, expand any collapsed <details>, then
+		// scroll the target into view so it is visible on arrival.
+		$panel.on('click', '.cleanup-task-configure, .cleanup-task-link', function(e) {
+			var href = $(this).attr('href') || '';
+			if (href.charAt(0) !== '#' || href.length < 2) {
+				return;
+			}
+			var $target = $(href);
+			if (!$target.length) {
+				return;
+			}
+			e.preventDefault();
+
+			var $ownerTab = $target.closest('.danger-tab-panel');
+			if ($ownerTab.length && !$ownerTab.hasClass('active')) {
+				$('.danger-zone-tab[data-danger-tab="' + $ownerTab.data('danger-tab') + '"]').trigger('click');
+			}
+
+			// Expand the target itself and every ancestor <details> before
+			// scrolling — a closed <details> hides its content entirely.
+			$target.filter('details').prop('open', true);
+			$target.parents('details').prop('open', true);
+
+			$target[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+		});
+
+		$panel.on('click', '.ob-cleanup-task-run', function() {
+			var $btn = $(this);
+			var $row = $btn.closest('tr');
+			var $msg = $row.find('.ob-cleanup-task-msg');
+
+			$btn.prop('disabled', true);
+			$msg.text(i18n('i18nQueueing', 'Queueing…'));
+
+			$.post(opti_behaviorSettings.ajaxUrl || ajaxurl, {
+				action: 'optibehavior_cleanup_task_run',
+				nonce: opti_behaviorSettings.smartCleanupNonce,
+				task: $btn.data('task')
+			}).done(function(response) {
+				var data = (response && response.data) || {};
+				$msg.text(data.message || '');
+				if (response && response.success) {
+					$row.find('.ob-ct-next .ct-next-value').text(i18n('i18nQueued', 'Queued — runs shortly'));
+				}
+				// Re-sync rows + Cleanup History until the background run lands.
+				watchRun(String($btn.data('task')), 0);
+			}).fail(function() {
+				$msg.text(i18n('i18nError', 'Request failed. Please try again.'));
+			}).always(function() {
+				setTimeout(function() {
+					$btn.prop('disabled', false);
+				}, 2500);
+			});
+		});
+
+		// "Run all now": one request queues every runnable task, staggered
+		// server-side; per-row messages come back in data.results.
+		var $runAllModal = $('#opti-behavior-run-all-modal');
+
+		$panel.on('click', '#ob-cleanup-tasks-run-all', function() {
+			$runAllModal.fadeIn(200);
+			if (typeof lucide !== 'undefined') { lucide.createIcons(); }
+			$('#opti-behavior-confirm-run-all-btn').trigger('focus');
+		});
+
+		$runAllModal.on('click', '.opti-behavior-modal-close, .opti-behavior-modal-cancel, .opti-behavior-modal-overlay', function(e) {
+			if ($(e.target).is('.opti-behavior-modal-overlay, .opti-behavior-modal-close, .opti-behavior-modal-cancel')) {
+				$runAllModal.fadeOut(200);
+			}
+		});
+
+		$(document).on('keydown', function(e) {
+			if (e.key === 'Escape' && $runAllModal.is(':visible')) {
+				$runAllModal.fadeOut(200);
+			}
+		});
+
+		$runAllModal.on('click', '#opti-behavior-confirm-run-all-btn', function() {
+			var $btn = $('#ob-cleanup-tasks-run-all');
+			var $msg = $('#ob-cleanup-tasks-run-all-msg');
+
+			$runAllModal.fadeOut(200);
+			$btn.prop('disabled', true);
+			$msg.text(i18n('i18nQueueing', 'Queueing…'));
+
+			$.post(opti_behaviorSettings.ajaxUrl || ajaxurl, {
+				action: 'optibehavior_cleanup_tasks_run_all',
+				nonce: opti_behaviorSettings.smartCleanupNonce
+			}).done(function(response) {
+				var data = (response && response.data) || {};
+				var lastQueued = '';
+				$msg.text(data.message || '');
+				$.each(data.results || {}, function(taskId, result) {
+					var $row = $panel.find('[data-cleanup-task-row="' + taskId + '"]');
+					$row.find('.ob-cleanup-task-msg').text(result.message || '');
+					if (result.success) {
+						$row.find('.ob-ct-next .ct-next-value').text(i18n('i18nQueued', 'Queued — runs shortly'));
+						lastQueued = String(taskId);
+					}
+				});
+				// Overview refresh re-syncs every row; follow the last task queued.
+				if (lastQueued) {
+					watchRun(lastQueued, 0);
+				}
+			}).fail(function() {
+				$msg.text(i18n('i18nError', 'Request failed. Please try again.'));
+			}).always(function() {
+				setTimeout(function() {
+					$btn.prop('disabled', false);
+				}, 2500);
+			});
+		});
 	});
 
 })();

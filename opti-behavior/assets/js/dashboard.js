@@ -196,9 +196,29 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 				}
 			}
 
+			/**
+			 * Release the Traffic Overview chart's loading overlay.
+			 *
+			 * `sessions-chart-widget` is the ONLY overlay-bearing widget with no
+			 * AJAX widget of its own: the chart paints from the `daily_history`
+			 * series already inside the `summary_stats` payload, so its
+			 * server-rendered overlay (the markup ships WITHOUT `.hidden`) was
+			 * cleared exclusively inside that one success callback. Every other
+			 * terminal outcome of the summary_stats request — network error,
+			 * aborted/blocked admin-ajax, `success: false`, or a payload with no
+			 * `daily_history` — left the chart trapped under a permanent spinner
+			 * with no error state (QA-B-DASH-022: exactly 1 stuck
+			 * `.widget-loading-overlay` with every admin-ajax request aborted).
+			 * Callers below release it on ALL of those paths.
+			 */
+			function releaseSessionsChartLoading() {
+				hideWidgetLoading('sessions-chart-widget');
+			}
+
 		// Expose to window object for use by other widgets
 		window.showWidgetLoading = showWidgetLoading;
 		window.hideWidgetLoading = hideWidgetLoading;
+		window.optiBehaviorReleaseSessionsChartLoading = releaseSessionsChartLoading;
 
 			/**
 			 * Initialize async widget loading on page load
@@ -347,7 +367,16 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 									}
 								};
 								paintTrafficChart();
+							} else {
+								// No converter available: nothing will paint the chart,
+								// so do not leave the spinner up over it.
+								releaseSessionsChartLoading();
 							}
+						} else {
+							// A successful payload that carries no per-day series still
+							// has to release the chart overlay (empty range, filtered-out
+							// dataset, trimmed payload).
+							releaseSessionsChartLoading();
 						}
 					} },
 					// sessions_chart is intentionally NOT an AJAX widget. The Traffic
@@ -529,12 +558,20 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 							}
 
 							widget.callback(result.data);
+						} else if (widget.name === 'summary_stats') {
+							// `success:false` / malformed payload: the summary_stats
+							// callback never runs, so the Traffic Overview overlay would
+							// stay up forever (it has no widgetId of its own).
+							releaseSessionsChartLoading();
 						}
 						return { widget: widget.name, success: true };
 					})
 					.catch(error => {
 						clearTimeout(timeoutId);
 						hideWidgetLoading(widget.widgetId);
+						if (widget.name === 'summary_stats') {
+							releaseSessionsChartLoading();
+						}
 						const widgetEndTime = performance.now();
 						const isTimeout = error.name === 'AbortError';
 
@@ -638,7 +675,24 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 					const p = depNames.length ? depGate.then(runSelf) : runSelf();
 					w._promise = Promise.resolve(p)
 						.catch(function() {})
-						.finally(function() { w._loading = false; w._loaded = true; });
+						.finally(function() {
+							w._loading = false;
+							w._loaded = true;
+							// SINGLE RELEASE POINT for every widget in the registry.
+							// A widget that has SETTLED must never still show a spinner,
+							// whatever the outcome or the code path: internal fetch,
+							// external loader (top_users / visitor_heatmap), an immediate
+							// network error from a blocked/aborted admin-ajax request, a
+							// `success:false` payload, or a throw inside a callback. The
+							// per-path hide calls below/above stay (they release earlier,
+							// which is nicer), but this is the guarantee that satisfies
+							// QA-B-DASH-022: "no widget may stay stuck behind a loading
+							// overlay" once section 1 and the cascade have settled.
+							hideWidgetLoading(w.widgetId);
+							// The Traffic Overview chart rides on summary_stats and has no
+							// widgetId of its own, so it is released with its owner.
+							if (w.name === 'summary_stats') { releaseSessionsChartLoading(); }
+						});
 					// Record module-level state so a later invocation's runWidget(sig)
 					// short-circuits instead of issuing a duplicate fetch. The early-KPI
 					// adopt path (summary_stats) flows through here too, so summary_stats
@@ -3924,7 +3978,7 @@ x = Math.min(x, maxX);
 				})
 				.catch(() => {})
 				.finally(() => { optibehaviorRefreshing = false; });
-			}, 5000);
+			}, 15000); // 1.9.0.6: 5 s -> 15 s (each tick = live query on sessions while trackers write to it)
 		})();
 
 		function refreshDashboard(period) {
@@ -5431,7 +5485,11 @@ x = Math.min(x, maxX);
 					// Fallback message if Leaflet fails to load within 5s (e.g., offline)
 					var i18nOffline = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
 					var mapUnavailableOffline = i18nOffline.mapUnavailableOffline || 'Map unavailable (offline)';
-					setTimeout(function(){ if(!window.L){ var el=document.getElementById('realtime-map'); if(el && !el.querySelector('.map-fallback')){ el.innerHTML='<div class="map-fallback">' + mapUnavailableOffline + '</div>'; } } }, 5000);
+					// Same class of defect as sessions-chart-widget: when Leaflet never
+					// arrives, tryInit() keeps retrying forever and nothing clears the
+					// map widget's server-rendered overlay, so the offline fallback copy
+					// rendered UNDER a spinner. Release it with the fallback.
+					setTimeout(function(){ if(!window.L){ var el=document.getElementById('realtime-map'); if(el && !el.querySelector('.map-fallback')){ el.innerHTML='<div class="map-fallback">' + mapUnavailableOffline + '</div>'; } if (typeof window.hideWidgetLoading === 'function') { window.hideWidgetLoading('realtime-map-widget'); } } }, 5000);
 
 			})();
 				if (typeof window.updateRealtimeMap === 'function') { window.updateRealtimeMap(visitors); }
@@ -5470,6 +5528,17 @@ x = Math.min(x, maxX);
 				} else if(!window.L) {
 					// Leaflet not loaded yet, try again
 					setTimeout(tryInit, 100);
+				} else {
+					// Leaflet IS here but this branch cannot initialise: either
+					// #realtime-map is absent from the DOM, or window.realtimeMap
+					// already exists (a second init pass). The old code fell through
+					// with no retry and no release, so the widget kept its
+					// server-rendered overlay forever — one of the three stuck
+					// overlays in QA-B-DASH-022. A widget that will never initialise
+					// must not sit behind a spinner.
+					if (typeof window.hideWidgetLoading === 'function') {
+						window.hideWidgetLoading('realtime-map-widget');
+					}
 				}
 			}
 			if(document.readyState === 'loading'){

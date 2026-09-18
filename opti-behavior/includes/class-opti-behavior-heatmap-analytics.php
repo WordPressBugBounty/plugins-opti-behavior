@@ -74,7 +74,9 @@ class Opti_Behavior_Heatmap_Analytics {
 		// Build WHERE clause (safe - contains only table names and placeholders)
 		$where = '';
 		if ( $param['search'] ) {
-			$where = " WHERE page_id2 IN ( SELECT DISTINCT page_id2 FROM {$events_table} WHERE page_id IN ( SELECT id FROM {$pages_table} WHERE title LIKE %s OR url LIKE %s ) ) ";
+			// `{page}` resolves to the page-id column of whichever source the
+			// counters builder uses (events.page_id2 or heatmap_daily.page_id).
+			$where = "{page} IN ( SELECT id FROM {$pages_table} WHERE title LIKE %s OR url LIKE %s )";
 		}
 
 		// Build ORDER BY clause with whitelisted values (safe - values are validated and whitelisted)
@@ -92,17 +94,8 @@ class Opti_Behavior_Heatmap_Analytics {
 					s.click_mobile,
 					s.breakaway_mobile,
 					s.attention_mobile
-				FROM (SELECT
-						page_id2,
-						COUNT( event = 16 OR NULL ) AS click_pc,
-						COUNT( event = 32 OR NULL ) AS breakaway_pc,
-						COUNT( event = 48 OR NULL ) AS attention_pc,
-						COUNT( event = 17 OR NULL ) AS click_mobile,
-						COUNT( event = 33 OR NULL ) AS breakaway_mobile,
-						COUNT( event = 49 OR NULL ) AS attention_mobile
-						FROM {$events_table}
-						{$where}
-						GROUP BY page_id2
+				FROM (
+						" . Opti_Behavior_Heatmap_Engagement_Counters::page_counts_subquery_sql( $where ) . "
 					) as s
 				LEFT JOIN {$pages_table} AS p ON p.id = s.page_id2
 				WHERE (click_pc OR breakaway_pc OR attention_pc OR click_mobile OR breakaway_mobile OR attention_mobile)
@@ -355,14 +348,14 @@ class Opti_Behavior_Heatmap_Analytics {
 
 		// Check if page exists by url2 (normalized URL)
 		$page_id = $wpdb->get_var( $wpdb->prepare(
-			"SELECT id FROM {$wpdb->prefix}optibehavior_pages WHERE url2 = %s LIMIT 1",
+			"SELECT id FROM {$wpdb->prefix}optibehavior_pages WHERE url2 = %s ORDER BY id ASC LIMIT 1",
 			$url2
 		) );
 
 		// Fallback: check by original URL if url2 didn't match
 		if ( ! $page_id ) {
 			$page_id = $wpdb->get_var( $wpdb->prepare(
-				"SELECT id FROM {$wpdb->prefix}optibehavior_pages WHERE url = %s LIMIT 1",
+				"SELECT id FROM {$wpdb->prefix}optibehavior_pages WHERE url = %s ORDER BY id ASC LIMIT 1",
 				$url
 			) );
 		}

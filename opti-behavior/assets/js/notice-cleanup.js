@@ -25,10 +25,10 @@
 			'.notice-info',
 			'.wp-pointer',
 			'div[id^="message"]:not([id*="opti-behavior"])',
-			'div[class*="notice"]:not([class*="opti-behavior"]):not([class^="ob-"])',
-			'div[class*="message"]:not([class*="opti-behavior"]):not([class^="ob-"])',
-			'div[class*="notification"]:not([class*="opti-behavior"]):not([class^="ob-"])',
-			'div[class*="alert"]:not([class*="opti-behavior"]):not([class^="ob-"])',
+			'div[class*="notice"]:not([class*="opti-behavior"]):not([class*="opti-ab"]):not([class^="ob-"])',
+			'div[class*="message"]:not([class*="opti-behavior"]):not([class*="opti-ab"]):not([class^="ob-"])',
+			'div[class*="notification"]:not([class*="opti-behavior"]):not([class*="opti-ab"]):not([class^="ob-"])',
+			'div[class*="alert"]:not([class*="opti-behavior"]):not([class*="opti-ab"]):not([class^="ob-"])',
 			// Plugin-specific
 			'.jetpack-message',
 			'.rank-math-notice',
@@ -48,8 +48,14 @@
 					// Double-check it's not an opti-behavior notice (full name or ob- prefix)
 					// Also preserve WordPress settings_errors() output — it always carries the
 					// 'settings-error' class and no third-party plugin uses that class.
+					// 'opti-ab-*' is first-party too (the A/B Testing UI, e.g.
+					// .opti-ab-limits-notice on the A/B list): it matches
+					// div[class*="notice"] but is NOT a third-party notice, and
+					// removing it silently deleted the Free plan-limits notice.
 					if (!notice.className.includes('opti-behavior') &&
+						!notice.className.includes('opti-ab-') &&
 						!notice.id.includes('opti-behavior') &&
+						!notice.id.includes('opti-ab-') &&
 						!notice.className.includes('settings-error') &&
 						!notice.className.startsWith('ob-') &&
 						!notice.className.includes(' ob-')) {

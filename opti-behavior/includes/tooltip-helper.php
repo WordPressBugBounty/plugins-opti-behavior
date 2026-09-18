@@ -253,8 +253,8 @@ function opti_behavior_get_settings_tooltips() {
 		),
 		'non_singular' => array(
 			'title'   => __( 'Non-Singular Pages', 'opti-behavior' ),
-			'content' => __( 'Choose whether to track category pages, archives, and listing pages in addition to individual posts and pages.', 'opti-behavior' ),
-			'simple'  => __( 'Should we track pages that list multiple posts, like category pages?', 'opti-behavior' ),
+			'content' => __( 'Choose whether heatmaps are also recorded on archive pages (categories, tags, authors, dates, search results and /page/2 listings). Each archive URL becomes its own heatmap, which can add thousands of low-value heatmaps. Visits, sessions and traffic stats are counted on every page whatever you choose.', 'opti-behavior' ),
+			'simple'  => __( 'Should listing pages like categories and tags get their own heatmap? Most sites only need posts, pages and products.', 'opti-behavior' ),
 		),
 		'ajax_delay' => array(
 			'title'   => __( 'Ajax Delay Time', 'opti-behavior' ),

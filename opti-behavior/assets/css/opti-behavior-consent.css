@@ -20,7 +20,7 @@
    CSS variable defaults (overridden by inline style on banner element)
    ----------------------------------------------------------------- */
 .ob-consent-banner {
-    --ob-consent-accent : #2e7d32;
+    --ob-consent-accent : #6c5ce7;
     --ob-consent-bg     : #ffffff;
     --ob-consent-text   : #333333;
 }
@@ -136,7 +136,7 @@
 .ob-consent-banner--compact-card {
     right         : 20px;
     bottom        : 20px;
-    width         : 492px;
+    width         : 400px;
     max-width     : calc(100vw - 40px);
     border        : 1px solid rgba(15, 23, 42, 0.12);
     border-radius : 14px;
@@ -168,8 +168,8 @@
 }
 
 .ob-consent-banner--compact-card .ob-consent-banner__inner {
-    gap       : 18px;
-    padding   : 24px 22px 20px;
+    gap       : 12px;
+    padding   : 18px 18px 14px;
     max-width : none;
 }
 
@@ -200,9 +200,9 @@
 }
 
 .ob-consent-banner--compact-card .ob-consent-banner__title {
-    margin      : 0 0 14px;
-    font-size   : 22px;
-    line-height : 1.25;
+    margin      : 0 0 8px;
+    font-size   : 17px;
+    line-height : 1.3;
 }
 
 .ob-consent-banner__message {
@@ -212,14 +212,68 @@
 }
 
 .ob-consent-banner--compact-card .ob-consent-banner__message {
-    font-size   : 16px;
-    line-height : 1.55;
+    font-size   : 14px;
+    line-height : 1.5;
     opacity     : 0.82;
+}
+
+/* Brand icon + title row */
+.ob-consent-banner__header {
+    display     : flex;
+    align-items : center;
+    gap         : 10px;
+    margin      : 0 0 6px;
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__header {
+    gap    : 10px;
+    margin : 0 24px 8px 0;
+}
+
+.ob-consent-banner__header .ob-consent-banner__title {
+    margin : 0;
+}
+
+.ob-consent-banner__icon {
+    display       : block;
+    flex          : 0 0 auto;
+    width         : 28px;
+    height        : 28px;
+    max-width     : none;
+    margin        : 0;
+    border-radius : 6px;
+}
+
+.ob-consent-banner--compact-card .ob-consent-banner__icon {
+    width  : 26px;
+    height : 26px;
 }
 
 .ob-consent-banner__policy-link {
     color           : var(--ob-consent-accent);
     font-weight     : 600;
+    text-decoration : underline;
+}
+
+/* "Powered by" credit (Pro branding) */
+.ob-consent-banner__powered {
+    align-self      : flex-start;
+    margin-top      : -4px;
+    font-size       : 11px;
+    line-height     : 1.4;
+    color           : var(--ob-consent-text);
+    opacity         : 0.55;
+    text-decoration : none;
+}
+
+.ob-consent-banner__content .ob-consent-banner__powered {
+    display    : inline-block;
+    margin-top : 6px;
+}
+
+.ob-consent-banner__powered:hover,
+.ob-consent-banner__powered:focus-visible {
+    opacity         : 0.85;
     text-decoration : underline;
 }
 
@@ -261,7 +315,7 @@
 .ob-consent-banner--compact-card .ob-consent-banner__buttons {
     display               : grid;
     grid-template-columns : repeat(3, minmax(0, 1fr));
-    gap                   : 10px;
+    gap                   : 8px;
 }
 
 /* -----------------------------------------------------------------
@@ -286,10 +340,12 @@
 
 .ob-consent-banner--compact-card .ob-consent-banner__btn {
     width         : 100%;
-    min-height    : 54px;
-    padding       : 12px 14px;
-    border-radius : 2px;
-    font-size     : 16px;
+    min-height    : 38px;
+    padding       : 8px 10px;
+    border-radius : 6px;
+    font-size     : 14px;
+    white-space   : normal;
+    text-align    : center;
 }
 
 .ob-consent-banner__btn:focus-visible {
@@ -377,24 +433,94 @@
    Mobile: stack buttons vertically
    ----------------------------------------------------------------- */
 @media (max-width: 480px) {
-    .ob-consent-banner__buttons {
-        flex-direction : column;
-        align-items    : stretch;
+    /* Keep the banner compact on phones: smaller type, tighter padding,
+       Accept full width + Reject/Customize side by side. */
+    .ob-consent-banner {
+        font-size  : 13px;
+        max-height : 70vh;
+        overflow-y : auto;
     }
 
-    .ob-consent-banner__btn {
-        width           : 100%;
-        justify-content : center;
+    .ob-consent-banner__inner,
+    .ob-consent-banner--compact-card .ob-consent-banner__inner {
+        gap     : 10px;
+        padding : 14px 16px;
+    }
+
+    .ob-consent-banner__title,
+    .ob-consent-banner--compact-card .ob-consent-banner__title {
+        margin      : 0 28px 4px 0;
+        font-size   : 15px;
+        line-height : 1.3;
+    }
+
+    .ob-consent-banner__header,
+    .ob-consent-banner--compact-card .ob-consent-banner__header {
+        gap    : 8px;
+        margin : 0 28px 4px 0;
+    }
+
+    .ob-consent-banner__header .ob-consent-banner__title {
+        margin : 0;
+    }
+
+    .ob-consent-banner__icon,
+    .ob-consent-banner--compact-card .ob-consent-banner__icon {
+        width  : 24px;
+        height : 24px;
+    }
+
+    .ob-consent-banner__message,
+    .ob-consent-banner--compact-card .ob-consent-banner__message {
+        font-size   : 13px;
+        line-height : 1.45;
+    }
+
+    .ob-consent-banner__close {
+        top    : 6px;
+        right  : 8px;
+        width  : 26px;
+        height : 26px;
+    }
+
+    .ob-consent-banner__buttons,
+    .ob-consent-banner--compact-card .ob-consent-banner__buttons {
+        display               : grid;
+        grid-template-columns : repeat(2, minmax(0, 1fr));
+        gap                   : 8px;
+    }
+
+    .ob-consent-banner__btn,
+    .ob-consent-banner--compact-card .ob-consent-banner__btn {
+        width         : 100%;
+        min-height    : 38px;
+        padding       : 8px 10px;
+        border-radius : 6px;
+        font-size     : 13px;
+        white-space   : normal;
+        text-align    : center;
+    }
+
+    .ob-consent-banner__btn--accept {
+        grid-column : 1 / -1;
+        font-size   : 14px;
+    }
+
+    .ob-consent-banner__btn--save-choice {
+        grid-column : 1 / -1;
+        margin-top  : 6px;
     }
 
     .ob-consent-banner--compact-card {
-        right     : 12px;
-        bottom    : 12px;
-        max-width : calc(100vw - 24px);
+        right     : 8px;
+        left      : 8px;
+        bottom    : 8px;
+        width     : auto;
+        max-width : none;
     }
 
-    .ob-consent-banner--compact-card .ob-consent-banner__buttons {
-        grid-template-columns : 1fr;
+    .ob-consent-banner--popup {
+        max-width : calc(100vw - 24px);
     }
 }
 

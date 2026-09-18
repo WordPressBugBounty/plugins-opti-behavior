@@ -24,6 +24,7 @@ class Opti_Behavior_Funnel_Database {
 		global $wpdb;
 
 		$charset_collate = $wpdb->get_charset_collate();
+		$engine          = Opti_Behavior_Heatmap_Database::engine_clause();
 
 		// Table for funnel definitions
 		$table_funnels = $wpdb->prefix . 'opti_behavior_funnels';
@@ -45,7 +46,7 @@ class Opti_Behavior_Funnel_Database {
 			KEY status (status),
 			KEY source (source),
 			KEY created_at (created_at)
-		) {$charset_collate};";
+		) {$engine} {$charset_collate};";
 
 		$sql_tracking = "CREATE TABLE {$table_funnel_tracking} (
 			id bigint(20) NOT NULL AUTO_INCREMENT,
@@ -62,7 +63,7 @@ class Opti_Behavior_Funnel_Database {
 			KEY funnel_id (funnel_id),
 			KEY completed (completed),
 			KEY entry_time (entry_time)
-		) {$charset_collate};";
+		) {$engine} {$charset_collate};";
 
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		dbDelta( $sql_funnels );

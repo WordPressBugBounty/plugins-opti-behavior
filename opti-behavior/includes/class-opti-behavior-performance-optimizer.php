@@ -74,39 +74,12 @@ class OptiBehavior_Performance_Optimizer {
 			'ALTER TABLE %s ADD COLUMN watched_at datetime DEFAULT NULL'
 		);
 
-		// Add composite indexes to recordings table
-		self::add_index_if_not_exists(
-			"{$wpdb->prefix}optibehavior_recordings",
-			'idx_recordings_page_start',
-			'CREATE INDEX idx_recordings_page_start ON %s (page_id, start_time)'
-		);
-
-		self::add_index_if_not_exists(
-			"{$wpdb->prefix}optibehavior_recordings",
-			'idx_recordings_start_duration',
-			'CREATE INDEX idx_recordings_start_duration ON %s (start_time, duration)'
-		);
-
-		self::add_index_if_not_exists(
-			"{$wpdb->prefix}optibehavior_recordings",
-			'idx_recordings_watched',
-			'CREATE INDEX idx_recordings_watched ON %s (watched)'
-		);
-
 		// Add indexes to sessions table for better JOIN performance
 		self::add_index_if_not_exists(
 			"{$wpdb->prefix}optibehavior_sessions",
 			'idx_sessions_visitor_start',
 			'CREATE INDEX idx_sessions_visitor_start ON %s (visitor_id, start_time)'
 		);
-
-		// Add indexes to visitors table
-		self::add_index_if_not_exists(
-			"{$wpdb->prefix}optibehavior_visitors",
-			'idx_visitors_last_visit',
-			'CREATE INDEX idx_visitors_last_visit ON %s (last_visit)'
-		);
-
 		// Optimize tables
 		self::optimize_tables();
 	}

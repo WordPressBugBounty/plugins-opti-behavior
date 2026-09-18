@@ -3,7 +3,7 @@
  * Plugin Name: Opti-Behavior – Self-Hosted Heatmaps, Session Recordings, Funnels, A/B Testing & Smart Insights
  * Plugin URI:  https://optiuser.com/
  * Description: Self-hosted heatmaps, funnels, A/B WooCommerce testing, behavior analytics & Smart Insights for WordPress. Own your data and optimize what users do.
- * Version:     1.9.0
+ * Version:     1.9.0.7
  * Author:      OptiUser
  * Author URI:  https://optiuser.com/
  * License:     GPLv2 or later
@@ -81,7 +81,7 @@ if ( defined( 'OPTI_BEHAVIOR_HEATMAP' ) ) {
 }
 
 // Define plugin constants.
-define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.9.0' );
+define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.9.0.7' );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR', OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'includes/' );
@@ -171,7 +171,7 @@ if ( ! function_exists( 'opti_behavior_purge_all_page_caches' ) ) {
 				rocket_clean_domain();
 			}
 			// LiteSpeed Cache.
-			do_action( 'litespeed_purge_all' );
+			do_action( 'litespeed_purge_all' ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Third-party hook owned by LiteSpeed Cache (its documented purge API); not a hook defined by this plugin.
 			// W3 Total Cache.
 			if ( function_exists( 'w3tc_flush_all' ) ) {
 				w3tc_flush_all();
@@ -185,9 +185,9 @@ if ( ! function_exists( 'opti_behavior_purge_all_page_caches' ) ) {
 				wpfc_clear_all_cache( true );
 			}
 			// Cache Enabler.
-			do_action( 'cache_enabler_clear_complete_cache' );
+			do_action( 'cache_enabler_clear_complete_cache' ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Third-party hook owned by Cache Enabler (its documented purge API); not a hook defined by this plugin.
 			// Hummingbird.
-			do_action( 'wphb_clear_page_cache' );
+			do_action( 'wphb_clear_page_cache' ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Third-party hook owned by Hummingbird (its documented purge API); not a hook defined by this plugin.
 			// SiteGround Optimizer.
 			if ( function_exists( 'sg_cachepress_purge_cache' ) ) {
 				sg_cachepress_purge_cache();

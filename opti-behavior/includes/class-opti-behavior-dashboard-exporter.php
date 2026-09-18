@@ -175,7 +175,7 @@ class Opti_Behavior_Dashboard_Exporter {
 		$format = in_array( $format, array( 'csv', 'json' ), true ) ? $format : 'csv';
 
 		$period = isset( $raw['period'] ) ? sanitize_key( wp_unslash( $raw['period'] ) ) : 'last30days';
-		$period = in_array( $period, array( 'today', 'yesterday', 'last7days', 'last30days', 'thismonth', 'custom' ), true ) ? $period : 'last30days';
+		$period = in_array( $period, array( 'today', 'yesterday', 'last7days', 'last14days', 'last30days', 'thismonth', 'custom' ), true ) ? $period : 'last30days';
 
 		$start = isset( $raw['start_date'] ) ? sanitize_text_field( wp_unslash( $raw['start_date'] ) ) : '';
 		$end   = isset( $raw['end_date'] ) ? sanitize_text_field( wp_unslash( $raw['end_date'] ) ) : '';
@@ -641,6 +641,11 @@ class Opti_Behavior_Dashboard_Exporter {
 				$start = gmdate( 'Y-m-d 00:00:00', strtotime( '-7 days', strtotime( $now ) ) );
 				$end   = gmdate( 'Y-m-d 23:59:59', strtotime( $now ) );
 				break;
+			case 'last14days':
+				// Inclusive 14-day window, matching Opti_Behavior_Stats_Date_Range.
+				$start = gmdate( 'Y-m-d 00:00:00', strtotime( '-13 days', strtotime( $now ) ) );
+				$end   = gmdate( 'Y-m-d 23:59:59', strtotime( $now ) );
+				break;
 			case 'thismonth':
 				$start = gmdate( 'Y-m-01 00:00:00', strtotime( $now ) );
 				$end   = gmdate( 'Y-m-d 23:59:59', strtotime( $now ) );
@@ -653,7 +658,7 @@ class Opti_Behavior_Dashboard_Exporter {
 		}
 
 		$first = $this->first_data_date();
-		if ( $first && strtotime( $start ) < strtotime( $first ) && in_array( $period, array( 'today', 'last7days', 'last30days', 'thismonth' ), true ) ) {
+		if ( $first && strtotime( $start ) < strtotime( $first ) && in_array( $period, array( 'today', 'last7days', 'last14days', 'last30days', 'thismonth' ), true ) ) {
 			$start = gmdate( 'Y-m-d 00:00:00', strtotime( $first ) );
 		}
 
@@ -1826,7 +1831,30 @@ class Opti_Behavior_Dashboard_Exporter {
 
 		// Empty feature key validates the signed Pro access token without
 		// depending on a token feature name that older API responses may lack.
-		return (bool) $manager->has_pro_access( '' );
+		if ( ! $manager->has_pro_access( '' ) ) {
+			return false;
+		}
+
+		// A revoked licence (suspended / chargebacked / blacklisted / disabled)
+		// must lose the raw-traffic scope immediately, even while a cached
+		// signed token is still inside its short lifetime.
+		if ( function_exists( 'opti_behavior_pro_access_context_denies' )
+			&& opti_behavior_pro_access_context_denies( '' ) ) {
+			return false;
+		}
+
+		/**
+		 * Filters the raw-traffic export entitlement.
+		 *
+		 * Deny-only: returning false withholds the scope (and hides the export
+		 * link); returning true can never grant a scope the licence checks
+		 * above already refused.
+		 *
+		 * @since 1.9.0.7
+		 *
+		 * @param bool $allowed Whether the raw-traffic scope is entitled.
+		 */
+		return (bool) apply_filters( 'opti_behavior_dashboard_export_can_raw_traffic', true );
 	}
 
 	/**
@@ -1922,6 +1950,10 @@ class Opti_Behavior_Dashboard_Exporter {
 					wp_delete_file( $tmp );
 					exit;
 				}
+				wp_delete_file( $tmp );
+			}
+			// open() failed: wp_tempnam() already created the (empty) temp file.
+			if ( $tmp && file_exists( $tmp ) ) {
 				wp_delete_file( $tmp );
 			}
 		}

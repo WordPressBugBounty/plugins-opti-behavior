@@ -117,7 +117,7 @@ class Opti_Behavior_Dimension_Aggregates {
 			PRIMARY KEY  (id),
 			UNIQUE KEY date_dim_value (stat_date, dimension, dim_value),
 			KEY dim_date (dimension, stat_date)
-			) " . $charset_collate
+			) " . Opti_Behavior_Heatmap_Database::engine_clause() . " " . $charset_collate
 		);
 	}
 

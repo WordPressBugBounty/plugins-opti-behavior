@@ -188,7 +188,10 @@ class Opti_Behavior_AB_Test_Visual_Editor {
 
 		$test = Opti_Behavior_AB_Test_Database::get_test( $test_id );
 		if ( ! $test ) {
+			echo '<div class="wrap">';
+			echo '<h1>' . esc_html__( 'A/B Visual Editor', 'opti-behavior' ) . '</h1>';
 			echo '<div class="notice notice-error opti-behavior-notice"><p>' . esc_html__( 'Test not found.', 'opti-behavior' ) . '</p></div>';
+			echo '</div>';
 			return;
 		}
 
@@ -206,8 +209,11 @@ class Opti_Behavior_AB_Test_Visual_Editor {
 
 		$variant = Opti_Behavior_AB_Test_Database::get_variant( $variant_id );
 		if ( ! $variant || (int) $variant->test_id !== (int) $test_id ) {
+			echo '<div class="wrap">';
+			echo '<h1>' . esc_html__( 'A/B Visual Editor', 'opti-behavior' ) . '</h1>';
 			echo '<div class="notice notice-error opti-behavior-notice"><p>' . esc_html__( 'Visual Editor variant not found for this test. It may have been removed or replaced by an older save.', 'opti-behavior' ) . '</p>';
 			echo '<p><a class="button button-primary" href="' . esc_url( $builder_url ) . '">' . esc_html__( 'Back to Builder', 'opti-behavior' ) . '</a></p></div>';
+			echo '</div>';
 			return;
 		}
 
@@ -218,7 +224,10 @@ class Opti_Behavior_AB_Test_Visual_Editor {
 		}
 
 		if ( ! $target_url ) {
+			echo '<div class="wrap">';
+			echo '<h1>' . esc_html__( 'A/B Visual Editor', 'opti-behavior' ) . '</h1>';
 			echo '<div class="notice notice-error opti-behavior-notice"><p>' . esc_html__( 'Test has no target URL.', 'opti-behavior' ) . '</p></div>';
+			echo '</div>';
 			return;
 		}
 
@@ -239,6 +248,8 @@ class Opti_Behavior_AB_Test_Visual_Editor {
 		}
 		$changes      = isset( $variant_data['changes'] ) ? $variant_data['changes'] : array();
 		?>
+		<div class="wrap opti-ab-ve-wrap" style="margin:0;padding:0;">
+		<h1 class="screen-reader-text"><?php esc_html_e( 'A/B Visual Editor', 'opti-behavior' ); ?></h1>
 		<div id="opti-ab-visual-editor" class="opti-ab-ve"
 			data-test-id="<?php echo esc_attr( $test_id ); ?>"
 			data-variant-id="<?php echo esc_attr( $variant_id ); ?>"
@@ -775,6 +786,7 @@ class Opti_Behavior_AB_Test_Visual_Editor {
 				<iframe id="opti-ab-ve-iframe" src="<?php echo esc_url( $iframe_url ); ?>" class="opti-ab-ve-iframe"></iframe>
 			</div>
 		</div>
+		</div><!-- /.wrap -->
 		<?php
 	}
 

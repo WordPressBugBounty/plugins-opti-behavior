@@ -508,17 +508,8 @@ trait Opti_Behavior_Maintenance_Trait {
 				'idx_events_page_event_time' => 'CREATE INDEX idx_events_page_event_time ON %s (page_id2, event, insert_at)',
 				'idx_events_event_time'      => 'CREATE INDEX idx_events_event_time ON %s (event, insert_at)',
 			),
-			$prefix . "optibehavior_pages"     => array(
-				'idx_pages_url' => 'CREATE INDEX idx_pages_url ON %s (url(191))',
-			),
 			$prefix . "optibehavior_pageviews" => array(
 				'idx_pv_url'        => 'CREATE INDEX idx_pv_url ON %s (url(191))',
-				'idx_pv_session_id' => 'CREATE INDEX idx_pv_session_id ON %s (session_id)',
-				'idx_pv_view_time'  => 'CREATE INDEX idx_pv_view_time ON %s (view_time)',
-			),
-			$prefix . "optibehavior_sessions"  => array(
-				'idx_sessions_start_time' => 'CREATE INDEX idx_sessions_start_time ON %s (start_time)',
-				'idx_sessions_visitor'    => 'CREATE INDEX idx_sessions_visitor ON %s (visitor_id)',
 			),
 		);
 		// PRODUCTION SAFETY (C2-3): CREATE INDEX on a multi-million-row table
@@ -785,7 +776,7 @@ trait Opti_Behavior_Maintenance_Trait {
 			KEY idx_stat_date (stat_date),
 			KEY idx_total_duration (stat_date, traffic_type, total_duration DESC),
 			KEY idx_traffic_date (traffic_type, stat_date)
-		) " . $charset_collate . ";";
+		) " . Opti_Behavior_Heatmap_Database::engine_clause() . " " . $charset_collate . ";";
 
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		dbDelta( $sql );

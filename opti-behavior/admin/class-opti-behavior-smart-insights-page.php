@@ -47,7 +47,15 @@ class Opti_Behavior_Smart_Insights_Page {
 			wp_die( esc_html__( 'You do not have permission to access Smart Insights.', 'opti-behavior' ) );
 		}
 
-		$period     = isset( $_GET['period'] ) ? sanitize_key( wp_unslash( $_GET['period'] ) ) : 'last90days'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter state.
+		// QA-B-SI-072: the landing period has to be the one the generator and
+		// the scheduler actually pre-generate, otherwise the default view can
+		// never be served from a cron run and every client that omits `period`
+		// silently gets a different window than the select shows.
+		$default_period = class_exists( 'Opti_Behavior_Smart_Insights_Generator' )
+			? Opti_Behavior_Smart_Insights_Generator::DEFAULT_PERIOD
+			: 'last30days';
+		$period     = isset( $_GET['period'] ) ? sanitize_key( wp_unslash( $_GET['period'] ) ) : $default_period; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter state.
+		$period     = '' !== $period ? $period : $default_period;
 		$start_date = isset( $_GET['start_date'] ) ? sanitize_text_field( wp_unslash( $_GET['start_date'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter state.
 		$end_date   = isset( $_GET['end_date'] ) ? sanitize_text_field( wp_unslash( $_GET['end_date'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter state.
 		$insight_id = isset( $_GET['insight_id'] ) ? absint( wp_unslash( $_GET['insight_id'] ) ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only deep-link state.

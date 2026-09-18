@@ -37,9 +37,22 @@ trait Opti_Behavior_Funnels_Views_Trait {
 		// view (header + period control + advanced filter + KPIs + steps). No
 		// `funnel` arg → the index list below, unchanged.
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only view routing; no state change.
-		$requested_funnel = isset( $_GET['funnel'] ) ? absint( wp_unslash( $_GET['funnel'] ) ) : 0;
+		$funnel_arg = isset( $_GET['funnel'] ) ? sanitize_text_field( wp_unslash( $_GET['funnel'] ) ) : '';
+		$requested_funnel = absint( $funnel_arg );
 		if ( $requested_funnel > 0 ) {
 			$this->render_funnel_detail( $requested_funnel );
+			return;
+		}
+
+		// A `funnel` arg that is present but not a positive integer (?funnel=abc,
+		// ?funnel=0, ?funnel=-1) is a request for a funnel that cannot exist. It
+		// used to fall through to the index list, so the user got the whole
+		// Funnels list back with no hint that their link was bad. Route it to the
+		// detail view's graceful "Funnel not found" panel instead: id 0 matches no
+		// row, so the panel renders with HTTP 200 and no fatal
+		// (QA-B-FUNNEL-021).
+		if ( '' !== trim( $funnel_arg ) ) {
+			$this->render_funnel_detail( 0 );
 			return;
 		}
 
@@ -104,6 +117,7 @@ trait Opti_Behavior_Funnels_Views_Trait {
 
 			<div class="funnels-content-wrapper">
 				<?php if ( $funnel_count == 0 ) : ?>
+				<?php $this->render_funnel_suggestions_panel( 'empty', $tooltips ); ?>
 				<!-- Empty State -->
 				<div class="funnels-empty-state">
 					<div class="empty-state-image">
@@ -114,7 +128,6 @@ trait Opti_Behavior_Funnels_Views_Trait {
 						<?php esc_html_e( 'Create your first funnel to start tracking user behavior and conversion rates through your website.', 'opti-behavior' ); ?>
 					</p>
 				</div>
-				<?php $this->render_funnel_suggestions_panel( 'empty', $tooltips ); ?>
 			<?php else : ?>
 				<!-- Global KPI Summary Bar -->
 				<div class="opti-funnel-stats-bar" id="opti-funnel-stats-bar">
@@ -164,8 +177,6 @@ trait Opti_Behavior_Funnels_Views_Trait {
 					</div>
 				</div>
 
-				<?php $this->render_funnel_suggestions_panel( 'list', $tooltips ); ?>
-
 				<!-- Funnel List Container -->
 				<div id="opti-funnel-list-container" class="opti-funnel-list">
 					<div class="funnel-loading">
@@ -181,6 +192,12 @@ trait Opti_Behavior_Funnels_Views_Trait {
 
 				<!-- Pagination -->
 				<div id="opti-funnel-pagination" class="opti-funnel-pagination"></div>
+
+				<?php
+				// Order is dynamic: with zero funnels the suggestions lead the page;
+				// once funnels exist the list leads and suggestions follow it.
+				$this->render_funnel_suggestions_panel( 'list', $tooltips );
+				?>
 			<?php endif; ?>
 
 			<!-- Funnel Builder Modal -->

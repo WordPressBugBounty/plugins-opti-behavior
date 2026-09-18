@@ -704,18 +704,12 @@ class Opti_Behavior_Heatmap_Detail_Page {
 
 		wp_cache_delete( 'opti_url_hash_' . (int) $page_id, 'opti-behavior' );
 
-		$patterns = array(
-			'_transient_' . $wpdb->esc_like( 'page_' . (int) $page_id . '_device_' ) . '%',
-			'_transient_timeout_' . $wpdb->esc_like( 'page_' . (int) $page_id . '_device_' ) . '%',
-			'_transient_' . $wpdb->esc_like( 'opti_heatmap_' . (int) $page_id . '_' ) . '%',
-			'_transient_timeout_' . $wpdb->esc_like( 'opti_heatmap_' . (int) $page_id . '_' ) . '%',
-			'_transient_' . $wpdb->esc_like( 'opti_hm_list_' ) . '%',
-			'_transient_timeout_' . $wpdb->esc_like( 'opti_hm_list_' ) . '%',
-		);
-
-		foreach ( $patterns as $pattern ) {
-			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Cache cleanup by transient name pattern.
-			$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", $pattern ) );
+		// 1.9.0.6: index-friendly, delete-by-name helper (leading `_transient_` was
+		// an unescaped wildcard -> full options scan per pattern).
+		if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+			opti_behavior_delete_transients_by_prefix(
+				array( 'page_' . (int) $page_id . '_device_', 'opti_heatmap_' . (int) $page_id . '_', 'opti_hm_list_' )
+			);
 		}
 
 		// Rotate the version-namespaced dashboard caches (ob_hm_stats_*,
@@ -1490,7 +1484,10 @@ class Opti_Behavior_Heatmap_Detail_Page {
 	private function render_heatmap_container( $current_type ) {
 		// Bug 6 fix: license-aware Pro check (see render_device_stats_bar comment).
 		$is_pro = function_exists( 'opti_behavior_pro_validate_env' ) && opti_behavior_pro_validate_env();
-		$is_pro_feature = in_array( $current_type, array( 'move', 'scroll' ), true );
+		// Must list every type flagged `pro => true` in render_device_stats_bar(),
+		// or a URL-forced Pro type (…&type=attention) renders an endless loading
+		// overlay on Free instead of the Pro notice.
+		$is_pro_feature = in_array( $current_type, array( 'move', 'attention', 'scroll' ), true );
 		$show_pro_message = $is_pro_feature && ! $is_pro;
 		$wrapper_classes = array( 'heatmap-canvas-wrapper' );
 
@@ -1506,7 +1503,7 @@ class Opti_Behavior_Heatmap_Detail_Page {
 				aria-busy="<?php echo esc_attr( $wrapper_aria_busy ); ?>"
 			>
 				<?php if ( $show_pro_message ) : ?>
-					<div class="heatmap-pro-feature-notice">
+					<div class="heatmap-pro-feature-notice opti-behavior-notice">
 						<i data-lucide="lock"></i>
 						<h3><?php esc_html_e( 'Pro Feature', 'opti-behavior' ); ?></h3>
 						<p>

@@ -6,7 +6,7 @@ Tags: heatmap, ab testing, Insights , session recording, funnel
 Requires at least: 5.8
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.9.0
+Stable tag: 1.9.0.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -192,6 +192,10 @@ Depending on settings, Opti-Behavior can collect page views, URLs, click positio
 
 Yes. Enable **Delete all data on uninstall** in Settings to remove stored plugin data when the plugin is uninstalled.
 
+= My host is busy or shared — how do I keep the plugin light on the server? =
+
+Two settings make the biggest difference. First, run WP-Cron from a real server cron instead of inside visitor page loads: add `define( 'DISABLE_WP_CRON', true );` to `wp-config.php` and have your host call `wp-cron.php` every 5 minutes. Cleanup, reports and database upkeep then never run inside a visitor request. Second, keep the default "Posts & Pages Only" heatmap scope and the default data retention so tables stay small. All heavy maintenance (index changes, table conversion, OPTIMIZE) is size-capped and time-boxed, and every frontend tracking request is rate-limited so concurrent visitors cannot pile up on the database.
+
 = Does it work with WooCommerce? =
 
 Yes. Use Opti-Behavior to analyze product pages, cart behavior, checkout funnels, CTA clicks, and revenue-focused A/B tests while keeping customer behavior data under your control.
@@ -320,7 +324,22 @@ This plugin may connect to external services in limited circumstances:
 
 == Changelog ==
 
-= 1.9.0 - 2026-09-07 =
+= 1.9.1 - 2026-09-18 =
+* **Feature:** Heatmaps only where they matter — recorded for posts, pages, products, home and shop; tag, category, author, date, search and paginated archives no longer create one heatmap per URL. Existing archive-page heatmaps are archived in the background and can be restored in one click (Settings → Data Collection).
+* **Feature:** Database size caps — optional global and per-table caps (Data Retention → Advanced). Oldest raw rows go first; the last 7 days and dashboard summaries are always kept.
+* **Feature:** Cleanup Tasks — "Run all now", plus two new tasks: "Database size cap" and "Database schema upkeep".
+* **Changed:** Page speed — frontend trackers are minified and loaded with `defer`: nothing blocks rendering, tracker weight drops by about half. Tracking behaviour is unchanged.
+* **Changed:** Smaller database — the heatmap events table is up to 10x smaller, duplicate indexes are dropped automatically, and all tables use InnoDB (older MyISAM tables are converted in the background).
+* **Changed:** Tables shared with Opti-Behavior Pro are now defined once, in Free. Both plugins can be updated in any order without data loss.
+* **Changed:** Funnels page — Suggested Funnels comes first when you have no funnels; your funnel list leads once you do.
+* **Changed:** Clearer data-retention summary, WP-Cron hint under Settings → Reports, and all new strings translated in French, German, Spanish, Italian and Portuguese.
+* **Changed:** Passes the WordPress.org Plugin Check with no errors and no warnings.
+* **Fix:** Server stability on busy sites — cache sweeps on `wp_options` no longer cause "Lock wait timeout exceeded"; the realtime "Active visitors" widget uses an indexed query and polls every 15 s; heatmap files are written atomically under a per-page lock; daily database upkeep is size-capped.
+* **Fix:** `Duplicate entry … for key PRIMARY` on the visitors table when two first hits raced.
+* **Fix:** Cleanup now respects every retention window — heatmap files, recording side files, archived heatmap data, bot visit logs, error summaries and 404 reports no longer grow without limit.
+* **Fix:** Dashboard CSV export no longer leaves a temporary file behind; the archive-page cleanup "Configure" link opens the right tab.
+
+= 1.9.0 - 2026-09-08 =
 * **Feature:** Smart Insights v2 — insights are ranked by measured cost (the visitors and conversions actually lost, blended with severity and confidence) and labelled Critical/High/Medium/Low by rank inside the batch, so a busy site gets a short ordered shortlist instead of dozens of "high priority" items. Thinly observed signals are flagged as observations to confirm instead of being promoted.
 * **Feature:** Business impact in money — when a value per conversion is known, cards and the detail modal show the exposure ("≈ $1,240 at risk this period") with the drop-off count, conversion rate and order value behind it. A new "Value of one conversion" setting covers sites without readable WooCommerce order history; WooCommerce data takes precedence.
 * **Feature:** "Where is the problem?" — every insight now names the audience carrying it. The segment split is computed on the real behaviour tables across 8 dimensions (device, browser, country, traffic source, campaign, new vs returning, time of day, day type) with a significance test, comparison bars you can click to re-scope the evidence, and a daily chart of the metric with the previous period behind it and a "first detected" marker.
@@ -390,6 +409,9 @@ This plugin may connect to external services in limited circumstances:
 The complete changelog for all versions is available at [optiuser.com/opti-behavior/changelog/](https://optiuser.com/opti-behavior/changelog/) (also shipped as changelog.txt in the plugin folder).
 
 == Upgrade Notice ==
+
+= 1.9.1 =
+Performance and storage release: deferred, minified trackers (Core Web Vitals), heatmaps only on pages that matter, a much smaller events table, database size caps and InnoDB upkeep, server-stability fixes for busy sites (lock wait timeouts, realtime widget), and cleanup that now respects every retention window. Pair with Opti-Behavior Pro 1.9.1.
 
 = 1.9.0 =
 Major release: Smart Insights v2 analyst briefing (cost-ranked insights, money impact, evidence), automatic funnel creation from site detection, cleanup safety-limit rework with a 50000 per-run default, and a fix for an HTTP 500 on concurrent first-visit tracking. Pair with Opti-Behavior Pro 1.9.0.

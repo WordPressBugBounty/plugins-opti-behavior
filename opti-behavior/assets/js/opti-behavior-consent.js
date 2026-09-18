@@ -410,7 +410,10 @@
      */
     function buildBanner() {
         var position    = config.banner_position || 'bottom-bar';
-        var accentColor = config.banner_accent_color || '#2e7d32';
+        var accentColor = config.banner_accent_color || '#6c5ce7';
+        var iconUrl     = config.banner_icon_url || '';
+        var poweredLabel = config.banner_powered_by_label || '';
+        var poweredUrl   = config.banner_powered_by_url || '';
         var bgColor     = config.banner_bg_color || '#ffffff';
         var textColor   = config.banner_text_color || '#333333';
         var title       = config.banner_title || 'We value your privacy';
@@ -477,7 +480,25 @@
             msgEl.appendChild( policyLink );
         }
 
-        content.appendChild( titleEl );
+        if ( iconUrl ) {
+            var header = document.createElement( 'div' );
+            header.className = 'ob-consent-banner__header';
+
+            var iconEl = document.createElement( 'img' );
+            iconEl.className = 'ob-consent-banner__icon';
+            iconEl.src       = iconUrl;
+            iconEl.alt       = '';
+            iconEl.width     = 32;
+            iconEl.height    = 32;
+            iconEl.setAttribute( 'aria-hidden', 'true' );
+            iconEl.addEventListener( 'error', function () { iconEl.parentNode && iconEl.parentNode.removeChild( iconEl ); } );
+
+            header.appendChild( iconEl );
+            header.appendChild( titleEl );
+            content.appendChild( header );
+        } else {
+            content.appendChild( titleEl );
+        }
         content.appendChild( msgEl );
 
         // Customize panel (initially hidden)
@@ -527,6 +548,19 @@
         inner.appendChild( content );
         inner.appendChild( customizePanel );
         inner.appendChild( btnRow );
+
+        // "Powered by" credit — only present when branding is enabled (Pro).
+        if ( poweredLabel && poweredUrl ) {
+            var powered = document.createElement( 'a' );
+            powered.className   = 'ob-consent-banner__powered';
+            powered.href        = poweredUrl;
+            powered.target      = '_blank';
+            powered.rel         = 'nofollow noopener noreferrer';
+            powered.textContent = poweredLabel;
+            // Bars lay out side by side on desktop: keep the credit under the message.
+            ( position === 'bottom-bar' || position === 'top-bar' ? content : inner ).appendChild( powered );
+        }
+
         banner.appendChild( inner );
 
         // Keyboard: Escape = reject

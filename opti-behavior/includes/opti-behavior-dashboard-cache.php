@@ -68,6 +68,12 @@ if ( ! function_exists( 'opti_behavior_dashboard_widget_cache_registry' ) ) {
 			'new_vs_returning_visitors' => array( 'opti_behavior_new_returning_' ),
 			'visited_directories'       => array( 'opti_behavior_visited_directories_' ),
 			'bot_traffic'               => array( 'opti_behavior_bot_traffic_' ),
+			// Teaser chips above the Heatmaps / Funnels / A-B sections. Written
+			// with the same 30 s TTL by get_section_summaries()
+			// (trait-opti-behavior-data-helpers.php), so they have to be swept
+			// by the invalidator and the dirty sweep like every other widget
+			// (QA-B-DASH-027).
+			'section_summaries'         => array( 'opti_behavior_section_summaries_' ),
 		);
 
 		/**
@@ -78,6 +84,167 @@ if ( ! function_exists( 'opti_behavior_dashboard_widget_cache_registry' ) ) {
 		 */
 		return (array) apply_filters( 'opti_behavior_dashboard_widget_cache_registry', $registry );
 	}
+}
+
+if ( ! function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+	/**
+	 * Delete every transient whose key starts with one of the given prefixes.
+	 *
+	 * Lock-safe replacement for `DELETE … WHERE option_name LIKE '_transient_x%'`.
+	 * That pattern starts with an unescaped `_` (a single-character SQL wildcard),
+	 * so MySQL cannot use the option_name index: every call full-scanned
+	 * wp_options while InnoDB held next-key locks on each row it walked. With
+	 * several visitors tracking at once the sweeps serialised on those locks
+	 * ("Lock wait timeout exceeded; try restarting transaction"), PHP workers
+	 * piled up behind them and whole sites went down (customer report, 1.9.5).
+	 *
+	 * This helper (a) escapes the full pattern so the LIKE becomes an index
+	 * range scan, (b) SELECTs the matching names first and returns early when
+	 * there is nothing to delete — the common case on the frontend tracking
+	 * path, where dashboard caches only exist after an admin opened the
+	 * dashboard — and (c) deletes by exact option_name so the DELETE locks only
+	 * the rows it removes.
+	 *
+	 * @since 1.9.0.6
+	 * @param string[] $prefixes Transient key prefixes (without `_transient_`).
+	 * @return int Number of option rows deleted.
+	 */
+	function opti_behavior_delete_transients_by_prefix( array $prefixes ) {
+		global $wpdb;
+
+		$where_parts = array();
+		$params      = array();
+		foreach ( $prefixes as $prefix ) {
+			$prefix = (string) $prefix;
+			if ( '' === $prefix ) {
+				continue;
+			}
+			$like          = $wpdb->esc_like( $prefix ) . '%';
+			$where_parts[] = 'option_name LIKE %s';
+			$params[]      = $wpdb->esc_like( '_transient_' ) . $like;
+			$where_parts[] = 'option_name LIKE %s';
+			$params[]      = $wpdb->esc_like( '_transient_timeout_' ) . $like;
+		}
+
+		if ( empty( $where_parts ) ) {
+			return 0;
+		}
+
+		$where = implode( ' OR ', $where_parts );
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Prefix list is internal (hardcoded registry), every fragment goes through $wpdb->prepare().
+		$option_names = $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE {$where}", $params ) );
+
+		if ( empty( $option_names ) ) {
+			return 0;
+		}
+
+		$rows = 0;
+		foreach ( array_chunk( $option_names, 200 ) as $chunk ) {
+			$placeholders = implode( ',', array_fill( 0, count( $chunk ), '%s' ) );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Exact option names read back from the DB above, all bound through $wpdb->prepare().
+			$rows += (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name IN ({$placeholders})", $chunk ) );
+		}
+
+		// A direct SQL DELETE bypasses delete_option()/delete_transient(), so on
+		// installs with a persistent object cache (Redis/Memcached) the stale
+		// value would otherwise keep being served. Transients are autoload=no,
+		// so they live under their own option_name key in the 'options' group;
+		// alloptions is busted too for safety.
+		wp_cache_delete( 'alloptions', 'options' );
+		foreach ( $option_names as $option_name ) {
+			wp_cache_delete( $option_name, 'options' );
+		}
+
+		return $rows;
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_cache_sweep_due' ) ) {
+	/**
+	 * Rate-limit a cache sweep triggered from the frontend tracking path.
+	 *
+	 * Returns true at most once per $window seconds per $key (site-wide), so a
+	 * burst of concurrent heartbeats / event batches / recording saves runs one
+	 * sweep instead of one per request. The check reads an autoloaded option
+	 * (free, served from alloptions); the single write per window is an UPDATE
+	 * by primary key, which cannot block other requests the way the old
+	 * per-request LIKE sweeps did.
+	 *
+	 * When the sweep is skipped the key is flagged dirty so the next admin
+	 * request (see {@see opti_behavior_flush_dirty_dashboard_caches()}) can run
+	 * it before the dashboard reads a widget. Worst case a widget is stale for
+	 * $window seconds — well under the 900 s transient TTL.
+	 *
+	 * @since 1.9.0.6
+	 * @param string $key    Sweep family key, e.g. 'dashboard' or 'recordings'.
+	 * @param int    $window Minimum seconds between two sweeps of the same key.
+	 * @return bool True when the caller should run the sweep now.
+	 */
+	function opti_behavior_cache_sweep_due( $key, $window = 60 ) {
+		$stamp_key = 'opti_behavior_sweep_' . sanitize_key( $key );
+		$window    = max( 1, (int) $window );
+		$last      = (int) get_option( $stamp_key, 0 );
+
+		if ( $last > 0 && ( time() - $last ) < $window ) {
+			// update_option() is a no-op (no query) when the value is already 1.
+			update_option( $stamp_key . '_dirty', 1, true );
+			return false;
+		}
+
+		return true;
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_cache_sweep_is_dirty' ) ) {
+	/**
+	 * Whether a throttled sweep was skipped since the last real sweep of $key.
+	 *
+	 * @since 1.9.0.6
+	 * @param string $key Sweep family key.
+	 * @return bool
+	 */
+	function opti_behavior_cache_sweep_is_dirty( $key ) {
+		return (bool) get_option( 'opti_behavior_sweep_' . sanitize_key( $key ) . '_dirty', 0 );
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_cache_sweep_mark_clean' ) ) {
+	/**
+	 * Record that a full sweep of $key just ran (stamps the throttle window and
+	 * clears the dirty flag). Both writes are no-ops when nothing changed.
+	 *
+	 * @since 1.9.0.6
+	 * @param string $key Sweep family key.
+	 * @return void
+	 */
+	function opti_behavior_cache_sweep_mark_clean( $key ) {
+		$stamp_key = 'opti_behavior_sweep_' . sanitize_key( $key );
+		update_option( $stamp_key, time(), true );
+		update_option( $stamp_key . '_dirty', 0, true );
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_flush_dirty_dashboard_caches' ) ) {
+	/**
+	 * admin_init: run a dashboard sweep that the tracking path skipped
+	 * (throttled) so an admin never reads a widget the throttle left stale.
+	 * Only for users who can see the dashboard; frontend nopriv AJAX (which
+	 * also fires admin_init) is excluded by the capability check.
+	 *
+	 * @since 1.9.0.6
+	 * @return void
+	 */
+	function opti_behavior_flush_dirty_dashboard_caches() {
+		if ( ! function_exists( 'current_user_can' ) || ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+		if ( ! opti_behavior_cache_sweep_is_dirty( 'dashboard' ) ) {
+			return;
+		}
+		opti_behavior_invalidate_dashboard_caches();
+	}
+	add_action( 'admin_init', 'opti_behavior_flush_dirty_dashboard_caches', 5 );
 }
 
 if ( ! function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
@@ -116,41 +283,12 @@ if ( ! function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
 			return 0;
 		}
 
-		$where_parts = array();
-		$params      = array();
-		foreach ( $prefixes as $prefix ) {
-			$like          = $wpdb->esc_like( $prefix ) . '%';
-			$where_parts[] = 'option_name LIKE %s';
-			$params[]      = '_transient_' . $like;
-			$where_parts[] = 'option_name LIKE %s';
-			$params[]      = '_transient_timeout_' . $like;
-		}
+		// 1.9.0.6: index-friendly, SELECT-then-DELETE-by-name sweep (see
+		// opti_behavior_delete_transients_by_prefix() for why the old
+		// `LIKE '_transient_…'` DELETE locked up wp_options under load).
+		$rows = opti_behavior_delete_transients_by_prefix( $prefixes );
 
-		$where = implode( ' OR ', $where_parts );
-
-		// Read the matching option names first so every individual per-option
-		// object-cache entry can be busted below. A direct SQL DELETE bypasses
-		// delete_option()/delete_transient(), so on installs with a persistent
-		// object cache (Redis/Memcached) the stale value would otherwise keep
-		// being served from cache even though the DB row is gone.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dynamic LIKE sweep built from an internal, hardcoded prefix registry (not user input); every fragment is still passed through $wpdb->prepare().
-		$option_names = $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE {$where}", $params ) );
-
-		$sql = "DELETE FROM {$wpdb->options} WHERE " . $where;
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Dynamic LIKE sweep built from an internal, hardcoded prefix registry (not user input); every fragment is still passed through $wpdb->prepare().
-		$rows = (int) $wpdb->query( $wpdb->prepare( $sql, $params ) );
-
-		// Bust the cached alloptions blob so the next request doesn't serve the
-		// deleted transient keys from memory.
-		wp_cache_delete( 'alloptions', 'options' );
-
-		// Bust each individual option's object-cache entry too. Transients are
-		// stored with autoload=no, so WP caches them per-option-name under the
-		// 'options' group rather than inside the 'alloptions' blob.
-		foreach ( (array) $option_names as $option_name ) {
-			wp_cache_delete( $option_name, 'options' );
-		}
+		opti_behavior_cache_sweep_mark_clean( 'dashboard' );
 
 		/**
 		 * Fires after dashboard caches are flushed.

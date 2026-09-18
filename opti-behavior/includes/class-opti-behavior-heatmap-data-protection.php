@@ -364,9 +364,11 @@ class Opti_Behavior_Heatmap_Data_Protection {
 	private function clear_plugin_caches() {
 		global $wpdb;
 		
-		// Clear WordPress transients
-		$wpdb->query( "DELETE FROM {$wpdb->prefix}options WHERE option_name LIKE '_transient_opti-behavior%'" );
-		$wpdb->query( "DELETE FROM {$wpdb->prefix}options WHERE option_name LIKE '_transient_timeout_opti-behavior%'" );
+		// Clear WordPress transients (1.9.0.6: index-friendly, delete-by-name
+		// helper instead of an unescaped `LIKE '_transient_…'` full scan).
+		if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+			opti_behavior_delete_transients_by_prefix( array( 'opti-behavior' ) );
+		}
 		
 		// Clear only plugin-specific object cache keys — never flush the entire cache
 		// (wp_cache_flush() would nuke Redis/Memcached data for all plugins site-wide).

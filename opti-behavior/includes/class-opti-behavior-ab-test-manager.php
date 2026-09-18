@@ -350,14 +350,17 @@ class Opti_Behavior_AB_Test_Manager {
 	// =========================================================================
 
 	/**
-	 * Add a goal to a test.
+	 * Validate a goal payload without writing anything.
 	 *
-	 * @since 1.3.0
+	 * Used by the wizard's full-save endpoint so an invalid goal set can be
+	 * rejected before the stored goals are replaced (QA-F-AB-005).
+	 *
+	 * @since 1.9.0.8
 	 * @param int   $test_id Test ID.
 	 * @param array $data    Goal data.
-	 * @return int|WP_Error Goal ID or error.
+	 * @return true|WP_Error True when the goal may be inserted.
 	 */
-	public function add_goal( $test_id, $data ) {
+	public function validate_goal( $test_id, $data ) {
 		$test = Opti_Behavior_AB_Test_Database::get_test( $test_id );
 		if ( ! $test ) {
 			return new \WP_Error( 'not_found', __( 'Test not found.', 'opti-behavior' ) );
@@ -367,6 +370,23 @@ class Opti_Behavior_AB_Test_Manager {
 		$goal_type = isset( $data['goal_type'] ) ? sanitize_key( $data['goal_type'] ) : 'page_visit';
 		if ( ! in_array( $goal_type, self::FREE_GOAL_TYPES, true ) && ! $this->is_pro_active() ) {
 			return new \WP_Error( 'pro_required', __( 'This goal type requires Opti-Behavior Pro.', 'opti-behavior' ) );
+		}
+
+		return true;
+	}
+
+	/**
+	 * Add a goal to a test.
+	 *
+	 * @since 1.3.0
+	 * @param int   $test_id Test ID.
+	 * @param array $data    Goal data.
+	 * @return int|WP_Error Goal ID or error.
+	 */
+	public function add_goal( $test_id, $data ) {
+		$opti_ab_valid = $this->validate_goal( $test_id, $data );
+		if ( is_wp_error( $opti_ab_valid ) ) {
+			return $opti_ab_valid;
 		}
 
 		// Check goal limit (dynamic).
@@ -394,6 +414,60 @@ class Opti_Behavior_AB_Test_Manager {
 		}
 
 		return $goal_id;
+	}
+
+	// =========================================================================
+	// Cron scheduling
+	// =========================================================================
+
+	/**
+	 * Canonical local time slot of each daily A/B cron hook.
+	 *
+	 * @since 1.9.0.8
+	 * @var array
+	 */
+	const CRON_DAILY_SLOTS = array(
+		'opti_behavior_ab_aggregate_daily' => '0315',
+		'opti_behavior_ab_cleanup'         => '0500',
+	);
+
+	/**
+	 * Arm the A/B cron events and repair a drifted slot.
+	 *
+	 * wp_next_scheduled() only proves that *an* event exists, so an install
+	 * upgraded from an older version keeps whatever time that version picked
+	 * (QA-B-AB-019 observed 18:13 for the 05:00 cleanup) forever. Re-arm any
+	 * daily hook that sits more than an hour away from its canonical slot,
+	 * the same repair the heatmap daily hooks already perform.
+	 *
+	 * Cost: one cron-array read, so it is safe to call on every admin load.
+	 *
+	 * @since 1.9.0.8
+	 */
+	public static function ensure_cron_schedules() {
+		$tz  = function_exists( 'wp_timezone' ) ? wp_timezone() : new \DateTimeZone( 'UTC' );
+		$now = new \DateTime( 'now', $tz );
+
+		foreach ( self::CRON_DAILY_SLOTS as $hook => $hhmm ) {
+			$slot = new \DateTime( 'T' . $hhmm, $tz );
+			if ( $slot < $now ) {
+				$slot->add( new \DateInterval( 'P1D' ) );
+			}
+			$slot_ts = $slot->getTimestamp();
+			$next    = wp_next_scheduled( $hook );
+
+			if ( ! $next ) {
+				wp_schedule_event( $slot_ts, 'daily', $hook );
+			} elseif ( $next < $slot_ts || $slot_ts + HOUR_IN_SECONDS < $next ) {
+				wp_clear_scheduled_hook( $hook );
+				wp_schedule_event( $slot_ts, 'daily', $hook );
+			}
+		}
+
+		// Hourly auto-winner check: armed when missing, never re-slotted.
+		if ( ! wp_next_scheduled( 'opti_behavior_ab_auto_winner_check' ) ) {
+			wp_schedule_event( time() + 600, 'hourly', 'opti_behavior_ab_auto_winner_check' );
+		}
 	}
 
 	// =========================================================================
@@ -1264,7 +1338,7 @@ class Opti_Behavior_AB_Test_Manager {
 
 		// LiteSpeed Cache.
 		foreach ( $urls as $url ) {
-			do_action( 'litespeed_purge_url', $url );
+			do_action( 'litespeed_purge_url', $url ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Third-party hook owned by LiteSpeed Cache (its documented purge API); not a hook defined by this plugin.
 		}
 
 		// W3 Total Cache.

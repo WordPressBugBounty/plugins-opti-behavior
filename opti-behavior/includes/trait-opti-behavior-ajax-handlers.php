@@ -186,30 +186,12 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             wp_send_json_success( array( 'html' => $html ) );
         }
 
-        /**
-         * AJAX handler for heatmaps sessions.
-         *
-         * @since 1.0.0
-         * @global wpdb $wpdb WordPress database abstraction object.
+        /*
+         * ajax_heatmaps_sessions_impl() removed in 1.9.0.7 (QA-B-HEAT-060):
+         * the `optibehavior_heatmaps_sessions` action had no JS caller — the
+         * per-page session counts ship inside the optibehavior_heatmaps_table
+         * payload — so the endpoint was dead code.
          */
-        private function ajax_heatmaps_sessions_impl() {
-            check_ajax_referer( 'opti_behavior_dashboard_nonce', 'nonce' );
-            if ( ! current_user_can( 'manage_options' ) ) {
-                wp_die( esc_html__( 'Unauthorized', 'opti-behavior' ) );
-            }
-            // Unslash first, then sanitize with intval
-            $pageIds = isset($_POST['page_ids']) && is_array($_POST['page_ids']) ? array_map('intval', wp_unslash( $_POST['page_ids'] ) ) : array();
-            $period  = isset($_POST['period']) ? sanitize_text_field( wp_unslash( $_POST['period'] ) ) : 'last30days';
-            $start   = isset($_POST['start_date']) ? sanitize_text_field( wp_unslash( $_POST['start_date'] ) ) : '';
-            $end     = isset($_POST['end_date']) ? sanitize_text_field( wp_unslash( $_POST['end_date'] ) ) : '';
-            if ($period === 'custom' && $start && $end) { $start_date = $start.' 00:00:00'; $end_date = $end.' 23:59:59'; }
-            else { $range = $this->get_date_range($period); $start_date = $range['start']; $end_date = $range['end']; }
-            $debug_manager = $this->heatmap->get_debug_manager();
-            $debug_manager->log( 'ajax_heatmaps_sessions ids=' . wp_json_encode( $pageIds ) . ' period=' . $period . ' start=' . $start_date . ' end=' . $end_date, 'debug', 'ajax' );
-            $map = $this->batch_sessions_counts_by_page($pageIds, $start_date, $end_date);
-            $debug_manager->log( 'ajax_heatmaps_sessions result=' . wp_json_encode( $map ), 'debug', 'ajax' );
-            wp_send_json_success(array('sessions'=>$map));
-        }
 
         /*
          * sanitize_advanced_filters_from_request() moved to the shared
@@ -351,7 +333,11 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 case 'section_summaries':
                     // Lightweight teaser chips for the collapsible section headers.
                     // Single cheap top-1 / COUNT aggregates on indexed columns; never
-                    // re-runs the heavy widget queries, never cached (live/exact).
+                    // re-runs the heavy widget queries. Unfiltered results ARE cached
+                    // for opti_behavior_dashboard_cache_ttl() (30 s) under the
+                    // `opti_behavior_section_summaries_` prefix, which is registered in
+                    // the widget-cache registry so the invalidator sweeps it
+                    // (QA-B-DASH-027); filtered and force-refresh requests stay live.
                     return array( 'section_summaries' => $this->get_section_summaries_data( $start_date, $end_date, $filters ) );
 
                 case 'top_users':
@@ -1191,8 +1177,17 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
         /**
          * AJAX handler for cleanup orphaned recording files.
          *
+         * Delegates to the hardened sweep engine in the file-storage layer
+         * (Opti_Behavior_Heatmap_File_Storage::sweep_orphaned_recording_files_step()).
+         * The previous inline walk was mis-scoped and could destroy heatmap data:
+         * with Pro active it iterated the uploads DATA ROOT (so every
+         * `events/*.json.gz` heatmap file was a deletion candidate), it stripped
+         * the base dir BEFORE normalising Windows separators (so the relative
+         * path never matched `optibehavior_recordings.file_path`), it dropped the
+         * `recordings/` prefix that `save_recording()` actually stores, and it had
+         * neither a min-age grace nor sidecar (.oblog/.obidx/.obtmp) handling.
+         *
          * @since 1.0.0
-         * @global wpdb $wpdb WordPress database abstraction object.
          */
         private function ajax_cleanup_orphaned_files_impl() {
             check_ajax_referer('opti_behavior_cleanup', 'nonce');
@@ -1201,68 +1196,50 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 wp_send_json_error(array('message' => esc_html__( 'Permission denied', 'opti-behavior' )));
             }
 
-            global $wpdb;
-            $table = $wpdb->prefix . 'optibehavior_recordings';
-
-            // Escape table name for WordPress Plugin Check compliance
-            $safe_table = esc_sql( $table );
-
-            // Get all file paths from database
-            // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-            $db_file_paths = $wpdb->get_col(
-                "SELECT file_path FROM " . $safe_table . " WHERE file_path IS NOT NULL AND file_path != ''"
-            );
-            // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-
-            // Get proper file path using WordPress upload directory
-            $upload_dir = wp_upload_dir();
-            $base_dir = trailingslashit($upload_dir['basedir']) . 'opti-behavior-data/recordings/';
-
-            // Get file storage instance (only if Pro is active)
-            $file_storage = null;
-            if (opti_behavior_pro_active() && class_exists('Opti_Behavior_Heatmap_File_Storage')) {
-                $file_storage = new Opti_Behavior_Heatmap_File_Storage( $this->heatmap->get_debug_manager() );
-                // If Pro version has file storage, use its base directory
-                if (method_exists($file_storage, 'get_base_dir')) {
-                    $base_dir = trailingslashit($file_storage->get_base_dir());
-                }
+            if ( ! class_exists( 'Opti_Behavior_Heatmap_File_Storage' ) ) {
+                wp_send_json_error( array( 'message' => esc_html__( 'File storage is not available on this install.', 'opti-behavior' ) ) );
             }
 
-            if (!is_dir($base_dir)) {
+            $debug_manager = ( isset( $this->heatmap ) && is_object( $this->heatmap ) && method_exists( $this->heatmap, 'get_debug_manager' ) )
+                ? $this->heatmap->get_debug_manager()
+                : null;
+            $file_storage  = new Opti_Behavior_Heatmap_File_Storage( $debug_manager );
+
+            // Scope is ALWAYS `<data root>/recordings/` — never the data root
+            // itself, so the heatmap `events/` tree can never be walked.
+            $recordings_dir = trailingslashit( $file_storage->get_base_dir() ) . 'recordings/';
+            if ( ! is_dir( $recordings_dir ) ) {
                 wp_send_json_error(array('message' => esc_html__( 'Recordings directory not found', 'opti-behavior' )));
             }
 
-            // Scan recordings directory for all .json.gz files
+            // Walk the whole tree in bounded, cursor'd batches. Each batch keeps
+            // its own time budget; the guard stops a pathological loop.
+            $cursor        = '';
             $deleted_count = 0;
-            $deleted_size = 0;
+            $deleted_size  = 0;
+            $delete_failed = 0;
+            $guard         = 0;
 
-            $iterator = new RecursiveIteratorIterator(
-                new RecursiveDirectoryIterator($base_dir, RecursiveDirectoryIterator::SKIP_DOTS),
-                RecursiveIteratorIterator::SELF_FIRST
-            );
-
-            foreach ($iterator as $file) {
-                if ($file->isFile() && pathinfo($file->getFilename(), PATHINFO_EXTENSION) === 'gz') {
-                    // Get relative path from base directory
-                    $relative_path = str_replace($base_dir, '', $file->getPathname());
-                    $relative_path = str_replace('\\', '/', $relative_path);
-
-                    // Check if this file has a database record
-                    if (!in_array($relative_path, $db_file_paths, true)) {
-                        // This is an orphaned file - delete it
-                        $deleted_size += $file->getSize();
-                        wp_delete_file($file->getPathname());
-                        $deleted_count++;
-                    }
-                }
-            }
+            do {
+                $stats          = $file_storage->sweep_orphaned_recording_files_step( (string) $cursor );
+                $deleted_count += isset( $stats['files_deleted'] ) ? (int) $stats['files_deleted'] : 0;
+                $deleted_size  += isset( $stats['bytes_freed'] ) ? (int) $stats['bytes_freed'] : 0;
+                $delete_failed += isset( $stats['delete_failed'] ) ? (int) $stats['delete_failed'] : 0;
+                $cursor         = isset( $stats['next_cursor'] ) ? $stats['next_cursor'] : null;
+                ++$guard;
+            } while ( ! empty( $cursor ) && $guard < 500 );
 
             wp_send_json_success(array(
                 'message' => sprintf(
-                    'Deleted %d orphaned file(s) (%.2f MB)',
+                    /* translators: 1: number of deleted files, 2: reclaimed space in MB. */
+                    esc_html__( 'Deleted %1$d orphaned file(s) (%2$.2f MB)', 'opti-behavior' ),
                     $deleted_count,
                     $deleted_size / 1024 / 1024
-                )
+                ),
+                'deleted_count' => $deleted_count,
+                'deleted_bytes' => $deleted_size,
+                'delete_failed' => $delete_failed,
+                'completed'     => empty( $cursor ),
             ));
         }
 
@@ -1429,22 +1406,10 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 delete_transient( 'opti_behavior_spam_recalc_processed' );
 
                 // Clear related caches
-                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_optibehavior_top_users_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_timeout_optibehavior_top_users_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_opti_behavior_traffic_class_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_timeout_opti_behavior_traffic_class_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+                // 1.9.0.6: index-friendly, delete-by-name helper (was 4 unescaped LIKE scans).
+                if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+                    opti_behavior_delete_transients_by_prefix( array( 'optibehavior_top_users_', 'opti_behavior_traffic_class_' ) );
+                }
 
                 wp_send_json_success( array(
                     'status' => 'completed',
@@ -1928,7 +1893,47 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 
             $force = isset( $_POST['refresh'] ) && '1' === sanitize_key( wp_unslash( $_POST['refresh'] ) );
 
-            wp_send_json_success( $this->get_danger_zone_category_sizes( $force ) );
+            $data = $this->get_danger_zone_category_sizes( $force );
+
+            // Bot/spam counter for the Manual Cleanup card. It used to run a
+            // synchronous COUNT(*) on the sessions table during the settings page
+            // render, which broke the documented skeleton-only contract; it is
+            // served from here instead and short-cached so the two danger-zone
+            // fetches never double the work.
+            // Shared with Opti_Behavior_Smart_Cleanup_Service, which drops this
+            // transient on every bot-record mutation so the Manual Cleanup
+            // counter next to the destructive button can never show a stale
+            // number for a minute after a cleanup (QA-B-SET-044).
+            $bot_cache_key = class_exists( 'Opti_Behavior_Smart_Cleanup_Service' )
+                ? Opti_Behavior_Smart_Cleanup_Service::BOT_BREAKDOWN_CACHE_KEY
+                : 'opti_behavior_danger_bot_breakdown';
+            $breakdown     = $force ? false : get_transient( $bot_cache_key );
+            if ( ! is_array( $breakdown ) ) {
+                $service   = $this->get_smart_cleanup_service();
+                $breakdown = ( $service && method_exists( $service, 'count_bot_records_breakdown' ) )
+                    ? (array) $service->count_bot_records_breakdown()
+                    : array( 'total' => 0, 'sessions' => 0, 'bot_visits' => 0 );
+                set_transient( $bot_cache_key, $breakdown, MINUTE_IN_SECONDS );
+            }
+
+            $bot_sessions   = isset( $breakdown['sessions'] ) ? (int) $breakdown['sessions'] : 0;
+            $bot_visits     = isset( $breakdown['bot_visits'] ) ? (int) $breakdown['bot_visits'] : 0;
+            $bot_total      = isset( $breakdown['total'] ) ? (int) $breakdown['total'] : ( $bot_sessions + $bot_visits );
+
+            $data['bot_breakdown'] = array(
+                'total'          => $bot_total,
+                'sessions'       => $bot_sessions,
+                'bot_visits'     => $bot_visits,
+                'total_fmt'      => number_format_i18n( $bot_total ),
+                'breakdown_text' => sprintf(
+                    /* translators: 1: bot/spam sessions, 2: bot-visit log rows. */
+                    __( '= %1$s bot/spam/automated sessions + %2$s rows in the bot-visit log (bots refused at the door, no session data).', 'opti-behavior' ),
+                    number_format_i18n( $bot_sessions ),
+                    number_format_i18n( $bot_visits )
+                ),
+            );
+
+            wp_send_json_success( $data );
         }
 
         /**
@@ -2019,6 +2024,33 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             }
 
             wp_send_json_success( array( 'counts' => $counts ) );
+        }
+
+        /**
+         * AJAX handler: Storage Stats tab — run one lean-events migration tick
+         * now (backfill → purge → OPTIMIZE) instead of waiting for WP-Cron.
+         *
+         * @since 1.9.2
+         */
+        public function ajax_engagement_migration_run() {
+            check_ajax_referer( 'opti_behavior_storage_stats', 'nonce' );
+
+            if ( ! current_user_can( 'manage_options' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Unauthorized', 'opti-behavior' ) ) );
+            }
+            if ( ! class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Engagement counters unavailable.', 'opti-behavior' ) ) );
+            }
+
+            if ( function_exists( 'set_time_limit' ) ) {
+                @set_time_limit( 120 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,Squiz.PHP.DiscouragedFunctions.Discouraged -- Admin-triggered 'Run now' migration tick; guarded by function_exists, failure is harmless.
+            }
+            ignore_user_abort( true );
+
+            $summary  = Opti_Behavior_Heatmap_Engagement_Counters::run_tick( 25 );
+            $progress = Opti_Behavior_Heatmap_Engagement_Counters::progress();
+
+            wp_send_json_success( array_merge( $progress, array( 'tick' => $summary ) ) );
         }
 
         /**
@@ -2640,6 +2672,12 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             if ( isset( $_POST['aggregates_months'] ) ) {
                 $fields['aggregates_retention_months'] = absint( wp_unslash( $_POST['aggregates_months'] ) );
             }
+            if ( isset( $_POST['db_max_mb'] ) ) {
+                $fields['db_max_mb'] = absint( wp_unslash( $_POST['db_max_mb'] ) );
+            }
+            if ( isset( $_POST['table_max_mb'] ) ) {
+                $fields['table_max_mb'] = absint( wp_unslash( $_POST['table_max_mb'] ) );
+            }
 
             $saved = Opti_Behavior_Retention_Policy::update_settings( $fields );
 
@@ -2650,6 +2688,8 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                     'spam_daily'        => ! empty( $saved['spam_daily_enabled'] ) ? 1 : 0,
                     'files_days'        => (int) $saved['files_retention_days'],
                     'aggregates_months' => (int) $saved['aggregates_retention_months'],
+                    'db_max_mb'         => isset( $saved['db_max_mb'] ) ? (int) $saved['db_max_mb'] : 0,
+                    'table_max_mb'      => isset( $saved['table_max_mb'] ) ? (int) $saved['table_max_mb'] : 0,
                 )
             );
         }
@@ -2811,6 +2851,15 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             foreach ( $recording_file_paths as $recording_file_path ) {
                 $relative_path = ltrim( str_replace( '\\', '/', (string) $recording_file_path ), '/' );
                 $candidate     = $recording_base_dir . $relative_path;
+
+                // Append-only sidecars (.oblog/.obidx/.obtmp) share the base path.
+                foreach ( array( '.oblog', '.obidx', '.obtmp' ) as $sidecar_suffix ) {
+                    $sidecar_real = realpath( $candidate . $sidecar_suffix );
+                    if ( false !== $sidecar_real && is_file( $sidecar_real ) && 0 === strpos( wp_normalize_path( $sidecar_real ), $recording_base_real ) ) {
+                        wp_delete_file( $sidecar_real );
+                    }
+                }
+
                 $real_path     = realpath( $candidate );
 
                 if ( false === $real_path || ! is_file( $real_path ) ) {
@@ -2913,21 +2962,32 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             $all_category_keys = array_keys( $categories_map );
 
             // Resolve selected categories from POST.
-            // If the `categories` param is absent or empty, default to ALL categories
-            // so the handler remains fully backward-compatible.
-            if ( isset( $_POST['categories'] ) && is_array( $_POST['categories'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce already checked above
-                $raw_cats = array_map( 'sanitize_key', (array) $_POST['categories'] ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+            // A genuinely ABSENT `categories` param keeps the legacy "delete
+            // everything" behaviour. A param that IS sent but selects nothing
+            // (the "Deselect All" control, or only unknown keys) must be a
+            // no-op: expanding it to every category turned a deliberate empty
+            // selection into a full wipe.
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce already checked above
+            $categories_sent = isset( $_POST['categories'] );
+
+            if ( $categories_sent ) {
+                $raw_cats = array_map( 'sanitize_key', (array) wp_unslash( $_POST['categories'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce already checked above
                 $selected_categories = array_values(
                     array_filter( $raw_cats, function ( $cat ) use ( $all_category_keys ) {
                         return in_array( $cat, $all_category_keys, true );
                     } )
                 );
-            } else {
-                $selected_categories = array();
-            }
 
-            // Empty / missing categories list → delete everything (backward compatibility)
-            if ( empty( $selected_categories ) ) {
+                if ( empty( $selected_categories ) ) {
+                    wp_send_json_error(
+                        array(
+                            'message' => __( 'Select at least one data category to delete. Nothing was deleted.', 'opti-behavior' ),
+                            'code'    => 'no_categories_selected',
+                        )
+                    );
+                }
+            } else {
+                // Backward compatibility: no selector on the caller side at all.
                 $selected_categories = $all_category_keys;
             }
 
@@ -3033,52 +3093,14 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 }
 
                 // Clear transient caches (safe to wipe all — they will be regenerated)
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_optibehavior_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_timeout_optibehavior_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_opti_behavior_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_timeout_opti_behavior_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-
-                // Heatmap dashboard caches use their own prefixes (ob_hm_stats_*,
-                // ob_hm_metrics_*, opti_hm_list_*, opti_heatmap_*) that the patterns
-                // above never match. Without this the Available Heatmaps table keeps
-                // serving pre-deletion Interactions/Sessions numbers from these
-                // transients even though every plugin table is already empty.
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_ob_hm_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_timeout_ob_hm_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_opti_hm_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_timeout_opti_hm_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_opti_heatmap_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-                // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-                $wpdb->query( "DELETE FROM " . $wpdb->prefix . "options WHERE option_name LIKE '_transient_timeout_opti_heatmap_%'" );
-                // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+                // 1.9.0.6: one index-friendly, delete-by-name sweep instead of 12 unescaped
+                // `LIKE '_transient_…'` full scans. Covers the dashboard families plus the
+                // heatmap dashboard caches (ob_hm_stats_*, ob_hm_metrics_*, opti_hm_list_*,
+                // opti_heatmap_*) that the plugin-wide prefixes never matched, so the
+                // Available Heatmaps table cannot keep serving pre-deletion numbers.
+                if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+                    opti_behavior_delete_transients_by_prefix( array( 'optibehavior_', 'opti_behavior_', 'ob_hm_', 'opti_hm_', 'opti_heatmap_' ) );
+                }
 
                 // Rotate the version-namespaced heatmap caches as well, so any key
                 // written between the deletes above and this response is orphaned.
@@ -3228,8 +3250,18 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             $start_date = isset( $_POST['start_date'] ) ? sanitize_text_field( wp_unslash( $_POST['start_date'] ) ) : '';
             $end_date = isset( $_POST['end_date'] ) ? sanitize_text_field( wp_unslash( $_POST['end_date'] ) ) : '';
 
-            // Validate dates
-            if ( empty( $start_date ) || empty( $end_date ) ) {
+            // Validate dates: both must be real Y-m-d calendar dates and the
+            // range must not be inverted. Accepting anything non-empty let an
+            // inverted range ("2026-03-10" → "2026-03-01") and a malformed date
+            // ("13/45/2026") walk the whole table stepper and report success.
+            $is_valid_date = function ( $value ) {
+                if ( ! is_string( $value ) || ! preg_match( '/^(\d{4})-(\d{2})-(\d{2})$/', $value, $m ) ) {
+                    return false;
+                }
+                return checkdate( (int) $m[2], (int) $m[3], (int) $m[1] );
+            };
+
+            if ( ! $is_valid_date( $start_date ) || ! $is_valid_date( $end_date ) || $end_date < $start_date ) {
                 wp_send_json_error( array( 'message' => __( 'Invalid date range', 'opti-behavior' ) ) );
             }
 
@@ -3496,6 +3528,118 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
         }
 
         /**
+         * AJAX handler: Cleanup Tasks panel overview (registry rows with live
+         * next-run / last-run / enabled state). Read-only; option reads + one
+         * cron-array scan, never a filesystem scan.
+         *
+         * @since 1.9.x
+         */
+        public function ajax_cleanup_tasks_overview() {
+            check_ajax_referer( 'opti_behavior_smart_cleanup', 'nonce' );
+
+            if ( ! current_user_can( 'manage_options' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Unauthorized', 'opti-behavior' ) ) );
+            }
+
+            if ( ! class_exists( 'Opti_Behavior_Cleanup_Task_Registry' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Cleanup task registry unavailable.', 'opti-behavior' ) ) );
+            }
+
+            // Fresh Cleanup History markup so the panel can show a run's stats
+            // as soon as the background job finishes, without a page reload.
+            ob_start();
+            $this->render_cleanup_history_list( $this->get_cleanup_logs( 20 ) );
+            $history_html = ob_get_clean();
+
+            wp_send_json_success(
+                array(
+                    'tasks'        => Opti_Behavior_Cleanup_Task_Registry::get_overview(),
+                    'cron_stalled' => Opti_Behavior_Cleanup_Task_Registry::is_cron_stalled(),
+                    'history_html' => $history_html,
+                )
+            );
+        }
+
+        /**
+         * AJAX handler: queue a run-now for one whitelisted cleanup task.
+         *
+         * Mechanism: immediate one-off cron event of the task's OWN hook +
+         * spawn_cron() — never inline deletion, never a new deletion path.
+         * The registry re-resolves the id (whitelist) and applies the
+         * full-cron-array duplicate guard before scheduling anything.
+         *
+         * @since 1.9.x
+         */
+        public function ajax_cleanup_task_run() {
+            check_ajax_referer( 'opti_behavior_smart_cleanup', 'nonce' );
+
+            if ( ! current_user_can( 'manage_options' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Unauthorized', 'opti-behavior' ) ) );
+            }
+
+            if ( ! class_exists( 'Opti_Behavior_Cleanup_Task_Registry' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Cleanup task registry unavailable.', 'opti-behavior' ) ) );
+            }
+
+            $task_id = isset( $_POST['task'] ) ? sanitize_key( wp_unslash( $_POST['task'] ) ) : '';
+
+            $result = Opti_Behavior_Cleanup_Task_Registry::queue_run_now( $task_id );
+
+            $payload = array(
+                'code'         => $result['code'],
+                'message'      => $result['message'],
+                'timestamp'    => $result['timestamp'],
+                'cron_stalled' => Opti_Behavior_Cleanup_Task_Registry::is_cron_stalled(),
+            );
+
+            if ( $result['success'] ) {
+                wp_send_json_success( $payload );
+            }
+
+            wp_send_json_error( $payload );
+        }
+
+        /**
+         * AJAX handler: "Run all now" — queue every runnable cleanup task,
+         * staggered, through the same run-now mechanism as a single row.
+         *
+         * @since 2026-09-13
+         */
+        public function ajax_cleanup_tasks_run_all() {
+            check_ajax_referer( 'opti_behavior_smart_cleanup', 'nonce' );
+
+            if ( ! current_user_can( 'manage_options' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Unauthorized', 'opti-behavior' ) ) );
+            }
+
+            if ( ! class_exists( 'Opti_Behavior_Cleanup_Task_Registry' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Cleanup task registry unavailable.', 'opti-behavior' ) ) );
+            }
+
+            $result  = Opti_Behavior_Cleanup_Task_Registry::queue_run_all();
+            $results = array();
+            foreach ( $result['results'] as $task_id => $task_result ) {
+                $results[ $task_id ] = array(
+                    'success' => (bool) $task_result['success'],
+                    'code'    => $task_result['code'],
+                    'message' => $task_result['message'],
+                );
+            }
+
+            $payload = array(
+                'message'      => $result['message'],
+                'results'      => $results,
+                'cron_stalled' => Opti_Behavior_Cleanup_Task_Registry::is_cron_stalled(),
+            );
+
+            if ( $result['success'] ) {
+                wp_send_json_success( $payload );
+            }
+
+            wp_send_json_error( $payload );
+        }
+
+        /**
          * AJAX handler: Save auto-cleanup schedule settings.
          *
          * @since 1.0.9
@@ -3542,17 +3686,27 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 
             update_option( 'opti_behavior_auto_cleanup_settings', $settings );
 
-            // Manage cron schedule
-            $hook = 'opti_behavior_scheduled_smart_cleanup';
-            wp_clear_scheduled_hook( $hook );
+            // Manage cron schedule through the single self-heal entry point so
+            // the saved `enabled` flag and the cron event can never drift apart
+            // (same method runs on every admin_init). It arms the event when
+            // enabled, clears it when disabled, and collapses duplicate or
+            // stale-cadence events — 'monthly' rides the daily recurrence and
+            // is throttled inside run_scheduled_cleanup().
+            $hook     = 'opti_behavior_scheduled_smart_cleanup';
+            $database = ( isset( $this->heatmap ) && is_object( $this->heatmap ) && method_exists( $this->heatmap, 'get_database' ) )
+                ? $this->heatmap->get_database()
+                : null;
 
-            if ( $settings['enabled'] ) {
-                $recurrence = $settings['frequency'];
-                if ( $recurrence === 'monthly' ) {
-                    // WordPress doesn't have monthly by default, use a custom interval
-                    $recurrence = 'daily'; // We'll check inside the callback
+            if ( $database && method_exists( $database, 'ensure_scheduled_smart_cleanup_cron' ) ) {
+                $database->ensure_scheduled_smart_cleanup_cron();
+            } else {
+                // Defensive fallback: identical outcome without the service.
+                wp_clear_scheduled_hook( $hook );
+
+                if ( $settings['enabled'] ) {
+                    $recurrence = ( 'monthly' === $settings['frequency'] ) ? 'daily' : $settings['frequency'];
+                    wp_schedule_event( time() + HOUR_IN_SECONDS, $recurrence, $hook );
                 }
-                wp_schedule_event( time() + HOUR_IN_SECONDS, $recurrence, $hook );
             }
 
             // Heatmap sync auto-repair toggle (Danger Zone → Smart Cleanup →
@@ -3941,7 +4095,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				$period = isset( $settings['period'] ) ? sanitize_key( $settings['period'] ) : 'last7days';
 			}
 
-			if ( ! in_array( $period, array( 'today', 'yesterday', 'last7days', 'last14days', 'last30days', 'custom' ), true ) ) {
+			if ( ! in_array( $period, array( 'today', 'yesterday', 'last7days', 'last14days', 'last30days', 'last90days', 'custom' ), true ) ) {
 				$period = isset( $settings['period'] ) ? sanitize_key( $settings['period'] ) : 'last7days';
 			}
 
@@ -3977,15 +4131,23 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 		private function get_smart_insights_center_url_for_scope_impl( $scope ) {
 			$args = array(
 				'page'         => 'opti-behavior-smart-insights',
-				'period'       => isset( $scope['period'] ) ? sanitize_key( $scope['period'] ) : 'last7days',
 				'exclude_spam' => ! empty( $scope['exclude_spam'] ) ? '1' : '0',
 			);
 
-			if ( ! empty( $scope['start_date'] ) ) {
-				$args['start_date'] = sanitize_text_field( $scope['start_date'] );
-			}
-			if ( ! empty( $scope['end_date'] ) ) {
-				$args['end_date'] = sanitize_text_field( $scope['end_date'] );
+			// Only pin the reporting window when the launcher mirrors a filter the
+			// user explicitly chose on the center. From any other admin page the
+			// launcher's own lookback (last7days) is a notification setting, not a
+			// center filter, so let the center open on its default (Last 3 Months).
+			$context = isset( $scope['context'] ) ? sanitize_key( $scope['context'] ) : '';
+			if ( 'center' === $context && ! empty( $scope['period'] ) ) {
+				$args['period'] = sanitize_key( $scope['period'] );
+
+				if ( ! empty( $scope['start_date'] ) ) {
+					$args['start_date'] = sanitize_text_field( $scope['start_date'] );
+				}
+				if ( ! empty( $scope['end_date'] ) ) {
+					$args['end_date'] = sanitize_text_field( $scope['end_date'] );
+				}
 			}
 
 			return admin_url( 'admin.php?' . http_build_query( $args, '', '&' ) );
@@ -4047,7 +4209,13 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			}
 
 			// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only launcher scope.
-			$period     = isset( $_GET['period'] ) ? sanitize_key( wp_unslash( $_GET['period'] ) ) : ( class_exists( 'Opti_Behavior_Smart_Insights_Generator' ) ? Opti_Behavior_Smart_Insights_Generator::DEFAULT_PERIOD : 'last30days' );
+			// QA-B-SI-072: same default as the center page render, which is
+			// Generator::DEFAULT_PERIOD — the only window cron pre-generates.
+			$si_default_period = class_exists( 'Opti_Behavior_Smart_Insights_Generator' )
+				? Opti_Behavior_Smart_Insights_Generator::DEFAULT_PERIOD
+				: 'last30days';
+			$period     = isset( $_GET['period'] ) ? sanitize_key( wp_unslash( $_GET['period'] ) ) : $si_default_period; // Matches the center page default filter.
+			$period     = '' !== $period ? $period : $si_default_period;
 			$start_date = isset( $_GET['start_date'] ) ? sanitize_text_field( wp_unslash( $_GET['start_date'] ) ) : '';
 			$end_date   = isset( $_GET['end_date'] ) ? sanitize_text_field( wp_unslash( $_GET['end_date'] ) ) : '';
 			$exclude_spam = $this->resolve_smart_insights_spam_exclusion_from_request_impl( $_GET );
@@ -5002,6 +5170,20 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			$exclude_spam = $this->set_smart_insights_spam_exclusion_context_impl( $_POST );
 			// phpcs:enable WordPress.Security.NonceVerification.Missing
 			$spam_scope   = $this->get_smart_insights_spam_scope_key_impl( $exclude_spam );
+			// An INVERTED custom range is a user error, not something to guess at:
+			// `Generator::normalize_date_range()` silently SWAPS the two dates, so a
+			// viewer who asked for "15 Sep -> 28 Aug" got a whole month of data and no
+			// word about it. Reject it instead: the center already renders a rejected
+			// request in its role="status" alert (`setAlert(section, error.message,
+			// 'error')`, smart-insights.js:3154). Reuses the generator's existing
+			// message id, so no new translatable string. (QA-B-SI-074)
+			if ( 'custom' === $period
+				&& preg_match( '/^\d{4}-\d{2}-\d{2}$/', (string) $start_date )
+				&& preg_match( '/^\d{4}-\d{2}-\d{2}$/', (string) $end_date )
+				&& strtotime( $start_date ) > strtotime( $end_date ) ) {
+				wp_send_json_error( array( 'message' => __( 'Invalid Smart Insights date range.', 'opti-behavior' ) ) );
+			}
+
 			$range      = $generator->get_date_range_for_period( $period, $start_date, $end_date );
 			if ( is_wp_error( $range ) ) {
 				wp_send_json_error( array( 'message' => $range->get_error_message() ) );

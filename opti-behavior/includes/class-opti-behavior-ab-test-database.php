@@ -459,7 +459,7 @@ class Opti_Behavior_AB_Test_Database {
 			KEY started_at (started_at),
 			KEY created_at (created_at),
 			KEY origin_insight_id (origin_insight_id)
-			) " . $charset_collate
+			) " . Opti_Behavior_Heatmap_Database::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -487,7 +487,7 @@ class Opti_Behavior_AB_Test_Database {
 			PRIMARY KEY  (id),
 			KEY test_id (test_id),
 			KEY test_control (test_id, is_control)
-			) " . $charset_collate
+			) " . Opti_Behavior_Heatmap_Database::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -513,7 +513,7 @@ class Opti_Behavior_AB_Test_Database {
 			created_at      datetime            NOT NULL,
 			PRIMARY KEY  (id),
 			KEY test_id (test_id)
-			) " . $charset_collate
+			) " . Opti_Behavior_Heatmap_Database::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -548,7 +548,7 @@ class Opti_Behavior_AB_Test_Database {
 			KEY test_variant (test_id, variant_id),
 			UNIQUE KEY visitor_test_unique (test_id, visitor_id),
 			KEY created_at (created_at)
-			) " . $charset_collate
+			) " . Opti_Behavior_Heatmap_Database::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -579,7 +579,7 @@ class Opti_Behavior_AB_Test_Database {
 			KEY test_variant_goal (test_id, variant_id, goal_id),
 			KEY visitor_test (visitor_id, test_id),
 			KEY created_at (created_at)
-			) " . $charset_collate
+			) " . Opti_Behavior_Heatmap_Database::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -616,7 +616,7 @@ class Opti_Behavior_AB_Test_Database {
 			UNIQUE KEY daily_unique (test_id, variant_id, goal_id, stat_date),
 			KEY stat_date (stat_date),
 			KEY test_id (test_id)
-			) " . $charset_collate
+			) " . Opti_Behavior_Heatmap_Database::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -652,7 +652,7 @@ class Opti_Behavior_AB_Test_Database {
 			KEY test_id (test_id),
 			KEY event_test (test_id, event),
 			KEY created_at (created_at)
-			) " . $charset_collate
+			) " . Opti_Behavior_Heatmap_Database::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -1171,10 +1171,14 @@ class Opti_Behavior_AB_Test_Database {
 
 		$test_id = absint( $test_id );
 
-		// Delete in dependency order: conversions, impressions, daily_stats, goals, variants, test.
+		// Delete in dependency order: conversions, impressions, daily_stats,
+		// decision_log, goals, variants, test.
 		$wpdb->delete( $wpdb->prefix . 'optibehavior_ab_conversions', array( 'test_id' => $test_id ), array( '%d' ) );
 		$wpdb->delete( $wpdb->prefix . 'optibehavior_ab_impressions', array( 'test_id' => $test_id ), array( '%d' ) );
 		$wpdb->delete( $wpdb->prefix . 'optibehavior_ab_daily_stats', array( 'test_id' => $test_id ), array( '%d' ) );
+		// QA-B-AB-020d: the decision log is a child of the test and must cascade too,
+		// otherwise orphan rows survive and can be returned for a reused test id.
+		$wpdb->delete( $wpdb->prefix . 'optibehavior_ab_decision_log', array( 'test_id' => $test_id ), array( '%d' ) );
 		$wpdb->delete( $wpdb->prefix . 'optibehavior_ab_goals', array( 'test_id' => $test_id ), array( '%d' ) );
 		$wpdb->delete( $wpdb->prefix . 'optibehavior_ab_variants', array( 'test_id' => $test_id ), array( '%d' ) );
 		$wpdb->delete( $wpdb->prefix . 'optibehavior_ab_tests', array( 'id' => $test_id ), array( '%d' ) );
@@ -1983,6 +1987,17 @@ class Opti_Behavior_AB_Test_Database {
 	 * @return int Total rows deleted.
 	 */
 	public static function cleanup_old_data( $retention_days = 90 ) {
+		return array_sum( self::cleanup_old_data_by_table( $retention_days ) );
+	}
+
+	/**
+	 * Clean up old raw A/B data and report rows deleted per table.
+	 *
+	 * @since 1.9.x
+	 * @param int $retention_days Days to retain raw data.
+	 * @return array<string,int> Rows deleted keyed by table suffix.
+	 */
+	public static function cleanup_old_data_by_table( $retention_days = 90 ) {
 		global $wpdb;
 
 		$cutoff = gmdate( 'Y-m-d H:i:s', strtotime( "-{$retention_days} days" ) );
@@ -2001,7 +2016,10 @@ class Opti_Behavior_AB_Test_Database {
 			)
 		);
 
-		return (int) $deleted_impressions + (int) $deleted_conversions;
+		return array(
+			'optibehavior_ab_impressions' => (int) $deleted_impressions,
+			'optibehavior_ab_conversions' => (int) $deleted_conversions,
+		);
 	}
 
 	/**

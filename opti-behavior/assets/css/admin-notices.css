@@ -115,12 +115,22 @@ div[class*="welcome"],
 div[class*="onboard"],
 div[class*="getting-started"],
 
-/* Specific plugin patterns (exclude ob-* prefixed classes — those are Opti-Behavior internal elements) */
-div[class*="-notice"]:not([class^="ob-"]),
-div[class*="-message"]:not([class^="ob-"]),
-div[class*="-notification"]:not([class^="ob-"]),
-div[class*="-alert"]:not([class^="ob-"]),
-div[class*="-banner"]:not([class^="ob-"]),
+/* Specific plugin patterns.
+ * Two exclusions, both required:
+ *  - `ob-*` prefixed classes are Opti-Behavior internal elements;
+ *  - `opti-behavior-*` classes are too, and WITHOUT that second exclusion
+ *    this block silently out-specifies the "EXCEPTION" rules further down:
+ *    `div[class*="-banner"]:not([class^="ob-"])` is (0,2,1) while
+ *    `div.opti-behavior-broadcast-banner` is only (0,1,1), so the broadcast
+ *    banner was rendered and then hidden by this plugin's own stylesheet
+ *    on every Opti-Behavior screen (QA-B-DASH-052: "Element is not visible"
+ *    on its dismiss button). Same trap for the trial banner.
+ */
+div[class*="-notice"]:not([class^="ob-"]):not([class*="opti-behavior"]),
+div[class*="-message"]:not([class^="ob-"]):not([class*="opti-behavior"]),
+div[class*="-notification"]:not([class^="ob-"]):not([class*="opti-behavior"]),
+div[class*="-alert"]:not([class^="ob-"]):not([class*="opti-behavior"]),
+div[class*="-banner"]:not([class^="ob-"]):not([class*="opti-behavior"]),
 
 /* Catch-all for admin notices in content area */
 #wpbody-content > div[class*="notice"]:not([class*="opti-behavior"]),
@@ -159,6 +169,22 @@ div[id*="opti-behavior-notice"],
 	height: auto !important;
 	margin: 5px 0 15px !important;
 	padding: 12px !important;
+	overflow: visible !important;
+}
+
+/* EXCEPTION: the in-canvas Pro-feature notice is first-party PAGE content, not an
+ * admin notice. It matches `div[class*="notice"]` (0,2,1), so the generic
+ * `.opti-behavior-notice` exemptions above (at most 0,1,1) cannot win - this
+ * selector ties that specificity and comes later. It keeps the element's own
+ * flex layout from heatmap-detail.css instead of the admin-notice box styling. */
+div[class*="notice"].heatmap-pro-feature-notice {
+	display: flex !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+	height: auto !important;
+	min-height: 600px !important;
+	margin: 0 !important;
+	padding: 40px !important;
 	overflow: visible !important;
 }
 

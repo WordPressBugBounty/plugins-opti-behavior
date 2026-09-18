@@ -101,7 +101,7 @@ class Opti_Behavior_Heatmap_Orphan_Purge {
 	 * The ONLY dir name forms the purge will ever touch:
 	 * `{32-hex}` and `{32-hex}-YmdHis` (re-archive collision suffix).
 	 */
-	const NAME_PATTERN = '/^[a-f0-9]{32}(-\d{14})?$/';
+	const NAME_PATTERN = '/^[a-f0-9]{8,64}(-\d{14})?$/';
 
 	/**
 	 * Storage instance (base dir helper).
@@ -210,6 +210,7 @@ class Opti_Behavior_Heatmap_Orphan_Purge {
 		if ( class_exists( 'Opti_Behavior_Heatmap_Orphan_Restore' )
 			&& Opti_Behavior_Heatmap_Orphan_Restore::is_recovery_active() ) {
 			$result['locked'] = true;
+			$result['reason'] = 'recovery_hold';
 			return $result;
 		}
 
@@ -217,6 +218,7 @@ class Opti_Behavior_Heatmap_Orphan_Purge {
 		if ( ! $got_lock ) {
 			// Another heatmap maintenance pass is scanning; caller retries.
 			$result['locked'] = true;
+			$result['reason'] = 'lock_miss';
 			return $result;
 		}
 
@@ -366,6 +368,18 @@ class Opti_Behavior_Heatmap_Orphan_Purge {
 
 		$mtime = @filemtime( $orphan_dir . $name ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Race with concurrent deletion is expected.
 		$mtime = ( false === $mtime ) ? 0 : (int) $mtime;
+
+		// Files archived into an existing `{hash}/` land in `{hash}/{folder}/`,
+		// which bumps that folder's mtime but not the hash dir's own. Take the
+		// newest of both levels so a recent archival keeps its full window.
+		if ( $mtime > 0 ) {
+			foreach ( array( 'clicks', 'moves', 'scrolls' ) as $folder ) {
+				$sub_mtime = @filemtime( $orphan_dir . $name . '/' . $folder ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Folder may not exist.
+				if ( false !== $sub_mtime && (int) $sub_mtime > $mtime ) {
+					$mtime = (int) $sub_mtime;
+				}
+			}
+		}
 
 		/**
 		 * Filter the resolved archive-dir mtime (tests override this because

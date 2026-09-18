@@ -245,6 +245,13 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			}
 		}
 
+		// Per-session engagement counters (events_count + click/scroll/move):
+		// one UPDATE per touched session instead of one per event. Must land
+		// before the spam re-classification below reads the counters.
+		if ( class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' ) ) {
+			Opti_Behavior_Heatmap_Engagement_Counters::flush();
+		}
+
 		if ( $processed_count > 0 ) {
 			$this->clear_behavior_classification_caches();
 
@@ -441,11 +448,22 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			$event_row_formats[]        = '%f';
 		}
 
-		$insert_result = $wpdb->insert(
-			$table_name,
-			$event_row,
-			$event_row_formats
-		);
+		// Lean events mode (1.9.2): scroll (32/33) and mouse-move (48/49) rows are
+		// no longer written to optibehavior_events once the session counters are
+		// live and Pro (if active) is new enough to read them. Those rows were
+		// ~90 % of the table and were only ever COUNTed; the heatmap itself
+		// renders from the JSON files written below. Click rows are kept for
+		// Top Clicked Elements / CTA analytics (element_* columns).
+		$store_event_row = ! class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' )
+			|| Opti_Behavior_Heatmap_Engagement_Counters::should_store_event_row( $event_numeric );
+
+		$insert_result = $store_event_row
+			? $wpdb->insert(
+				$table_name,
+				$event_row,
+				$event_row_formats
+			)
+			: true;
 
 		// Self-healing fallback: if the insert failed and element/anchor columns
 		// were included, the events table may pre-date that schema (dbDelta
@@ -453,7 +471,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// click, retry without the element_* / anchor fields so the heatmap dot
 		// is still recorded; element data resumes once the schema is upgraded.
 		$optional_event_fields = ( isset( $element_fields ) ? $element_fields : array() ) + $anchor_fields;
-		if ( false === $insert_result && $optional_event_fields && array_intersect_key( $event_row, $optional_event_fields ) ) {
+		if ( $store_event_row && false === $insert_result && $optional_event_fields && array_intersect_key( $event_row, $optional_event_fields ) ) {
 			$debug_manager->log( 'Event insert failed with element fields (' . $wpdb->last_error . ') - retrying without element data. Deactivate/reactivate the plugin to upgrade the events table schema.', 'error', 'ajax' );
 			$base_field_count  = 9; // page_id, event, device, x, y, width, height, time, insert_at.
 			$event_row         = array_diff_key( $event_row, $optional_event_fields );
@@ -467,20 +485,28 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		}
 
 		// DEBUG: Log insert result
-		if ( $insert_result === false ) {
+		if ( ! $store_event_row ) {
+			$debug_manager->log( "Event row skipped (lean mode) event=$event_numeric, device=$device", 'debug', 'ajax' );
+		} elseif ( $insert_result === false ) {
 			$debug_manager->log( "Database insert FAILED! Error: " . $wpdb->last_error . ", event=$event_numeric, device=$device", 'error', 'ajax' );
 		} else {
 			$inserted_id = $wpdb->insert_id;
 			$debug_manager->log( "Event inserted with ID=$inserted_id (event=$event_numeric, device=$device)", 'info', 'ajax' );
 		}
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
-		$wpdb->query(
-			$wpdb->prepare(
-				"UPDATE {$wpdb->prefix}optibehavior_sessions SET events_count = events_count + 1 WHERE id = %s",
-				$session_id
-			)
-		);
+		// Session counters (events_count + click/scroll/move_count) are buffered
+		// and flushed once per AJAX batch by the caller (one UPDATE per session).
+		if ( class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' ) ) {
+			Opti_Behavior_Heatmap_Engagement_Counters::record( $session_id, $event_numeric );
+		} else {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
+			$wpdb->query(
+				$wpdb->prepare(
+					"UPDATE {$wpdb->prefix}optibehavior_sessions SET events_count = events_count + 1 WHERE id = %s",
+					$session_id
+				)
+			);
+		}
 
 		// Keep the per-page click counter (session_pages.clicks_count) in sync with the
 		// heatmap tracker. That counter is normally written by the session-recording
@@ -1139,26 +1165,49 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		}
 
 		// Create new visitor with metadata
-		$wpdb->insert(
-			"{$wpdb->prefix}optibehavior_visitors",
-			array(
-				'id'           => $visitor_id,
-				'first_visit'  => current_time( 'mysql' ),
-				'last_visit'   => current_time( 'mysql' ),
-				'device_type'  => $metadata['device_type'],
-				'browser'      => $metadata['browser'],
-				'browser_version' => $metadata['browser_version'],
-				'os'           => $metadata['os'],
-				'os_version'   => $metadata['os_version'],
-				'screen_width' => $screen_width,
-				'screen_height' => $screen_height,
-				'country'      => $country,
-				'country_name' => $country_name,
-				'region'       => $region,
-				'city'         => $city,
-				'timezone'     => $timezone,
-			),
-			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s' )
+		$visitor_data = array(
+			'id'              => $visitor_id,
+			'first_visit'     => current_time( 'mysql' ),
+			'last_visit'      => current_time( 'mysql' ),
+			'device_type'     => $metadata['device_type'],
+			'browser'         => $metadata['browser'],
+			'browser_version' => $metadata['browser_version'],
+			'os'              => $metadata['os'],
+			'os_version'      => $metadata['os_version'],
+			'screen_width'    => $screen_width,
+			'screen_height'   => $screen_height,
+			'country'         => $country,
+			'country_name'    => $country_name,
+			'region'          => $region,
+			'city'            => $city,
+			'timezone'        => $timezone,
+		);
+		$formats = array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s' );
+
+		// INSERT IGNORE: two concurrent first hits from the same visitor both
+		// pass the SELECT above and race to insert the same primary key. The
+		// loser used to log "Duplicate entry … for key PRIMARY"; the row already
+		// exists, so silently skipping is the correct outcome.
+		$columns      = array();
+		$placeholders = array();
+		$values       = array();
+		$i            = 0;
+		foreach ( $visitor_data as $column => $value ) {
+			$columns[] = '`' . $column . '`';
+			if ( null === $value ) {
+				$placeholders[] = 'NULL';
+			} else {
+				$placeholders[] = $formats[ $i ];
+				$values[]       = $value;
+			}
+			$i++;
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Column list is hardcoded; values bound through prepare(); NULL literals for null fields.
+		$wpdb->query(
+			$wpdb->prepare(
+				"INSERT IGNORE INTO {$wpdb->prefix}optibehavior_visitors (" . implode( ', ', $columns ) . ') VALUES (' . implode( ', ', $placeholders ) . ')',
+				$values
+			)
 		);
 	}
 
@@ -3816,36 +3865,29 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	 * @since 1.3.8
 	 */
 	private function clear_behavior_classification_caches() {
-		global $wpdb;
-
-		$options_table = esc_sql( $wpdb->prefix . 'options' );
-		$patterns      = array(
-			'_transient_opti_behavior_traffic_class_%',
-			'_transient_timeout_opti_behavior_traffic_class_%',
-			'_transient_opti_behavior_user_intent_%',
-			'_transient_timeout_opti_behavior_user_intent_%',
-		);
-
-		foreach ( $patterns as $pattern ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Clearing dashboard transients after live tracking updates.
-			$wpdb->query(
-				$wpdb->prepare(
-					"DELETE FROM {$options_table} WHERE option_name LIKE %s",
-					$pattern
-				)
-			);
-		}
-
-		// Bug #3 (Part B) fix: this method runs on every heartbeat session-row
-		// update (i.e. potentially before classify_session() below has run/flipped
-		// anything), so also proactively clear the dashboard_traffic_series KPI
-		// cache family here — same reasoning as
+		// 1.9.0.6 (customer crash report): this ran on EVERY frontend tracking
+		// request (heartbeat, event batch) and issued 4 `DELETE … LIKE
+		// '_transient_…'` queries + the 34-clause dashboard sweep. The leading
+		// unescaped `_` wildcard defeated the option_name index, so each call
+		// full-scanned wp_options under InnoDB next-key locks; concurrent
+		// visitors serialised on those locks ("Lock wait timeout exceeded"),
+		// PHP workers piled up and the site went down.
+		//
+		// Now: at most one sweep per 60 s site-wide (skipped calls flag the
+		// family dirty and admin_init flushes it before any dashboard read),
+		// and the sweep itself is the index-friendly SELECT-then-DELETE-by-name
+		// helper. traffic_class + user_intent are part of the dashboard widget
+		// registry, so the dashboard sweep covers the 4 patterns cleared here
+		// before — same reasoning as
 		// Opti_Behavior_Stats_Spam_Filter::clear_traffic_classification_caches(),
-		// kept in sync with it so neither cache-clear path can be updated without
-		// the other.
-		if ( function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
-			opti_behavior_invalidate_dashboard_caches();
+		// kept in sync with it.
+		if ( ! function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
+			return;
 		}
+		if ( function_exists( 'opti_behavior_cache_sweep_due' ) && ! opti_behavior_cache_sweep_due( 'dashboard', 60 ) ) {
+			return;
+		}
+		opti_behavior_invalidate_dashboard_caches();
 	}
 
 	/**

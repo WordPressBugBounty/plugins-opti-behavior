@@ -1165,8 +1165,11 @@ class Opti_Behavior_Smart_Insights_Repository {
 			}
 
 			$existing = isset( $insight['outcome'] ) && is_array( $insight['outcome'] ) ? $insight['outcome'] : array();
-			if ( ! empty( $existing['verdict'] ) || isset( $existing['after_value'] ) ) {
-				// Already measured; re-resolving must not erase a stored result.
+			if ( ! empty( $existing['verdict'] ) || isset( $existing['after_value'] ) || ! empty( $existing['metric_key'] ) ) {
+				// A snapshot already exists. Re-resolving must neither erase a
+				// stored verdict nor re-freeze `before_value` from the CURRENT
+				// metrics — that would silently rewrite the baseline the later
+				// cron check compares against (QA-B-SI-003).
 				return false;
 			}
 

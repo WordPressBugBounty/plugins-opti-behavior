@@ -455,7 +455,7 @@ class Opti_Behavior_Heatmap_Frontend {
 		// can declare it as a dependency and load after it.
 		wp_register_script(
 			'opti-behavior-anon-broker',
-			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/opti-behavior-anon-broker.js',
+			Opti_Behavior_Optimizer_Compat::js_asset_url( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR, OPTI_BEHAVIOR_HEATMAP_ASSETS_URL, 'js/opti-behavior-anon-broker.js' ),
 			array(),
 			$version,
 			true
@@ -464,7 +464,7 @@ class Opti_Behavior_Heatmap_Frontend {
 		// Register simple reporter script (for click tracking only)
 		wp_register_script(
 			'opti-behavior-reporter',
-			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/opti-behavior-heatmap-simple.js',
+			Opti_Behavior_Optimizer_Compat::js_asset_url( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR, OPTI_BEHAVIOR_HEATMAP_ASSETS_URL, 'js/opti-behavior-heatmap-simple.js' ),
 			array_merge( $debug_deps, array( 'opti-behavior-anon-broker' ) ),
 			$version,
 			true
@@ -485,7 +485,7 @@ class Opti_Behavior_Heatmap_Frontend {
 		// Register frontend page title override script
 		wp_register_script(
 			'opti-behavior-frontend-page-title',
-			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/frontend-page-title.js',
+			Opti_Behavior_Optimizer_Compat::js_asset_url( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR, OPTI_BEHAVIOR_HEATMAP_ASSETS_URL, 'js/frontend-page-title.js' ),
 			array( 'opti-behavior-reporter' ),
 			$version,
 			true
@@ -512,7 +512,7 @@ class Opti_Behavior_Heatmap_Frontend {
 		// Depends on opti-behavior-reporter so consent fires before tracker init.
 		wp_register_script(
 			'opti-behavior-consent',
-			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/opti-behavior-consent.js',
+			Opti_Behavior_Optimizer_Compat::js_asset_url( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR, OPTI_BEHAVIOR_HEATMAP_ASSETS_URL, 'js/opti-behavior-consent.js' ),
 			array( 'opti-behavior-reporter' ),
 			$consent_js_ver,
 			true
@@ -529,7 +529,7 @@ class Opti_Behavior_Heatmap_Frontend {
 		// Register A/B test tracker script (lightweight, no dependencies).
 		wp_register_script(
 			'opti-behavior-ab-tracker',
-			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/ab-test-tracker.js',
+			Opti_Behavior_Optimizer_Compat::js_asset_url( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR, OPTI_BEHAVIOR_HEATMAP_ASSETS_URL, 'js/ab-test-tracker.js' ),
 			array( 'opti-behavior-anon-broker' ),
 			$version,
 			true
@@ -550,10 +550,29 @@ class Opti_Behavior_Heatmap_Frontend {
 	 * @since 1.0.0
 	 */
 	public function wp_enqueue_scripts() {
-		// Skip ALL tracking scripts inside heatmap preview iframes to prevent blink loop.
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		if ( isset( $_GET['opti_heatmap_preview'] ) || isset( $_GET['opti_preview_as_guest'] ) || isset( $_GET['opti_preview_as_mobile'] ) ) {
-			return;
+		// Skip ALL tracking scripts inside our own preview iframes: the heatmap
+		// preview (blink loop) and the A/B visual editor / admin preview, whose
+		// pageviews would otherwise be recorded as real traffic (QA-B-TRACK-011).
+		$opti_preview_args = array(
+			'opti_heatmap_preview',
+			'opti_preview_as_guest',
+			'opti_preview_as_mobile',
+			'opti_ab_visual_editor',
+			'opti_ab_admin_preview',
+		);
+		foreach ( $opti_preview_args as $opti_preview_arg ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only preview-mode check, no state change.
+			if ( isset( $_GET[ $opti_preview_arg ] ) ) {
+				// A preview response must never be cached or optimized: the
+				// tracker-free HTML would otherwise be served to real visitors.
+				if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+					define( 'DONOTCACHEPAGE', true ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- Cross-plugin standard constant honoured by WP Super Cache, W3TC, WP Rocket, etc.; must keep this exact name.
+				}
+				if ( ! defined( 'DONOTROCKETOPTIMIZE' ) ) {
+					define( 'DONOTROCKETOPTIMIZE', true ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- Cross-plugin standard constant read by WP Rocket; must keep this exact name.
+				}
+				return;
+			}
 		}
 
 		// Check if this is a heatmap capture request (for downloading heatmap as image)
@@ -609,7 +628,12 @@ class Opti_Behavior_Heatmap_Frontend {
 
 		// ALWAYS track all page types (singular, archives, search, home, 404, etc.)
 		// This ensures all taxonomy types (categories, tags, authors, search, date archives) are tracked
-		// The report_non_singular option is ignored to guarantee complete tracking coverage
+		// The report_non_singular option is NOT applied here on purpose: this same
+		// reporter records sessions, page views, UTM and A/B data, which must stay
+		// complete. Since 1.9.5 the option only filters HEATMAP points of archive
+		// URLs, server-side at ingest (Opti_Behavior_Heatmap_Page_Type_Prune,
+		// called from Opti_Behavior_Heatmap_Storage::save_heatmap_data()) — which
+		// also stays correct behind page caches.
 
 		// Check excluded categories (only for single posts)
 		if ( is_single() && ! empty( $options['exclude_categories'] ) ) {
@@ -621,15 +645,74 @@ class Opti_Behavior_Heatmap_Frontend {
 
 		// Skip tracking for admin users if disabled in Traffic & Behavior settings
 		// track_admin_users defaults to true (admins are tracked)
-		if ( current_user_can( 'manage_options' ) ) {
-			$traffic_settings = get_option( 'opti_behavior_traffic_settings', array() );
-			$track_admin      = isset( $traffic_settings['track_admin_users'] ) ? (bool) $traffic_settings['track_admin_users'] : true;
-			if ( ! $track_admin ) {
-				return false;
-			}
+		if ( ! self::admin_tracking_allowed() ) {
+			return false;
 		}
 
 		// Track everything else
+		return true;
+	}
+
+	/**
+	 * Whether the CURRENT user may be tracked by a render-time tracker.
+	 *
+	 * Shared gate for every Free tracker that is enqueued at render time
+	 * (reporter, funnel tracker, …) so the Traffic & Behavior setting
+	 * `track_admin_users` cannot be honoured by one tracker and ignored by the
+	 * next (QA-B-TRACK-012). Anonymous visitors are always allowed: the
+	 * capability check is the gate.
+	 *
+	 * @since 1.9.5
+	 * @return bool True when this user may be tracked.
+	 */
+	public static function admin_tracking_allowed() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return true;
+		}
+
+		// QA / preview override: `?opti_behavior_test_recording=1` re-enables the
+		// reporter for THIS administrator only, mirroring the Pro recorder
+		// override (Opti_Behavior_Session_Recording::enqueue_recording_scripts).
+		// It is never honoured for anonymous visitors — the capability check
+		// above is the gate — and it only ever turns tracking back ON, so no
+		// nonce is required (it cannot change state or leak data).
+		if ( self::is_test_tracking_override() ) {
+			return true;
+		}
+
+		$traffic_settings = get_option( 'opti_behavior_traffic_settings', array() );
+
+		return isset( $traffic_settings['track_admin_users'] ) ? (bool) $traffic_settings['track_admin_users'] : true;
+	}
+
+	/**
+	 * Whether the administrator asked for a test/preview tracking pass.
+	 *
+	 * Honours `?opti_behavior_test_recording=1` and the 30-minute cookie the
+	 * first request sets, exactly like the Pro session recorder. Callers MUST
+	 * have already established that the current user can `manage_options`:
+	 * this helper only reads the request, it performs no capability check of
+	 * its own, and anonymous visitors never reach it.
+	 *
+	 * @since 1.9.0.7
+	 * @return bool True when the override is active for this request.
+	 */
+	private static function is_test_tracking_override() {
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only preview flag, admin-only, cannot change state.
+		$has_param  = isset( $_GET['opti_behavior_test_recording'] );
+		$has_cookie = isset( $_COOKIE['opti_behavior_test_recording'] );
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		if ( ! $has_param && ! $has_cookie ) {
+			return false;
+		}
+
+		// Persist for 30 minutes so the follow-up page views of the same QA pass
+		// stay tracked without re-adding the query argument (same cookie Pro sets).
+		if ( $has_param && ! $has_cookie && ! headers_sent() ) {
+			setcookie( 'opti_behavior_test_recording', '1', time() + 1800, '/', '', false, false );
+		}
+
 		return true;
 	}
 
@@ -912,8 +995,13 @@ class Opti_Behavior_Heatmap_Frontend {
 			$detected_slug  = null;
 			$detected_label = '';
 			$show_builtin   = true;
-		} elseif ( 'thirdparty' === $banner_prefer && null !== $detected_slug ) {
-			// User explicitly chose third-party: never show built-in.
+		} elseif ( 'thirdparty' === $banner_prefer ) {
+			// User explicitly chose third-party: ALWAYS defer, never show the
+			// built-in banner. The old `&& null !== $detected_slug` guard fell
+			// through to auto-detect whenever no consent plugin was recognised,
+			// so an unsupported (or renamed) consent plugin silently got our
+			// banner stacked on top of it — the one outcome this setting exists
+			// to prevent (QA-B-SET-070).
 			$show_builtin = false;
 		} else {
 			// Auto-detect (default): use third-party if detected, else built-in.
@@ -938,9 +1026,17 @@ class Opti_Behavior_Heatmap_Frontend {
 
 		$banner_position_user_set = ! empty( $options['consent_banner_position_user_set'] );
 		$banner_position     = ( $banner_position_user_set && isset( $options['consent_banner_position'] ) ) ? sanitize_text_field( $options['consent_banner_position'] ) : 'compact-card';
-		$banner_accent_color = isset( $options['consent_banner_accent_color'] ) ? sanitize_hex_color( $options['consent_banner_accent_color'] ) : '#2e7d32';
-		$banner_bg_color     = isset( $options['consent_banner_bg_color'] ) ? sanitize_hex_color( $options['consent_banner_bg_color'] ) : '#ffffff';
+		$banner_accent_color = isset( $options['consent_banner_accent_color'] ) ? sanitize_hex_color( $options['consent_banner_accent_color'] ) : '#6c5ce7';
+		// Old default accent (green) was saved on every settings save; use the brand purple instead.
+		if ( '#2e7d32' === strtolower( (string) $banner_accent_color ) ) {
+			$banner_accent_color = '#6c5ce7';
+		}
+		$banner_bg_color    = isset( $options['consent_banner_bg_color'] ) ? sanitize_hex_color( $options['consent_banner_bg_color'] ) : '#ffffff';
 		$banner_text_color   = isset( $options['consent_banner_text_color'] ) ? sanitize_hex_color( $options['consent_banner_text_color'] ) : '#333333';
+
+		// Banner branding ("Powered by Opti-Behavior" + icon) stays OFF in Free: WordPress.org
+		// guideline 10 forbids public-site credits without opt-in. Opti-Behavior Pro enables it.
+		$show_branding = (bool) apply_filters( 'opti_behavior_consent_banner_branding', false, $options );
 
 		// Build JS config object.
 		$consent_config = array(
@@ -951,7 +1047,10 @@ class Opti_Behavior_Heatmap_Frontend {
 			'pending_timeout'       => 8000,
 			'is_admin_user'         => current_user_can( 'manage_options' ),
 			'banner_position'       => $banner_position,
-			'banner_accent_color'   => $banner_accent_color ? $banner_accent_color : '#2e7d32',
+			'banner_accent_color'   => $banner_accent_color ? $banner_accent_color : '#6c5ce7',
+			'banner_icon_url'       => $show_branding ? esc_url_raw( (string) apply_filters( 'opti_behavior_consent_banner_icon_url', plugins_url( 'assets/images/consent-icon.png', dirname( __FILE__ ) ) ) ) : '',
+			'banner_powered_by_label' => $show_branding ? __( 'Powered by Opti-Behavior', 'opti-behavior' ) : '',
+			'banner_powered_by_url' => $show_branding ? esc_url_raw( (string) apply_filters( 'opti_behavior_consent_banner_powered_by_url', 'https://optiuser.com/' ) ) : '',
 			'banner_bg_color'       => $banner_bg_color ? $banner_bg_color : '#ffffff',
 			'banner_text_color'     => $banner_text_color ? $banner_text_color : '#333333',
 			'banner_title'          => $banner_title,
@@ -1753,10 +1852,12 @@ JS;
 			return;
 		}
 
-		// Skip inside heatmap preview iframes.
+		// Skip inside heatmap preview iframes and the A/B visual editor iframe.
 		if ( null !== filter_input( INPUT_GET, 'opti_heatmap_preview' ) ||
 			null !== filter_input( INPUT_GET, 'opti_preview_as_guest' ) ||
-			null !== filter_input( INPUT_GET, 'opti_preview_as_mobile' ) ) {
+			null !== filter_input( INPUT_GET, 'opti_preview_as_mobile' ) ||
+			null !== filter_input( INPUT_GET, 'opti_ab_visual_editor' ) ||
+			null !== filter_input( INPUT_GET, 'opti_ab_admin_preview' ) ) {
 			return;
 		}
 
@@ -1837,10 +1938,12 @@ JS;
 			return;
 		}
 
-		// Skip inside heatmap preview iframes.
+		// Skip inside heatmap preview iframes and the A/B visual editor iframe.
 		if ( null !== filter_input( INPUT_GET, 'opti_heatmap_preview' ) ||
 			null !== filter_input( INPUT_GET, 'opti_preview_as_guest' ) ||
-			null !== filter_input( INPUT_GET, 'opti_preview_as_mobile' ) ) {
+			null !== filter_input( INPUT_GET, 'opti_preview_as_mobile' ) ||
+			null !== filter_input( INPUT_GET, 'opti_ab_visual_editor' ) ||
+			null !== filter_input( INPUT_GET, 'opti_ab_admin_preview' ) ) {
 			return;
 		}
 

@@ -295,6 +295,15 @@ class Opti_Behavior_Optimizer_Compat {
 				'opti-behavior-consent.js',
 				'ab-test-tracker.js',
 				'funnel-tracker.js',
+				// 1.9.4: minified production builds (assets/js/*.min.js, generated
+				// by tools/build-min-js.js and served via js_asset_url()). Optimizer
+				// file lists are substring/regex matched against the served URL, so
+				// every .min.js name must be listed next to its source name.
+				'opti-behavior-heatmap-simple.min.js',
+				'opti-behavior-anon-broker.min.js',
+				'opti-behavior-consent.min.js',
+				'ab-test-tracker.min.js',
+				'funnel-tracker.min.js',
 				// Debug logger + page-title override (R7 gap, 1.7.7): their
 				// HANDLES were protected (tag attributes) but the filenames
 				// were missing here, so URL-matched optimizations — WP Rocket
@@ -307,6 +316,9 @@ class Opti_Behavior_Optimizer_Compat {
 				// override timing-dependent.
 				'opti-behavior-debug.js',
 				'frontend-page-title.js',
+				// 1.9.0.7 (QA-B-TRACK-004): frontend-page-title.js is a built
+				// target too, so its .min.js needs the same URL protection.
+				'frontend-page-title.min.js',
 			),
 			'handles'     => array(
 				'opti-behavior',
@@ -804,11 +816,95 @@ class Opti_Behavior_Optimizer_Compat {
 			$attrs .= ' data-jetpack-boost="ignore"';
 		}
 
+		// 1.9.4 (Core Web Vitals): every protected tracker is an external,
+		// self-contained file whose boot path already waits for
+		// DOMContentLoaded (or is DOM-independent), so it is safe to execute
+		// after HTML parsing. `defer` preserves document order between
+		// dependent handles (broker -> reporter -> page-title/consent,
+		// rrweb -> recorder), takes the tracker bundle off the render-blocking
+		// critical path (LCP) and lets the browser fetch it at low priority
+		// alongside the page instead of stalling the parser (TBT/INP). Applied
+		// here rather than via the wp_register_script 'strategy' arg so it works
+		// on WP < 6.3 and survives optimizers that rewrite our tags.
+		if ( self::should_defer_tag( $tag ) ) {
+			$attrs .= ' defer';
+		}
+
 		if ( '' !== $attrs ) {
 			$tag = str_replace( '<script ', '<script' . $attrs . ' ', $tag );
 		}
 
 		return $tag;
+	}
+
+	/**
+	 * Whether a protected external script tag should receive `defer`.
+	 *
+	 * Only external (`src=`) classic scripts that do not already carry
+	 * `async`/`defer` qualify; inline blocks and modules are left alone.
+	 *
+	 * @since 1.9.4
+	 * @param string $tag Full <script> tag HTML.
+	 * @return bool
+	 */
+	public static function should_defer_tag( $tag ) {
+		if ( ! is_string( $tag ) || false === strpos( $tag, ' src=' ) ) {
+			return false;
+		}
+		if ( preg_match( '/<script[^>]*\s(?:async|defer)(?:[\s=>]|$)/i', $tag ) ) {
+			return false;
+		}
+		if ( preg_match( '/<script[^>]*\stype=["\']module["\']/i', $tag ) ) {
+			return false;
+		}
+
+		/**
+		 * Filter whether Opti-Behavior frontend tracker tags are deferred.
+		 *
+		 * Return false to restore synchronous execution (e.g. while debugging
+		 * a third-party script that reads a tracker global synchronously).
+		 *
+		 * @since 1.9.4
+		 * @param bool   $defer Default true.
+		 * @param string $tag   The <script> tag being filtered.
+		 */
+		return (bool) apply_filters( 'opti_behavior_defer_tracker_scripts', true, $tag );
+	}
+
+	/**
+	 * Resolve a frontend JS asset URL, preferring the minified build.
+	 *
+	 * Returns `<file>.min.js` when that file exists next to the source and
+	 * SCRIPT_DEBUG is off, otherwise the source file. Min builds are generated
+	 * by tools/build-min-js.js; a missing build silently falls back to source
+	 * so a partial deploy can never 404 a tracker.
+	 *
+	 * @since 1.9.4
+	 * @param string $dir  Absolute plugin directory (the one containing assets/).
+	 * @param string $url  Plugin assets base URL, trailing slash (…/assets/).
+	 * @param string $file Path relative to assets/, e.g. 'js/foo.js'.
+	 * @return string
+	 */
+	public static function js_asset_url( $dir, $url, $file ) {
+		$use_min = ! ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG );
+
+		/**
+		 * Filter whether minified tracker builds are served.
+		 *
+		 * @since 1.9.4
+		 * @param bool   $use_min Default: true unless SCRIPT_DEBUG.
+		 * @param string $file    Relative asset path being resolved.
+		 */
+		$use_min = (bool) apply_filters( 'opti_behavior_use_minified_js', $use_min, $file );
+
+		if ( $use_min && '.js' === substr( $file, -3 ) && '.min.js' !== substr( $file, -7 ) ) {
+			$min = substr( $file, 0, -3 ) . '.min.js';
+			if ( file_exists( rtrim( (string) $dir, '/' . chr( 92 ) ) . '/assets/' . $min ) ) {
+				return $url . $min;
+			}
+		}
+
+		return $url . $file;
 	}
 
 	/**
@@ -875,10 +971,10 @@ class Opti_Behavior_Optimizer_Compat {
 		}
 
 		if ( ! defined( 'DONOTROCKETOPTIMIZE' ) ) {
-			define( 'DONOTROCKETOPTIMIZE', true );
+			define( 'DONOTROCKETOPTIMIZE', true ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- Cross-plugin standard constant read by WP Rocket; must keep this exact name.
 		}
 		if ( ! defined( 'DONOTCACHEPAGE' ) ) {
-			define( 'DONOTCACHEPAGE', true );
+			define( 'DONOTCACHEPAGE', true ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- Cross-plugin standard constant honoured by WP Super Cache, W3TC, WP Rocket, etc.; must keep this exact name.
 		}
 	}
 }

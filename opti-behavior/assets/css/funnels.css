@@ -2759,8 +2759,14 @@
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
+/* Empty state: suggestions render first, above the "No Funnels Yet" card. */
 .opti-funnel-suggestions--empty {
-	margin-top: 8px;
+	margin-top: 40px;
+}
+
+/* List surface: suggestions sit below the funnel list + pagination. */
+.opti-funnel-suggestions--list {
+	margin-top: 24px;
 }
 
 /* ---- Collapsed summary bar (1.8.4.1 UX pass) ----

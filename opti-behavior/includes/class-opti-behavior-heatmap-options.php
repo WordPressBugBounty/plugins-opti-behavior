@@ -36,6 +36,11 @@ class Opti_Behavior_Heatmap_Options implements ArrayAccess {
 			// Privacy mode.
 			'privacy_mode'               => 'anonymous',
 
+			// Heatmaps on archive pages (tags, categories, authors, dates,
+			// search, /page/N): 0 = posts, pages, products, home and shop only
+			// (1.9.5 default), 1 = all pages. Sessions are counted either way.
+			'report_non_singular'        => 0,
+
 			// Consent banner preference: 'auto' = use third-party if detected, else built-in;
 			// 'builtin' = always use built-in; 'thirdparty' = always defer to third-party.
 			'consent_banner_prefer'      => 'auto',
@@ -45,7 +50,7 @@ class Opti_Behavior_Heatmap_Options implements ArrayAccess {
 			'consent_banner_position'    => 'bottom-bar',
 
 			// Built-in consent banner: colors.
-			'consent_banner_accent_color' => '#2e7d32',
+			'consent_banner_accent_color' => '#6c5ce7',
 			'consent_banner_bg_color'    => '#ffffff',
 			'consent_banner_text_color'  => '#333333',
 

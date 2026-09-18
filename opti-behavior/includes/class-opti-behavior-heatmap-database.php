@@ -379,6 +379,17 @@ class Opti_Behavior_Heatmap_Database {
 		$debug_manager->log( 'Checking for database migrations', 'debug', 'database' );
 		$this->handle_migrations( $tables_preexisted );
 
+		// Engagement counters (1.9.2): sessions.click/scroll/move_count columns,
+		// migration state seed, one-off backfill + legacy row purge via cron.
+		// Also drops the redundant events indexes once their covering indexes
+		// exist (deferred to the cron tick on large tables).
+		if ( class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' ) ) {
+			Opti_Behavior_Heatmap_Engagement_Counters::ensure_schema();
+		}
+		if ( 'cli' === PHP_SAPI || ! $this->is_large_table( $wpdb->prefix . 'optibehavior_events' ) ) {
+			self::drop_redundant_indexes( 'cli' !== PHP_SAPI );
+		}
+
 		// Create default report schedule if none exists
 		$debug_manager->log( 'Checking for default report schedule', 'debug', 'database' );
 		$this->maybe_create_default_schedule();
@@ -465,6 +476,10 @@ class Opti_Behavior_Heatmap_Database {
 
 		// Always run NULL ip → Anonymous migration (checks internally if needed)
 		$this->migrate_null_ip_to_anonymous();
+
+		// One-time url2 re-normalisation (tracking-param strip + trailing slash);
+		// checks internally if needed.
+		$this->migrate_url2_canonical_normalization();
 
 		// Always run empty page-title backfill (checks internally if needed).
 		// Cleans up rows created with an empty title (e.g. older Pro session-recording
@@ -1152,70 +1167,6 @@ class Opti_Behavior_Heatmap_Database {
 		} else {
 			$debug_manager->log( 'Performance indexes already exist, skipping migration', 'debug', 'database' );
 		}
-
-		// Add composite index for session-visitor JOINs (critical for top_users query)
-		$visitors_table = $wpdb->prefix . 'optibehavior_visitors';
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching -- One-time migration check
-		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-		$visitor_idx_exists = $wpdb->get_var(
-			$wpdb->prepare(
-				"SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-				WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND INDEX_NAME = %s",
-				DB_NAME,
-				$sessions_table,
-				'idx_visitor_time'
-			)
-		);
-		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-
-		if ( ! $visitor_idx_exists ) {
-			$debug_manager->log( 'Adding visitor-session composite index', 'info', 'database' );
-			// phpcs:disable WordPress.DB.DirectDatabaseQuery.SchemaChange
-			// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
-			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-			$wpdb->query(
-				"ALTER TABLE " . $sessions_table . "
-				ADD KEY idx_visitor_time (visitor_id, start_time)"
-			);
-			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-			// phpcs:enable WordPress.DB.DirectDatabaseQuery.SchemaChange
-		}
-
-		// Add index on visitors table for faster lookups
-		// Guard: skip visitor index if visitors table does not exist
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching -- Safety check before ALTER TABLE
-		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-		if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $visitors_table ) ) ) {
-			$debug_manager->log( 'Visitors table does not exist yet, skipping visitor index migration', 'debug', 'database' );
-		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-		} else {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching -- One-time migration check
-			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-			$visitor_country_idx = $wpdb->get_var(
-				$wpdb->prepare(
-					"SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
-					WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND INDEX_NAME = %s",
-					DB_NAME,
-					$visitors_table,
-					'idx_visitor_country'
-				)
-			);
-			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-
-			if ( ! $visitor_country_idx ) {
-				$debug_manager->log( 'Adding visitor country composite index', 'info', 'database' );
-				// phpcs:disable WordPress.DB.DirectDatabaseQuery.SchemaChange
-				// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
-				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-				$wpdb->query(
-					"ALTER TABLE " . $visitors_table . "
-					ADD KEY idx_visitor_country (id, country, country_name)"
-				);
-				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-				// phpcs:enable WordPress.DB.DirectDatabaseQuery.SchemaChange
-			}
-		}
-
 		// Add additional performance indexes for large dataset optimization (1M+ rows)
 		$this->add_large_dataset_indexes();
 	}
@@ -2209,8 +2160,6 @@ class Opti_Behavior_Heatmap_Database {
 			array( 'optibehavior_sessions', 'idx_start_traffic', 'start_time, traffic_type' ),
 			// Sessions table - for bounce rate queries
 			array( 'optibehavior_sessions', 'idx_bounce_time', 'is_bounce, start_time' ),
-			// Sessions table - standalone start_time index for simple date range queries
-			array( 'optibehavior_sessions', 'idx_start_time_only', 'start_time' ),
 			// Sessions table - composite for top users aggregation with date filtering
 			array( 'optibehavior_sessions', 'idx_visitor_traffic_time', 'visitor_id, traffic_type, start_time' ),
 			// Sessions table - COVERING index for the canonical dashboard traffic timeseries
@@ -2229,7 +2178,6 @@ class Opti_Behavior_Heatmap_Database {
 			// MAX(view_time) GROUP BY is index-served instead of full-scanning pageviews.
 			array( 'optibehavior_pageviews', 'idx_pv_session_time', 'session_id, view_time' ),
 			// Pageviews table - for page-specific queries with date filtering
-			array( 'optibehavior_pageviews', 'idx_pv_page_time', 'page_id, view_time' ),
 			// Pageviews table - for scroll depth aggregation with date filtering
 			array( 'optibehavior_pageviews', 'idx_pv_scroll_time', 'view_time, scroll_depth' ),
 			// Pageviews table - COVERING index for the canonical pageview-session
@@ -2248,8 +2196,7 @@ class Opti_Behavior_Heatmap_Database {
 
 			// Events table - for heatmap queries with viewport filtering
 			array( 'optibehavior_events', 'idx_page_event_width', 'page_id2, event, width' ),
-			// Events table - for date-filtered event queries
-			array( 'optibehavior_events', 'idx_event_insert', 'event, insert_at' ),
+			// (1.9.2) idx_event_insert removed: exact duplicate of idx_events_event_time below.
 			// Events table - for Top Clicked Elements aggregation (group by selector per page/event type)
 			array( 'optibehavior_events', 'idx_top_elements', 'page_id2, event, element_selector(100)' ),
 
@@ -2268,20 +2215,18 @@ class Opti_Behavior_Heatmap_Database {
 			// so the background worker covers those too on large installs.
 			array( 'optibehavior_events', 'idx_events_page_event_time', 'page_id2, event, insert_at' ),
 			array( 'optibehavior_events', 'idx_events_event_time', 'event, insert_at' ),
-			array( 'optibehavior_pages', 'idx_pages_url', 'url(191)' ),
 			array( 'optibehavior_pageviews', 'idx_pv_url', 'url(191)' ),
-			array( 'optibehavior_pageviews', 'idx_pv_session_id', 'session_id' ),
-			array( 'optibehavior_pageviews', 'idx_pv_view_time', 'view_time' ),
-			array( 'optibehavior_sessions', 'idx_sessions_start_time', 'start_time' ),
-			array( 'optibehavior_sessions', 'idx_sessions_visitor', 'visitor_id' ),
 
 			// Merged from migrate_performance_indexes() so its ALTERs are also
 			// covered by the background worker on large installs.
 			array( 'optibehavior_sessions', 'idx_spam_filter', 'start_time, traffic_type, duration, events_count' ),
 			array( 'optibehavior_sessions', 'idx_duration', 'duration' ),
 			array( 'optibehavior_sessions', 'idx_events_count', 'events_count' ),
-			array( 'optibehavior_sessions', 'idx_visitor_time', 'visitor_id, start_time' ),
-			array( 'optibehavior_visitors', 'idx_visitor_country', 'id, country, country_name' ),
+			array( 'optibehavior_sessions', 'idx_sessions_visitor_start', 'visitor_id, start_time' ),
+			// 1.9.0.6: realtime "active visitors" widget (polled every 15 s per open
+			// dashboard tab) filters on end_time; without this index it full-scanned
+			// sessions while heartbeats were updating the same rows.
+			array( 'optibehavior_sessions', 'idx_sessions_end_time', 'end_time' ),
 		);
 	}
 
@@ -2309,6 +2254,282 @@ class Opti_Behavior_Heatmap_Database {
 	 * Whether a table is too large for inline (web-request) DDL/full-table DML.
 	 *
 	 * @since 1.8.1.7
+	 * Drop redundant indexes on optibehavior_events (1.9.2).
+	 *
+	 * On a 600k-row install the index footprint (189 MB) was 2.6x the data
+	 * (72 MB). Three keys were pure duplicates / left-prefixes of the managed
+	 * composite indexes:
+	 *   event            ⊂ idx_events_event_time (event, insert_at)
+	 *   idx_event_insert = idx_events_event_time (exact duplicate)
+	 *   page_id2         ⊂ idx_events_page_event_time (page_id2, event, insert_at)
+	 *
+	 * Each drop happens only when its covering index already exists, so query
+	 * plans never lose an index. Idempotent, cheap when nothing to do (one
+	 * INFORMATION_SCHEMA read), safe to call from setup and from cron.
+	 *
+	 * @since 1.9.2
+	 * @return int Number of indexes dropped.
+	 */
+	public static function drop_redundant_event_indexes() {
+		global $wpdb;
+
+		$table = $wpdb->prefix . 'optibehavior_events';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$existing = $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT DISTINCT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s',
+				DB_NAME,
+				$table
+			)
+		);
+		if ( ! is_array( $existing ) || ! $existing ) {
+			return 0;
+		}
+		$existing = array_flip( $existing );
+
+		$pairs = array(
+			'event'            => 'idx_events_event_time',
+			'idx_event_insert' => 'idx_events_event_time',
+			'page_id2'         => 'idx_events_page_event_time',
+		);
+
+		$dropped = 0;
+		foreach ( $pairs as $redundant => $covering ) {
+			if ( ! isset( $existing[ $redundant ] ) || ! isset( $existing[ $covering ] ) ) {
+				continue;
+			}
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin table ($wpdb->prefix) and hardcoded index names from the redundant-index map; identifiers cannot be placeholders on WP < 6.2.
+			if ( false !== $wpdb->query( "ALTER TABLE {$table} DROP INDEX `{$redundant}`" ) ) {
+				++$dropped;
+			}
+		}
+		return $dropped;
+	}
+
+	/**
+	 * Explicit storage-engine clause for every plugin CREATE TABLE (1.9.3).
+	 *
+	 * Without it MySQL falls back to the server default, which on some
+	 * hosts (and WAMP) is still MyISAM: table-level locks on every tracking
+	 * INSERT, no crash safety, no incremental space reclaim. Returns an empty
+	 * string when InnoDB is unavailable so table creation never fails.
+	 *
+	 * @return string 'ENGINE=InnoDB' or ''.
+	 */
+	public static function engine_clause() {
+		static $clause = null;
+		if ( null !== $clause ) {
+			return $clause;
+		}
+		$clause = self::innodb_available() ? 'ENGINE=InnoDB' : '';
+		return (string) apply_filters( 'opti_behavior_table_engine_clause', $clause );
+	}
+
+	/**
+	 * Whether the server offers InnoDB (YES or DEFAULT in SHOW ENGINES).
+	 *
+	 * @return bool
+	 */
+	public static function innodb_available() {
+		global $wpdb;
+		static $available = null;
+		if ( null !== $available ) {
+			return $available;
+		}
+		$available = false;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $wpdb->get_results( 'SHOW ENGINES', ARRAY_A );
+		if ( is_array( $rows ) ) {
+			foreach ( $rows as $row ) {
+				if ( isset( $row['Engine'], $row['Support'] )
+					&& 'innodb' === strtolower( (string) $row['Engine'] )
+					&& in_array( strtoupper( (string) $row['Support'] ), array( 'YES', 'DEFAULT' ), true ) ) {
+					$available = true;
+					break;
+				}
+			}
+		}
+		return $available;
+	}
+
+	/**
+	 * Redundant secondary indexes and the covering index that makes each one
+	 * useless (1.9.3 space audit). An index is dropped ONLY when its covering
+	 * index exists on the table, so a partially migrated install never loses
+	 * a lookup path. Free-owned names only: indexes created by the Pro plugin
+	 * are never touched (an older Pro would simply re-create them).
+	 *
+	 * Table suffix => array( redundant_index => covering_index ).
+	 *
+	 * @return array
+	 */
+	public static function get_redundant_index_map() {
+		return array(
+			'optibehavior_events'        => array(
+				'event'            => 'idx_events_event_time',
+				'idx_event_insert' => 'idx_events_event_time',
+				'page_id2'         => 'idx_events_page_event_time',
+			),
+			'optibehavior_sessions'      => array(
+				'start_time'              => 'idx_start_traffic',
+				'idx_sessions_start_time' => 'idx_start_traffic',
+				'idx_start_time_only'     => 'idx_start_traffic',
+				'visitor_id'              => 'idx_sessions_visitor_start',
+				'idx_sessions_visitor'    => 'idx_sessions_visitor_start',
+				'idx_visitor_time'        => 'idx_sessions_visitor_start',
+				'is_bounce'               => 'idx_bounce_time',
+			),
+			// session_id / page_id single-column indexes stay: the dashboard
+			// evidence queries carry FORCE INDEX (session_id|page_id) hints.
+			'optibehavior_pageviews'     => array(
+				'idx_pv_session_id' => 'idx_pv_session_time',
+				'view_time'         => 'idx_pv_time_session',
+				'idx_pv_view_time'  => 'idx_pv_time_session',
+				'idx_pv_page_time'  => 'idx_pv_page_time_sess',
+			),
+			'optibehavior_recordings'    => array(
+				'idx_recordings_page_start'     => 'page_start_time',
+				'idx_recordings_start_duration' => 'start_duration',
+				'idx_recordings_watched'        => 'watched',
+				'start_time'                    => 'start_duration',
+				'page_id'                       => 'page_start_time',
+			),
+			'optibehavior_session_pages' => array(
+				'page_order' => 'idx_sp_order_session',
+			),
+			'optibehavior_visitors'      => array(
+				'idx_visitors_last_visit' => 'last_visit',
+				'idx_visitor_country'     => 'PRIMARY',
+			),
+			'optibehavior_pages'         => array(
+				'idx_pages_url' => 'url',
+			),
+			'optibehavior_bot_visits'    => array(
+				'visit_time' => 'idx_bot_time_type',
+			),
+		);
+	}
+
+	/**
+	 * Drop every redundant index whose covering index exists. Idempotent and
+	 * safe to call from activation, the daily tick or a Cleanup Tasks
+	 * "Run now": nothing happens when the index is already gone.
+	 *
+	 * @param bool $skip_large Skip tables above the large-table threshold
+	 *                         (DROP INDEX rebuilds the whole table on MyISAM;
+	 *                         the daily tick passes false).
+	 * @return array { dropped: int, deferred: string[] }
+	 */
+	public static function drop_redundant_indexes( $skip_large = false ) {
+		global $wpdb;
+		$result = array(
+			'dropped'  => 0,
+			'deferred' => array(),
+		);
+		foreach ( self::get_redundant_index_map() as $suffix => $pairs ) {
+			$table = $wpdb->prefix . $suffix;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+			$existing = $wpdb->get_col(
+				$wpdb->prepare(
+					'SELECT DISTINCT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s',
+					DB_NAME,
+					$table
+				)
+			);
+			if ( ! is_array( $existing ) || ! $existing ) {
+				continue;
+			}
+			$existing = array_flip( $existing );
+			$todo     = array();
+			foreach ( $pairs as $redundant => $covering ) {
+				if ( isset( $existing[ $redundant ] ) && isset( $existing[ $covering ] ) ) {
+					$todo[] = $redundant;
+				}
+			}
+			if ( ! $todo ) {
+				continue;
+			}
+			if ( $skip_large && self::estimate_rows_static( $table ) > (int) apply_filters( 'opti_behavior_large_table_threshold', self::LARGE_TABLE_ROW_THRESHOLD, $table ) ) {
+				$result['deferred'][] = $suffix;
+				continue;
+			}
+			foreach ( $todo as $redundant ) {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin table ($wpdb->prefix) and hardcoded index names from the redundant-index map; identifiers cannot be placeholders on WP < 6.2.
+				if ( false !== $wpdb->query( "ALTER TABLE {$table} DROP INDEX `{$redundant}`" ) ) {
+					++$result['dropped'];
+				}
+			}
+		}
+		return $result;
+	}
+
+	/**
+	 * information_schema row estimate without a class instance (activation-safe).
+	 *
+	 * @param string $table Full table name.
+	 * @return int
+	 */
+	private static function estimate_rows_static( $table ) {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		return (int) $wpdb->get_var( $wpdb->prepare( 'SELECT TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s', DB_NAME, $table ) );
+	}
+
+	/**
+	 * Public entry for the DB size cap: age out every raw row older than
+	 * $cutoff across the retention sweep tables (same batched path as the
+	 * daily retention, so linked tables stay consistent).
+	 *
+	 * @param string $cutoff UTC datetime (Y-m-d H:i:s).
+	 * @param string $label  Reason shown in the debug log.
+	 * @return int Rows deleted.
+	 */
+	public function delete_raw_data_before( $cutoff, $label = 'size cap' ) {
+		return (int) $this->delete_old_data_before( $cutoff, $label );
+	}
+
+	/**
+	 * (Re)create the tables shared with the Pro plugin from the Free
+	 * definitions (single schema source since 1.9.3). Pro >= 1.9.3 calls
+	 * this instead of running its own CREATE TABLE copies; an older Pro keeps
+	 * its own `CREATE TABLE IF NOT EXISTS` fallbacks, which are no-ops on an
+	 * existing table.
+	 *
+	 * @return void
+	 */
+	public function ensure_shared_schema() {
+		global $wpdb;
+		if ( ! function_exists( 'dbDelta' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		}
+		$charset_collate = $wpdb->get_charset_collate();
+		$this->create_recordings_table( $charset_collate );
+		$this->create_errors_table( $charset_collate );
+		$this->create_error_types_table( $charset_collate );
+		$this->create_friction_table( $charset_collate );
+		$this->create_performance_table( $charset_collate );
+		$this->create_broken_links_table( $charset_collate );
+		$this->create_journey_groups_table( $charset_collate );
+	}
+
+	/**
+	 * Table suffixes whose schema is owned by Free but written by Pro.
+	 *
+	 * @return string[]
+	 */
+	public static function get_shared_table_suffixes() {
+		return array(
+			'optibehavior_recordings',
+			'optibehavior_errors',
+			'optibehavior_error_types',
+			'optibehavior_friction',
+			'optibehavior_performance',
+			'optibehavior_broken_links',
+			'optibehavior_journey_groups',
+		);
+	}
+
+	/**
 	 * @param string $table Full (prefixed) table name.
 	 * @return bool True when heavy work on this table must be deferred to cron.
 	 */
@@ -2683,12 +2904,14 @@ class Opti_Behavior_Heatmap_Database {
 			element_rel_y float(7,6)           DEFAULT NULL,
 			insert_at    datetime              NOT NULL,
 			PRIMARY KEY  (id),
-			KEY event (event),
-			KEY page_id2 (page_id2),
 			KEY session_id (session_id),
 			KEY insert_at (insert_at)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
+		// NOTE (1.9.2): the single-column `event` and `page_id2` keys were removed;
+		// they are left-prefixes of the managed composite indexes
+		// idx_events_event_time (event, insert_at) and idx_events_page_event_time
+		// (page_id2, event, insert_at). See drop_redundant_event_indexes().
 	}
 
 	/**
@@ -2719,7 +2942,7 @@ class Opti_Behavior_Heatmap_Database {
 			KEY term_id (term_id),
 			KEY taxonomy (taxonomy),
 			KEY object_type (object_type)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -2741,6 +2964,9 @@ class Opti_Behavior_Heatmap_Database {
 			duration     int(10)     UNSIGNED DEFAULT 0,
 			page_views   int(5)      UNSIGNED DEFAULT 0,
 			events_count int(10)     UNSIGNED DEFAULT 0,
+			click_count  int(10)     UNSIGNED NOT NULL DEFAULT 0,
+			scroll_count int(10)     UNSIGNED NOT NULL DEFAULT 0,
+			move_count   int(10)     UNSIGNED NOT NULL DEFAULT 0,
 			is_bounce    tinyint(1)           DEFAULT 1,
 			referrer     text                 DEFAULT NULL,
 			utm_source   varchar(100)         DEFAULT NULL,
@@ -2755,15 +2981,12 @@ class Opti_Behavior_Heatmap_Database {
 			bot_type     varchar(50)          DEFAULT NULL,
 			spam_reason  varchar(100)         DEFAULT NULL,
 			PRIMARY KEY  (id),
-			KEY visitor_id (visitor_id),
 			KEY user_id (user_id),
-			KEY start_time (start_time),
-			KEY is_bounce (is_bounce),
 			KEY idx_traffic_type (traffic_type),
 			KEY idx_spam_filter (start_time, traffic_type, duration, events_count),
 			KEY idx_duration (duration),
 			KEY idx_events_count (events_count)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -2801,7 +3024,7 @@ class Opti_Behavior_Heatmap_Database {
 			KEY last_visit (last_visit),
 			KEY country (country),
 			KEY device_type (device_type)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -2828,9 +3051,8 @@ class Opti_Behavior_Heatmap_Database {
 			PRIMARY KEY  (id),
 			KEY session_id (session_id),
 			KEY visitor_id (visitor_id),
-			KEY page_id (page_id),
-			KEY view_time (view_time)
-			) " . $charset_collate
+			KEY page_id (page_id)
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -2855,16 +3077,16 @@ class Opti_Behavior_Heatmap_Database {
 			file_size    int(10)     UNSIGNED DEFAULT 0,
 			watched      tinyint(1)           DEFAULT 0,
 			watched_at   datetime             DEFAULT NULL,
+			share_hash   varchar(12)          DEFAULT NULL,
 			PRIMARY KEY  (id),
+			UNIQUE KEY share_hash (share_hash),
 			KEY session_id (session_id),
-			KEY page_id (page_id),
-			KEY start_time (start_time),
 			KEY page_start_time (page_id, start_time),
 			KEY start_duration (start_time, duration),
 			KEY watched (watched),
 			KEY file_path (file_path),
 			KEY storage_type (storage_type)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 
 		// Migrate existing schema if needed
@@ -3037,7 +3259,6 @@ class Opti_Behavior_Heatmap_Database {
 			KEY session_id (session_id),
 			KEY page_id (page_id),
 			KEY entry_time (entry_time),
-			KEY page_order (page_order),
 			KEY file_path (file_path),
 			KEY device_type (device_type),
 			KEY browser (browser),
@@ -3046,7 +3267,7 @@ class Opti_Behavior_Heatmap_Database {
 			KEY clicks_count (clicks_count),
 			KEY visitor_type (visitor_type),
 			KEY watched (watched)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3077,7 +3298,7 @@ class Opti_Behavior_Heatmap_Database {
 			KEY page_id (page_id),
 			KEY referrer_type (referrer_type),
 			KEY created_at (created_at)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3109,7 +3330,7 @@ class Opti_Behavior_Heatmap_Database {
 			KEY page_id (page_id),
 			KEY click_type (click_type),
 			KEY created_at (created_at)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3132,9 +3353,8 @@ class Opti_Behavior_Heatmap_Database {
 			visit_time   datetime             NOT NULL,
 			PRIMARY KEY  (id),
 			KEY bot_type (bot_type),
-			KEY visit_time (visit_time),
 			KEY ip (ip)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3193,7 +3413,7 @@ class Opti_Behavior_Heatmap_Database {
 			KEY agg_sort_last (agg_has_data, agg_last_event),
 			KEY agg_synced (agg_synced_at),
 			KEY daily_synced (daily_synced_at)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3237,7 +3457,7 @@ class Opti_Behavior_Heatmap_Database {
 			PRIMARY KEY  (id),
 			UNIQUE KEY page_day (page_id, day),
 			KEY day (day)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3487,7 +3707,7 @@ class Opti_Behavior_Heatmap_Database {
 			UNIQUE KEY stat_date (stat_date),
 			KEY is_finalized (is_finalized),
 			KEY last_aggregated (last_aggregated)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3552,7 +3772,7 @@ class Opti_Behavior_Heatmap_Database {
 			KEY idx_visibility_status (visibility_tier, status),
 			KEY idx_suppressed_until (suppressed_until),
 			KEY idx_parent_insight (parent_insight_id)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3594,6 +3814,7 @@ class Opti_Behavior_Heatmap_Database {
 			resolved_by     bigint(20)   UNSIGNED DEFAULT NULL,
 			notes           text                  DEFAULT NULL,
 			created_at      datetime              NOT NULL,
+			error_origin    varchar(500)          DEFAULT NULL,
 			PRIMARY KEY  (id),
 			KEY session_id (session_id),
 			KEY recording_id (recording_id),
@@ -3605,8 +3826,9 @@ class Opti_Behavior_Heatmap_Database {
 			KEY browser (browser),
 			KEY device_type (device_type),
 			KEY country (country),
-			KEY visitor_id (visitor_id)
-			) " . $charset_collate
+			KEY visitor_id (visitor_id),
+			KEY error_origin (error_origin(191))
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3640,6 +3862,7 @@ class Opti_Behavior_Heatmap_Database {
 			priority          int(3)       UNSIGNED DEFAULT 50,
 			created_at        datetime              NOT NULL,
 			updated_at        datetime              NOT NULL,
+			error_origin      varchar(500)          DEFAULT NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY error_hash (error_hash),
 			KEY error_type (error_type),
@@ -3647,8 +3870,9 @@ class Opti_Behavior_Heatmap_Database {
 			KEY status (status),
 			KEY priority (priority),
 			KEY occurrence_count (occurrence_count),
-			KEY last_seen (last_seen)
-			) " . $charset_collate
+			KEY last_seen (last_seen),
+			KEY error_origin (error_origin(191))
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3691,6 +3915,14 @@ class Opti_Behavior_Heatmap_Database {
 			user_id           bigint(20)   UNSIGNED DEFAULT NULL,
 			occurred_at       datetime              NOT NULL,
 			created_at        datetime              NOT NULL,
+			error_signature   varchar(500)          DEFAULT NULL,
+			error_group       varchar(500)          DEFAULT NULL,
+			element_xpath     varchar(500)          DEFAULT NULL,
+			signal_version    tinyint(3)   UNSIGNED DEFAULT NULL,
+			target_interactive tinyint(1)           DEFAULT NULL,
+			target_disabled   tinyint(1)            DEFAULT NULL,
+			overlay_covered   tinyint(1)            DEFAULT NULL,
+			post_click_outcome varchar(20)          DEFAULT NULL,
 			PRIMARY KEY  (id),
 			KEY session_id (session_id),
 			KEY recording_id (recording_id),
@@ -3699,8 +3931,10 @@ class Opti_Behavior_Heatmap_Database {
 			KEY occurred_at (occurred_at),
 			KEY element_selector (element_selector(191)),
 			KEY country (country),
-			KEY visitor_id (visitor_id)
-			) " . $charset_collate
+			KEY visitor_id (visitor_id),
+			KEY error_signature (error_signature(191)),
+			KEY error_group (error_group(191))
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3747,6 +3981,7 @@ class Opti_Behavior_Heatmap_Database {
 			visitor_id          varchar(64)           DEFAULT NULL,
 			measured_at         datetime              NOT NULL,
 			created_at          datetime              NOT NULL,
+			page_title          varchar(255)          DEFAULT NULL,
 			PRIMARY KEY  (id),
 			KEY session_id (session_id),
 			KEY page_id (page_id),
@@ -3757,7 +3992,7 @@ class Opti_Behavior_Heatmap_Database {
 			KEY lcp (lcp),
 			KEY country (country),
 			KEY visitor_id (visitor_id)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3791,6 +4026,7 @@ class Opti_Behavior_Heatmap_Database {
 			notes             text                  DEFAULT NULL,
 			created_at        datetime              NOT NULL,
 			updated_at        datetime              NOT NULL,
+			last_checked_at   datetime              DEFAULT NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY url_hash (url_hash),
 			KEY source_page_id (source_page_id),
@@ -3798,8 +4034,9 @@ class Opti_Behavior_Heatmap_Database {
 			KEY status (status),
 			KEY occurrence_count (occurrence_count),
 			KEY last_detected (last_detected),
-			KEY error_type (error_type)
-			) " . $charset_collate
+			KEY error_type (error_type),
+			KEY bl_recheck (status, error_type, last_checked_at)
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3825,7 +4062,7 @@ class Opti_Behavior_Heatmap_Database {
 			created_at     datetime            DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (id),
 			KEY idx_active_priority (is_active, priority)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -3876,7 +4113,7 @@ class Opti_Behavior_Heatmap_Database {
 				KEY enabled (enabled),
 				KEY next_send_at (next_send_at),
 				KEY frequency (frequency)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 
 		// Report logs table
@@ -3897,7 +4134,7 @@ class Opti_Behavior_Heatmap_Database {
 				KEY schedule_id (schedule_id),
 				KEY sent_at (sent_at),
 				KEY status (status)
-			) " . $charset_collate
+			) " . self::engine_clause() . " " . $charset_collate
 		);
 	}
 
@@ -4079,27 +4316,12 @@ class Opti_Behavior_Heatmap_Database {
 		// Schedule report sending (every 15 minutes).
 		$this->ensure_scheduled_reports_cron();
 
-		// A/B Testing cron: daily aggregation at 3:15 AM.
-		if ( ! wp_next_scheduled( 'opti_behavior_ab_aggregate_daily' ) ) {
-			$am315 = new DateTime( 'T0315', $tz );
-			if ( $am315 < $now ) {
-				$am315->add( new DateInterval( 'P1D' ) );
-			}
-			wp_schedule_event( $am315->getTimestamp(), 'daily', 'opti_behavior_ab_aggregate_daily' );
-		}
-
-		// A/B Testing cron: hourly auto-winner check.
-		if ( ! wp_next_scheduled( 'opti_behavior_ab_auto_winner_check' ) ) {
-			wp_schedule_event( time() + 600, 'hourly', 'opti_behavior_ab_auto_winner_check' );
-		}
-
-		// A/B Testing cron: daily cleanup of old raw data.
-		if ( ! wp_next_scheduled( 'opti_behavior_ab_cleanup' ) ) {
-			$am5 = new DateTime( 'T0500', $tz );
-			if ( $am5 < $now ) {
-				$am5->add( new DateInterval( 'P1D' ) );
-			}
-			wp_schedule_event( $am5->getTimestamp(), 'daily', 'opti_behavior_ab_cleanup' );
+		// A/B Testing cron: daily aggregation (03:15), daily raw-data cleanup
+		// (05:00) and the hourly auto-winner check. Delegated to the A/B manager
+		// so the very same routine also repairs a slot that drifted on an install
+		// upgraded from an older version (QA-B-AB-019).
+		if ( class_exists( 'Opti_Behavior_AB_Test_Manager' ) ) {
+			Opti_Behavior_AB_Test_Manager::ensure_cron_schedules();
 		}
 	}
 
@@ -4261,6 +4483,92 @@ class Opti_Behavior_Heatmap_Database {
 	}
 
 	/**
+	 * Keep the scheduled Conditional Cleanup cron event in sync with the saved
+	 * `enabled` flag — the two must never contradict each other.
+	 *
+	 * Why this exists: deactivation clears every plugin cron hook
+	 * ({@see Opti_Behavior_Heatmap_Core::get_all_cron_hooks()}), while
+	 * reactivation only re-arms the event on a FRESH install —
+	 * maybe_apply_default_auto_cleanup_once() is gated behind the one-shot
+	 * `opti_behavior_auto_cleanup_defaults_migrated` flag and returns
+	 * immediately on every existing install. A single deactivate/reactivate
+	 * cycle therefore left "Enable automatic cleanup" checked with no cron
+	 * event behind it, forever.
+	 *
+	 * Safety (2026-08-16 incident policy): this NEVER changes the admin's
+	 * settings. It only makes WP-Cron agree with the flag the admin already
+	 * saved — arming when enabled, clearing when disabled. It cannot introduce
+	 * a deletion rule that was not configured.
+	 *
+	 * Duplicate-guard rule: the decision comes from a FULL cron-array scan of
+	 * the hook (recurring events counted separately), never from the
+	 * earliest-event-only wp_next_scheduled() shortcut.
+	 *
+	 * Cheap: one option read + one cron-array read on every call.
+	 *
+	 * @since 1.9.x
+	 * @return string One of: healthy | scheduled | rescheduled | cleared | disabled | failed.
+	 */
+	public function ensure_scheduled_smart_cleanup_cron() {
+		$hook     = 'opti_behavior_scheduled_smart_cleanup';
+		$settings = get_option( 'opti_behavior_auto_cleanup_settings', array() );
+		$settings = is_array( $settings ) ? $settings : array();
+
+		$enabled   = ! empty( $settings['enabled'] );
+		$frequency = ( isset( $settings['frequency'] ) && in_array( $settings['frequency'], array( 'daily', 'weekly', 'monthly' ), true ) )
+			? (string) $settings['frequency']
+			: 'daily';
+
+		// 'monthly' has no core recurrence: it rides the daily event and is
+		// throttled inside Opti_Behavior_Smart_Cleanup_Service::run_scheduled_cleanup().
+		$recurrence = ( 'monthly' === $frequency ) ? 'daily' : $frequency;
+
+		$recurring_count = 0;
+		$armed_recurrence = '';
+		foreach ( (array) _get_cron_array() as $timestamp => $hooks ) {
+			if ( ! is_array( $hooks ) || ! isset( $hooks[ $hook ] ) ) {
+				continue;
+			}
+			foreach ( (array) $hooks[ $hook ] as $event ) {
+				if ( is_array( $event ) && ! empty( $event['schedule'] ) ) {
+					++$recurring_count;
+					if ( '' === $armed_recurrence ) {
+						$armed_recurrence = (string) $event['schedule'];
+					}
+				}
+			}
+		}
+
+		if ( ! $enabled ) {
+			if ( $recurring_count > 0 ) {
+				wp_clear_scheduled_hook( $hook );
+				return 'cleared';
+			}
+			return 'disabled';
+		}
+
+		$rescheduled = false;
+		if ( $recurring_count > 1 || ( 1 === $recurring_count && $armed_recurrence !== $recurrence ) ) {
+			// Duplicate events, or a cadence that no longer matches the saved
+			// setting: collapse to exactly one correct event.
+			wp_clear_scheduled_hook( $hook );
+			$recurring_count = 0;
+			$rescheduled     = true;
+		}
+
+		if ( $recurring_count > 0 ) {
+			return 'healthy';
+		}
+
+		$scheduled = wp_schedule_event( time() + HOUR_IN_SECONDS, $recurrence, $hook );
+		if ( false === $scheduled || is_wp_error( $scheduled ) ) {
+			return 'failed';
+		}
+
+		return $rescheduled ? 'rescheduled' : 'scheduled';
+	}
+
+	/**
 	 * Ensure the scheduled reports worker cron event exists.
 	 *
 	 * @since 1.2.7
@@ -4405,6 +4713,136 @@ class Opti_Behavior_Heatmap_Database {
 	}
 
 	/**
+	 * One-time migration: recompute url2 for every page row after the canonical
+	 * URL rules changed (2026-09-12): tracking IDs such as srsltid/gbraid/... are
+	 * now always stripped and the trailing slash is normalised. Without this,
+	 * rows created under the old rules keep a url2 that no new visit can match,
+	 * so every such page would get yet another duplicate row.
+	 *
+	 * Duplicate rows that already exist keep their own id; lookups now prefer
+	 * the lowest id (see Opti_Behavior_Heatmap_Analytics::get_or_create_page_id())
+	 * and read paths merge siblings through get_sibling_page_ids().
+	 */
+	public function migrate_url2_canonical_normalization() {
+		if ( get_option( 'opti_behavior_url2_canonical_v2_migrated' ) ) {
+			return;
+		}
+
+		$debug_manager = $this->core->get_debug_manager();
+		$count         = $this->rebuild_all_url2();
+		$debug_manager->log( 'url2 canonical normalisation migration complete: ' . (int) $count . ' page row(s) rebuilt', 'info', 'database' );
+
+		update_option( 'opti_behavior_url2_canonical_v2_migrated', '1', false );
+	}
+
+	/**
+	 * Canonical URL base used to decide whether two page rows are the "same
+	 * page" for heatmap purposes: scheme + lowercase host + path without
+	 * trailing slash. No port, no query, no fragment. This is exactly the
+	 * string Opti_Behavior_Heatmap_Storage::get_url_hash() md5()s, so two rows
+	 * with the same base share one heatmap file directory.
+	 *
+	 * @param string $url URL.
+	 * @return string Canonical base, or '' when the URL cannot be parsed.
+	 */
+	public function get_canonical_url_base( $url ) {
+		$parsed = wp_parse_url( (string) $url );
+		if ( ! $parsed || ! is_array( $parsed ) ) {
+			return '';
+		}
+
+		$base = '';
+		if ( isset( $parsed['scheme'] ) ) {
+			$base .= $parsed['scheme'] . '://';
+		}
+		if ( isset( $parsed['host'] ) ) {
+			$base .= strtolower( $parsed['host'] );
+		}
+		if ( isset( $parsed['path'] ) ) {
+			$base .= rtrim( $parsed['path'], '/' );
+		}
+
+		return $base;
+	}
+
+	/**
+	 * Expand a set of page IDs with every other optibehavior_pages row that
+	 * shares the same canonical URL base (see get_canonical_url_base()).
+	 *
+	 * Why: before the url2 rules were tightened, one physical page could end
+	 * up as several rows (".../page/" vs ".../page" vs ".../page/?srsltid=..."),
+	 * while their heatmap files always landed in ONE directory (get_url_hash()
+	 * strips query + trailing slash). Read paths that restrict sessions by
+	 * DB page_id (session_pages, pageviews, events) must therefore consider
+	 * the whole sibling group, or the detail page shows only the sessions
+	 * that happened to be recorded under the requested id.
+	 *
+	 * @param array $page_ids Page IDs.
+	 * @return array Unique page IDs: the input first, siblings appended. Max 100.
+	 */
+	public function get_sibling_page_ids( $page_ids ) {
+		global $wpdb;
+
+		$page_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $page_ids ) ) ) );
+		if ( empty( $page_ids ) ) {
+			return array();
+		}
+
+		$table        = $wpdb->prefix . 'optibehavior_pages';
+		$placeholders = implode( ',', array_fill( 0, count( $page_ids ), '%d' ) );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix, placeholders built from count(); values bound via prepare().
+		$rows = $wpdb->get_results(
+			$wpdb->prepare( "SELECT id, url FROM {$table} WHERE id IN ({$placeholders})", $page_ids )
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		if ( empty( $rows ) ) {
+			return $page_ids;
+		}
+
+		$bases = array();
+		foreach ( $rows as $row ) {
+			$base = $this->get_canonical_url_base( $row->url );
+			if ( '' !== $base ) {
+				$bases[ $base ] = true;
+			}
+		}
+		if ( empty( $bases ) ) {
+			return $page_ids;
+		}
+
+		// Cheap SQL pre-filter (prefix match), exact check done in PHP below.
+		$where  = array();
+		$params = array();
+		foreach ( array_keys( $bases ) as $base ) {
+			$like     = $wpdb->esc_like( $base );
+			$where[]  = '( url = %s OR url = %s OR url LIKE %s OR url LIKE %s OR url LIKE %s OR url LIKE %s )';
+			$params[] = $base;
+			$params[] = $base . '/';
+			$params[] = $like . '?%';
+			$params[] = $like . '/?%';
+			$params[] = $like . '#%';
+			$params[] = $like . '/#%';
+		}
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix, WHERE built from fixed placeholder fragments; values bound via prepare().
+		$candidates = $wpdb->get_results(
+			$wpdb->prepare( "SELECT id, url FROM {$table} WHERE " . implode( ' OR ', $where ) . ' ORDER BY id ASC LIMIT 500', $params )
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		if ( ! empty( $candidates ) ) {
+			foreach ( $candidates as $candidate ) {
+				if ( isset( $bases[ $this->get_canonical_url_base( $candidate->url ) ] ) ) {
+					$page_ids[] = (int) $candidate->id;
+				}
+			}
+		}
+
+		return array_slice( array_values( array_unique( $page_ids ) ), 0, 100 );
+	}
+
+	/**
 	 * Rebuild ALL URL2 fields (used when settings change)
 	 */
 	public function rebuild_all_url2() {
@@ -4475,6 +4913,13 @@ class Opti_Behavior_Heatmap_Database {
 			'opti_behavior_debug',
 			'utm_source','utm_medium','utm_campaign','utm_term','utm_content',
 			'gclid','fbclid','msclkid','mc_cid','mc_eid','ref',
+			// Click / tracking IDs appended by ad networks and social apps. Any of
+			// these left in url2 splits one physical page into several page rows
+			// (each with its own page_id), which then fragments session counts and
+			// heatmap detail views. Same URL, same page.
+			'srsltid','gbraid','wbraid','dclid','yclid','ttclid','twclid','li_fat_id',
+			'igshid','_gl','_ga','mkt_tok','sscid','epik','vero_id','_hsenc','_hsmi',
+			'hsa_cam','hsa_grp','hsa_ad','hsa_src','hsa_tgt','hsa_kw','hsa_mt','hsa_net','hsa_ver',
 			'elementor-preview','ver','preview','preview_id','preview_nonce' // Strip preview/version params
 		);
 		$filter = array_values( array_unique( array_merge( $filter, $always_strip ) ) );
@@ -4509,9 +4954,12 @@ class Opti_Behavior_Heatmap_Database {
 		if ( isset( $parsed['port'] ) ) {
 			$result .= ':' . $parsed['port'];
 		}
-		if ( isset( $parsed['path'] ) ) {
-			$result .= $parsed['path'];
-		}
+		// Path: normalise the trailing slash so "/page" and "/page/" resolve to
+		// the SAME page row. This mirrors Opti_Behavior_Heatmap_Storage::get_url_hash()
+		// (which rtrim()s the path before hashing), so url2 and the heatmap file
+		// directory now agree on what "one page" is. Root stays "/".
+		$path = isset( $parsed['path'] ) ? rtrim( $parsed['path'], '/' ) : '';
+		$result .= ( '' === $path ) ? '/' : $path;
 
 		// Query parameters
 		if ( isset( $parsed['query'] ) && null !== $query_filter ) {
@@ -4625,7 +5073,6 @@ class Opti_Behavior_Heatmap_Database {
 			'optibehavior_daily_dimension_stats' => 'stat_date',
 			'optibehavior_heatmap_daily'         => 'day',
 			'optibehavior_ab_daily_stats'        => 'stat_date',
-			'optibehavior_visitor_daily_stats'   => 'stat_date',
 		);
 
 		$total_deleted = 0;
@@ -4709,6 +5156,16 @@ class Opti_Behavior_Heatmap_Database {
 			'opti_behavior_funnel_tracking'  => 'entry_time',
 			'optibehavior_ab_impressions'    => 'created_at',
 			'optibehavior_ab_conversions'    => 'created_at',
+			// Dedupe rows keyed per error message / per 404 URL / per
+			// visitor-day: new keys keep arriving (bots, dynamic messages), so
+			// rows not seen within the window age out instead of growing forever.
+			'optibehavior_error_types'         => 'last_seen',
+			'optibehavior_visitors'           => 'last_visit',
+			'optibehavior_broken_links'        => 'last_detected',
+			// Audit/log tables with no other prune path (Cleanup audit 2026-09-13):
+			// one row per report send / per A/B decision — slow but unbounded.
+			'optibehavior_report_logs'         => 'sent_at',
+			'optibehavior_ab_decision_log'     => 'created_at',
 		);
 	}
 

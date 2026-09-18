@@ -2330,11 +2330,25 @@
 				syncVariantIdsFromResponse( res.data );
 				try { sessionStorage.removeItem( 'opti_ab_wizard_step_' + wizardTestId ); } catch (e) {}
 				showToast(strings.saved, 'success');
+
+				// Add-ons (Pro targeting rules, schedule) persist their own
+				// data on this event. They push their jqXHRs into `pending` so
+				// the redirect below cannot abort a save in flight.
+				var pending = [];
+				$(document).trigger('opti_behavior_ab_test_saved', [res.data, pending]);
+
 				// Redirect to list or results.
 				var targetPage = mode === 'launch' ?
 					'admin.php?page=opti-behavior-ab-testing&view=results&test_id=' + res.data.test_id :
 					'admin.php?page=opti-behavior-ab-testing';
-				window.location.href = ajaxUrl.replace('admin-ajax.php', targetPage);
+				var redirect = function() {
+					window.location.href = ajaxUrl.replace('admin-ajax.php', targetPage);
+				};
+				if ( pending.length ) {
+					$.when.apply($, pending).always(redirect);
+				} else {
+					redirect();
+				}
 			} else {
 				showToast(res.data && res.data.message ? res.data.message : strings.error, 'error');
 				$btn.text(mode === 'launch' ? ( strings.launch_test || 'Launch Test' ) : ( strings.save_draft || 'Save Draft' ));
@@ -2378,6 +2392,9 @@
 		}, function(res) {
 			if ( res.success && res.data.test_id ) {
 				syncVariantIdsFromResponse( res.data );
+				// Same contract as saveTest(): let add-ons persist their own
+				// data for this test id (no redirect here, nothing to wait on).
+				$(document).trigger('opti_behavior_ab_test_saved', [res.data, []]);
 				// Store the new test_id if this was a brand-new test.
 				var newId = parseInt(res.data.test_id, 10);
 				if ( newId && ! wizardTestId ) {
@@ -3120,6 +3137,28 @@
 			// Store in cache for instant switching later.
 			var cacheKey = getResultsCacheKey(goalId);
 			resultsCache[cacheKey] = data;
+
+			// QA-B-AB-012 / QA-B-AB-075: the first load carries every goal's
+			// numbers (`goal_results`), so seed the cache for all of them. Goal
+			// tabs then render from memory instead of paying a full admin-ajax
+			// round trip each, which was ~8 s per tab on a 20-goal test.
+			var prefetched = data.goal_results || [];
+			for ( var pi = 0; pi < prefetched.length; pi++ ) {
+				var prefetch = prefetched[pi];
+				var prefetchGoalId = parseInt(prefetch.active_goal_id, 10) || 0;
+				if ( ! prefetchGoalId ) {
+					continue;
+				}
+				var prefetchKey = getResultsCacheKey(prefetchGoalId);
+				if ( resultsCache[prefetchKey] ) {
+					continue;
+				}
+				// `test` and `goals` are goal-independent: the server sends them
+				// once, in this payload.
+				prefetch.test  = data.test;
+				prefetch.goals = goals;
+				resultsCache[prefetchKey] = prefetch;
+			}
 
 			// On initial load (no explicit goalId), also cache under the
 			// primary goal's ID so switching BACK to it is instant.
@@ -4501,7 +4540,7 @@
 			}
 
 			// ----- Full dialog HTML -----
-			var dialogHtml = '<div id="opti-ab-diff-dialog" class="opti-ab-diff-dialog-overlay"'
+			var dialogHtml = '<div id="opti-ab-diff-dialog" class="opti-ab-modal opti-ab-diff-dialog-overlay"'
 				+ ' role="dialog" aria-modal="true" aria-labelledby="opti-ab-diff-dlg-title">'
 				+ '<div class="opti-ab-diff-dialog">'
 
@@ -4535,7 +4574,7 @@
 				// Footer
 				+ '<div class="opti-ab-diff-dialog-footer">'
 				+ '<button class="opti-ab-diff-btn opti-ab-diff-btn--cancel" type="button">' + escHtml( strings.confirm_cancel || 'Cancel' ) + '</button>'
-				+ '<button class="opti-ab-diff-btn opti-ab-diff-btn--commit" type="button">' + escHtml( strings.diff_commit || 'Review & Commit' ) + '</button>'
+				+ '<button id="opti-ab-apply-confirm" class="opti-ab-diff-btn opti-ab-diff-btn--commit" type="button">' + escHtml( strings.diff_commit || 'Review & Commit' ) + '</button>'
 				+ '</div>'
 
 				+ '</div>'

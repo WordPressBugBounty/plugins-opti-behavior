@@ -108,7 +108,7 @@ class Opti_Behavior_Report_Scheduler {
 				KEY enabled (enabled),
 				KEY next_send_at (next_send_at),
 				KEY frequency (frequency)
-			) {$charset_collate}"
+			) {$engine} {$charset_collate}"
 		);
 
 		// Report logs table
@@ -129,7 +129,7 @@ class Opti_Behavior_Report_Scheduler {
 				KEY schedule_id (schedule_id),
 				KEY sent_at (sent_at),
 				KEY status (status)
-			) {$charset_collate}"
+			) {$engine} {$charset_collate}"
 		);
 	}
 

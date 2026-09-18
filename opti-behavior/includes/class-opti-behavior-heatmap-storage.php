@@ -638,7 +638,104 @@ class Opti_Behavior_Heatmap_Storage {
 	 * @return array|false Result with file_path or false on failure.
 	 */
 	public function save_heatmap_data( $url_hash, $type, $session_id, $data, $metadata ) {
+		// 1.9.0.6: serialise writers of the same page directory. The merge path
+		// below is read -> merge -> delete old -> write new with no lock; two
+		// concurrent batches for one session (two tabs, heartbeat + unload
+		// beacon, retry) produced either duplicate session files (double-counted
+		// points) or the customer-reported "filesize(): stat failed" warning.
+		$lock = $this->acquire_page_lock( $url_hash );
+		try {
+			return $this->save_heatmap_data_unlocked( $url_hash, $type, $session_id, $data, $metadata );
+		} finally {
+			$this->release_page_lock( $lock );
+		}
+	}
+
+	/**
+	 * Take an exclusive advisory lock for one page's heatmap directory.
+	 *
+	 * Lock files live in `<base_dir>/.locks/<url_hash>.lock`, outside the
+	 * hash-named data directories so no scan / archive / stats routine ever
+	 * sees them. Fails open (returns null) when the lock cannot be taken, so a
+	 * read-only filesystem never blocks ingestion.
+	 *
+	 * @since 1.9.0.6
+	 * @param string $url_hash Page hash.
+	 * @return resource|null Lock handle, or null when unavailable.
+	 */
+	private function acquire_page_lock( $url_hash ) {
+		$lock_dir = $this->base_dir . '.locks/';
+		if ( ! is_dir( $lock_dir ) && ! wp_mkdir_p( $lock_dir ) ) {
+			return null;
+		}
+		$fh = @fopen( $lock_dir . md5( (string) $url_hash ) . '.lock', 'c' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Advisory lock file; failure is non-fatal.
+		if ( ! $fh ) {
+			return null;
+		}
+		if ( ! @flock( $fh, LOCK_EX ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			fclose( $fh ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+			return null;
+		}
+		return $fh;
+	}
+
+	/**
+	 * Release a lock taken by acquire_page_lock().
+	 *
+	 * @since 1.9.0.6
+	 * @param resource|null $fh Lock handle.
+	 * @return void
+	 */
+	private function release_page_lock( $fh ) {
+		if ( is_resource( $fh ) ) {
+			@flock( $fh, LOCK_UN ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			fclose( $fh ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+		}
+	}
+
+	/**
+	 * Write a heatmap JSON file atomically: temp file in the same directory,
+	 * then rename() over the final name, so a concurrent reader (heatmap
+	 * render, stats scan) never sees a half-written file.
+	 *
+	 * @since 1.9.0.6
+	 * @param string $filepath Final path.
+	 * @param string $json     Encoded content.
+	 * @return int|false Bytes written, or false.
+	 */
+	private function write_heatmap_file_atomic( $filepath, $json ) {
+		// Hidden name WITHOUT ".json" in it: find_existing_session_file() matches
+		// on "_{session}.json" and the stats/cleanup scans filter on the
+		// extension, so an in-flight temp file is invisible to all of them.
+		$tmp     = dirname( $filepath ) . '/.' . substr( md5( basename( $filepath ) ), 0, 16 ) . '.tmp';
+		$written = file_put_contents( $tmp, $json ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		if ( false === $written ) {
+			return false;
+		}
+		if ( ! @rename( $tmp, $filepath ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename
+			wp_delete_file( $tmp );
+			return false;
+		}
+		return $written;
+	}
+
+	/**
+	 * Body of save_heatmap_data(); always called under the page lock.
+	 *
+	 * @since 1.9.0.6
+	 */
+	private function save_heatmap_data_unlocked( $url_hash, $type, $session_id, $data, $metadata ) {
 		if ( empty( $data ) ) {
+			return false;
+		}
+
+		// Page-type filter (1.9.5): with "Non-Singular Pages" = "Posts & Pages
+		// Only", heatmap points of tag / category / author / date / search /
+		// paginated archive URLs are dropped. Covers Free beacons and Pro
+		// recordings (Pro writes through this method). Sessions are unaffected.
+		// Fails open.
+		if ( is_array( $metadata ) && ! empty( $metadata['url'] ) && class_exists( 'Opti_Behavior_Heatmap_Page_Type_Prune' )
+			&& Opti_Behavior_Heatmap_Page_Type_Prune::should_skip_heatmap_url( (string) $metadata['url'] ) ) {
 			return false;
 		}
 
@@ -770,7 +867,7 @@ class Opti_Behavior_Heatmap_Storage {
 			$filepath = $dir . $filename;
 
 			$json = wp_json_encode( $file_content );
-			$written = file_put_contents( $filepath, $json );
+			$written = $this->write_heatmap_file_atomic( $filepath, $json );
 
 			if ( false === $written ) {
 				$this->log( 'Failed to write merged heatmap file: ' . $filepath, 'error' );
@@ -808,7 +905,10 @@ class Opti_Behavior_Heatmap_Storage {
 			return array(
 				'success'   => true,
 				'file_path' => str_replace( $this->base_dir, '', $filepath ),
-				'file_size' => filesize( $filepath ),
+				// Race-safety: a cleanup/archive job can remove the file between
+				// the write above and this stat (customer log: "filesize(): stat
+				// failed"). Same guard as the new-file branch below.
+				'file_size' => file_exists( $filepath ) ? (int) filesize( $filepath ) : 0,
 				'count'     => $total_count,
 				'merged'    => true,
 			);
@@ -846,7 +946,7 @@ class Opti_Behavior_Heatmap_Storage {
 			);
 
 			$json = wp_json_encode( $file_content );
-			$written = file_put_contents( $filepath, $json );
+			$written = $this->write_heatmap_file_atomic( $filepath, $json );
 
 			if ( false === $written ) {
 				$this->log( 'Failed to write heatmap file: ' . $filepath, 'error' );
@@ -1341,6 +1441,21 @@ class Opti_Behavior_Heatmap_Storage {
 	 * @return bool True when a directory was moved (or already archived), false otherwise.
 	 */
 	private function archive_orphaned_hash_dir( $url_hash ) {
+		$moved = $this->archive_hash_dir_to_orphaned( $url_hash );
+		return is_string( $moved ) && '' !== $moved;
+	}
+
+	/**
+	 * Move a url_hash data directory under `_orphaned/` and return the archive
+	 * dir name (the page-type prune records it in its restore manifest).
+	 *
+	 * @since 1.9.5
+	 * @param string $url_hash  Hash whose directory should be archived.
+	 * @param string $dest_name Optional exact archive name (`{hash}` or
+	 *                          `{hash}-{YmdHis}`); fails when it already exists.
+	 * @return string|false Archive dir name, '' when there is no directory, false on failure.
+	 */
+	public function archive_hash_dir_to_orphaned( $url_hash, $dest_name = '' ) {
 		$url_hash = preg_replace( '/[^a-f0-9]/i', '', (string) $url_hash );
 		if ( '' === $url_hash ) {
 			return false;
@@ -1348,7 +1463,7 @@ class Opti_Behavior_Heatmap_Storage {
 
 		$src = $this->base_dir . $url_hash . '/';
 		if ( ! is_dir( $src ) ) {
-			return false;
+			return '';
 		}
 
 		$archive_root = $this->base_dir . '_orphaned/';
@@ -1358,16 +1473,29 @@ class Opti_Behavior_Heatmap_Storage {
 			$this->create_index_file( $archive_root );
 		}
 
-		$dest = $archive_root . $url_hash . '/';
-		if ( is_dir( $dest ) ) {
-			// Preserve any earlier archive under a timestamped suffix.
-			$dest = $archive_root . $url_hash . '-' . gmdate( 'YmdHis' ) . '/';
+		// Lowercase: the `_orphaned/` purge only ages out lowercase-hex names.
+		$requested = strtolower( (string) $dest_name );
+		if ( '' !== $requested ) {
+			if ( ! preg_match( '/^[a-f0-9]{8,64}(-\d{14})?$/', $requested ) || file_exists( $archive_root . $requested ) ) {
+				return false;
+			}
+			$dest_name = $requested;
+		} else {
+			$dest_name = strtolower( $url_hash );
+			if ( is_dir( $archive_root . $dest_name . '/' ) ) {
+				// Preserve any earlier archive under a timestamped suffix.
+				$dest_name .= '-' . gmdate( 'YmdHis' );
+			}
 		}
+		$dest = $archive_root . $dest_name . '/';
 
 		// @rename is atomic on the same filesystem; suppress the warning and
 		// fall back to a copy+delete only if it fails.
 		if ( @rename( $src, $dest ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename -- Atomic same-filesystem move; WP_Filesystem::move is non-atomic and unavailable on cron. Falls back to copy+delete below on failure.
-			return true;
+			// A moved dir keeps its old mtime; stamp the archive time so the
+			// purge measures its retention window from now.
+			@touch( $dest ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.file_system_operations_touch -- Best effort mtime stamp on the archived dir (purge age); WP_Filesystem is unavailable on cron. Unsupported on some platforms.
+			return $dest_name;
 		}
 
 		return false;
@@ -1470,6 +1598,9 @@ class Opti_Behavior_Heatmap_Storage {
 			return false;
 		}
 
+		// Lowercase: the `_orphaned/` purge only ages out lowercase-hex names.
+		$url_hash = strtolower( (string) $url_hash );
+
 		$archive_root = $this->base_dir . '_orphaned/';
 		if ( ! is_dir( $archive_root ) ) {
 			wp_mkdir_p( $archive_root );
@@ -1547,6 +1678,13 @@ class Opti_Behavior_Heatmap_Storage {
 	const FILES_EXPIRED_PAGES_OPTION = 'opti_behavior_heatmap_files_expired_pages';
 
 	/**
+	 * Resume cursor (hash dir name) of a capped heavy-files tier call.
+	 *
+	 * @since 2026-09-13
+	 */
+	const FILES_TIER_CURSOR_OPTION = 'opti_behavior_heatmap_files_tier_cursor';
+
+	/**
 	 * Heavy-files retention tier (Tiered Retention, 2026-08-15 second round):
 	 * ARCHIVE (never hard-delete — Option B guardrail) every heatmap event
 	 * JSON file older than the cutoff to `_orphaned/{hash}/{folder}/`.
@@ -1585,9 +1723,22 @@ class Opti_Behavior_Heatmap_Storage {
 
 		$affected_hashes = array();
 
+		/**
+		 * Seconds one heavy-files tier call may spend scanning and moving files.
+		 *
+		 * @since 2026-09-13
+		 * @param float $budget Default 20 seconds.
+		 */
+		$budget  = max( 1.0, (float) apply_filters( 'opti_behavior_files_tier_time_budget', 20.0 ) );
+		$started = microtime( true );
+		// Resume cursor: the hash dir a capped call stopped in. Resuming there
+		// (inclusive) keeps every call on new ground instead of re-globbing the
+		// same leading dirs; a call that reaches the end resets it.
+		$cursor     = (string) get_option( self::FILES_TIER_CURSOR_OPTION, '' );
+		$stopped_at = '';
+
 		foreach ( (array) scandir( $this->base_dir ) as $entry ) {
-			if ( $result['archived'] >= $max_files ) {
-				$result['capped'] = true;
+			if ( $result['capped'] ) {
 				break;
 			}
 
@@ -1597,14 +1748,17 @@ class Opti_Behavior_Heatmap_Storage {
 				continue;
 			}
 
+			if ( '' !== $cursor && strcmp( (string) $entry, $cursor ) < 0 ) {
+				continue;
+			}
+
 			$hash_dir = $this->base_dir . $entry . '/';
 			if ( ! is_dir( $hash_dir ) ) {
 				continue;
 			}
 
 			foreach ( array( 'clicks', 'moves', 'scrolls' ) as $folder ) {
-				if ( $result['archived'] >= $max_files ) {
-					$result['capped'] = true;
+				if ( $result['capped'] ) {
 					break;
 				}
 
@@ -1614,8 +1768,9 @@ class Opti_Behavior_Heatmap_Storage {
 				}
 
 				foreach ( (array) glob( $dir . '/*.json' ) as $file ) {
-					if ( $result['archived'] >= $max_files ) {
+					if ( $result['archived'] >= $max_files || ( microtime( true ) - $started ) >= $budget ) {
 						$result['capped'] = true;
+						$stopped_at       = (string) $entry;
 						break;
 					}
 
@@ -1636,6 +1791,8 @@ class Opti_Behavior_Heatmap_Storage {
 				}
 			}
 		}
+
+		update_option( self::FILES_TIER_CURSOR_OPTION, $result['capped'] ? $stopped_at : '', false );
 
 		if ( empty( $affected_hashes ) ) {
 			return $result;

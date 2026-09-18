@@ -523,8 +523,19 @@ class Opti_Behavior_Funnel_Page {
 		// nonce fails validation (admin-ajax 403 noise) and any accepted hit would
 		// pollute funnel analytics with admin preview visits. The Pro trackers
 		// (errors tracking, session recording) skip these params the same way.
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only preview-mode detection.
-		if ( isset( $_GET['opti_heatmap_preview'] ) || isset( $_GET['opti_preview_as_guest'] ) || isset( $_GET['opti_preview_as_mobile'] ) ) {
+		// The A/B visual editor and the admin variant preview render the page in
+		// an iframe too (QA-B-TRACK-011): no tracker may be emitted there either.
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only preview-mode detection (presence check only); no state change.
+		if ( isset( $_GET['opti_heatmap_preview'] ) || isset( $_GET['opti_preview_as_guest'] ) || isset( $_GET['opti_preview_as_mobile'] )
+			|| isset( $_GET['opti_ab_visual_editor'] ) || isset( $_GET['opti_ab_admin_preview'] ) ) {
+			return;
+		}
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		// Traffic & Behavior -> "Track administrators" applies to EVERY render-time
+		// tracker, not only the reporter (QA-B-TRACK-012).
+		if ( class_exists( 'Opti_Behavior_Heatmap_Frontend' )
+			&& ! Opti_Behavior_Heatmap_Frontend::admin_tracking_allowed() ) {
 			return;
 		}
 
@@ -562,7 +573,7 @@ class Opti_Behavior_Funnel_Page {
 			: array();
 		wp_enqueue_script(
 			'opti-behavior-funnel-tracker',
-			plugins_url( 'assets/js/funnel-tracker.js', dirname( __FILE__ ) ),
+			Opti_Behavior_Optimizer_Compat::js_asset_url( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR, OPTI_BEHAVIOR_HEATMAP_ASSETS_URL, 'js/funnel-tracker.js' ),
 			$debug_deps,
 			OPTI_BEHAVIOR_HEATMAP_VERSION,
 			true
@@ -601,6 +612,12 @@ class Opti_Behavior_Funnel_Page {
 		if ( $cohort_start_at && $cohort_end_at ) {
 			$start_date = $cohort_start_at;
 			$end_date   = $cohort_end_at;
+			// Explicit cohort bounds outrank the period preset. calculate_date_range()
+			// hands the pair to Opti_Behavior_Stats_Date_Range::resolve(), which only
+			// honours explicit dates for the `custom` period — without this the bounds
+			// were silently dropped and a 90-day cohort returned the 7-day figures
+			// (QA-B-FUNNEL-060).
+			$period     = 'custom';
 		}
 		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
 		$filter = isset( $_POST['filter'] ) ? sanitize_text_field( wp_unslash( $_POST['filter'] ) ) : 'all';
@@ -952,7 +969,7 @@ class Opti_Behavior_Funnel_Page {
 			);
 		}
 
-		$steps_definitions = json_decode( $funnel->steps, true );
+		$steps_definitions = $this->read_funnel_steps( $funnel->steps );
 		$country_codes     = $this->normalize_country_filter( $country );
 
 		// Build device and country filter clause.
@@ -1034,7 +1051,7 @@ class Opti_Behavior_Funnel_Page {
 		$initial_entries = $total_entries; // Keep initial count for all comparisons
 
 		foreach ( $steps_definitions as $index => $step_def ) {
-			$step_number = $index + 1;
+			$step_number = (int) $index + 1;
 
 			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			// Count sessions that reached this step or beyond.
@@ -1530,6 +1547,12 @@ class Opti_Behavior_Funnel_Page {
 		if ( $cohort_start_at && $cohort_end_at ) {
 			$start_date = $cohort_start_at;
 			$end_date   = $cohort_end_at;
+			// Explicit cohort bounds outrank the period preset. calculate_date_range()
+			// hands the pair to Opti_Behavior_Stats_Date_Range::resolve(), which only
+			// honours explicit dates for the `custom` period — without this the bounds
+			// were silently dropped and a 90-day cohort returned the 7-day figures
+			// (QA-B-FUNNEL-060).
+			$period     = 'custom';
 		}
 
 		$date_range = $this->calculate_date_range( $period, $start_date, $end_date );
@@ -1643,6 +1666,12 @@ class Opti_Behavior_Funnel_Page {
 		if ( $cohort_start_at && $cohort_end_at ) {
 			$start_date = $cohort_start_at;
 			$end_date   = $cohort_end_at;
+			// Explicit cohort bounds outrank the period preset. calculate_date_range()
+			// hands the pair to Opti_Behavior_Stats_Date_Range::resolve(), which only
+			// honours explicit dates for the `custom` period — without this the bounds
+			// were silently dropped and a 90-day cohort returned the 7-day figures
+			// (QA-B-FUNNEL-060).
+			$period     = 'custom';
 		}
 
 		$date_range = $this->calculate_date_range( $period, $start_date, $end_date );
@@ -1725,16 +1754,29 @@ class Opti_Behavior_Funnel_Page {
 		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
 		$name = isset( $_POST['name'] ) ? sanitize_text_field( wp_unslash( $_POST['name'] ) ) : '';
 		$description = isset( $_POST['description'] ) ? sanitize_textarea_field( wp_unslash( $_POST['description'] ) ) : '';
-		$steps = isset( $_POST['steps'] ) ? sanitize_text_field( wp_unslash( $_POST['steps'] ) ) : '';
+		// NOT sanitize_text_field(): this field is a JSON document, and that filter
+		// strips `<`-led sequences and collapses newlines, so a step whose
+		// url_pattern contains `<` (e.g. the regex `product/[^<]+`) was silently
+		// mangled before json_decode() ever saw it — the builder then either failed
+		// with "Invalid steps format" or persisted a corrupted pattern
+		// (QA-B-FUNNEL-035). Every decoded field is sanitized in
+		// validate_funnel_steps() below instead.
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Raw JSON payload; each decoded field is sanitized in validate_funnel_steps().
+		$steps = isset( $_POST['steps'] ) ? wp_unslash( $_POST['steps'] ) : '';
+		if ( ! is_string( $steps ) ) {
+			$steps = '';
+		}
 
 		// Validate.
 		if ( empty( $name ) || empty( $steps ) ) {
 			wp_send_json_error( array( 'message' => __( 'Name and steps are required', 'opti-behavior' ) ) );
 		}
 
-		// Decode and validate steps.
-		$steps_array = json_decode( $steps, true );
-		if ( ! is_array( $steps_array ) || empty( $steps_array ) ) {
+		// Decode and validate steps. A "non-empty array" check is not enough: an
+		// object-shaped JSON map ({"a":1}) satisfies it, persists, and then makes
+		// the whole Funnels list fatal (QA-B-FUNNEL-010).
+		$steps_array = $this->validate_funnel_steps( $steps );
+		if ( false === $steps_array ) {
 			wp_send_json_error( array( 'message' => __( 'Invalid steps format', 'opti-behavior' ) ) );
 		}
 
@@ -1754,6 +1796,119 @@ class Opti_Behavior_Funnel_Page {
 		}
 
 		wp_send_json_success( array( 'funnel_id' => $saved_id, 'message' => __( 'Funnel saved successfully', 'opti-behavior' ) ) );
+	}
+
+	/**
+	 * Tolerant reader for a stored funnel `steps` payload.
+	 *
+	 * Accepts the raw JSON column (or an already-decoded value) and ALWAYS returns
+	 * a zero-indexed LIST whose every entry carries `url_pattern` and `match_type`
+	 * strings. Legacy rows, a third-party `opti_behavior_funnel_recipe_steps`
+	 * filter and hand-crafted POSTs from before the write-side validation landed
+	 * could store an object-shaped map or a step missing either key; the matcher
+	 * then emitted a PHP warning on EVERY frontend request via
+	 * track_all_requests(), and get_user_funnel_analytics() added a string key to
+	 * an int and died with a TypeError (KNOWN-SUSPECTS FUNNEL 1,
+	 * QA-B-FUNNEL-010/011).
+	 *
+	 * @since 1.9.0.7
+	 *
+	 * @param mixed $steps Raw JSON string, or an already-decoded steps value.
+	 * @return array Zero-indexed list of usable step definitions (possibly empty).
+	 */
+	private function read_funnel_steps( $steps ) {
+		if ( is_string( $steps ) ) {
+			$steps = json_decode( $steps, true );
+		}
+
+		if ( ! is_array( $steps ) ) {
+			return array();
+		}
+
+		$clean = array();
+
+		foreach ( $steps as $step ) {
+			if ( ! is_array( $step ) ) {
+				continue;
+			}
+
+			$pattern    = ( isset( $step['url_pattern'] ) && is_scalar( $step['url_pattern'] ) ) ? (string) $step['url_pattern'] : '';
+			$match_type = ( isset( $step['match_type'] ) && is_scalar( $step['match_type'] ) ) ? (string) $step['match_type'] : '';
+
+			if ( '' === $match_type ) {
+				continue;
+			}
+
+			// `any` / `pageview` deliberately ignore their pattern; every other
+			// match type without one would match nothing (or everything).
+			if ( '' === $pattern && ! in_array( $match_type, array( 'any', 'pageview' ), true ) ) {
+				continue;
+			}
+
+			$step['url_pattern'] = $pattern;
+			$step['match_type']  = $match_type;
+
+			if ( ! isset( $step['name'] ) || ! is_scalar( $step['name'] ) || '' === (string) $step['name'] ) {
+				/* translators: %d: funnel step number. */
+				$step['name'] = sprintf( __( 'Step %d', 'opti-behavior' ), count( $clean ) + 1 );
+			} else {
+				$step['name'] = (string) $step['name'];
+			}
+
+			$clean[] = $step;
+		}
+
+		return $clean;
+	}
+
+	/**
+	 * Write-side validation for a funnel `steps` payload.
+	 *
+	 * The historic check was "a non-empty array", which an object-shaped JSON map
+	 * ({"a":1}) satisfies. Such a row persisted happily and then took the Funnels
+	 * list down for every admin: get_user_funnel_analytics() computes
+	 * `$index + 1` over the step keys, and PHP 8 throws
+	 * `TypeError: Unsupported operand types: string + int` (QA-B-FUNNEL-010).
+	 * Steps must therefore be a LIST whose EVERY entry carries a usable
+	 * `url_pattern` + `match_type` pair (QA-B-FUNNEL-011) — a partially usable
+	 * payload is rejected rather than silently tracking fewer steps than the user
+	 * defined.
+	 *
+	 * @since 1.9.0.7
+	 *
+	 * @param mixed $steps Raw JSON string, or an already-decoded steps value.
+	 * @return array|false Sanitized zero-indexed step list, or false when invalid.
+	 */
+	private function validate_funnel_steps( $steps ) {
+		if ( is_string( $steps ) ) {
+			$steps = json_decode( $steps, true );
+		}
+
+		if ( ! is_array( $steps ) || empty( $steps ) ) {
+			return false;
+		}
+
+		// A LIST, never an object-shaped map.
+		if ( array_keys( $steps ) !== range( 0, count( $steps ) - 1 ) ) {
+			return false;
+		}
+
+		$clean = $this->read_funnel_steps( $steps );
+
+		if ( count( $clean ) !== count( $steps ) ) {
+			return false;
+		}
+
+		foreach ( $clean as $index => $step ) {
+			// Names are display text; patterns are NOT (a regex may legitimately
+			// contain `<`, which sanitize_text_field() would eat — see
+			// QA-B-FUNNEL-035), so they only lose control characters and length.
+			$clean[ $index ]['name']        = sanitize_text_field( $step['name'] );
+			$clean[ $index ]['url_pattern'] = substr( preg_replace( '/[\x00-\x1F\x7F]/', '', $step['url_pattern'] ), 0, 500 );
+			$clean[ $index ]['match_type']  = sanitize_key( $step['match_type'] );
+		}
+
+		return $clean;
 	}
 
 	/**
@@ -1798,15 +1953,14 @@ class Opti_Behavior_Funnel_Page {
 		$name        = isset( $data['name'] ) ? sanitize_text_field( $data['name'] ) : '';
 		$description = isset( $data['description'] ) ? sanitize_textarea_field( $data['description'] ) : '';
 
-		$steps = isset( $data['steps'] ) ? $data['steps'] : null;
-		if ( is_string( $steps ) ) {
-			$steps = json_decode( $steps, true );
-		}
+		// Shared write-path validation: steps must be a LIST of usable step
+		// definitions, never an object-shaped map (QA-B-FUNNEL-010/011).
+		$steps = isset( $data['steps'] ) ? $this->validate_funnel_steps( $data['steps'] ) : false;
 
 		if ( '' === $name ) {
 			return new WP_Error( 'opti_behavior_funnel_missing_name', 'Name and steps are required' );
 		}
-		if ( ! is_array( $steps ) || empty( $steps ) ) {
+		if ( false === $steps ) {
 			return new WP_Error( 'opti_behavior_funnel_invalid_steps', 'Invalid steps format' );
 		}
 
@@ -2371,8 +2525,8 @@ class Opti_Behavior_Funnel_Page {
 			wp_send_json_error( array( 'message' => __( 'Funnel not found', 'opti-behavior' ) ) );
 		}
 
-		$steps = json_decode( $funnel->steps, true );
-		if ( empty( $steps ) || ! is_array( $steps ) ) {
+		$steps = $this->read_funnel_steps( $funnel->steps );
+		if ( empty( $steps ) ) {
 			wp_send_json_error( array( 'message' => __( 'Funnel has no steps', 'opti-behavior' ) ) );
 		}
 
@@ -2381,7 +2535,7 @@ class Opti_Behavior_Funnel_Page {
 		// the AJAX advancement to prevent double-counting. Without this guard, a
 		// single page visit advances two steps when consecutive steps both match
 		// the same URL (e.g. back-to-back 'any'/'pageview' steps).
-		$php_tracker_url = get_transient( 'ob_srv_' . md5( $session_id . '_' . $funnel_id ) );
+		$php_tracker_url = $this->get_server_tracker_claim( $session_id, $funnel_id );
 		if ( false !== $php_tracker_url && $php_tracker_url === $current_url ) {
 			wp_send_json_success( array( 'message' => 'Server-side tracker handled this request' ) );
 			return;
@@ -2538,7 +2692,7 @@ class Opti_Behavior_Funnel_Page {
 
 		// Check funnels (in-memory only, very fast)
 		foreach ( $active_funnels as $funnel ) {
-			$steps = json_decode( $funnel['steps'], true );
+			$steps = $this->read_funnel_steps( $funnel['steps'] );
 			if ( empty( $steps ) ) {
 				continue;
 			}
@@ -2549,27 +2703,125 @@ class Opti_Behavior_Funnel_Page {
 			// session's current progress â€” we must not commit to a "matched step"
 			// here, because overlapping patterns (e.g. step 1 = 'any') would
 			// otherwise hijack every advancement.
-			$any_match = false;
+			// The COUNT matters as well as the fact of a match: the JS tracker can
+			// only double-advance when TWO steps match the same URL (it advances
+			// only when the NEXT step's pattern matches too), so the cross-request
+			// dedup flag below is written only for that case (QA-B-FUNNEL-044).
+			$match_count = 0;
 			foreach ( $steps as $step ) {
 				if ( $this->url_matches_pattern( $current_url, $step['url_pattern'], $step['match_type'] ) ) {
-					$any_match = true;
-					break;
+					++$match_count;
+					if ( $match_count > 1 ) {
+						break;
+					}
 				}
 			}
 
-			if ( $any_match ) {
+			if ( $match_count > 0 ) {
 				// Mark this session+funnel+url as being handled by the server-side
 				// tracker. The JS AJAX tracker checks this flag and skips its AJAX
 				// call so that a single page visit never advances more than one step
 				// (double-advancement can happen when consecutive steps both match
 				// the same URL, e.g. two 'any'/'pageview' steps back-to-back).
 				// 10-second TTL â€” long enough for the JS AJAX call to arrive.
-				set_transient( 'ob_srv_' . md5( $session_id . '_' . $funnel['id'] ), $current_url, 10 );
+				$this->set_server_tracker_claim( $session_id, (int) $funnel['id'], $current_url, $match_count > 1 );
 
 				// PERFORMANCE: Defer DB write to shutdown (non-blocking).
 				$this->queue_tracking( $session_id, (int) $funnel['id'], 0, $current_url, $steps );
 			}
 		}
+	}
+
+	/**
+	 * Cache group for the server-side tracker's per-request claim flags.
+	 *
+	 * @since 1.9.0.7
+	 * @var string
+	 */
+	const SERVER_CLAIM_GROUP = 'opti_behavior_funnels';
+
+	/**
+	 * Request-scoped mirror of the claims written during this request.
+	 *
+	 * @since 1.9.0.7
+	 * @var array
+	 */
+	private static $server_claims = array();
+
+	/**
+	 * Cache key for a session+funnel claim.
+	 *
+	 * @since 1.9.0.7
+	 *
+	 * @param string $session_id Session identifier.
+	 * @param int    $funnel_id  Funnel row ID.
+	 * @return string
+	 */
+	private function server_tracker_claim_key( $session_id, $funnel_id ) {
+		return 'ob_srv_' . md5( $session_id . '_' . $funnel_id );
+	}
+
+	/**
+	 * Record "the server-side tracker already handled this session+funnel+url".
+	 *
+	 * This used to be an unconditional set_transient(), which without a persistent
+	 * object cache is one wp_options INSERT plus a _transient_timeout_ sibling PER
+	 * matching pageview PER funnel: write amplification on exactly the
+	 * high-traffic pages funnels are pointed at, plus a steady stream of expired
+	 * _transient_ob_srv_* rows (QA-B-FUNNEL-044).
+	 *
+	 * The flag now lives in the object cache (free, and genuinely cross-request on
+	 * any install with a persistent backend). The wp_options-backed transient is
+	 * still written, but ONLY when this URL matches more than one step AND there
+	 * is no persistent object cache, i.e. only for the overlapping-pattern funnels
+	 * the guard actually exists for. A normal funnel, whose steps match distinct
+	 * URLs, cannot double-advance and so costs no option write at all.
+	 *
+	 * @since 1.9.0.7
+	 *
+	 * @param string $session_id  Session identifier.
+	 * @param int    $funnel_id   Funnel row ID.
+	 * @param string $current_url URL that was claimed.
+	 * @param bool   $overlapping Whether more than one step matches this URL.
+	 * @return void
+	 */
+	private function set_server_tracker_claim( $session_id, $funnel_id, $current_url, $overlapping ) {
+		$key = $this->server_tracker_claim_key( $session_id, $funnel_id );
+
+		self::$server_claims[ $key ] = $current_url;
+		wp_cache_set( $key, $current_url, self::SERVER_CLAIM_GROUP, 10 );
+
+		if ( $overlapping && ! wp_using_ext_object_cache() ) {
+			set_transient( $key, $current_url, 10 );
+		}
+	}
+
+	/**
+	 * Read back a server-side tracker claim.
+	 *
+	 * Checks the request-scoped mirror, then the object cache, then the legacy
+	 * transient (claims written by an older release, and by the
+	 * overlapping-pattern path above).
+	 *
+	 * @since 1.9.0.7
+	 *
+	 * @param string $session_id Session identifier.
+	 * @param int    $funnel_id  Funnel row ID.
+	 * @return string|false Claimed URL, or false when there is no claim.
+	 */
+	private function get_server_tracker_claim( $session_id, $funnel_id ) {
+		$key = $this->server_tracker_claim_key( $session_id, $funnel_id );
+
+		if ( isset( self::$server_claims[ $key ] ) ) {
+			return self::$server_claims[ $key ];
+		}
+
+		$cached = wp_cache_get( $key, self::SERVER_CLAIM_GROUP );
+		if ( false !== $cached ) {
+			return $cached;
+		}
+
+		return get_transient( $key );
 	}
 
 	/**
@@ -2889,22 +3141,30 @@ class Opti_Behavior_Funnel_Page {
 	 * Only returns countries that have data for the specified funnel
 	 */
 	public function ajax_get_funnel_countries() {
-		check_ajax_referer( 'opti_behavior_funnels', 'nonce' );
-
-		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Unauthorized', 'opti-behavior' ) ) );
-		}
+		// Shared gate: the SAME nonce check and the SAME "Permission denied"
+		// message every other funnel admin action answers with. A bespoke
+		// "Unauthorized" here made this one endpoint deviate from the contract
+		// clients switch on (QA-B-FUNNEL-009).
+		$this->check_funnel_ajax_access();
 
 		// Get funnel ID, period, and date range from request
+		// phpcs:disable WordPress.Security.NonceVerification.Missing -- Nonce + capability verified by check_funnel_ajax_access() above (check_ajax_referer).
 		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
 		$period = isset( $_POST['period'] ) ? sanitize_text_field( wp_unslash( $_POST['period'] ) ) : '7days';
 		$start_date = isset( $_POST['start_date'] ) ? sanitize_text_field( wp_unslash( $_POST['start_date'] ) ) : '';
 		$end_date = isset( $_POST['end_date'] ) ? sanitize_text_field( wp_unslash( $_POST['end_date'] ) ) : '';
 		$cohort_start_at = isset( $_POST['cohort_start_at'] ) ? sanitize_text_field( wp_unslash( $_POST['cohort_start_at'] ) ) : '';
 		$cohort_end_at = isset( $_POST['cohort_end_at'] ) ? sanitize_text_field( wp_unslash( $_POST['cohort_end_at'] ) ) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Missing
 		if ( $cohort_start_at && $cohort_end_at ) {
 			$start_date = $cohort_start_at;
 			$end_date   = $cohort_end_at;
+			// Explicit cohort bounds outrank the period preset. calculate_date_range()
+			// hands the pair to Opti_Behavior_Stats_Date_Range::resolve(), which only
+			// honours explicit dates for the `custom` period — without this the bounds
+			// were silently dropped and a 90-day cohort returned the 7-day figures
+			// (QA-B-FUNNEL-060).
+			$period     = 'custom';
 		}
 
 		// Calculate date range

@@ -38,31 +38,43 @@ $form_analytics = $report['sections']['form_analytics'] ?? array();
 
 /**
  * Get arrow indicator based on direction (using text arrows for email compatibility)
+ *
+ * Guarded: this template is included once per rendered report, so a worker that
+ * sends several due schedules in one PHP process would otherwise hit a fatal
+ * "Cannot redeclare opti_get_change_html()" on the second report.
  */
-function opti_get_change_html( $change ) {
-	if ( empty( $change['value'] ) ) {
-		return '';
+if ( ! function_exists( 'opti_get_change_html' ) ) {
+	/**
+	 * Get arrow indicator based on direction.
+	 *
+	 * @param array $change Change descriptor (value, direction, positive).
+	 * @return string HTML markup, or an empty string when there is nothing to show.
+	 */
+	function opti_get_change_html( $change ) {
+		if ( empty( $change['value'] ) ) {
+			return '';
+		}
+
+		$direction   = $change['direction'] ?? 'neutral';
+		$is_positive = $change['positive'] ?? null;
+
+		if ( 'up' === $direction ) {
+			$arrow = '&#9650;'; // ▲
+			$color = true === $is_positive ? '#16a34a' : '#dc2626';
+		} elseif ( 'down' === $direction ) {
+			$arrow = '&#9660;'; // ▼
+			$color = false === $is_positive ? '#16a34a' : '#dc2626';
+		} else {
+			return '';
+		}
+
+		return sprintf(
+			'<div style="font-size: 12px; color: %s; margin-top: 4px;">%s %s%%</div>',
+			esc_attr( $color ),
+			$arrow,
+			esc_html( $change['value'] )
+		);
 	}
-
-	$direction   = $change['direction'] ?? 'neutral';
-	$is_positive = $change['positive'] ?? null;
-
-	if ( 'up' === $direction ) {
-		$arrow = '&#9650;'; // ▲
-		$color = true === $is_positive ? '#16a34a' : '#dc2626';
-	} elseif ( 'down' === $direction ) {
-		$arrow = '&#9660;'; // ▼
-		$color = false === $is_positive ? '#16a34a' : '#dc2626';
-	} else {
-		return '';
-	}
-
-	return sprintf(
-		'<div style="font-size: 12px; color: %s; margin-top: 4px;">%s %s%%</div>',
-		esc_attr( $color ),
-		$arrow,
-		esc_html( $change['value'] )
-	);
 }
 ?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">

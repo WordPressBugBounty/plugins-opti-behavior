@@ -1356,10 +1356,12 @@ trait Opti_Behavior_Assets_Trait {
             'opti-behavior-admin-notices',
             OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/admin-notices.css',
             array(),
+            // v9: the `-banner` / `-notice` catch-alls now also exclude
+            // `opti-behavior-*`, which they used to out-specify (QA-B-DASH-052).
             // v8: the third-party "upgrade" notice suppressor no longer matches
             // this plugin's own `ob-*-upgrade-*` elements, so cached copies of v7
             // must not survive — they hide every Pro teaser in the modal.
-            OPTI_BEHAVIOR_HEATMAP_VERSION . '-admin-notices-v8'
+            OPTI_BEHAVIOR_HEATMAP_VERSION . '-admin-notices-v9'
         );
 
         // TECHNIQUE 3: JavaScript cleanup for dynamically added notices

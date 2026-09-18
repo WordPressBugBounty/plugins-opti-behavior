@@ -146,14 +146,56 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 <?php $this->render_settings_header_impl(); ?>
                 <?php if ( function_exists( 'opti_behavior_pro_sodium_banner' ) ) { opti_behavior_pro_sodium_banner(); } ?>
                 <?php
-                // Display settings errors (for add_settings_error() calls)
-                // Note: WordPress automatically displays admin_notices on admin pages
-                settings_errors('opti_behavior_settings');
+                // Display settings errors (for add_settings_error() calls).
+                // Rendered here instead of settings_errors() so the markup carries
+                // the `opti-behavior-notice` class: this plugin suppresses admin
+                // notices on its own pages (assets/css/admin-notices.css hides
+                // `.notice` outright and only whitelists `.opti-behavior-notice`),
+                // so plain settings_errors() output was invisible to the user —
+                // every save confirmation and every "invalid IP rule" warning was
+                // silently hidden.
+                $this->render_settings_notices_impl();
                 ?>
                 <?php $this->render_settings_content_impl($settings); ?>
             </div>
             <?php
             // Note: Settings page styles and scripts are enqueued in enqueue_dashboard_assets_impl()
+        }
+
+        /**
+         * Render this plugin's own settings notices.
+         *
+         * Same content as settings_errors( 'opti_behavior_settings' ), but the
+         * markup adds `opti-behavior-notice` so the plugin's notice-suppression
+         * layer (assets/css/admin-notices.css + assets/js/notice-cleanup.js,
+         * enqueued from trait-opti-behavior-assets.php) keeps it visible. Each
+         * notice is consumed once — a plain reload shows nothing again.
+         *
+         * @since 1.9.0.7
+         * @return void
+         */
+        private function render_settings_notices_impl() {
+            $notices = get_settings_errors( 'opti_behavior_settings' );
+            if ( empty( $notices ) ) {
+                return;
+            }
+
+            foreach ( $notices as $notice ) {
+                $type = isset( $notice['type'] ) ? $notice['type'] : 'error';
+                if ( 'updated' === $type ) {
+                    $type = 'success';
+                }
+                if ( ! in_array( $type, array( 'error', 'success', 'warning', 'info' ), true ) ) {
+                    $type = 'info';
+                }
+
+                printf(
+                    '<div id="%1$s" class="notice notice-%2$s settings-error opti-behavior-notice is-dismissible"><p><strong>%3$s</strong></p></div>',
+                    esc_attr( 'setting-error-' . ( isset( $notice['code'] ) ? $notice['code'] : '' ) ),
+                    esc_attr( $type ),
+                    wp_kses_post( isset( $notice['message'] ) ? $notice['message'] : '' )
+                );
+            }
         }
 
         /**
@@ -328,7 +370,10 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                      */
                                     do_action( 'opti_behavior_render_recordings_settings_tab' );
                                 } else {
-                                    $this->render_privacy_gdpr_tab();
+                                    // Free: a deep link to this tab used to render the
+                                    // Privacy & GDPR body with no explanation. Show the
+                                    // Session Recordings upgrade surface instead.
+                                    $this->render_recordings_upgrade_tab();
                                 }
                                 break;
                             case 'traffic-behavior':
@@ -425,7 +470,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <div class="setting-item">
                             <label class="setting-label">
                                 <span class="label-text"><?php esc_html_e( 'Non-Singular Pages', 'opti-behavior' ); ?><?php opti_behavior_tooltip_e( $tooltips['non_singular']['title'], $tooltips['non_singular']['content'], $tooltips['non_singular']['simple'], '', array( 'position' => 'right' ) ); ?></span>
-                                <span class="label-description"><?php esc_html_e( 'Track category pages, archives, and other non-singular pages', 'opti-behavior' ); ?></span>
+                                <span class="label-description"><?php esc_html_e( 'Record heatmaps on category, tag, author, date, search and paginated archive pages too. Visits are counted on every page either way.', 'opti-behavior' ); ?></span>
                             </label>
                             <div class="setting-control">
                                 <div class="radio-group">
@@ -435,16 +480,21 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                         <span class="radio-label">
                                             <?php esc_html_e( 'Track All Pages', 'opti-behavior' ); ?>
                                         </span>
-                                        <span class="radio-description"><?php esc_html_e( 'Include category and archive pages', 'opti-behavior' ); ?></span>
+                                        <span class="radio-description"><?php esc_html_e( 'One heatmap per archive URL too (can create thousands)', 'opti-behavior' ); ?></span>
                                     </label>
                                     <label class="radio-option">
                                         <input type="radio" name="non_singular" value="no_report" <?php checked($settings['non_singular'], 'no_report'); ?>>
                                         <span class="radio-label"><?php esc_html_e( 'Posts & Pages Only', 'opti-behavior' ); ?></span>
-                                        <span class="radio-description"><?php esc_html_e( 'Track only individual posts and pages', 'opti-behavior' ); ?></span>
+                                        <span class="radio-description"><?php esc_html_e( 'Posts, pages, products, home and shop (recommended)', 'opti-behavior' ); ?></span>
                                     </label>
                                 </div>
                             </div>
                         </div>
+                        <?php
+                        if ( class_exists( 'Opti_Behavior_Heatmap_Page_Type_Prune' ) ) {
+                            Opti_Behavior_Heatmap_Page_Type_Prune::render_card();
+                        }
+                        ?>
 
                         <div class="setting-item">
                             <label class="setting-label">
@@ -982,15 +1032,203 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
         }
 
         /**
+         * Unified "Cleanup Tasks" panel (registry-driven) inside the Scheduled
+         * Auto-Cleanup sub-tab: every periodic cleanup task with live frequency /
+         * next-run / last-run, a Configure anchor to its owning card, and —
+         * where justified — a Run-now button that queues an immediate one-off
+         * cron event of the task's own hook (never inline deletion). History is
+         * NOT rendered here — the Cleanup History card on the same sub-tab is
+         * the single history view.
+         *
+         * Cheap render: option reads + one cron-array scan per row. Pro rows
+         * arrive via the `opti_behavior_cleanup_tasks` filter and are simply
+         * absent on Free-only installs.
+         *
+         * @since 1.9.x
+         * @return void
+         */
+        private function render_cleanup_tasks_panel() {
+            if ( ! class_exists( 'Opti_Behavior_Cleanup_Task_Registry' ) ) {
+                return;
+            }
+
+            $task_rows = Opti_Behavior_Cleanup_Task_Registry::get_overview();
+            if ( empty( $task_rows ) ) {
+                return;
+            }
+
+            $cron_stalled = Opti_Behavior_Cleanup_Task_Registry::is_cron_stalled();
+
+            // "Run all now" covers exactly the rows that show an enabled "Run now".
+            $run_all_titles = array();
+            foreach ( $task_rows as $task_row ) {
+                if ( 'cron-spawn' === $task_row['run_now'] && $task_row['enabled'] ) {
+                    $run_all_titles[] = $task_row['title'];
+                }
+            }
+            ?>
+                <div class="smart-cleanup-subsection" id="opti-behavior-cleanup-tasks-panel">
+                    <h4 class="danger-subtitle">
+                        <i data-lucide="list-checks"></i>
+                        <?php esc_html_e( 'Cleanup Tasks', 'opti-behavior' ); ?>
+                    </h4>
+                    <p class="smart-cleanup-description">
+                        <?php esc_html_e( 'Every automatic cleanup task on this site, what it deletes, and when it runs next. "Run now" queues the task\'s own scheduled background job immediately — it never deletes anything in this page request.', 'opti-behavior' ); ?>
+                    </p>
+                    <?php if ( ! empty( $run_all_titles ) ) : ?>
+                        <div class="cleanup-tasks-run-all">
+                            <button type="button" class="btn-secondary" id="ob-cleanup-tasks-run-all">
+                                <span class="btn-icon"><i data-lucide="fast-forward"></i></span>
+                                <?php esc_html_e( 'Run all now', 'opti-behavior' ); ?>
+                            </button>
+                            <span class="ob-cleanup-task-msg" id="ob-cleanup-tasks-run-all-msg" aria-live="polite"></span>
+                        </div>
+
+                        <!-- Run All Cleanup Tasks Modal (same template as the Danger Zone modals) -->
+                        <div id="opti-behavior-run-all-modal" class="opti-behavior-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="opti-behavior-run-all-modal-title">
+                            <div class="opti-behavior-modal-overlay"></div>
+                            <div class="opti-behavior-modal-content">
+                                <div class="opti-behavior-modal-header">
+                                    <h3 class="opti-behavior-modal-title" id="opti-behavior-run-all-modal-title">
+                                        <i data-lucide="fast-forward"></i>
+                                        <?php esc_html_e( 'Run all cleanup tasks now', 'opti-behavior' ); ?>
+                                    </h3>
+                                    <button type="button" class="opti-behavior-modal-close" aria-label="<?php esc_attr_e( 'Close', 'opti-behavior' ); ?>">&times;</button>
+                                </div>
+                                <div class="opti-behavior-modal-body">
+                                    <p><?php esc_html_e( 'These tasks will be queued and run one after another in the background, using your current retention settings. Nothing is deleted beyond what their next scheduled run would delete.', 'opti-behavior' ); ?></p>
+                                    <ul class="ob-run-all-task-list">
+                                        <?php foreach ( $run_all_titles as $run_all_title ) : ?>
+                                            <li><i data-lucide="check"></i><?php echo esc_html( $run_all_title ); ?></li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                    <p class="ob-run-all-note">
+                                        <i data-lucide="info"></i>
+                                        <?php esc_html_e( 'Conditional Cleanup rules are not included — use "Preview & run" to review them first.', 'opti-behavior' ); ?>
+                                    </p>
+                                    <div class="opti-behavior-modal-actions">
+                                        <button type="button" class="btn-secondary opti-behavior-modal-cancel"><?php esc_html_e( 'Cancel', 'opti-behavior' ); ?></button>
+                                        <button type="button" id="opti-behavior-confirm-run-all-btn" class="btn-primary">
+                                            <span class="btn-icon"><i data-lucide="play"></i></span>
+                                            <?php esc_html_e( 'Queue all tasks', 'opti-behavior' ); ?>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+                    <?php if ( $cron_stalled ) : ?>
+                        <p class="smart-cleanup-or-note cleanup-tasks-cron-warning">
+                            <strong><?php esc_html_e( 'WP-Cron appears stalled:', 'opti-behavior' ); ?></strong>
+                            <?php esc_html_e( 'scheduled background tasks are overdue on this site, so queued runs may not start until cron fires again.', 'opti-behavior' ); ?>
+                        </p>
+                    <?php endif; ?>
+                    <table class="cleanup-tasks-table" id="opti-behavior-cleanup-tasks-table"
+                        data-i18n-queued="<?php esc_attr_e( 'Queued — runs shortly', 'opti-behavior' ); ?>"
+                        data-i18n-not-scheduled="<?php esc_attr_e( 'Not scheduled', 'opti-behavior' ); ?>"
+                        data-i18n-queueing="<?php esc_attr_e( 'Queueing…', 'opti-behavior' ); ?>"
+                        data-i18n-error="<?php esc_attr_e( 'Request failed. Please try again.', 'opti-behavior' ); ?>">
+                        <thead>
+                            <tr>
+                                <th class="ct-col-task"><?php esc_html_e( 'Task', 'opti-behavior' ); ?></th>
+                                <th><?php esc_html_e( 'Frequency', 'opti-behavior' ); ?></th>
+                                <th><?php esc_html_e( 'Next run', 'opti-behavior' ); ?></th>
+                                <th><?php esc_html_e( 'Last run', 'opti-behavior' ); ?></th>
+                                <th><?php esc_html_e( 'Action', 'opti-behavior' ); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ( $task_rows as $row ) : ?>
+                                <tr data-cleanup-task-row="<?php echo esc_attr( $row['id'] ); ?>" class="<?php echo $row['enabled'] ? '' : 'cleanup-task-disabled'; ?>">
+                                    <td class="ct-col-task">
+                                        <strong><?php echo esc_html( $row['title'] ); ?></strong>
+                                        <?php if ( ! $row['enabled'] ) : ?>
+                                            <span class="cleanup-task-badge cleanup-task-badge-off"><?php esc_html_e( 'Disabled by settings', 'opti-behavior' ); ?></span>
+                                        <?php endif; ?>
+                                        <p class="smart-cleanup-description cleanup-task-desc">
+                                            <?php echo esc_html( $row['description'] ); ?>
+                                            <?php if ( ! empty( $row['settings_anchor'] ) && empty( $row['details'] ) ) : ?>
+                                                <a href="<?php echo esc_attr( $row['settings_anchor'] ); ?>" class="cleanup-task-configure"><?php esc_html_e( 'Configure', 'opti-behavior' ); ?></a>
+                                            <?php endif; ?>
+                                        </p>
+                                        <?php if ( ! empty( $row['details'] ) ) : ?>
+                                            <?php // Collapsed by default so the row keeps the table's height; links inside <summary> navigate without toggling. ?>
+                                            <details class="cleanup-task-details">
+                                                <summary>
+                                                    <span class="cleanup-task-details-toggle"><?php esc_html_e( 'What exactly is removed', 'opti-behavior' ); ?></span>
+                                                    <?php if ( ! empty( $row['settings_anchor'] ) ) : ?>
+                                                        <a href="<?php echo esc_attr( $row['settings_anchor'] ); ?>" class="cleanup-task-configure"><?php esc_html_e( 'Configure', 'opti-behavior' ); ?></a>
+                                                    <?php endif; ?>
+                                                </summary>
+                                                <ul>
+                                                    <?php foreach ( $row['details'] as $detail ) : ?>
+                                                        <li><?php echo esc_html( $detail ); ?></li>
+                                                    <?php endforeach; ?>
+                                                </ul>
+                                            </details>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="ob-ct-frequency"><?php echo '' !== $row['frequency'] ? esc_html( $row['frequency'] ) : esc_html__( '—', 'opti-behavior' ); ?></td>
+                                    <td class="ob-ct-next">
+                                        <span class="ct-next-value">
+                                        <?php
+                                        if ( $row['queued'] ) {
+                                            esc_html_e( 'Queued — runs shortly', 'opti-behavior' );
+                                        } elseif ( '' !== $row['next_run_display'] ) {
+                                            echo esc_html( $row['next_run_display'] );
+                                        } elseif ( 'one-off' === $row['kind'] ) {
+                                            echo esc_html( '' !== $row['status'] ? $row['status'] : __( '—', 'opti-behavior' ) );
+                                        } else {
+                                            esc_html_e( 'Not scheduled', 'opti-behavior' );
+                                        }
+                                        ?>
+                                        </span>
+                                        <?php // Honest per-state explanation from the registry (never a promised self-heal the code cannot perform). ?>
+                                        <span class="ct-next-note"<?php echo '' === $row['next_run_note'] ? ' style="display:none;"' : ''; ?>><?php echo esc_html( $row['next_run_note'] ); ?></span>
+                                    </td>
+                                    <td class="ob-ct-last"><?php echo '' !== $row['last_run_display'] ? esc_html( $row['last_run_display'] ) : esc_html__( '—', 'opti-behavior' ); ?></td>
+                                    <td class="ob-ct-action">
+                                        <?php if ( 'cron-spawn' === $row['run_now'] ) : ?>
+                                            <button type="button"
+                                                class="btn-secondary ob-cleanup-task-run"
+                                                data-task="<?php echo esc_attr( $row['id'] ); ?>"
+                                                <?php disabled( ! $row['enabled'] ); ?>>
+                                                <span class="btn-icon"><i data-lucide="play"></i></span>
+                                                <?php esc_html_e( 'Run now', 'opti-behavior' ); ?>
+                                            </button>
+                                        <?php elseif ( 'link' === $row['run_now'] && ! empty( $row['settings_anchor'] ) ) : ?>
+                                            <?php // Styled as a button for column consistency; still a plain anchor (no AJAX, no cron spawn). ?>
+                                            <a href="<?php echo esc_attr( $row['settings_anchor'] ); ?>" class="btn-secondary cleanup-task-link">
+                                                <span class="btn-icon"><i data-lucide="eye"></i></span>
+                                                <?php echo esc_html( '' !== $row['link_label'] ? $row['link_label'] : __( 'Open settings', 'opti-behavior' ) ); ?>
+                                            </a>
+                                        <?php else : ?>
+                                            <span class="cleanup-task-badge"><?php echo esc_html( '' !== $row['status'] ? $row['status'] : __( 'Automatic', 'opti-behavior' ) ); ?></span>
+                                        <?php endif; ?>
+                                        <span class="ob-cleanup-task-msg" aria-live="polite"></span>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php
+        }
+
+        /**
          * Render the Smart Data Cleanup section inside Danger Zone tab.
          *
          * @since 1.0.9
          */
         private function render_smart_cleanup_section() {
-            $bot_count        = $this->count_bot_sessions();
+            // Skeleton-only contract: the bot/spam counter used to run a
+            // synchronous COUNT(*) on the sessions table here. It now paints as a
+            // placeholder and is hydrated from the existing
+            // `optibehavior_get_danger_zone_sizes` endpoint (see the inline script
+            // at the end of this method).
             $auto_settings    = $this->normalize_auto_cleanup_settings_for_display( get_option( 'opti_behavior_auto_cleanup_settings', array() ) );
             $saved_conditions = isset( $auto_settings['conditions'] ) ? $auto_settings['conditions'] : array();
-            $cleanup_logs     = $this->get_cleanup_logs( 5 );
+            $cleanup_logs     = $this->get_cleanup_logs( 20 );
             $tooltips         = opti_behavior_get_settings_tooltips();
             // Daily heatmap sync auto-repair toggle (separate option, default ON).
             $auto_repair_enabled = method_exists( $this, 'is_heatmap_auto_repair_enabled' ) ? $this->is_heatmap_auto_repair_enabled() : true;
@@ -1022,12 +1260,16 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         'spam_daily_enabled'          => true,
                         'files_retention_days'        => 90,
                         'aggregates_retention_months' => 0,
+                        'db_max_mb'                   => 0,
+                        'table_max_mb'                => 0,
                     );
                 $retention_days_value  = absint( $tier_settings['raw_retention_days'] );
                 $insights_prune_months = absint( $tier_settings['insights_prune_months'] );
                 $spam_daily_enabled    = ! empty( $tier_settings['spam_daily_enabled'] );
                 $files_days_value      = absint( $tier_settings['files_retention_days'] );
                 $agg_months_value      = absint( $tier_settings['aggregates_retention_months'] );
+                $db_max_mb_value       = isset( $tier_settings['db_max_mb'] ) ? absint( $tier_settings['db_max_mb'] ) : 0;
+                $table_max_mb_value    = isset( $tier_settings['table_max_mb'] ) ? absint( $tier_settings['table_max_mb'] ) : 0;
                 ?>
                 <div class="smart-cleanup-subsection" id="opti-behavior-data-retention-widget">
                     <h4 class="danger-subtitle">
@@ -1077,6 +1319,19 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             <input type="number" id="sc-insights-prune-months" class="condition-input condition-input-small" min="0" max="120" value="<?php echo esc_attr( (string) $insights_prune_months ); ?>">
                             <span class="condition-unit"><?php esc_html_e( 'months (0 = never)', 'opti-behavior' ); ?></span>
                         </label>
+                        <label class="condition-row" style="margin-top:8px;">
+                            <span class="condition-label"><?php esc_html_e( 'Cap all plugin tables at', 'opti-behavior' ); ?></span>
+                            <input type="number" id="sc-db-max-mb" class="condition-input condition-input-small" min="0" max="1000000" step="1" value="<?php echo esc_attr( (string) $db_max_mb_value ); ?>">
+                            <span class="condition-unit"><?php esc_html_e( 'MB (0 = no cap)', 'opti-behavior' ); ?></span>
+                        </label>
+                        <label class="condition-row" style="margin-top:8px;">
+                            <span class="condition-label"><?php esc_html_e( 'Cap each raw data table at', 'opti-behavior' ); ?></span>
+                            <input type="number" id="sc-table-max-mb" class="condition-input condition-input-small" min="0" max="1000000" step="1" value="<?php echo esc_attr( (string) $table_max_mb_value ); ?>">
+                            <span class="condition-unit"><?php esc_html_e( 'MB (0 = no cap)', 'opti-behavior' ); ?></span>
+                        </label>
+                        <p class="smart-cleanup-description" style="margin-top:4px;">
+                            <?php esc_html_e( 'When a cap is exceeded the oldest raw data is removed first (never dashboard summaries); the last 7 days are always kept and at most a quarter of a table goes per daily run. Disk space is released by the automatic OPTIMIZE pass that follows.', 'opti-behavior' ); ?>
+                        </p>
                         <p class="smart-cleanup-description" style="margin-top:4px;">
                             <?php esc_html_e( 'Expired heatmap files are archived first (never deleted immediately) — the “Archived Heatmap Data Retention” setting below controls when archives are permanently removed.', 'opti-behavior' ); ?>
                         </p>
@@ -1164,13 +1419,77 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                     </p>
                     <div class="smart-cleanup-bot-count">
                         <span class="bot-count-label"><?php esc_html_e( 'Currently detected:', 'opti-behavior' ); ?></span>
-                        <span class="bot-count-value" id="opti-behavior-bot-count"><?php echo esc_html( $bot_count ); ?></span>
+                        <span class="bot-count-value is-loading" id="opti-behavior-bot-count">…</span>
                         <span class="bot-count-suffix"><?php esc_html_e( 'bot/spam/automated records', 'opti-behavior' ); ?></span>
                     </div>
-                    <button type="button" id="opti-behavior-bot-cleanup-btn" class="btn-danger" <?php echo $bot_count === 0 ? 'disabled' : ''; ?>>
+                    <?php
+                    // Honest "this also runs by itself" line: the daily spam/bot tier
+                    // applies the same rule automatically; only the 30-day bot-visit
+                    // log survives it, which is why the counter can stay > 0 between
+                    // manual clicks.
+                    $spam_tier_on       = ! class_exists( 'Opti_Behavior_Retention_Policy' ) || Opti_Behavior_Retention_Policy::is_spam_daily_enabled();
+                    $spam_tier_last_run = '';
+                    if ( class_exists( 'Opti_Behavior_Cleanup_Task_Registry' ) ) {
+                        // Same source as the Cleanup Tasks "Last run" cell (run records +
+                        // history), so a "Run now" pass counts too.
+                        foreach ( Opti_Behavior_Cleanup_Task_Registry::get_overview() as $spam_tier_row ) {
+                            if ( isset( $spam_tier_row['id'] ) && 'spam-tier' === $spam_tier_row['id'] ) {
+                                $spam_tier_last_run = isset( $spam_tier_row['last_run_display'] ) ? (string) $spam_tier_row['last_run_display'] : '';
+                                break;
+                            }
+                        }
+                    }
+                    ?>
+                    <p class="description opti-behavior-spam-tier-breakdown" id="opti-behavior-bot-breakdown" style="margin:6px 0 4px;"></p>
+                    <p class="description opti-behavior-spam-tier-note" style="margin:0 0 12px;">
+                        <?php if ( $spam_tier_on ) : ?>
+                            <?php
+                            echo esc_html(
+                                '' !== $spam_tier_last_run
+                                    /* translators: %s: site-local date/time of the last automatic spam/bot pass. */
+                                    ? sprintf( __( 'The sessions are removed automatically every day (Cleanup Tasks → "Bot/spam traffic cleanup", same rule; last pass: %s). The bot-visit log expires after 30 days on its own — only this button empties it right now.', 'opti-behavior' ), $spam_tier_last_run )
+                                    : __( 'The sessions are removed automatically every day (Cleanup Tasks → "Bot/spam traffic cleanup", same rule; no pass completed yet). The bot-visit log expires after 30 days on its own — only this button empties it right now.', 'opti-behavior' )
+                            );
+                            ?>
+                        <?php else : ?>
+                            <?php esc_html_e( 'Automatic daily spam/bot cleanup is turned off in Data Retention — only this button removes these records.', 'opti-behavior' ); ?>
+                        <?php endif; ?>
+                    </p>
+                    <button type="button" id="opti-behavior-bot-cleanup-btn" class="btn-danger" disabled>
                         <span class="btn-icon"><i data-lucide="trash-2"></i></span>
                         <?php esc_html_e( 'Clean Bot/Spam Traffic', 'opti-behavior' ); ?>
                     </button>
+                    <script>
+                    /* Hydrate the bot/spam counter from the danger-zone sizes
+                       endpoint so the settings page never runs a COUNT(*) on the
+                       sessions table while rendering (QA-B-SET-073). */
+                    ( function () {
+                        if ( typeof jQuery === 'undefined' ) { return; }
+                        jQuery( function ( $ ) {
+                            var $count = $( '#opti-behavior-bot-count' );
+                            if ( ! $count.length ) { return; }
+                            var settings = ( typeof opti_behaviorSettings !== 'undefined' ) ? opti_behaviorSettings : {};
+                            var nonce    = settings.dangerSizesNonce || '<?php echo esc_js( wp_create_nonce( 'opti_behavior_danger_sizes' ) ); ?>';
+                            $.ajax( {
+                                url: settings.ajaxUrl || ajaxurl,
+                                type: 'POST',
+                                data: { action: 'optibehavior_get_danger_zone_sizes', nonce: nonce, refresh: '0' },
+                                success: function ( response ) {
+                                    var info = response && response.success && response.data ? response.data.bot_breakdown : null;
+                                    if ( ! info ) { $count.removeClass( 'is-loading' ).text( '0' ); return; }
+                                    $count.removeClass( 'is-loading' ).text( info.total_fmt );
+                                    $( '#opti-behavior-bot-breakdown' ).text( info.breakdown_text || '' );
+                                    if ( parseInt( info.total, 10 ) > 0 ) {
+                                        $( '#opti-behavior-bot-cleanup-btn' ).prop( 'disabled', false );
+                                    }
+                                },
+                                error: function () {
+                                    $count.removeClass( 'is-loading' ).text( '0' );
+                                }
+                            } );
+                        } );
+                    }() );
+                    </script>
 
                     <!-- Conditional Cleanup (expert feature — collapsed by default) -->
                     <details class="smart-cleanup-advanced" id="opti-behavior-conditional-cleanup-details" style="margin-top:16px;">
@@ -1544,11 +1863,36 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                     </form>
                 </div>
 
+                <!-- Card: Manual data recovery / integrity check (POST opti_behavior_manual_recovery) -->
+                <?php if ( current_user_can( 'manage_options' ) ) : ?>
+                <div class="smart-cleanup-subsection" id="opti-behavior-manual-recovery-card">
+                    <h4 class="danger-subtitle">
+                        <i data-lucide="life-buoy"></i>
+                        <?php esc_html_e( 'Data integrity check & recovery', 'opti-behavior' ); ?>
+                    </h4>
+                    <p class="smart-cleanup-description">
+                        <?php esc_html_e( 'Check the analytics tables and the heatmap storage directory for missing or inconsistent plugin records and repair what can be repaired automatically. Nothing is deleted: the result is reported as a notice with the number of events and accessible heatmaps found.', 'opti-behavior' ); ?>
+                    </p>
+                    <form method="post" action="">
+                        <?php wp_nonce_field( 'opti_behavior_manual_recovery', 'opti_behavior_recovery_nonce' ); ?>
+                        <div class="smart-cleanup-actions">
+                            <button type="submit" name="opti_behavior_manual_recovery" value="1" class="btn-secondary" id="opti-behavior-manual-recovery-btn">
+                                <span class="btn-icon"><i data-lucide="life-buoy"></i></span>
+                                <?php esc_html_e( 'Run data check', 'opti-behavior' ); ?>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <?php endif; ?>
+
             </div>
             </div><!-- /.danger-tab-panel smart-cleanup -->
 
             <div class="danger-tab-panel" data-danger-tab="auto-schedule">
             <div class="settings-section settings-section-danger settings-section-smart-cleanup">
+                <!-- Unified Cleanup Tasks overview (registry-driven) -->
+                <?php $this->render_cleanup_tasks_panel(); ?>
+
                 <!-- Scheduled Auto-Cleanup -->
                 <div class="smart-cleanup-subsection">
                     <h4 class="danger-subtitle">
@@ -1594,18 +1938,35 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                               // to the Smart Cleanup tab's "Repair & Archive" card, next to the manual
                               // Repair button. Same option + cron wiring, same element ID. ?>
 
-                        <?php if ( ! empty( $auto_settings['last_run'] ) ) : ?>
-                            <p class="auto-cleanup-last-run">
+                        <?php
+                        // Last run: always stated explicitly. The stored value is a
+                        // site-local timestamp (current_time('timestamp')), and older
+                        // installs kept a MySQL datetime string here — both are coerced
+                        // to the same site-local epoch, then formatted in UTC so the
+                        // site offset is not applied twice. Feeding wp_date() the raw
+                        // string used to return false and print the icon with no date.
+                        $last_run_ts      = class_exists( 'Opti_Behavior_Smart_Cleanup_Service' )
+                            ? Opti_Behavior_Smart_Cleanup_Service::normalize_last_run( isset( $auto_settings['last_run'] ) ? $auto_settings['last_run'] : null )
+                            : ( isset( $auto_settings['last_run'] ) && is_numeric( $auto_settings['last_run'] ) ? (int) $auto_settings['last_run'] : null );
+                        $last_run_display = ( null !== $last_run_ts && class_exists( 'Opti_Behavior_Cleanup_Task_Registry' ) )
+                            ? Opti_Behavior_Cleanup_Task_Registry::format_site_timestamp( $last_run_ts )
+                            : '';
+                        ?>
+                        <p class="auto-cleanup-last-run">
+                            <?php if ( '' !== $last_run_display ) : ?>
                                 <i data-lucide="check-circle"></i>
                                 <?php
                                 printf(
                                     /* translators: %s: date/time of last run */
                                     esc_html__( 'Last run: %s', 'opti-behavior' ),
-                                    esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $auto_settings['last_run'] ) )
+                                    esc_html( $last_run_display )
                                 );
                                 ?>
-                            </p>
-                        <?php endif; ?>
+                            <?php else : ?>
+                                <i data-lucide="clock"></i>
+                                <?php esc_html_e( 'Last run: never run yet', 'opti-behavior' ); ?>
+                            <?php endif; ?>
+                        </p>
 
                         <?php if ( ! empty( $auto_settings['last_result'] ) && is_array( $auto_settings['last_result'] ) ) : ?>
                             <div class="auto-cleanup-last-result">
@@ -1633,18 +1994,72 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                     </div>
                 </div>
 
-                <!-- Cleanup History -->
-                <?php if ( ! empty( $cleanup_logs ) ) : ?>
-                <div class="smart-cleanup-subsection">
+                <!-- Cleanup History (always rendered: the Cleanup Tasks panel refreshes it after "Run now") -->
+                <div class="smart-cleanup-subsection" id="opti-behavior-cleanup-history-section">
                     <h4 class="danger-subtitle">
                         <i data-lucide="history"></i>
                         <?php esc_html_e( 'Cleanup History', 'opti-behavior' ); ?>
                         <?php opti_behavior_tooltip_e( $tooltips['cleanup_history']['title'], $tooltips['cleanup_history']['content'], $tooltips['cleanup_history']['simple'], '', array( 'position' => 'right', 'theme' => 'danger' ) ); ?>
                     </h4>
+                    <div id="opti-behavior-cleanup-history" aria-live="polite">
+                        <?php $this->render_cleanup_history_list( $cleanup_logs ); ?>
+                    </div>
+                </div>
+
+            </div>
+            </div><!-- /.danger-tab-panel auto-schedule -->
+            <?php
+            $this->render_smart_cleanup_section_footer();
+        }
+
+        /**
+         * Shared Cleanup History list partial. Rendered on the Auto Schedule
+         * panel's Cleanup History card — the single history view (the unified
+         * Cleanup Tasks panel on the same sub-tab intentionally renders no
+         * history of its own). Markup unchanged from the original inline
+         * renderer.
+         *
+         * @since 1.9.x
+         * @param array $cleanup_logs Entries from get_cleanup_logs().
+         * @return void
+         */
+        private function render_cleanup_history_list( $cleanup_logs ) {
+            if ( empty( $cleanup_logs ) ) {
+                ?>
+                    <p class="smart-cleanup-description cleanup-history-empty"><?php esc_html_e( 'No cleanup runs recorded yet. Each cleanup task run appears here with its results as soon as it finishes.', 'opti-behavior' ); ?></p>
+                <?php
+                return;
+            }
+
+            $has_registry   = class_exists( 'Opti_Behavior_Cleanup_Task_Registry' );
+            $legacy_types   = array( 'manual', 'scheduled', 'auto', 'retention' );
+            $date_format    = get_option( 'date_format' ) . ' ' . get_option( 'time_format' );
+            $status_labels  = array(
+                'queued'    => __( 'Queued', 'opti-behavior' ),
+                'completed' => __( 'Completed', 'opti-behavior' ),
+                'partial'   => __( 'Partial', 'opti-behavior' ),
+                'aborted'   => __( 'Aborted', 'opti-behavior' ),
+                'skipped'   => __( 'Skipped', 'opti-behavior' ),
+            );
+            $trigger_labels = array(
+                'manual'    => __( 'Run now', 'opti-behavior' ),
+                'scheduled' => __( 'Scheduled', 'opti-behavior' ),
+            );
+            ?>
                     <ul class="cleanup-history-list">
                         <?php foreach ( $cleanup_logs as $log ) : ?>
-                            <li class="cleanup-history-item">
-                                <span class="cleanup-history-date"><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $log['timestamp'] ) ) ); ?></span>
+                            <?php
+                            $log_type    = isset( $log['type'] ) ? (string) $log['type'] : '';
+                            $log_status  = isset( $log['status'] ) ? (string) $log['status'] : 'completed';
+                            $log_trigger = isset( $log['trigger'] ) ? (string) $log['trigger'] : '';
+                            $is_task_log = ! in_array( $log_type, $legacy_types, true );
+                            // Stored timestamps are site-local datetimes: format them without re-applying the site offset.
+                            $log_date    = $has_registry
+                                ? Opti_Behavior_Cleanup_Task_Registry::format_site_timestamp( Opti_Behavior_Cleanup_Task_Registry::to_site_timestamp( $log['timestamp'] ), $date_format )
+                                : wp_date( $date_format, strtotime( $log['timestamp'] ) );
+                            ?>
+                            <li class="cleanup-history-item cleanup-history-status-<?php echo esc_attr( $log_status ); ?>" data-history-type="<?php echo esc_attr( $log_type ); ?>" data-history-status="<?php echo esc_attr( $log_status ); ?>">
+                                <span class="cleanup-history-date"><?php echo esc_html( $log_date ); ?></span>
                                 <?php if ( ! empty( $log['repeat_count'] ) && intval( $log['repeat_count'] ) > 1 ) : ?>
                                     <span class="cleanup-history-repeat">
                                         <?php
@@ -1658,14 +2073,49 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                         ?>
                                     </span>
                                 <?php endif; ?>
-                                <span class="cleanup-history-type cleanup-history-type-<?php echo esc_attr( $log['type'] ); ?>"><?php echo esc_html( ucfirst( $log['type'] ) ); ?></span>
+                                <span class="cleanup-history-type cleanup-history-type-<?php echo esc_attr( $log_type ); ?>"><?php echo esc_html( $has_registry ? Opti_Behavior_Cleanup_Task_Registry::get_history_type_label( $log_type ) : ucfirst( $log_type ) ); ?></span>
+                                <?php if ( isset( $trigger_labels[ $log_trigger ] ) ) : ?>
+                                    <span class="cleanup-history-trigger cleanup-history-trigger-<?php echo esc_attr( $log_trigger ); ?>"><?php echo esc_html( $trigger_labels[ $log_trigger ] ); ?></span>
+                                <?php endif; ?>
+                                <?php if ( $is_task_log && isset( $status_labels[ $log_status ] ) ) : ?>
+                                    <span class="cleanup-history-status cleanup-history-status-badge-<?php echo esc_attr( $log_status ); ?>"><?php echo esc_html( $status_labels[ $log_status ] ); ?></span>
+                                <?php endif; ?>
                                 <span class="cleanup-history-stats">
                                     <?php
-                                    printf(
-                                        /* translators: %d: number of sessions deleted */
-                                        esc_html__( '%d sessions deleted', 'opti-behavior' ),
-                                        intval( $log['sessions_deleted'] )
-                                    );
+                                    if ( 'queued' === $log_status ) {
+                                        esc_html_e( 'Waiting for the background job to run…', 'opti-behavior' );
+                                    } elseif ( ! $is_task_log ) {
+                                        printf(
+                                            /* translators: %d: number of sessions deleted */
+                                            esc_html__( '%d sessions deleted', 'opti-behavior' ),
+                                            intval( $log['sessions_deleted'] )
+                                        );
+                                    } else {
+                                        $stat_parts = array();
+                                        $rows_total = ! empty( $log['rows_by_table'] ) && is_array( $log['rows_by_table'] ) ? array_sum( array_map( 'intval', $log['rows_by_table'] ) ) : 0;
+                                        if ( ! empty( $log['sessions_deleted'] ) ) {
+                                            $stat_parts[] = sprintf(
+                                                /* translators: %d: number of sessions deleted */
+                                                __( '%d sessions deleted', 'opti-behavior' ),
+                                                intval( $log['sessions_deleted'] )
+                                            );
+                                        }
+                                        if ( $rows_total > 0 ) {
+                                            $stat_parts[] = sprintf(
+                                                /* translators: %s: number of database rows deleted */
+                                                __( '%s rows deleted', 'opti-behavior' ),
+                                                number_format_i18n( $rows_total )
+                                            );
+                                        }
+                                        if ( ! empty( $log['files_deleted'] ) ) {
+                                            $stat_parts[] = sprintf(
+                                                /* translators: %d: number of files deleted */
+                                                __( '%d files deleted', 'opti-behavior' ),
+                                                intval( $log['files_deleted'] )
+                                            );
+                                        }
+                                        echo esc_html( ! empty( $stat_parts ) ? implode( ' • ', $stat_parts ) : __( 'Nothing deleted', 'opti-behavior' ) );
+                                    }
                                     ?>
                                 </span>
                                 <?php
@@ -1699,10 +2149,17 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                     );
                                 }
                                 ?>
-                                <?php if ( ! empty( $history_details ) || ! empty( $log['rows_by_table'] ) || ! empty( $log['warnings'] ) ) : ?>
+                                <?php if ( ! empty( $history_details ) || ! empty( $log['rows_by_table'] ) || ! empty( $log['warnings'] ) || ! empty( $log['notes'] ) ) : ?>
                                     <div class="cleanup-history-details">
                                         <?php if ( ! empty( $history_details ) ) : ?>
                                             <span class="cleanup-history-detail-summary"><?php echo esc_html( implode( ' • ', $history_details ) ); ?></span>
+                                        <?php endif; ?>
+                                        <?php if ( ! empty( $log['notes'] ) && is_array( $log['notes'] ) ) : ?>
+                                            <ul class="cleanup-history-notes">
+                                                <?php foreach ( $log['notes'] as $note ) : ?>
+                                                    <li><?php echo esc_html( $note ); ?></li>
+                                                <?php endforeach; ?>
+                                            </ul>
                                         <?php endif; ?>
                                         <?php if ( ! empty( $log['rows_by_table'] ) && is_array( $log['rows_by_table'] ) ) : ?>
                                             <details class="cleanup-history-table-details">
@@ -1732,12 +2189,20 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             </li>
                         <?php endforeach; ?>
                     </ul>
-                </div>
-                <?php endif; ?>
+            <?php
+        }
 
-            </div>
-            </div><!-- /.danger-tab-panel auto-schedule -->
-
+        /**
+         * Trailing markup of the Smart Cleanup section: the bot-cleanup and
+         * smart-cleanup modals, the uninstall sub-tab panel, and the section
+         * wrapper close. Extracted verbatim from render_smart_cleanup_section()
+         * when the shared Cleanup History partial was introduced.
+         *
+         * @since 1.9.x
+         * @return void
+         */
+        private function render_smart_cleanup_section_footer() {
+            ?>
                 <!-- Bot Cleanup Modal -->
                 <div id="opti-behavior-bot-cleanup-modal" class="opti-behavior-modal" style="display: none;">
                     <div class="opti-behavior-modal-overlay"></div>
@@ -1993,7 +2458,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <?php wp_nonce_field('opti_behavior_language_settings', 'opti_behavior_language_nonce'); ?>
 
                         <?php if ($settings_saved): ?>
-                            <div class="notice notice-success is-dismissible" style="margin: 20px 0;">
+                            <div class="notice notice-success opti-behavior-notice is-dismissible" style="margin: 20px 0;">
                                 <p><?php esc_html_e('Language settings saved successfully. Reloading page to apply new language...', 'opti-behavior'); ?></p>
                             </div>
                             <script>
@@ -2145,7 +2610,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 'consent_banner_enabled'      => false,
                 'consent_banner_position'     => 'compact-card',
                 'consent_banner_position_user_set' => false,
-                'consent_banner_accent_color' => '#2e7d32',
+                'consent_banner_accent_color' => '#6c5ce7',
                 'consent_banner_bg_color'     => '#ffffff',
                 'consent_banner_text_color'   => '#333333',
                 'consent_banner_title'        => '',
@@ -2160,6 +2625,10 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 'consent_banner_policy_url'   => '',
             );
             $options = wp_parse_args( $options, $banner_defaults );
+            // Old default accent (green) was saved on every settings save; show the brand purple instead.
+            if ( '#2e7d32' === strtolower( (string) $options['consent_banner_accent_color'] ) ) {
+                $options['consent_banner_accent_color'] = '#6c5ce7';
+            }
             if ( empty( $options['consent_banner_position_user_set'] ) ) {
                 $options['consent_banner_position'] = 'compact-card';
             }
@@ -2454,6 +2923,15 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                         <span class="ob-color-hex"><?php echo esc_html( $options['consent_banner_text_color'] ); ?></span>
                                     </div>
                                 </div>
+                                <?php if ( apply_filters( 'opti_behavior_consent_branding_setting_available', false ) ) : ?>
+                                <div class="ob-consent-branding-row" style="margin-top:12px;">
+                                    <input type="hidden" name="consent_banner_branding_field" value="1">
+                                    <label for="ob_consent_show_branding">
+                                        <input type="checkbox" id="ob_consent_show_branding" name="consent_banner_show_branding" value="1" <?php checked( ! isset( $options['consent_banner_show_branding'] ) || ! empty( $options['consent_banner_show_branding'] ) ); ?>>
+                                        <?php esc_html_e( 'Show "Powered by Opti-Behavior" and icon on the banner', 'opti-behavior' ); ?>
+                                    </label>
+                                </div>
+                                <?php endif; ?>
                             </div>
                         </div>
 
@@ -2640,14 +3118,18 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
 
             // Colors.
             $options['consent_banner_accent_color'] = isset( $_POST['consent_banner_accent_color'] )
-                ? ( sanitize_hex_color( wp_unslash( $_POST['consent_banner_accent_color'] ) ) ?: '#2e7d32' )
-                : '#2e7d32';
+                ? ( sanitize_hex_color( wp_unslash( $_POST['consent_banner_accent_color'] ) ) ?: '#6c5ce7' )
+                : '#6c5ce7';
             $options['consent_banner_bg_color'] = isset( $_POST['consent_banner_bg_color'] )
                 ? ( sanitize_hex_color( wp_unslash( $_POST['consent_banner_bg_color'] ) ) ?: '#ffffff' )
                 : '#ffffff';
             $options['consent_banner_text_color'] = isset( $_POST['consent_banner_text_color'] )
                 ? ( sanitize_hex_color( wp_unslash( $_POST['consent_banner_text_color'] ) ) ?: '#333333' )
                 : '#333333';
+            // Branding toggle is rendered only when Pro exposes it; keep stored value otherwise.
+            if ( isset( $_POST['consent_banner_branding_field'] ) ) {
+                $options['consent_banner_show_branding'] = empty( $_POST['consent_banner_show_branding'] ) ? 0 : 1;
+            }
 
             // Text fields.
             $options['consent_banner_title'] = isset( $_POST['consent_banner_title'] )
@@ -2721,9 +3203,9 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             // Color pickers — validate as hex color codes.
             $accent_color = isset( $_POST['consent_banner_accent_color'] )
                 ? sanitize_hex_color( wp_unslash( $_POST['consent_banner_accent_color'] ) )
-                : '#2e7d32';
+                : '#6c5ce7';
             if ( empty( $accent_color ) ) {
-                $accent_color = '#2e7d32';
+                $accent_color = '#6c5ce7';
             }
 
             $bg_color = isset( $_POST['consent_banner_bg_color'] )
@@ -2789,6 +3271,11 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             $options['consent_banner_accent_color'] = $accent_color;
             $options['consent_banner_bg_color']     = $bg_color;
             $options['consent_banner_text_color']   = $text_color;
+            // phpcs:disable WordPress.Security.NonceVerification.Missing -- Nonce verified in calling function; presence checks only.
+            if ( isset( $_POST['consent_banner_branding_field'] ) ) {
+                $options['consent_banner_show_branding'] = empty( $_POST['consent_banner_show_branding'] ) ? 0 : 1;
+            }
+            // phpcs:enable WordPress.Security.NonceVerification.Missing
             $options['consent_banner_title']        = $banner_title;
             $options['consent_banner_message']      = $banner_message;
             $options['consent_banner_accept_label'] = $banner_accept_label;
@@ -2817,7 +3304,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
         private function get_current_settings_impl() {
             $defaults = array(
                 'accuracy' => 2,
-                'report_non_singular' => 1,
+                'report_non_singular' => 0,
                 'ajax_delay_time' => 3000,
                 'drawing_points' => 3000,
                 'count_bar' => 1,
@@ -2901,6 +3388,8 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             // Check if URL hash setting changed
             $url_hash_changed = isset($options['keep_url_hash']) && $options['keep_url_hash'] !== $url_hash_value;
 
+            $non_singular_changed = ! isset( $options['report_non_singular'] ) || (int) $options['report_non_singular'] !== $non_singular_value;
+
             // Update only the changed settings
             $options['accuracy'] = $accuracy_value;
             $options['report_non_singular'] = $non_singular_value;
@@ -2911,17 +3400,21 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
 
             update_option('opti_behavior_heatmap_option', maybe_serialize($options));
 
+            if ( $non_singular_changed && class_exists( 'Opti_Behavior_Heatmap_Page_Type_Prune' ) ) {
+                Opti_Behavior_Heatmap_Page_Type_Prune::note_user_choice( 1 === $non_singular_value );
+            }
+
             // If URL hash setting changed, rebuild all url2 fields
             if ($url_hash_changed) {
                 $database = $this->heatmap->get_database();
                 $count = $database->rebuild_all_url2();
                 add_action('admin_notices', function() use ($count) {
                     /* translators: %s: number of rebuilt URLs */
-                    echo '<div class="notice notice-success is-dismissible"><p>' . esc_html( sprintf( __( 'Settings saved successfully! Rebuilt %s page URLs.', 'opti-behavior' ), $count ) ) . '</p></div>';
+                    echo '<div class="notice notice-success opti-behavior-notice is-dismissible"><p>' . esc_html( sprintf( __( 'Settings saved successfully! Rebuilt %s page URLs.', 'opti-behavior' ), $count ) ) . '</p></div>';
                 });
             } else {
                 add_action('admin_notices', function() {
-                    echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Settings saved successfully!', 'opti-behavior' ) . '</p></div>';
+                    echo '<div class="notice notice-success opti-behavior-notice is-dismissible"><p>' . esc_html__( 'Settings saved successfully!', 'opti-behavior' ) . '</p></div>';
                 });
             }
         }
@@ -2938,26 +3431,34 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 $accessible_count = isset($result['accessible_count']) ? $result['accessible_count'] : 0;
                 $auto_fixed = isset($result['auto_fixed']) ? $result['auto_fixed'] : array();
 
+                // These used to be queued on `admin_notices`, which WordPress
+                // has ALREADY fired by the time the page callback (this render)
+                // runs — so the recovery result was never shown to anyone. They
+                // go through the plugin's own settings-notice channel instead,
+                // the same one every other save on this page uses
+                // (render_settings_notices_impl()); the strings are unchanged.
                 if (!empty($auto_fixed)) {
-                    add_action('admin_notices', function() use ($event_count, $accessible_count, $auto_fixed) {
-                        echo '<div class="notice notice-success is-dismissible">';
-                        echo '<p><strong>' . esc_html__( '✅ Data Recovery Completed!', 'opti-behavior' ) . '</strong></p>';
-                        /* translators: %1$s: number of events, %2$s: number of accessible heatmaps */
-                        echo '<p>' . esc_html( sprintf( __( 'Found and recovered: %1$s events, %2$s accessible heatmaps.', 'opti-behavior' ), number_format($event_count), number_format($accessible_count) ) ) . '</p>';
-                        /* translators: %s: list of fixed issues */
-                        echo '<p>' . esc_html( sprintf( __( 'Issues fixed: %s', 'opti-behavior' ), implode(', ', array_map(function($fix) {
-                            return str_replace('_', ' ', ucfirst($fix));
-                        }, $auto_fixed)) ) ) . '</p>';
-                        echo '</div>';
-                    });
+                    add_settings_error(
+                        'opti_behavior_settings',
+                        'manual_recovery_completed',
+                        esc_html__( '✅ Data Recovery Completed!', 'opti-behavior' ) . ' '
+                            /* translators: %1$s: number of events, %2$s: number of accessible heatmaps */
+                            . esc_html( sprintf( __( 'Found and recovered: %1$s events, %2$s accessible heatmaps.', 'opti-behavior' ), number_format($event_count), number_format($accessible_count) ) ) . ' '
+                            /* translators: %s: list of fixed issues */
+                            . esc_html( sprintf( __( 'Issues fixed: %s', 'opti-behavior' ), implode(', ', array_map(function($fix) {
+                                return str_replace('_', ' ', ucfirst($fix));
+                            }, $auto_fixed)) ) ),
+                        'success'
+                    );
                 } else {
-                    add_action('admin_notices', function() use ($event_count) {
-                        echo '<div class="notice notice-info is-dismissible">';
-                        echo '<p><strong>' . esc_html__( '✅ Data Check Completed!', 'opti-behavior' ) . '</strong></p>';
-                        /* translators: %s: number of events */
-                        echo '<p>' . esc_html( sprintf( __( 'No issues detected. Your data is healthy with %s events.', 'opti-behavior' ), number_format($event_count) ) ) . '</p>';
-                        echo '</div>';
-                    });
+                    add_settings_error(
+                        'opti_behavior_settings',
+                        'manual_recovery_checked',
+                        esc_html__( '✅ Data Check Completed!', 'opti-behavior' ) . ' '
+                            /* translators: %s: number of events */
+                            . esc_html( sprintf( __( 'No issues detected. Your data is healthy with %s events.', 'opti-behavior' ), number_format($event_count) ) ),
+                        'info'
+                    );
                 }
             }
         }
@@ -2971,6 +3472,129 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
          * AJAX endpoints (see trait-opti-behavior-ajax-handlers.php) and is
          * injected by the storage-stats module in assets/js/settings.js.
          */
+        /**
+         * Storage Stats tab — lean events migration status card (1.9.2).
+         *
+         * Shows where the one-off "scroll/move rows → session counters" migration
+         * stands (backfill / on hold / purge / optimize / done) and offers a
+         * "Run now" button that executes one tick synchronously instead of
+         * waiting for WP-Cron. Hidden once the migration is complete.
+         */
+        private function render_engagement_migration_status() {
+            if ( ! class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' ) ) {
+                return;
+            }
+            $p = Opti_Behavior_Heatmap_Engagement_Counters::progress();
+            if ( 'done' === $p['phase'] ) {
+                return;
+            }
+            $blocked_hint = '';
+            if ( 'pro_version' === $p['blocked_by'] ) {
+                $blocked_hint = sprintf(
+                    /* translators: %s: minimum Pro version */
+                    __( 'Opti-Behavior Pro must be updated to %s or newer first. Until then Free keeps writing the legacy rows so the older Pro keeps working.', 'opti-behavior' ),
+                    Opti_Behavior_Heatmap_Engagement_Counters::MIN_PRO_VERSION
+                );
+            } elseif ( 'storage_mode' === $p['blocked_by'] ) {
+                $blocked_hint = __( 'Heatmap storage mode is "database"; the cleanup only runs in file storage mode.', 'opti-behavior' );
+            } elseif ( 'filter' === $p['blocked_by'] ) {
+                $blocked_hint = __( 'Lean events mode is disabled by the opti_behavior_events_lean_mode filter.', 'opti-behavior' );
+            }
+            $can_run = ! in_array( $p['phase'], array( 'blocked', 'done' ), true );
+            ?>
+            <div class="settings-section" style="margin-top: 30px;" id="ob-engagement-migration">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <span class="section-icon"><i data-lucide="shrink"></i></span>
+                        <?php esc_html_e( 'Events Table Cleanup (one-time migration)', 'opti-behavior' ); ?>
+                    </h3>
+                    <p class="section-description">
+                        <?php esc_html_e( 'Scroll and mouse-move points are now kept only in the heatmap files and as per-session counters. This migration folds the old rows into the counters, deletes them in small background batches, then rebuilds the table so the space is released.', 'opti-behavior' ); ?>
+                    </p>
+                </div>
+                <div class="ob-migration-card" style="padding:16px 20px;border:1px solid #e2e4e7;border-radius:8px;background:#fff;">
+                    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                        <div style="flex:1 1 320px;">
+                            <div id="ob-migration-label" style="font-weight:600;margin-bottom:6px;"><?php echo esc_html( $p['label'] ); ?></div>
+                            <?php if ( $blocked_hint ) : ?>
+                                <div style="color:#b32d2e;margin-bottom:6px;"><?php echo esc_html( $blocked_hint ); ?></div>
+                            <?php endif; ?>
+                            <div style="background:#f0f0f1;border-radius:4px;height:10px;overflow:hidden;">
+                                <div id="ob-migration-bar" style="height:100%;width:<?php echo (int) $p['percent']; ?>%;background:#6c5ce7;transition:width .3s;"></div>
+                            </div>
+                            <div id="ob-migration-meta" style="color:#646970;font-size:12px;margin-top:6px;">
+                                <?php
+                                printf(
+                                    /* translators: 1: percent, 2: rows deleted so far */
+                                    esc_html__( '%1$d%% — %2$s rows deleted so far.', 'opti-behavior' ),
+                                    (int) $p['percent'],
+                                    esc_html( number_format_i18n( $p['purged_rows'] ) )
+                                );
+                                if ( $p['next_run'] ) {
+                                    echo ' ' . esc_html( sprintf(
+                                        /* translators: %s: human time diff */
+                                        __( 'Next background run in %s.', 'opti-behavior' ),
+                                        human_time_diff( time(), $p['next_run'] )
+                                    ) );
+                                } elseif ( $p['pending'] ) {
+                                    echo ' ' . esc_html__( 'No background run scheduled — click Run now.', 'opti-behavior' );
+                                }
+                                if ( $p['last_error'] ) {
+                                    echo ' <span style="color:#b32d2e;">' . esc_html( $p['last_error'] ) . '</span>';
+                                }
+                                ?>
+                            </div>
+                        </div>
+                        <div>
+                            <button type="button" class="button button-primary" id="ob-migration-run" <?php disabled( ! $can_run ); ?>>
+                                <?php esc_html_e( 'Run now', 'opti-behavior' ); ?>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <script>
+            (function(){
+                var btn = document.getElementById('ob-migration-run');
+                if (!btn || typeof jQuery === 'undefined') { return; }
+                var running = false;
+                function tick() {
+                    if (running) { return; }
+                    running = true;
+                    btn.disabled = true;
+                    btn.textContent = <?php echo wp_json_encode( __( 'Running…', 'opti-behavior' ) ); ?>;
+                    jQuery.post(
+                        (window.opti_behaviorSettings && opti_behaviorSettings.ajaxUrl) || window.ajaxurl,
+                        { action: 'optibehavior_engagement_migration_run', nonce: (window.opti_behaviorSettings && opti_behaviorSettings.storageStatsNonce) || '' }
+                    ).done(function(res){
+                        running = false;
+                        if (!res || !res.success) {
+                            btn.disabled = false;
+                            btn.textContent = <?php echo wp_json_encode( __( 'Run now', 'opti-behavior' ) ); ?>;
+                            alert((res && res.data && res.data.message) || 'Error');
+                            return;
+                        }
+                        var d = res.data;
+                        document.getElementById('ob-migration-label').textContent = d.label;
+                        document.getElementById('ob-migration-bar').style.width = d.percent + '%';
+                        document.getElementById('ob-migration-meta').textContent = d.percent + '% — ' + d.purged_rows + ' rows deleted so far.';
+                        if (d.pending && d.phase !== 'blocked') {
+                            tick(); // keep going until done
+                        } else {
+                            window.location.reload();
+                        }
+                    }).fail(function(){
+                        running = false;
+                        btn.disabled = false;
+                        btn.textContent = <?php echo wp_json_encode( __( 'Run now', 'opti-behavior' ) ); ?>;
+                    });
+                }
+                btn.addEventListener('click', tick);
+            })();
+            </script>
+            <?php
+        }
+
         private function render_storage_stats_impl() {
             $tooltips = opti_behavior_get_settings_tooltips();
             ?>
@@ -3025,6 +3649,8 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         </div>
                     </div>
                 </div>
+
+                <?php $this->render_engagement_migration_status(); ?>
 
                 <!-- Database Tables Section -->
                 <div class="settings-section" style="margin-top: 30px;">
@@ -3118,7 +3744,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             </div>
                         </div>
 
-                        <div class="storage-file-notice" id="ob-storage-file-notice" style="display: none;">
+                        <div class="ob-storage-file-notice" id="ob-storage-file-notice" style="display: none;">
                             <i data-lucide="info"></i>
                             <span><?php esc_html_e( 'File storage folder will be created automatically when recordings or file-based storage is enabled.', 'opti-behavior' ); ?></span>
                         </div>
@@ -3460,7 +4086,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <p class="section-description">
                             <?php esc_html_e( 'Configure debug logging for PHP and JavaScript. Enable debugging to troubleshoot issues and monitor plugin behavior. Logs are stored securely and can be viewed or downloaded below.', 'opti-behavior' ); ?>
                         </p>
-                        <div class="notice notice-info inline">
+                        <div class="notice notice-info opti-behavior-notice inline">
                             <p>
                                 <?php
                                 printf(
@@ -3693,7 +4319,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             $debug_manager->save_settings($settings);
 
             add_action('admin_notices', function() {
-                echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Debug settings saved successfully!', 'opti-behavior' ) . '</p></div>';
+                echo '<div class="notice notice-success opti-behavior-notice is-dismissible"><p>' . esc_html__( 'Debug settings saved successfully!', 'opti-behavior' ) . '</p></div>';
             });
         }
 
@@ -3705,7 +4331,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             $debug_manager->clear_log();
 
             add_action('admin_notices', function() {
-                echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Debug log cleared successfully!', 'opti-behavior' ) . '</p></div>';
+                echo '<div class="notice notice-success opti-behavior-notice is-dismissible"><p>' . esc_html__( 'Debug log cleared successfully!', 'opti-behavior' ) . '</p></div>';
             });
         }
 
@@ -3718,7 +4344,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             $archiver = $this->heatmap->get_data_archiver();
 
             if (!$file_storage) {
-                echo '<div class="notice notice-error"><p>' . esc_html__( 'File storage system not available.', 'opti-behavior' ) . '</p></div>';
+                echo '<div class="notice notice-error opti-behavior-notice"><p>' . esc_html__( 'File storage system not available.', 'opti-behavior' ) . '</p></div>';
                 return;
             }
 
@@ -4025,7 +4651,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
 
             if (!$file_storage) {
                 add_action('admin_notices', function() {
-                    echo '<div class="notice notice-error is-dismissible"><p>' . esc_html__( 'File storage system not available.', 'opti-behavior' ) . '</p></div>';
+                    echo '<div class="notice notice-error opti-behavior-notice is-dismissible"><p>' . esc_html__( 'File storage system not available.', 'opti-behavior' ) . '</p></div>';
                 });
                 return;
             }
@@ -4050,8 +4676,61 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             $file_storage->update_settings($new_settings);
 
             add_action('admin_notices', function() {
-                echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'File storage settings saved successfully!', 'opti-behavior' ) . '</p></div>';
+                echo '<div class="notice notice-success opti-behavior-notice is-dismissible"><p>' . esc_html__( 'File storage settings saved successfully!', 'opti-behavior' ) . '</p></div>';
             });
+        }
+
+        /**
+         * Render the Free "Session Recordings" settings tab.
+         *
+         * Free has no recordings settings, but the tab is reachable through old
+         * bookmarks and documentation deep links (`settings_tab=recordings`).
+         * Render an explicit upgrade surface rather than silently falling through
+         * to the Privacy & GDPR panel.
+         *
+         * @since 1.9.0.7
+         * @return void
+         */
+        private function render_recordings_upgrade_tab() {
+            $recordings_page_url = admin_url( 'admin.php?page=opti-behavior-recordings' );
+            ?>
+            <div class="opti-behavior-settings-form opti-behavior-upgrade upgrade-card recordings-upgrade-content">
+                <div class="settings-section">
+                    <div class="section-header">
+                        <h2 class="section-title">
+                            <span class="section-icon"><i data-lucide="video"></i></span>
+                            <?php esc_html_e( 'Session Recordings', 'opti-behavior' ); ?>
+                        </h2>
+                        <p class="section-description">
+                            <?php esc_html_e( 'Session Recordings is an Opti-Behavior Pro feature. Upgrade to replay real visitor sessions and configure recording settings here.', 'opti-behavior' ); ?>
+                        </p>
+                    </div>
+                    <ul class="pro-upgrade-features">
+                        <li><?php esc_html_e( 'Replay real visitor sessions with clicks, scrolls and rage-click markers', 'opti-behavior' ); ?></li>
+                        <li><?php esc_html_e( 'Sampling, duration limits and per-page recording rules', 'opti-behavior' ); ?></li>
+                        <li><?php esc_html_e( 'Automatic masking of sensitive form fields', 'opti-behavior' ); ?></li>
+                        <li><?php esc_html_e( 'Compressed file storage with automatic retention cleanup', 'opti-behavior' ); ?></li>
+                    </ul>
+                    <p class="pro-upgrade-actions">
+                        <a href="<?php echo esc_url( $recordings_page_url ); ?>" class="button button-primary button-large">
+                            <?php esc_html_e( 'See what Session Recordings offers', 'opti-behavior' ); ?>
+                        </a>
+                        <a href="https://optiuser.com/opti-behavior/" class="button button-secondary button-large" target="_blank" rel="noopener noreferrer">
+                            <?php esc_html_e( 'Upgrade to Opti-Behavior Pro', 'opti-behavior' ); ?>
+                        </a>
+                    </p>
+                    <p class="description">
+                        <?php
+                        printf(
+                            /* translators: %s: link to the Privacy & GDPR settings tab. */
+                            esc_html__( 'Looking for tracking privacy options? They live on the %s tab.', 'opti-behavior' ),
+                            '<a href="' . esc_url( admin_url( 'admin.php?page=opti-behavior-settings&settings_tab=privacy-gdpr' ) ) . '">' . esc_html__( 'Privacy & GDPR', 'opti-behavior' ) . '</a>'
+                        );
+                        ?>
+                    </p>
+                </div>
+            </div>
+            <?php
         }
 
         /**
@@ -4147,10 +4826,15 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 $settings['spam_min_clicks_threshold'] = 10;
             }
 
-            // Parse custom bot patterns (already unslashed and sanitized above)
-            if ( isset( $traffic_settings['custom_bot_patterns'] ) && ! empty( $traffic_settings['custom_bot_patterns'] ) ) {
-                $patterns_text = $traffic_settings['custom_bot_patterns'];
-                $patterns = explode( "\n", $patterns_text );
+            // Parse custom bot patterns (one pattern per line).
+            // Read from $_POST directly with sanitize_textarea_field: the map_deep
+            // sanitize_text_field pass above strips newlines, which would merge
+            // all textarea lines into one unusable pattern.
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified at the top of this method.
+            if ( isset( $_POST['opti_behavior_traffic']['custom_bot_patterns'] ) ) {
+                // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified at the top of this method.
+                $patterns_text = sanitize_textarea_field( wp_unslash( $_POST['opti_behavior_traffic']['custom_bot_patterns'] ) );
+                $patterns      = preg_split( '/\r\n|\r|\n/', $patterns_text );
                 foreach ( $patterns as $pattern ) {
                     $pattern = trim( $pattern );
                     if ( ! empty( $pattern ) ) {
@@ -4181,14 +4865,10 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
 
             // Clear traffic classification cache
             global $wpdb;
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Cache cleanup query.
-            $wpdb->query( "DELETE FROM {$wpdb->prefix}options WHERE option_name LIKE '_transient_opti_behavior_traffic_class_%'" );
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Cache cleanup query.
-            $wpdb->query( "DELETE FROM {$wpdb->prefix}options WHERE option_name LIKE '_transient_timeout_opti_behavior_traffic_class_%'" );
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Cache cleanup query.
-            $wpdb->query( "DELETE FROM {$wpdb->prefix}options WHERE option_name LIKE '_transient_opti_recordings_by_page_%'" );
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Cache cleanup query.
-            $wpdb->query( "DELETE FROM {$wpdb->prefix}options WHERE option_name LIKE '_transient_timeout_opti_recordings_by_page_%'" );
+            // 1.9.0.6: index-friendly, delete-by-name helper (was 4 unescaped LIKE scans).
+            if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+                opti_behavior_delete_transients_by_prefix( array( 'opti_behavior_traffic_class_', 'opti_recordings_by_page_' ) );
+            }
 
             // Note: Spam recalculation is now handled via AJAX with progress bar
             // The JavaScript will trigger batch recalculation after settings are saved
@@ -5025,16 +5705,10 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             $wpdb->query( $wpdb->prepare(
                 "UPDATE {$sessions_table} s
                  LEFT JOIN (
-                     SELECT session_id, COUNT(*) as scroll_count
-                     FROM {$events_table}
-                     WHERE event IN (32,33)
-                     GROUP BY session_id
+                     " . Opti_Behavior_Heatmap_Engagement_Counters::session_counts_subquery_sql() . "
                  ) sc ON s.id = sc.session_id
                  LEFT JOIN (
-                     SELECT session_id, COUNT(*) as click_count
-                     FROM {$events_table}
-                     WHERE event IN (16,17)
-                     GROUP BY session_id
+                     " . Opti_Behavior_Heatmap_Engagement_Counters::session_counts_subquery_sql() . "
                  ) cc ON s.id = cc.session_id
                  SET s.traffic_type = 'spam',
                      s.spam_reason = CONCAT_WS(',',
@@ -5066,10 +5740,10 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             ) );
 
             // Clear all related caches
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Cache cleanup query.
-            $wpdb->query( "DELETE FROM {$wpdb->prefix}options WHERE option_name LIKE '_transient_optibehavior_top_users_%'" );
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Cache cleanup query.
-            $wpdb->query( "DELETE FROM {$wpdb->prefix}options WHERE option_name LIKE '_transient_timeout_optibehavior_top_users_%'" );
+            // 1.9.0.6: index-friendly, delete-by-name helper (was 2 unescaped LIKE scans).
+            if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+                opti_behavior_delete_transients_by_prefix( array( 'optibehavior_top_users_' ) );
+            }
         }
 
         /**
@@ -5176,6 +5850,10 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <p style="margin: 12px 0 0; color: #dc2626; font-size: 12px;">
                             <?php esc_html_e( 'Active schedules exist, but the report worker is not currently scheduled. Saving or toggling a schedule will repair it automatically.', 'opti-behavior' ); ?>
                         </p>
+                    <?php else : ?>
+                    <p style="margin: 12px 0 0; color: #6b7280; font-size: 12px;">
+                    <?php esc_html_e( 'WP-Cron currently runs inside visitor page loads. On busy or shared hosting, define DISABLE_WP_CRON in wp-config.php and call wp-cron.php from a real server cron (every 5 minutes) so cleanup, reports and database upkeep never run inside a visitor request.', 'opti-behavior' ); ?>
+                    </p>
                     <?php endif; ?>
                 </div>
 
@@ -5837,7 +6515,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                     $.post(ajaxurl, postData, function(response) {
                         $btn.prop('disabled', false).html(originalText);
                         if (response.success) {
-                            var $notice = $('<div class="notice notice-success is-dismissible" style="margin: 10px 0;"><p><?php echo esc_js( __( 'Email settings saved successfully!', 'opti-behavior' ) ); ?></p></div>');
+                            var $notice = $('<div class="notice notice-success opti-behavior-notice is-dismissible" style="margin: 10px 0;"><p><?php echo esc_js( __( 'Email settings saved successfully!', 'opti-behavior' ) ); ?></p></div>');
                             $('#email-settings-form').prepend($notice);
                             setTimeout(function() { $notice.fadeOut(); }, 3000);
                         } else {
@@ -5920,7 +6598,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             <div class="ob-smart-insights-settings opti-behavior-settings-form">
                 <?php if ( get_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id() ) ) : ?>
                     <?php delete_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id() ); ?>
-                    <div style="background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;padding:12px 16px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:8px;">
+                    <div class="notice notice-success opti-behavior-notice is-dismissible ob-si-saved-notice" style="background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;padding:12px 16px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:8px;">
                         <span aria-hidden="true" style="font-size:16px;">✓</span>
                         <strong><?php esc_html_e( 'Smart Insights notification settings saved.', 'opti-behavior' ); ?></strong>
                     </div>
@@ -6582,10 +7260,17 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
 
             update_option( 'opti_behavior_frontend_stats_bar', $settings );
 
-            // Clear cached stats so next load picks up new period
+            // Clear cached stats so the next load picks up the new period/toggles.
+            // The frontend also caches per-request permutations under hashed keys
+            // (`opti_behavior_frontend_stats_<md5>`, see
+            // public/class-opti-behavior-heatmap-frontend.php), so deleting only the
+            // three period keys left stale bars behind — sweep the whole prefix.
             delete_transient( 'opti_behavior_frontend_stats_today' );
             delete_transient( 'opti_behavior_frontend_stats_last7days' );
             delete_transient( 'opti_behavior_frontend_stats_last30days' );
+            if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+                opti_behavior_delete_transients_by_prefix( array( 'opti_behavior_frontend_stats_' ) );
+            }
 
             // Use transient for inline success message (admin notices are suppressed on plugin pages)
             set_transient( 'opti_behavior_fsb_saved', true, 30 );

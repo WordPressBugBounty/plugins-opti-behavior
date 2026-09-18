@@ -349,10 +349,39 @@
 	// Exclude-spam flag
 	// =========================================================================
 
+	// Per-user persistence for the exclude-spam toggle. The flag used to live in
+	// the URL only (history.replaceState), so any navigation back to the bare
+	// ?page=opti-behavior-funnels URL silently reverted it to the site default
+	// (QA-B-FUNNEL-056). The stored preference is a display filter, never a
+	// security boundary, so localStorage is the right home for it.
+	const EXCLUDE_SPAM_STORAGE_KEY = 'optiBehaviorFunnelsExcludeSpam';
+
+	function readStoredExcludeSpamFlag() {
+		try {
+			const stored = window.localStorage.getItem(EXCLUDE_SPAM_STORAGE_KEY);
+			return (stored === '1' || stored === '0') ? stored : null;
+		} catch (e) {
+			return null;
+		}
+	}
+
+	function writeStoredExcludeSpamFlag(flag) {
+		try {
+			window.localStorage.setItem(EXCLUDE_SPAM_STORAGE_KEY, flag);
+		} catch (e) {
+			// Private mode / storage disabled: the URL param still carries the
+			// flag for the rest of this page's life.
+		}
+	}
+
 	function getExcludeSpamFlag() {
 		const params = new URLSearchParams(window.location.search);
 		if (params.has('exclude_spam')) {
 			return params.get('exclude_spam') === '1' ? '1' : '0';
+		}
+		const stored = readStoredExcludeSpamFlag();
+		if (stored !== null) {
+			return stored;
 		}
 		const root = document.querySelector('.opti-behavior-funnels-page');
 		if (root && root.getAttribute('data-exclude-spam') !== null) {
@@ -366,6 +395,7 @@
 
 	function setExcludeSpamFlag(value) {
 		const flag = value === '1' ? '1' : '0';
+		writeStoredExcludeSpamFlag(flag);
 		const root = document.querySelector('.opti-behavior-funnels-page');
 		const button = document.getElementById('funnels-exclude-spam-toggle');
 		if (root) {
@@ -384,6 +414,27 @@
 		window.history.replaceState({}, '', url.toString());
 		if (typeof lucide !== 'undefined' && typeof lucide.createIcons === 'function') {
 			lucide.createIcons();
+		}
+	}
+
+	// Reconcile the server-rendered toggle state with the stored preference.
+	function applyStoredExcludeSpamFlag() {
+		const params = new URLSearchParams(window.location.search);
+		if (params.has('exclude_spam')) {
+			// The URL is explicit: treat it as the user's latest choice.
+			writeStoredExcludeSpamFlag(params.get('exclude_spam') === '1' ? '1' : '0');
+			return;
+		}
+
+		const stored = readStoredExcludeSpamFlag();
+		if (stored === null) {
+			return;
+		}
+
+		const root = document.querySelector('.opti-behavior-funnels-page');
+		const rendered = (root && root.getAttribute('data-exclude-spam') === '1') ? '1' : '0';
+		if (stored !== rendered) {
+			setExcludeSpamFlag(stored);
 		}
 	}
 
@@ -2463,10 +2514,16 @@
 	$(document).ready(function() {
 		if ($('#opti-funnel-detail').length > 0) {
 			// Single-funnel detail page (spec.md §4.1).
+			applyStoredExcludeSpamFlag();
 			initFunnelDetailPage();
 			return;
 		}
 		if ($('.opti-behavior-funnels-page').length > 0) {
+			// The page was rendered from $_GET, which carries no exclude_spam arg
+			// on a plain menu click. Re-apply the stored preference (and mirror it
+			// back into the URL + button state) BEFORE the first summary request,
+			// so the toggle survives a reload (QA-B-FUNNEL-056).
+			applyStoredExcludeSpamFlag();
 			initFunnelAnalytics();
 			initFunnelBuilder();
 			initFunnelActions();

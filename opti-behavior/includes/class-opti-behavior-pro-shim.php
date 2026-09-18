@@ -101,16 +101,27 @@ if ( ! class_exists( 'Opti_Behavior_Pro_Ajax_Shim' ) ) {
 		 * Stub handler: respond with the WordPress AJAX success shape and exit.
 		 *
 		 * Deliberately reads NOTHING from `$_POST` / `php://input` and stores
-		 * nothing. `wp_send_json_success()` emits HTTP 200 with
+		 * nothing. It emits HTTP 200 with the full documented envelope
 		 * `{"success":true,"data":null}` and terminates — the exact contract the
 		 * Pro trackers treat as a confirmed save (they then clear their pending
 		 * queue and stop retrying). No user input is ever echoed back.
+		 *
+		 * The envelope is built explicitly rather than via
+		 * `wp_send_json_success()`: that helper omits the `data` key entirely
+		 * when no value is passed (`isset( null )` is false), emitting the
+		 * shorter `{"success":true}`. Older cached tracker builds parse the
+		 * response with a strict `data` lookup, so the key must be present.
 		 *
 		 * @since 1.7.1
 		 * @return void
 		 */
 		public static function handle() {
-			wp_send_json_success();
+			wp_send_json(
+				array(
+					'success' => true,
+					'data'    => null,
+				)
+			);
 		}
 	}
 }
