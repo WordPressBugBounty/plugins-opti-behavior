@@ -36,9 +36,31 @@ class Opti_Behavior_Smart_Insights_Repository {
 	const STATUS_RESOLVED      = 'resolved';
 	const STATUS_IGNORED       = 'ignored';
 	const STATUS_AUTO_RESOLVED = 'auto_resolved';
+	// Closed by us, never by the site owner, and never a win: the rule that
+	// raised the card changed and no longer confirms it (a false positive of
+	// the older rule), or the card was merged into a twin with the same data.
+	const STATUS_RULE_UPDATED     = 'rule_updated';
+	const STATUS_MERGED_DUPLICATE = 'merged_duplicate';
 
 	/** Cap on the stored recurrence audit trail so the payload stays bounded. */
 	const MAX_RECURRENCE_WINDOWS = 12;
+
+	/**
+	 * Admin-menu lightbulb colour: non-autoloaded option written only when an
+	 * insight changes (never loaded on the public site), recomputed at most
+	 * once after a change, or after MENU_SEVERITY_TTL as a safety net.
+	 */
+	const MENU_SEVERITY_OPTION = 'opti_behavior_si_menu_severity';
+
+	/** Safety net for write paths outside this class (seconds). */
+	const MENU_SEVERITY_TTL = 43200;
+
+	/**
+	 * Whether this request already dropped the stored menu severity.
+	 *
+	 * @var bool
+	 */
+	private static $menu_severity_flushed = false;
 
 	/**
 	 * Database table name.
@@ -94,6 +116,21 @@ class Opti_Behavior_Smart_Insights_Repository {
 			self::STATUS_RESOLVED,
 			self::STATUS_IGNORED,
 			self::STATUS_AUTO_RESOLVED,
+			self::STATUS_RULE_UPDATED,
+			self::STATUS_MERGED_DUPLICATE,
+		);
+	}
+
+	/**
+	 * Closed statuses that are never a result of the site owner's work: they
+	 * never count as resolved, fixed or won (counters, weekly summary, outcome).
+	 *
+	 * @return array
+	 */
+	public static function get_retired_statuses() {
+		return array(
+			self::STATUS_RULE_UPDATED,
+			self::STATUS_MERGED_DUPLICATE,
 		);
 	}
 
@@ -120,6 +157,8 @@ class Opti_Behavior_Smart_Insights_Repository {
 		return array(
 			self::STATUS_RESOLVED,
 			self::STATUS_AUTO_RESOLVED,
+			self::STATUS_RULE_UPDATED,
+			self::STATUS_MERGED_DUPLICATE,
 		);
 	}
 
@@ -302,6 +341,7 @@ class Opti_Behavior_Smart_Insights_Repository {
 				return new WP_Error( 'opti_behavior_smart_insights_update_failed', __( 'Unable to update the Smart Insight.', 'opti-behavior' ) );
 			}
 
+			self::flush_menu_severity();
 			$this->auto_resolve_superseded_insights( (int) $existing['id'], $data );
 
 			return (int) $existing['id'];
@@ -313,6 +353,7 @@ class Opti_Behavior_Smart_Insights_Repository {
 		}
 
 		$insert_id = (int) $wpdb->insert_id;
+		self::flush_menu_severity();
 		$this->auto_resolve_superseded_insights( $insert_id, $data );
 
 		return $insert_id;
@@ -1025,6 +1066,134 @@ class Opti_Behavior_Smart_Insights_Repository {
 			return new WP_Error( 'opti_behavior_smart_insights_auto_resolve_unseen_failed', __( 'Unable to auto-resolve Smart Insights that no longer trigger.', 'opti-behavior' ) );
 		}
 
+		if ( $result > 0 ) {
+			self::flush_menu_severity();
+		}
+
+		return (int) $result;
+	}
+
+	/**
+	 * Whether a plugin table exists (memoized per request).
+	 *
+	 * @param string $table Table name.
+	 * @return bool
+	 */
+	public function table_exists_named( $table ) {
+		global $wpdb;
+		static $seen = array();
+		if ( ! isset( $seen[ $table ] ) ) {
+			$seen[ $table ] = (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
+		}
+
+		return $seen[ $table ];
+	}
+
+	/**
+	 * Close the open cards of candidates this run merged into a data twin
+	 * (status `merged_duplicate`, never counted as resolved). Cards the site
+	 * owner ignored stay as they are.
+	 *
+	 * @param array $group_keys Group keys of the merged candidates.
+	 * @return int|WP_Error Rows closed.
+	 */
+	public function close_merged_duplicates( $group_keys ) {
+		global $wpdb;
+
+		if ( ! $this->table_exists() ) {
+			return $this->missing_table_error();
+		}
+
+		$group_keys = array_values( array_unique( array_filter( array_map( 'sanitize_text_field', (array) $group_keys ) ) ) );
+		if ( empty( $group_keys ) ) {
+			return 0;
+		}
+
+		$statuses = array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS );
+		$now      = $this->current_mysql_time();
+		$sql      = "UPDATE {$this->table} SET status = %s, updated_at = %s, resolved_at = %s WHERE group_key IN (" . implode( ',', array_fill( 0, count( $group_keys ), '%s' ) ) . ') AND status IN (' . implode( ',', array_fill( 0, count( $statuses ), '%s' ) ) . ')';
+		$result   = $wpdb->query( $wpdb->prepare( $sql, array_merge( array( self::STATUS_MERGED_DUPLICATE, $now, $now ), $group_keys, $statuses ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- placeholders built above.
+
+		if ( false === $result ) {
+			return new WP_Error( 'opti_behavior_smart_insights_merge_failed', __( 'Unable to close Smart Insights merged into a twin card.', 'opti-behavior' ) );
+		}
+
+		if ( $result > 0 ) {
+			self::flush_menu_severity();
+		}
+
+		return (int) $result;
+	}
+
+	/**
+	 * Close the open cards a changed rule no longer confirms (status
+	 * `rule_updated`, never counted as resolved): cards of the evaluated
+	 * signals, stored under an older `rule_version`, overlapping the run's
+	 * range, not re-detected by this run, in the run's spam scope. Cards the
+	 * site owner ignored stay as they are. Runs before
+	 * auto_resolve_unseen_insights(), so an upgrade never turns the old
+	 * rule's false positives into "resolved" wins.
+	 *
+	 * @param string $date_from         Range start.
+	 * @param string $date_to           Range end.
+	 * @param array  $rule_versions     signal_id => current rule_version.
+	 * @param array  $active_group_keys Group keys this run stored.
+	 * @param array  $args              Optional: spam_scope.
+	 * @return int|WP_Error Rows closed.
+	 */
+	public function close_outdated_rule_insights( $date_from, $date_to, $rule_versions, $active_group_keys = array(), $args = array() ) {
+		global $wpdb;
+
+		if ( ! $this->table_exists() ) {
+			return $this->missing_table_error();
+		}
+
+		$pairs  = array();
+		$values = array();
+		foreach ( (array) $rule_versions as $signal_id => $version ) {
+			$signal_id = sanitize_key( (string) $signal_id );
+			$version   = sanitize_text_field( (string) $version );
+			if ( '' === $signal_id || '' === $version ) {
+				continue;
+			}
+			// A card stored without a version (very old rows) keeps the usual path.
+			$pairs[]  = "(signal_id = %s AND rule_version <> %s AND rule_version <> '')";
+			$values[] = $signal_id;
+			$values[] = $version;
+		}
+		if ( empty( $pairs ) ) {
+			return 0;
+		}
+
+		$statuses = array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS );
+		$where    = array(
+			'(' . implode( ' OR ', $pairs ) . ')',
+			'date_from <= %s',
+			'date_to >= %s',
+			'status IN (' . implode( ',', array_fill( 0, count( $statuses ), '%s' ) ) . ')',
+		);
+		$values   = array_merge( $values, array( $this->normalize_date( $date_to ), $this->normalize_date( $date_from ) ), $statuses );
+
+		$active_group_keys = array_values( array_unique( array_filter( array_map( 'sanitize_text_field', (array) $active_group_keys ) ) ) );
+		if ( ! empty( $active_group_keys ) ) {
+			$where[] = 'group_key NOT IN (' . implode( ',', array_fill( 0, count( $active_group_keys ), '%s' ) ) . ')';
+			$values  = array_merge( $values, $active_group_keys );
+		}
+
+		$this->append_spam_scope_where( isset( $args['spam_scope'] ) ? $args['spam_scope'] : null, $where, $values );
+
+		$now      = $this->current_mysql_time();
+		$sql      = "UPDATE {$this->table} SET status = %s, updated_at = %s, resolved_at = %s WHERE " . implode( ' AND ', $where );
+		$result   = $wpdb->query( $wpdb->prepare( $sql, array_merge( array( self::STATUS_RULE_UPDATED, $now, $now ), $values ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- placeholders built above.
+
+		if ( false === $result ) {
+			return new WP_Error( 'opti_behavior_smart_insights_rule_updated_failed', __( 'Unable to close Smart Insights raised by an older rule.', 'opti-behavior' ) );
+		}
+
+		if ( $result > 0 ) {
+			self::flush_menu_severity();
+		}
+
 		return (int) $result;
 	}
 
@@ -1138,6 +1307,8 @@ class Opti_Behavior_Smart_Insights_Repository {
 		if ( self::STATUS_RESOLVED === $status ) {
 			$this->maybe_snapshot_outcome( $id );
 		}
+
+		self::flush_menu_severity();
 
 		return true;
 	}
@@ -1427,6 +1598,10 @@ class Opti_Behavior_Smart_Insights_Repository {
 			return new WP_Error( 'opti_behavior_smart_insights_auto_resolve_failed', __( 'Unable to auto-resolve stale Smart Insights.', 'opti-behavior' ) );
 		}
 
+		if ( $result > 0 ) {
+			self::flush_menu_severity();
+		}
+
 		return (int) $result;
 	}
 
@@ -1486,6 +1661,10 @@ class Opti_Behavior_Smart_Insights_Repository {
 			return new WP_Error( 'opti_behavior_smart_insights_supersede_failed', __( 'Unable to supersede older Smart Insight snapshots.', 'opti-behavior' ) );
 		}
 
+		if ( $result > 0 ) {
+			self::flush_menu_severity();
+		}
+
 		return (int) $result;
 	}
 
@@ -1501,7 +1680,86 @@ class Opti_Behavior_Smart_Insights_Repository {
 			return 0;
 		}
 
+		self::flush_menu_severity();
+
 		return $wpdb->query( "TRUNCATE TABLE {$this->table}" );
+	}
+
+	/**
+	 * Drop the stored admin-menu severity (once per request).
+	 *
+	 * Called by every write that can open, close or re-rank an insight. The
+	 * next admin screen recomputes it with one query; the public site never
+	 * reads it.
+	 *
+	 * @return void
+	 */
+	public static function flush_menu_severity() {
+		if ( self::$menu_severity_flushed ) {
+			return;
+		}
+		self::$menu_severity_flushed = true;
+		delete_option( self::MENU_SEVERITY_OPTION );
+	}
+
+	/**
+	 * Colour of the Smart Insights lightbulb in the admin menu.
+	 *
+	 * red = at least one open Critical insight, yellow = at least one open High
+	 * or Medium, green = nothing open (or Low only). Open = new / viewed /
+	 * in progress, top-level, not suppressed, default (spam excluded) scope:
+	 * the insight list's "Active" definition. The priority key is the final
+	 * label the generator stores in scores_json (`priority_label_key`).
+	 *
+	 * @return array{level:string,critical:int,warning:int,computed_at:int}
+	 */
+	public function get_menu_severity() {
+		$stored = get_option( self::MENU_SEVERITY_OPTION, null );
+		if ( is_array( $stored ) && isset( $stored['level'], $stored['computed_at'] )
+			&& ( time() - (int) $stored['computed_at'] ) < self::MENU_SEVERITY_TTL ) {
+			return $stored;
+		}
+
+		$result = array(
+			'level'       => 'green',
+			'critical'    => 0,
+			'warning'     => 0,
+			'computed_at' => time(),
+		);
+
+		if ( $this->table_exists() ) {
+			global $wpdb;
+
+			$statuses = array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS );
+			$where    = array(
+				'status IN (' . implode( ',', array_fill( 0, count( $statuses ), '%s' ) ) . ')',
+				'( parent_insight_id IS NULL OR parent_insight_id = 0 )',
+				'( suppressed_until IS NULL OR suppressed_until <= %s )',
+			);
+			$values   = array_merge( $statuses, array( $this->current_mysql_time() ) );
+			$this->append_spam_scope_where( true, $where, $values );
+
+			$like = function ( $key ) use ( $wpdb ) {
+				return '%' . $wpdb->esc_like( '"priority_label_key":"' . $key . '"' ) . '%';
+			};
+			$sql  = "SELECT SUM( scores_json LIKE %s ) AS critical, SUM( scores_json LIKE %s OR scores_json LIKE %s ) AS warning FROM {$this->table} WHERE " . implode( ' AND ', $where );
+
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Table name is internal; placeholders prepared here.
+			$row = $wpdb->get_row( $wpdb->prepare( $sql, array_merge( array( $like( 'critical' ), $like( 'high' ), $like( 'medium' ) ), $values ) ), ARRAY_A );
+
+			$result['critical'] = isset( $row['critical'] ) ? (int) $row['critical'] : 0;
+			$result['warning']  = isset( $row['warning'] ) ? (int) $row['warning'] : 0;
+			if ( $result['critical'] > 0 ) {
+				$result['level'] = 'red';
+			} elseif ( $result['warning'] > 0 ) {
+				$result['level'] = 'yellow';
+			}
+		}
+
+		update_option( self::MENU_SEVERITY_OPTION, $result, false );
+		self::$menu_severity_flushed = false;
+
+		return $result;
 	}
 
 	/**
@@ -1670,6 +1928,38 @@ class Opti_Behavior_Smart_Insights_Repository {
 		$row['recommended_actions'] = $this->decode_json_field( $row['recommended_actions_json'] );
 		$row['recommended_actions'] = $this->normalize_recommended_actions_for_row( $row );
 		$row['related_reports']     = $this->decode_json_field( $row['related_reports_json'] );
+		// Every card about one page opens its Page X-Ray dossier (the dossier
+		// already lists the page's insights; this is the way back). Added at
+		// read time so cards stored before the tab existed get it too.
+		// A funnel card opens the dossier of the page visitors leave from (the
+		// generator resolved it once per run: detection.worst_transition.page_id).
+		$xray_page = 0;
+		if ( isset( $row['entity_type'], $row['entity_id'] ) && 'page' === $row['entity_type'] && ctype_digit( (string) $row['entity_id'] ) ) {
+			$xray_page = (int) $row['entity_id'];
+		} elseif ( isset( $row['entity_type'] ) && 'funnel' === $row['entity_type'] && ! empty( $row['detection']['worst_transition']['page_id'] ) ) {
+			$xray_page = (int) $row['detection']['worst_transition']['page_id'];
+		}
+		// Page X-Ray is a Pro tab: the link only exists where the tab can open.
+		if ( $xray_page > 0 && function_exists( 'opti_behavior_page_xray_available' ) && opti_behavior_page_xray_available() ) {
+			$reports    = is_array( $row['related_reports'] ) ? $row['related_reports'] : array();
+			$has_xray   = false;
+			foreach ( $reports as $report ) {
+				if ( is_array( $report ) && isset( $report['type'] ) && 'page_xray' === $report['type'] ) {
+					$has_xray = true;
+				}
+			}
+			if ( ! $has_xray ) {
+				array_unshift(
+					$reports,
+					array(
+						'label'   => __( 'Open the Page X-Ray dossier', 'opti-behavior' ),
+						'type'    => 'page_xray',
+						'page_id' => (string) $xray_page,
+					)
+				);
+			}
+			$row['related_reports'] = $reports;
+		}
 		$row['date_range']          = array(
 			'from' => $row['date_from'],
 			'to'   => $row['date_to'],
@@ -1684,6 +1974,10 @@ class Opti_Behavior_Smart_Insights_Repository {
 		$row['hypothesis']        = $this->decode_json_field( isset( $row['hypothesis_json'] ) ? $row['hypothesis_json'] : '' );
 		$row['experiment']        = $this->decode_json_field( isset( $row['experiment_json'] ) ? $row['experiment_json'] : '' );
 		$row['impact']            = $this->decode_json_field( isset( $row['impact_json'] ) ? $row['impact_json'] : '' );
+		// Money computed by an older rule is never shown again (see Impact_Calculator::REVENUE_RULE).
+		if ( ! empty( $row['impact']['revenue'] ) && class_exists( 'Opti_Behavior_Smart_Insights_Impact_Calculator' ) ) {
+			$row['impact']['revenue'] = Opti_Behavior_Smart_Insights_Impact_Calculator::current_revenue( $row['impact']['revenue'] );
+		}
 
 		// Outcome loop (Workstream F). Legacy rows and rows that were never
 		// resolved decode to an empty array, so every consumer keeps the exact

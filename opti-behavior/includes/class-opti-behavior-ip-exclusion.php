@@ -79,6 +79,116 @@ class Opti_Behavior_IP_Exclusion {
 	}
 
 	/**
+	 * Cloudflare edge ranges (https://www.cloudflare.com/ips/). CF-Connecting-IP
+	 * is trusted only when the TCP peer (REMOTE_ADDR) is one of them.
+	 *
+	 * @var string[]
+	 */
+	const CLOUDFLARE_RANGES = array(
+		'173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+		'141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+		'197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+		'104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+		'2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32',
+		'2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+	);
+
+	/**
+	 * Visitor IP for geolocation, anonymous identity hashing and rate limits.
+	 *
+	 * Forwarding headers are only believed when they come from a proxy we can
+	 * trust, never from the open internet (WordPress.org security review of
+	 * 1.9.2: X-Forwarded-For / Client-IP / CF-Connecting-IP were accepted from
+	 * any caller, so one client could claim a new IP per request):
+	 * - REMOTE_ADDR is a Cloudflare edge => CF-Connecting-IP;
+	 * - REMOTE_ADDR is private / reserved (reverse proxy on the host or LAN) =>
+	 *   the right-most public X-Forwarded-For hop (the one our proxy appended),
+	 *   else X-Real-IP;
+	 * - otherwise REMOTE_ADDR itself.
+	 *
+	 * @return string Visitor IP ('' when unavailable, e.g. CLI).
+	 */
+	public static function get_visitor_ip() {
+		$remote = isset( $_SERVER['REMOTE_ADDR'] ) ? trim( sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) ) : '';
+		if ( false === filter_var( $remote, FILTER_VALIDATE_IP ) ) {
+			$remote = '';
+		}
+		$ip = $remote;
+
+		if ( '' !== $remote ) {
+			if ( self::is_cloudflare_ip( $remote ) ) {
+				$cf = isset( $_SERVER['HTTP_CF_CONNECTING_IP'] ) ? trim( sanitize_text_field( wp_unslash( $_SERVER['HTTP_CF_CONNECTING_IP'] ) ) ) : '';
+				if ( false !== filter_var( $cf, FILTER_VALIDATE_IP ) ) {
+					$ip = $cf;
+				}
+			} elseif ( ! self::is_public_ip( $remote ) ) {
+				$hop = self::forwarded_client_ip();
+				if ( '' !== $hop ) {
+					$ip = $hop;
+				}
+			}
+		}
+
+		/**
+		 * Filter the visitor IP (custom trusted-proxy setups).
+		 *
+		 * @param string $ip     Resolved visitor IP.
+		 * @param string $remote Raw REMOTE_ADDR.
+		 */
+		return (string) apply_filters( 'opti_behavior_visitor_ip', $ip, $remote );
+	}
+
+	/**
+	 * Whether an IP is a public (routable, non-reserved) address.
+	 *
+	 * @param string $ip IP.
+	 * @return bool
+	 */
+	public static function is_public_ip( $ip ) {
+		return false !== filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE );
+	}
+
+	/**
+	 * Whether an IP belongs to a Cloudflare edge range.
+	 *
+	 * @param string $ip IP.
+	 * @return bool
+	 */
+	public static function is_cloudflare_ip( $ip ) {
+		foreach ( self::CLOUDFLARE_RANGES as $range ) {
+			if ( self::cidr_match( $ip, $range ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Client IP reported by a trusted local reverse proxy.
+	 *
+	 * @return string Right-most public X-Forwarded-For hop, else a valid
+	 *                X-Real-IP, else ''.
+	 */
+	private static function forwarded_client_ip() {
+		if ( ! empty( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
+			$hops = array_reverse( explode( ',', sanitize_text_field( wp_unslash( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) ) );
+			foreach ( $hops as $hop ) {
+				$hop = trim( $hop );
+				if ( self::is_public_ip( $hop ) ) {
+					return $hop;
+				}
+			}
+		}
+		if ( ! empty( $_SERVER['HTTP_X_REAL_IP'] ) ) {
+			$real = trim( sanitize_text_field( wp_unslash( $_SERVER['HTTP_X_REAL_IP'] ) ) );
+			if ( false !== filter_var( $real, FILTER_VALIDATE_IP ) ) {
+				return $real;
+			}
+		}
+		return '';
+	}
+
+	/**
 	 * Whether a rule string is a valid exclusion rule.
 	 *
 	 * Accepted formats:

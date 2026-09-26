@@ -186,7 +186,9 @@ class Opti_Behavior_Funnel_Page {
 			'opti-behavior-heatmaps',
 			plugins_url( 'assets/css/heatmaps.css', dirname( __FILE__ ) ),
 			array( 'opti-behavior-dashboard' ),
-			OPTI_BEHAVIOR_HEATMAP_VERSION
+			file_exists( dirname( __DIR__ ) . '/assets/css/heatmaps.css' )
+				? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( dirname( __DIR__ ) . '/assets/css/heatmaps.css' )
+				: OPTI_BEHAVIOR_HEATMAP_VERSION
 		);
 
 		// Shared dashboard design primitives (control-bar: .dashboard-controls,
@@ -266,7 +268,8 @@ class Opti_Behavior_Funnel_Page {
 			'opti-behavior-funnels',
 			plugins_url( 'assets/js/funnels.js', dirname( __FILE__ ) ),
 			array( 'jquery', 'chart-js', 'opti-behavior-filter-ui', 'opti-behavior-filter-badge', 'opti-behavior-filter-profiles' ),
-			OPTI_BEHAVIOR_HEATMAP_VERSION,
+			// Version + file time: a fix shipped inside the same version reaches the browser.
+			OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . (int) @filemtime( dirname( __DIR__ ) . '/assets/js/funnels.js' ), // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- A missing file only drops the cache buster.
 			true
 		);
 
@@ -423,7 +426,7 @@ class Opti_Behavior_Funnel_Page {
 			'opti-behavior-funnel-suggestions',
 			plugins_url( 'assets/js/funnel-suggestions.js', dirname( __FILE__ ) ),
 			array( 'jquery', 'opti-behavior-funnels' ),
-			OPTI_BEHAVIOR_HEATMAP_VERSION,
+			OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . (int) @filemtime( dirname( __DIR__ ) . '/assets/js/funnel-suggestions.js' ), // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- cache-bust only.
 			true
 		);
 
@@ -2595,15 +2598,28 @@ class Opti_Behavior_Funnel_Page {
 	 * @return string Cache-safe session id for downstream funnel storage.
 	 */
 	private function resolve_anon_funnel_session_id( $client_session_id ) {
+		// A session cookie binds the event to this browser: the stored id is
+		// ALWAYS the cookie value (same order as funnel-tracker.js and
+		// heatmap-ajax-handler get_or_create_session_id), never the free-form
+		// POST session_id. WordPress.org security review of 1.9.2: the cookie
+		// used to be checked for presence only and the POST value was stored,
+		// so one cookie let a caller report any number of identities. A
+		// mismatch is not rejected: a server-set HttpOnly optibehavior_sid is
+		// invisible to the tracker JS, which then reports another id.
+		$cookie_session_id = '';
+		foreach ( array( 'optibehavior_sid', 'opti_behavior_session_id' ) as $cookie_name ) {
+			if ( ! empty( $_COOKIE[ $cookie_name ] ) ) {
+				$cookie_session_id = sanitize_text_field( wp_unslash( $_COOKIE[ $cookie_name ] ) );
+				break;
+			}
+		}
+		if ( '' !== $cookie_session_id ) {
+			return $cookie_session_id;
+		}
+
 		// Logged-in users are identified by a stable server id and are never
 		// served frozen cached identity — leave their session id untouched.
 		if ( is_user_logged_in() ) {
-			return $client_session_id;
-		}
-
-		// A real full-consent session cookie means the client id is cache-safe
-		// (set per-browser by JS, not baked into cached HTML) — do not override.
-		if ( ! empty( $_COOKIE['optibehavior_sid'] ) || ! empty( $_COOKIE['opti_behavior_session_id'] ) ) {
 			return $client_session_id;
 		}
 
@@ -2940,6 +2956,15 @@ class Opti_Behavior_Funnel_Page {
 		// checkout page is never counted as having completed the funnel.
 		$first_step = $steps[0];
 		if ( ! $this->url_matches_pattern( $current_url, $first_step['url_pattern'], $first_step['match_type'] ) ) {
+			return array( 'advanced' => false, 'step' => 0, 'completed' => 0 );
+		}
+
+		// New funnel entries are budgeted per connecting IP, so a public caller
+		// cannot fabricate entries by cycling session ids (a real visitor
+		// enters each funnel once per session). Filter 0 = no limit.
+		$entry_limit = (int) apply_filters( 'opti_behavior_funnel_entry_rate_limit', 120 );
+		if ( class_exists( 'Opti_Behavior_Ingest_Gate' )
+			&& ! Opti_Behavior_Ingest_Gate::allow_hit( 'funnel_entry', $entry_limit, HOUR_IN_SECONDS ) ) {
 			return array( 'advanced' => false, 'step' => 0, 'completed' => 0 );
 		}
 

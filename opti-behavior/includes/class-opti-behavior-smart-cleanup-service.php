@@ -2343,55 +2343,18 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		}
 
 		$result['processed'] = count( $sessions );
-		$session_ids_placeholder = implode( ',', array_fill( 0, count( $sessions ), '%s' ) );
-		$query = $wpdb->prepare(
-			"UPDATE " . $sessions_table . " s
-			 LEFT JOIN (
-				 SELECT session_id, COUNT(*) as scroll_count
-				 FROM " . $events_table . "
-				 WHERE session_id IN (" . $session_ids_placeholder . ")
-				 AND event IN (32, 33)
-				 GROUP BY session_id
-			 ) sc ON s.id = sc.session_id
-			 LEFT JOIN (
-				 SELECT session_id, COUNT(*) as click_count
-				 FROM " . $events_table . "
-				 WHERE session_id IN (" . $session_ids_placeholder . ")
-				 AND event IN (16, 17)
-				 GROUP BY session_id
-			 ) cc ON s.id = cc.session_id
-			 SET s.traffic_type = 'spam',
-			     s.spam_reason = CONCAT_WS(',',
-				     CASE WHEN (
-					     CASE WHEN s.duration > 0 THEN s.duration
-					          ELSE TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time))
-					     END
-				     ) < %d THEN 'short_duration' ELSE NULL END,
-				     CASE WHEN COALESCE(sc.scroll_count, 0) < %d THEN 'few_scrolls' ELSE NULL END,
-				     CASE WHEN COALESCE(cc.click_count, 0) < %d THEN 'few_clicks' ELSE NULL END
-			     )
-			 WHERE s.id IN (" . $session_ids_placeholder . ")
-			   AND (
-			       (
-				       CASE
-					       WHEN s.duration > 0 THEN s.duration
-					       ELSE TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time))
-				       END
-			       ) < %d
-			       OR COALESCE(sc.scroll_count, 0) < %d
-			       OR COALESCE(cc.click_count, 0) < %d
-			   )",
-			...array_merge(
-				$sessions,
-				$sessions,
-				array( $spam_duration_threshold, $spam_min_scrolls_threshold, $spam_min_clicks_threshold ),
-				$sessions,
-				array( $spam_duration_threshold, $spam_min_scrolls_threshold, $spam_min_clicks_threshold )
+		// Shared multi-source marker (lean-events aware). The inline UPDATE that
+		// lived here read scrolls / clicks from optibehavior_events only, flagged
+		// every session `few_scrolls` under lean events mode, and this tier then
+		// DELETES what it flagged.
+		$updated = Opti_Behavior_Stats_Spam_Filter::mark_spam_sessions(
+			$sessions,
+			array(
+				'duration' => $spam_duration_threshold,
+				'scrolls'  => $spam_min_scrolls_threshold,
+				'clicks'   => $spam_min_clicks_threshold,
 			)
 		);
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Custom analytics table bulk update; $query already bound via $wpdb->prepare() above, per-request caching not applicable.
-		$updated = $wpdb->query( $query );
 		$result['updated'] = false !== $updated ? absint( $updated ) : 0;
 
 		if ( count( $sessions ) >= $limit ) {
@@ -2466,7 +2429,10 @@ class Opti_Behavior_Smart_Cleanup_Service {
 
 		$previous = isset( $logs[0] ) && is_array( $logs[0] ) ? $logs[0] : array();
 
-		if ( ! empty( $previous['signature'] ) && $previous['signature'] === $entry['signature'] ) {
+		// Idle and working runs never collapse together, even under a signature
+		// stored before the signature counted file / row deletions.
+		if ( ! empty( $previous['signature'] ) && $previous['signature'] === $entry['signature']
+			&& self::is_idle_cleanup_log( $previous ) === self::is_idle_cleanup_log( $entry ) ) {
 			// Same run as the newest entry: collapse instead of appending a duplicate.
 			$entry['repeat_count'] = max( 1, absint( isset( $previous['repeat_count'] ) ? $previous['repeat_count'] : 1 ) ) + 1;
 
@@ -2487,8 +2453,113 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			$entry
 		);
 
-		$logs = array_slice( $logs, 0, self::CLEANUP_LOG_LIMIT );
+		$logs = array_slice( self::compact_cleanup_logs( $logs ), 0, self::CLEANUP_LOG_LIMIT );
 		update_option( 'opti_behavior_cleanup_logs', $logs, false );
+	}
+
+	/**
+	 * Fold the Cleanup History so it shows results, not noise (newest first in,
+	 * newest first out):
+	 *  - an idle run (see is_idle_cleanup_log()) merges into the nearest NEWER
+	 *    entry of the same task when that entry is the same idle result: tasks
+	 *    run in turn, so identical idle runs are rarely consecutive. A run of the
+	 *    task that deleted something (or warned) in between breaks the streak;
+	 *  - one "queued" marker per task (the newest), and none once the task
+	 *    recorded a finished run after it.
+	 * Used on write and on read, so histories stored before this rule compact
+	 * without a migration.
+	 *
+	 * @since 1.9.1.9
+	 * @param array $logs Entries, newest first.
+	 * @return array
+	 */
+	private static function compact_cleanup_logs( array $logs ) {
+		$out       = array();
+		$open_idle = array();
+		$queued    = array();
+		$registry  = class_exists( 'Opti_Behavior_Cleanup_Task_Registry' ) && method_exists( 'Opti_Behavior_Cleanup_Task_Registry', 'get_recorded_run' );
+
+		foreach ( $logs as $log ) {
+			if ( ! is_array( $log ) ) {
+				continue;
+			}
+
+			$type   = isset( $log['type'] ) ? (string) $log['type'] : '';
+			$status = isset( $log['status'] ) ? (string) $log['status'] : 'completed';
+
+			if ( 'queued' === $status ) {
+				if ( isset( $queued[ $type ] ) ) {
+					continue;
+				}
+				$run = $registry ? Opti_Behavior_Cleanup_Task_Registry::get_recorded_run( $type ) : null;
+				if ( is_array( $run ) && isset( $run['status'] ) && 'deferred' !== $run['status']
+					&& ! empty( $log['timestamp'] ) && strtotime( $run['timestamp'] ) > strtotime( $log['timestamp'] ) ) {
+					continue;
+				}
+				// Older than an hour and no one-off run of the task is waiting
+				// in WP-Cron any more: nothing will ever replace this marker.
+				if ( $registry && ! empty( $log['timestamp'] )
+					&& ( strtotime( current_time( 'mysql' ) ) - strtotime( $log['timestamp'] ) ) > HOUR_IN_SECONDS ) {
+					$task = Opti_Behavior_Cleanup_Task_Registry::get_task( $type );
+					if ( is_array( $task ) && ! empty( $task['hook'] ) ) {
+						$schedule = Opti_Behavior_Cleanup_Task_Registry::describe_hook_schedule( $task['hook'] );
+						if ( empty( $schedule['oneoff_pending'] ) ) {
+							continue;
+						}
+					}
+				}
+				$queued[ $type ] = true;
+				$out[]           = $log;
+				continue;
+			}
+
+			$idle = self::is_idle_cleanup_log( $log ) && ! empty( $log['signature'] );
+
+			if ( $idle && isset( $open_idle[ $type ] ) && $out[ $open_idle[ $type ] ]['signature'] === $log['signature'] ) {
+				$newer                    = $out[ $open_idle[ $type ] ];
+				$newer['repeat_count']    = max( 1, absint( isset( $newer['repeat_count'] ) ? $newer['repeat_count'] : 1 ) ) + max( 1, absint( isset( $log['repeat_count'] ) ? $log['repeat_count'] : 1 ) );
+				$newer['first_timestamp'] = ! empty( $log['first_timestamp'] ) ? $log['first_timestamp'] : ( isset( $log['timestamp'] ) ? $log['timestamp'] : $newer['first_timestamp'] );
+				$out[ $open_idle[ $type ] ] = $newer;
+				continue;
+			}
+
+			$out[] = $log;
+			if ( $idle ) {
+				$open_idle[ $type ] = count( $out ) - 1;
+			} else {
+				unset( $open_idle[ $type ] );
+			}
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Whether a cleanup log entry is an idle run: finished, nothing deleted,
+	 * no warning. Such runs may merge with an older entry of the same task.
+	 * A Danger Zone reset never counts as idle (each reset stays visible).
+	 *
+	 * @since 1.9.1.9
+	 * @param array $log Log entry.
+	 * @return bool
+	 */
+	private static function is_idle_cleanup_log( $log ) {
+		if ( ! is_array( $log ) || ( isset( $log['type'] ) && 'danger-zone-reset' === $log['type'] ) ) {
+			return false;
+		}
+
+		$status = isset( $log['status'] ) ? (string) $log['status'] : 'completed';
+		if ( ! in_array( $status, array( 'completed', 'skipped' ), true ) || ! empty( $log['warnings'] ) ) {
+			return false;
+		}
+
+		foreach ( array( 'sessions_deleted', 'events_deleted', 'files_deleted', 'orphaned_visitors_deleted' ) as $key ) {
+			if ( ! empty( $log[ $key ] ) ) {
+				return false;
+			}
+		}
+
+		return empty( $log['rows_by_table'] ) || ! is_array( $log['rows_by_table'] ) || 0 === array_sum( array_map( 'absint', $log['rows_by_table'] ) );
 	}
 
 	/**
@@ -2532,7 +2603,10 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			isset( $entry['type'] ) ? (string) $entry['type'] : '',
 			isset( $entry['status'] ) ? (string) $entry['status'] : '',
 			isset( $entry['trigger'] ) ? (string) $entry['trigger'] : '',
-			! empty( $entry['sessions_deleted'] ) ? 'deleted' : 'none',
+			// Any deletion counts (files, rows, visitors), not only sessions: an
+			// idle run must never collapse into — and zero — a run that deleted files.
+			( ! empty( $entry['sessions_deleted'] ) || ! empty( $entry['events_deleted'] ) || ! empty( $entry['files_deleted'] ) || ! empty( $entry['orphaned_visitors_deleted'] )
+				|| ( ! empty( $entry['rows_by_table'] ) && is_array( $entry['rows_by_table'] ) && array_sum( $entry['rows_by_table'] ) > 0 ) ) ? 'deleted' : 'none',
 			$normalized_warnings,
 		);
 
@@ -2556,7 +2630,7 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			return array();
 		}
 
-		$logs = array_slice( $logs, 0, absint( $limit ) );
+		$logs = array_slice( self::compact_cleanup_logs( $logs ), 0, absint( $limit ) );
 
 		foreach ( $logs as $index => $log ) {
 			if ( ! is_array( $log ) ) {

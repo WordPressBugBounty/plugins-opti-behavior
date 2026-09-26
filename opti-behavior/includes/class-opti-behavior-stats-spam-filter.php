@@ -116,6 +116,31 @@ class Opti_Behavior_Stats_Spam_Filter {
 	}
 
 	/**
+	 * Class / id / selector fragments of cookie and consent banners (the built-in
+	 * banner, Complianz, CookieYes, Cookiebot, OneTrust, Borlabs…). Same idea as
+	 * the Page X-Ray click list, which already drops these elements. `cky-` only
+	 * as a class / id start (never "sticky-"). SQL twin in the heatmap ingest
+	 * `reconcile_session_page_click_count()` — keep both patterns identical.
+	 */
+	const CONSENT_ELEMENT_REGEX = '/consent|cookie|gdpr|cmplz|onetrust|(^|[ .#])cky-/i';
+
+	/**
+	 * Is a clicked element part of a cookie / consent banner?
+	 *
+	 * Such a click is not engagement with the page: the recorder only starts
+	 * after it, so the replay shows 0 clicks while the session counter said 1
+	 * and the session passed the minimum-clicks threshold as human.
+	 *
+	 * @param string[] $parts Element class, id and selector (empty values ignored).
+	 * @return bool
+	 */
+	public static function is_consent_element( $parts ) {
+		$text = implode( ' ', array_filter( array_map( 'strval', (array) $parts ), 'strlen' ) );
+
+		return '' !== $text && 1 === preg_match( self::CONSENT_ELEMENT_REGEX, $text );
+	}
+
+	/**
 	 * Configured minimum click threshold.
 	 *
 	 * @return int
@@ -430,7 +455,14 @@ class Opti_Behavior_Stats_Spam_Filter {
 		}
 
 		$duration     = max( 0, (int) $row->duration_seconds );
-		$scroll_count = ( (int) $row->page_count > 0 ) ? (int) $row->page_scroll_count : (int) $row->event_scroll_count;
+		// Parity with recordings_threshold_sql(): the scroll count is the MAX of
+		// the two sources, never the page-based one alone. `page_scroll_count` is
+		// the number of PAGES with scroll_depth > 0, so a single-page visit can
+		// never exceed 1 there and was always flagged `few_scrolls` under the
+		// default threshold of 2 — even with real scroll events recorded (seen:
+		// 7 scrolls to 100 % depth, 27 clicks, still `few_scrolls`). Like the click
+		// fan-in below, max() can only ADMIT more sessions as human.
+		$scroll_count = max( (int) $row->page_scroll_count, (int) $row->event_scroll_count );
 
 		// Engagement-gate parity with recordings_threshold_sql() (2026-08-16
 		// incident fix): the click count is the MAX across every reliable
@@ -501,6 +533,278 @@ class Opti_Behavior_Stats_Spam_Filter {
 			'reason'  => empty( $reasons ) ? null : implode( ',', $reasons ),
 			'reasons' => $reasons,
 		);
+	}
+
+	/**
+	 * One-time repair of sessions mis-flagged `few_scrolls` (1.9.1 incident).
+	 *
+	 * Cron hook + state option. State: { started, done, cursor, processed, changed }.
+	 */
+	const FEW_SCROLLS_REPAIR_HOOK   = 'opti_behavior_spam_few_scrolls_repair';
+	const FEW_SCROLLS_REPAIR_OPTION = 'opti_behavior_spam_few_scrolls_repair';
+
+	/**
+	 * Wire the one-time `few_scrolls` repair (called once from the core bootstrap).
+	 *
+	 * @since 1.9.1.1
+	 * @return void
+	 */
+	public static function register_repair_hooks() {
+		add_action( self::FEW_SCROLLS_REPAIR_HOOK, array( __CLASS__, 'run_few_scrolls_repair_tick' ) );
+		add_action( 'init', array( __CLASS__, 'maybe_start_few_scrolls_repair' ), 31 );
+	}
+
+	/**
+	 * Queue the repair once per site, and re-queue it if its cron event was lost.
+	 *
+	 * 1.9.1 flagged every session `few_scrolls` whenever the Traffic settings were
+	 * saved on a lean-events site with a scroll threshold of 1 or more (see
+	 * mark_spam_sessions()). Fixing the marker stops new damage but leaves those
+	 * rows flagged, so every reporting page keeps hiding them. This re-checks
+	 * exactly that population with the canonical per-session classifier: rows that
+	 * genuinely fail the thresholds keep their verdict, the rest return to human.
+	 * Admin / cron / CLI requests only — never a visitor page view.
+	 *
+	 * @since 1.9.1.1
+	 * @return void
+	 */
+	public static function maybe_start_few_scrolls_repair() {
+		if ( wp_doing_ajax() || ! ( is_admin() || wp_doing_cron() || ( defined( 'WP_CLI' ) && WP_CLI ) ) ) {
+			return;
+		}
+
+		$state = get_option( self::FEW_SCROLLS_REPAIR_OPTION );
+		if ( is_array( $state ) && ! empty( $state['done'] ) ) {
+			return;
+		}
+
+		if ( ! is_array( $state ) ) {
+			$state = array(
+				'started'   => time(),
+				'done'      => 0,
+				'cursor'    => null,
+				'processed' => 0,
+				'changed'   => 0,
+			);
+			if ( ! add_option( self::FEW_SCROLLS_REPAIR_OPTION, $state, '', 'yes' ) ) {
+				return; // Another request won the race and owns the schedule.
+			}
+		}
+
+		if ( ! wp_next_scheduled( self::FEW_SCROLLS_REPAIR_HOOK ) ) {
+			wp_schedule_single_event( time() + 30, self::FEW_SCROLLS_REPAIR_HOOK );
+		}
+	}
+
+	/**
+	 * Run one time-boxed pass of the `few_scrolls` repair.
+	 *
+	 * @since 1.9.1.1
+	 * @param float|null $budget_seconds Optional time budget (tests); default 15 s.
+	 * @return array Final state for this pass.
+	 */
+	public static function run_few_scrolls_repair_tick( $budget_seconds = null ) {
+		$state = get_option( self::FEW_SCROLLS_REPAIR_OPTION );
+		if ( ! is_array( $state ) ) {
+			$state = array( 'started' => time(), 'done' => 0, 'cursor' => null, 'processed' => 0, 'changed' => 0 );
+		}
+		if ( ! empty( $state['done'] ) ) {
+			return $state;
+		}
+
+		// classify_session() is a no-op while spam detection is off; stored spam
+		// verdicts hide nothing in that mode either. Check again tomorrow instead of
+		// marking the repair done against rows it could not evaluate.
+		if ( ! self::is_enabled() ) {
+			if ( ! wp_next_scheduled( self::FEW_SCROLLS_REPAIR_HOOK ) ) {
+				wp_schedule_single_event( time() + DAY_IN_SECONDS, self::FEW_SCROLLS_REPAIR_HOOK );
+			}
+			return $state;
+		}
+
+		$budget   = is_numeric( $budget_seconds ) ? (float) $budget_seconds : 15.0;
+		$deadline = microtime( true ) + max( 1.0, $budget );
+
+		do {
+			$batch = self::reclassify_flagged_sessions_batch(
+				array(
+					'limit'       => 200,
+					'window_days' => 0,
+					'cursor'      => isset( $state['cursor'] ) ? $state['cursor'] : null,
+					'reason_like' => 'few_scrolls',
+				)
+			);
+
+			$state['processed'] = (int) $state['processed'] + (int) $batch['processed'];
+			$state['changed']   = (int) $state['changed'] + (int) $batch['changed'];
+			$state['cursor']    = $batch['cursor'];
+
+			if ( ! empty( $batch['done'] ) ) {
+				$state['done']     = 1;
+				$state['finished'] = time();
+				$state['cursor']   = null;
+				break;
+			}
+		} while ( microtime( true ) < $deadline );
+
+		update_option( self::FEW_SCROLLS_REPAIR_OPTION, $state, 'yes' );
+
+		if ( empty( $state['done'] ) ) {
+			if ( ! wp_next_scheduled( self::FEW_SCROLLS_REPAIR_HOOK ) ) {
+				wp_schedule_single_event( time() + 60, self::FEW_SCROLLS_REPAIR_HOOK );
+			}
+		} elseif ( (int) $state['changed'] > 0 ) {
+			self::clear_traffic_classification_caches();
+		}
+
+		return $state;
+	}
+
+	/**
+	 * Bulk-mark spam among sessions that are currently human / unclassified.
+	 *
+	 * Single SQL implementation behind every bulk recalculation (the settings
+	 * "Recalculate" batches, the on-save recalculation and the scheduled spam
+	 * cleanup). It reads the same multi-source engagement contract as
+	 * get_session_classification_metrics() and recordings_threshold_sql():
+	 *   duration = GREATEST(recording, session, wall clock, longest page)
+	 *   scrolls  = GREATEST(pages scrolled, scroll counter / events)
+	 *   clicks   = GREATEST(page beacons, click counter / events, recording)
+	 *
+	 * The two older bulk copies counted scrolls and clicks ONLY from
+	 * optibehavior_events (event IN (32,33) / (16,17)). Lean events mode stopped
+	 * writing scroll rows there, so every recalculation read 0 scrolls for every
+	 * session and — with a scroll threshold of 1 or more — flagged the whole
+	 * sessions table `few_scrolls` spam (seen on a live site: every recording
+	 * hidden by "Exclude spam" right after a recalculation). The scheduled copy
+	 * then feeds the spam cleanup tier, which deletes what it flagged.
+	 *
+	 * @since 1.9.1.1
+	 * @param string[]|null $session_ids Sessions to evaluate; null = every human / unclassified session.
+	 * @param array|null    $thresholds  Optional { duration, scrolls, clicks }; defaults to the saved settings.
+	 * @return int|false Rows flagged spam, or false on a database error.
+	 */
+	public static function mark_spam_sessions( $session_ids = null, $thresholds = null ) {
+		global $wpdb;
+
+		if ( is_array( $session_ids ) ) {
+			$session_ids = array_values( array_filter( array_map( 'strval', $session_ids ), 'strlen' ) );
+			if ( empty( $session_ids ) ) {
+				return 0;
+			}
+		} else {
+			$session_ids = null;
+		}
+
+		$thresholds = is_array( $thresholds ) ? $thresholds : array();
+		$duration   = isset( $thresholds['duration'] ) ? max( 0, (int) $thresholds['duration'] ) : self::duration_threshold();
+		$scrolls    = isset( $thresholds['scrolls'] ) ? max( 0, (int) $thresholds['scrolls'] ) : self::min_scrolls_threshold();
+		$clicks     = isset( $thresholds['clicks'] ) ? max( 0, (int) $thresholds['clicks'] ) : self::min_clicks_threshold();
+
+		$sessions   = $wpdb->prefix . 'optibehavior_sessions';
+		$pages      = $wpdb->prefix . 'optibehavior_session_pages';
+		$recordings = $wpdb->prefix . 'optibehavior_recordings';
+		$events     = $wpdb->prefix . 'optibehavior_events';
+
+		$in_sql    = '';
+		$in_values = array();
+		if ( null !== $session_ids ) {
+			$in_sql    = implode( ',', array_fill( 0, count( $session_ids ), '%s' ) );
+			$in_values = $session_ids;
+		}
+
+		$values = array();
+
+		// Counter / event source. Lean mode reads the per-session counters (a plain
+		// SELECT the optimizer merges); legacy mode aggregates the events table,
+		// scoped to the batch so it never scans every event per batch.
+		if ( Opti_Behavior_Heatmap_Engagement_Counters::is_lean() ) {
+			$event_sql = Opti_Behavior_Heatmap_Engagement_Counters::session_counts_subquery_sql();
+		} else {
+			$event_where = '';
+			if ( '' !== $in_sql ) {
+				$event_where = " AND session_id IN ({$in_sql})";
+				$values      = array_merge( $values, $in_values );
+			}
+			$event_sql = "SELECT session_id,
+					SUM(CASE WHEN event IN (16,17) THEN 1 ELSE 0 END) AS click_count,
+					SUM(CASE WHEN event IN (32,33) THEN 1 ELSE 0 END) AS scroll_count
+				FROM {$events}
+				WHERE event IN (16,17,32,33){$event_where}
+				GROUP BY session_id";
+		}
+
+		$scope_where = '';
+		if ( '' !== $in_sql ) {
+			$scope_where = " WHERE session_id IN ({$in_sql})";
+		}
+
+		$page_sql = "SELECT session_id,
+				MAX(COALESCE(duration, 0)) AS duration,
+				SUM(CASE WHEN COALESCE(scroll_depth, 0) > 0 THEN 1 ELSE 0 END) AS scroll_count,
+				SUM(COALESCE(clicks_count, 0)) AS click_count
+			FROM {$pages}{$scope_where}
+			GROUP BY session_id";
+		if ( '' !== $in_sql ) {
+			$values = array_merge( $values, $in_values );
+		}
+
+		$recording_sql = "SELECT session_id,
+				MAX(COALESCE(duration, 0)) AS duration,
+				MAX(COALESCE(click_count, 0)) AS click_count
+			FROM {$recordings}{$scope_where}
+			GROUP BY session_id";
+		if ( '' !== $in_sql ) {
+			$values = array_merge( $values, $in_values );
+		}
+
+		$duration_sql = "GREATEST(
+				COALESCE(sr.duration, 0),
+				COALESCE(s.duration, 0),
+				COALESCE(TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time)), 0),
+				COALESCE(sp.duration, 0)
+			)";
+		$scroll_sql   = 'GREATEST(COALESCE(sp.scroll_count, 0), COALESCE(ev.scroll_count, 0))';
+		$click_sql    = 'GREATEST(COALESCE(sp.click_count, 0), COALESCE(ev.click_count, 0), COALESCE(sr.click_count, 0))';
+
+		$target_where = '';
+		if ( '' !== $in_sql ) {
+			$target_where = "s.id IN ({$in_sql}) AND ";
+		}
+
+		// Placeholder order follows the SQL text: the three derived tables (bound
+		// above), the spam_reason CASEs, the id scope, then the verdict.
+		$values = array_merge( $values, array( $duration, $scrolls, $clicks ) );
+		if ( '' !== $in_sql ) {
+			$values = array_merge( $values, $in_values );
+		}
+		$values = array_merge( $values, array( $duration, $scrolls, $clicks ) );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin tables from $wpdb->prefix; every value (session ids, thresholds) is bound through $wpdb->prepare(); bulk classification write, caching not applicable.
+		$updated = $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$sessions} s
+				 LEFT JOIN ( {$event_sql} ) ev ON s.id = ev.session_id
+				 LEFT JOIN ( {$page_sql} ) sp ON s.id = sp.session_id
+				 LEFT JOIN ( {$recording_sql} ) sr ON s.id = sr.session_id
+				 SET s.traffic_type = 'spam',
+				     s.spam_reason = CONCAT_WS(',',
+				         CASE WHEN {$duration_sql} < %d THEN 'short_duration' ELSE NULL END,
+				         CASE WHEN {$scroll_sql} < %d THEN 'few_scrolls' ELSE NULL END,
+				         CASE WHEN {$click_sql} < %d THEN 'few_clicks' ELSE NULL END
+				     )
+				 WHERE {$target_where}(s.traffic_type IS NULL OR s.traffic_type = '' OR s.traffic_type = 'human')
+				   AND (
+				       {$duration_sql} < %d
+				       OR {$scroll_sql} < %d
+				       OR {$click_sql} < %d
+				   )",
+				$values
+			)
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		return false === $updated ? false : (int) $updated;
 	}
 
 	/**

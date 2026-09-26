@@ -20,6 +20,15 @@
 	bottom: var(--ob-si-notification-edge-offset);
 }
 
+/* A/B test wizard: the fixed launcher sat on top of the wizard's Next /
+   Save / Launch buttons when they reached the bottom-right of the screen, so
+   clicks landed on the launcher and the wizard could not move on. The wizard
+   is a focused task: hide the launcher while it is open (ab-test-admin.js adds
+   the body class). */
+body.opti-ab-wizard-open .ob-si-notification-root {
+	display: none;
+}
+
 .ob-si-notification-root * {
 	box-sizing: border-box;
 }

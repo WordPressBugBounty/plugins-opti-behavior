@@ -1065,6 +1065,11 @@ class Opti_Behavior_Cleanup_Task_Registry {
 			self::record_run( $task_id, $status, $trigger );
 		}
 
+		// Any finished run of the task supersedes its "queued" marker, even a
+		// quiet scheduled one that logs nothing below (the manual attribution
+		// may have expired): a marker left here would say "Waiting…" forever.
+		self::remove_queued_markers( $task_id );
+
 		if ( ! $is_manual ) {
 			if ( 'skipped' === $status && ! $loud_skip ) {
 				return;
@@ -1074,8 +1079,6 @@ class Opti_Behavior_Cleanup_Task_Registry {
 				return;
 			}
 		}
-
-		self::remove_queued_markers( $task_id );
 
 		if ( ! class_exists( 'Opti_Behavior_Smart_Cleanup_Service' ) ) {
 			return;
@@ -1244,6 +1247,7 @@ class Opti_Behavior_Cleanup_Task_Registry {
 			'scheduled' => __( 'Scheduled Auto-Cleanup', 'opti-behavior' ),
 			'retention' => __( 'Data retention', 'opti-behavior' ),
 			'auto'      => __( 'Spam/bot purge', 'opti-behavior' ),
+			'danger-zone-reset' => __( 'Danger Zone data reset', 'opti-behavior' ),
 		);
 
 		return isset( $legacy[ $type ] ) ? $legacy[ $type ] : ucfirst( str_replace( array( '-', '_' ), ' ', $type ) );

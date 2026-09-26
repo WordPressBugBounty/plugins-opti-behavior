@@ -886,12 +886,13 @@
 		const $badges = $('.funnel-card[data-funnel-id="' + funnelId + '"] .opti-funnel-row__badges');
 		$badges.find('.opti-funnel-badge--entries .opti-funnel-badge__value').text(formatNumberShort(kpi.entries));
 		$badges.find('.opti-funnel-badge--completions .opti-funnel-badge__value').text(formatNumberShort(kpi.completions));
+		const noEntries = !(parseInt(kpi.entries, 10) > 0);
 		$badges.find('.opti-funnel-badge--rate .opti-funnel-badge__value')
-			.text((kpi.conversion_rate || 0) + '%')
-			.removeClass(KPI_COLOR_CLASSES).addClass(conversionColorClass(kpi.conversion_rate || 0));
+			.text(noEntries ? NO_RATE : (kpi.conversion_rate || 0) + '%')
+			.removeClass(KPI_COLOR_CLASSES).addClass(noEntries ? '' : conversionColorClass(kpi.conversion_rate || 0));
 		$badges.find('.opti-funnel-badge--dropoff .opti-funnel-badge__value')
-			.text((kpi.dropoff_rate || 0) + '%')
-			.removeClass(KPI_COLOR_CLASSES).addClass(dropoffColorClass(kpi.dropoff_rate || 0));
+			.text(noEntries ? NO_RATE : (kpi.dropoff_rate || 0) + '%')
+			.removeClass(KPI_COLOR_CLASSES).addClass(noEntries ? '' : dropoffColorClass(kpi.dropoff_rate || 0));
 	}
 
 	// Refresh any funnel whose per-funnel selection differs from the default
@@ -915,6 +916,14 @@
 		updateSummaryCards(computeFilteredTotals(rows));
 		const total = rows.length;
 		const totalPages = Math.ceil(total / PER_PAGE) || 1;
+		// Smart Insights / Page X-Ray deep link: open the list on the page that
+		// holds the target funnel (it was only focused when it sat on page 1).
+		if (!smartInsightsHandled && smartInsightsFunnelContext.funnelId) {
+			const targetIdx = rows.findIndex(function(r) { return String(r.id) === String(smartInsightsFunnelContext.funnelId); });
+			if (targetIdx >= 0) {
+				currentPage = Math.floor(targetIdx / PER_PAGE) + 1;
+			}
+		}
 		if (currentPage > totalPages) currentPage = totalPages;
 		if (currentPage < 1) currentPage = 1;
 
@@ -947,6 +956,10 @@
 		if (r >= 10) return 'opti-kpi-orange';
 		return 'opti-kpi-red';
 	}
+
+	// Shown instead of a rate when nobody entered the funnel over the period
+	// (the server answers 0 % conversion / 100 % drop-off for 0 entries).
+	const NO_RATE = '—';
 
 	// Drop-off rate — higher is worse (mirror of conversion bands).
 	function dropoffColorClass(rate) {
@@ -996,8 +1009,12 @@
 			html += '    <div class="opti-funnel-row__badges">';
 			html += renderRowBadge(formatNumberShort(funnel.entries), _s.entries || 'Entries', 'entries');
 			html += renderRowBadge(formatNumberShort(funnel.completions), _s.completions || 'Completions', 'completions');
-			html += renderRowBadge(conv + '%', _s.conversionRate || 'Conversion Rate', 'rate', conversionColorClass(conv));
-			html += renderRowBadge(drop + '%', _s.dropOff || 'Drop-off', 'dropoff', dropoffColorClass(drop));
+			// Nobody entered over the period: there is no rate to show (the
+			// server answers 0 % conversion / 100 % drop-off, which read as a
+			// catastrophe on a funnel with no traffic).
+			const noEntries = !(parseInt(funnel.entries, 10) > 0);
+			html += renderRowBadge(noEntries ? NO_RATE : conv + '%', _s.conversionRate || 'Conversion Rate', 'rate', noEntries ? '' : conversionColorClass(conv));
+			html += renderRowBadge(noEntries ? NO_RATE : drop + '%', _s.dropOff || 'Drop-off', 'dropoff', noEntries ? '' : dropoffColorClass(drop));
 			html += '    </div>';
 
 			html += '    <div class="opti-funnel-row__actions">';
@@ -2501,10 +2518,11 @@
 		const drop = parseFloat(data.dropoff_rate) || 0;
 		$('#funnel-detail-entries').text(formatNumberShort(data.total_entries || 0));
 		$('#funnel-detail-completions').text(formatNumberShort(data.completed || 0));
-		$('#funnel-detail-rate').text(conv + '%')
-			.removeClass(KPI_COLOR_CLASSES).addClass(conversionColorClass(conv));
-		$('#funnel-detail-dropoff').text(drop + '%')
-			.removeClass(KPI_COLOR_CLASSES).addClass(dropoffColorClass(drop));
+		const noEntries = !(parseInt(data.total_entries, 10) > 0);
+		$('#funnel-detail-rate').text(noEntries ? NO_RATE : conv + '%')
+			.removeClass(KPI_COLOR_CLASSES).addClass(noEntries ? '' : conversionColorClass(conv));
+		$('#funnel-detail-dropoff').text(noEntries ? NO_RATE : drop + '%')
+			.removeClass(KPI_COLOR_CLASSES).addClass(noEntries ? '' : dropoffColorClass(drop));
 	}
 
 	// =========================================================================

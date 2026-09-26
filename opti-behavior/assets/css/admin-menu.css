@@ -87,6 +87,58 @@
 	vertical-align: middle;
 }
 
+/* Group separators in the plugin submenu ("What to fix" / "Your data").
+   Inert anchors (#ob-menu-*) injected by reorder_submenu(); the inline script
+   on the `opti-behavior-admin-menu` handle then drops their href and tags them
+   .ob-menu-sep, so both selectors are styled. No colour is set on purpose: the
+   label inherits the submenu link colour of the active admin colour scheme. */
+#adminmenu .wp-submenu a[href^="#ob-menu-"],
+#adminmenu .wp-submenu a.ob-menu-sep {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 14px 0 3px;
+	padding: 2px 12px;
+	font-size: 10.5px;
+	font-weight: 700;
+	line-height: 1.6;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	/* A long translated label wraps instead of pushing out of the 160px menu. */
+	white-space: normal;
+	overflow-wrap: anywhere;
+	opacity: 0.8;
+	pointer-events: none;
+	cursor: default;
+	box-shadow: none;
+}
+
+/* Section-header look: small caps label followed by a rule to the edge, so a
+   separator can never be mistaken for a menu row that lost its icon. */
+#adminmenu .wp-submenu a[href^="#ob-menu-"]::after,
+#adminmenu .wp-submenu a.ob-menu-sep::after {
+	content: "";
+	flex: 1 1 auto;
+	min-width: 10px;
+	height: 1px;
+	background: currentColor;
+	opacity: 0.5;
+}
+
+/* Separator without a label = the rule alone. */
+#adminmenu .wp-submenu a[href^="#ob-menu-"]:empty,
+#adminmenu .wp-submenu a.ob-menu-sep:empty {
+	margin: 10px 0 6px;
+}
+
+@media screen and (max-width: 782px) {
+	#adminmenu .wp-submenu a[href^="#ob-menu-"],
+	#adminmenu .wp-submenu a.ob-menu-sep {
+		padding: 2px 20px;
+		font-size: 12px;
+	}
+}
+
 /* Red pulse dot on the Insights submenu item — shown while newly detected
    Smart Insights have not yet been seen by the current user. Cleared when
    the Smart Insights screen is opened. */
@@ -120,3 +172,87 @@
 	}
 }
 
+/* Smart Insights menu item: the lightbulb always pulses, in the colour of the
+   open problems (repository menu severity): green = nothing to fix,
+   yellow = High / Medium, red = Critical. */
+#adminmenu .opti-menu-insights-bulb,
+#adminmenu .opti-menu-insights-text {
+	--ob-si-c: #22c55e;
+	--ob-si-c2: #4ade80;
+}
+
+#adminmenu .opti-menu-insights-bulb.is-yellow,
+#adminmenu .opti-menu-insights-text.is-yellow {
+	--ob-si-c: #eab308;
+	--ob-si-c2: #fde047;
+}
+
+#adminmenu .opti-menu-insights-bulb.is-red,
+#adminmenu .opti-menu-insights-text.is-red {
+	--ob-si-c: #ef4444;
+	--ob-si-c2: #fca5a5;
+}
+
+#adminmenu .opti-menu-insights-bulb {
+	color: var(--ob-si-c);
+	border-radius: 50%;
+	animation: opti-menu-insights-bulb 2s ease-in-out infinite;
+}
+
+#adminmenu .opti-menu-insights-bulb svg {
+	stroke: currentColor;
+}
+
+@keyframes opti-menu-insights-bulb {
+	0%,
+	100% {
+		opacity: 1;
+		filter: drop-shadow(0 0 0 transparent);
+	}
+	50% {
+		opacity: 0.75;
+		filter: drop-shadow(0 0 4px currentColor);
+	}
+}
+
+/* Scanner line: a light sweeps across the label, on an aria-hidden copy. */
+#adminmenu .opti-menu-insights-text {
+	position: relative;
+	display: inline-block;
+	white-space: nowrap;
+}
+
+#adminmenu .opti-menu-insights-scan {
+	position: absolute;
+	top: 0;
+	left: 0;
+	white-space: nowrap;
+	color: transparent;
+	pointer-events: none;
+	background-image: linear-gradient(100deg, transparent 0%, transparent 42%, var(--ob-si-c) 47%, var(--ob-si-c2) 50%, var(--ob-si-c) 53%, transparent 58%, transparent 100%);
+	background-size: 300% 100%;
+	background-repeat: no-repeat;
+	-webkit-background-clip: text;
+	background-clip: text;
+	animation: opti-menu-insights-scan 3.2s ease-in-out infinite;
+}
+
+@keyframes opti-menu-insights-scan {
+	0% {
+		background-position: 100% 0;
+	}
+	60%,
+	100% {
+		background-position: 0% 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	#adminmenu .opti-menu-insights-bulb {
+		animation: none;
+	}
+
+	#adminmenu .opti-menu-insights-scan {
+		display: none;
+	}
+}

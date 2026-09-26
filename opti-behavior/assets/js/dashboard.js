@@ -2729,6 +2729,16 @@ x = Math.min(x, maxX);
 			    const prevMediumSessions = intentData.prev_medium_sessions || 0;
 			    const prevHighSessions = intentData.prev_high_sessions || 0;
 
+				    // No sessions: hide the legend so the card shows only its empty state,
+				    // like the other dashboard cards (no rows of zeros).
+				    const legendTable = tbody.closest('table');
+				    if ((lowSessions + mediumSessions + highSessions) <= 0) {
+				      tbody.innerHTML = '';
+				      if (legendTable) legendTable.style.display = 'none';
+				      return;
+				    }
+				    if (legendTable) legendTable.style.display = '';
+
 			    // Helper function to create trend HTML
 			    function getTrendHTML(currentCount, previousCount) {
 			      let trendClass = 'trend-neutral';
@@ -4949,7 +4959,7 @@ x = Math.min(x, maxX);
 						<td class="country-name-cell">
 							<div class="ob-metric-main">
 								<span class="country-flag" style="background-image: url('${flagUrl}');"></span>
-								<span class="country-name ob-metric-label">${countryName}</span>
+								<span class="country-name ob-metric-label">${String(countryName).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</span>
 							</div>
 						</td>
 						<td class="country-visitors-cell">
@@ -5319,12 +5329,14 @@ x = Math.min(x, maxX);
 			})();
 
 		function updateRealtimeVisitors(visitors) {
+			// Visitor rows carry tracker-supplied strings: escape before innerHTML.
+			function escRT(s){ return (s === null || s === undefined ? '' : String(s)).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 			function shortIP(ip){
 				ip = (ip||'').toString().trim();
 				// Treat empty/null IP as Anonymous — NULL ip means the ip was not stored (GDPR-safe fallback)
 				if(!ip || ip === 'Anonymous') { return '<span class="visitor-ip-pill visitor-ip-anon"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:3px;"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>Anonymous</span>'; }
-				if (ip.indexOf(':') !== -1) { return '<span class="visitor-ip-pill">' + ip.slice(0,7) + '\u2026' + ip.slice(-7) + '</span>'; }
-				return '<span class="visitor-ip-pill">' + ip + '</span>';
+				if (ip.indexOf(':') !== -1) { return '<span class="visitor-ip-pill">' + escRT(ip.slice(0,7)) + '\u2026' + escRT(ip.slice(-7)) + '</span>'; }
+				return '<span class="visitor-ip-pill">' + escRT(ip) + '</span>';
 			}
 
 			const container = document.getElementById('realtime-visitors');
@@ -5355,14 +5367,16 @@ x = Math.min(x, maxX);
 			visitors.forEach(visitor => {
 				// Get country code for flag icon
 				const countryCode = (visitor.country_code || '').toLowerCase();
-				const flagUrl = countryCode && countryCode.length === 2 ? `https://flagcdn.com/w40/${countryCode}.png` : '';
-				const flagHtml = flagUrl ? `<img src="${flagUrl}" alt="${visitor.country}" class="visitor-flag-icon" />` : '<span class="visitor-flag">${visitor.flag}</span>';
+				const flagUrl = /^[a-z]{2}$/.test(countryCode) ? `https://flagcdn.com/w40/${countryCode}.png` : '';
+				const flagHtml = flagUrl ? `<img src="${flagUrl}" alt="${escRT(visitor.country)}" class="visitor-flag-icon" />` : `<span class="visitor-flag">${escRT(visitor.flag)}</span>`;
+				const currentUrl = visitor.current_url || '';
+				const urlHref = /^https?:\/\//i.test(currentUrl) ? currentUrl : '#';
 
 				html += `
 					<div class="visitor-item grid">
-						<span class="visitor-datetime">${(visitor.visited_at || '') + (visitor.time_ago ? ' - <span class="ago">' + visitor.time_ago + '</span>' : '')}</span>
-						<span class="visitor-flag-country">${flagHtml} <span class="visitor-location">${visitor.country}</span></span>
-						<span class="visitor-pageblock"><span class="visitor-title">${visitor.page_title || ''}</span><a class="visitor-url" href="${visitor.current_url || '#'}" target="_blank" rel="noopener">${visitor.current_url || ''}</a></span>
+						<span class="visitor-datetime">${escRT(visitor.visited_at) + (visitor.time_ago ? ' - <span class="ago">' + escRT(visitor.time_ago) + '</span>' : '')}</span>
+						<span class="visitor-flag-country">${flagHtml} <span class="visitor-location">${escRT(visitor.country)}</span></span>
+						<span class="visitor-pageblock"><span class="visitor-title">${escRT(visitor.page_title)}</span><a class="visitor-url" href="${escRT(urlHref)}" target="_blank" rel="noopener">${escRT(currentUrl)}</a></span>
 						<span class="visitor-ip-col">${shortIP(visitor.ip)}<\/span>
 					</div>
 				`;

@@ -153,10 +153,12 @@ class Opti_Behavior_Cron_Health {
 	/**
 	 * Get the cached health status, recomputing at most once per hour.
 	 *
+	 * Public: the "How it works" setup check reads it.
+	 *
 	 * @since 1.7.2
 	 * @return string 'ok' or 'overdue'.
 	 */
-	private function get_status() {
+	public function get_status() {
 		$status = get_transient( self::TRANSIENT_STATUS );
 
 		if ( 'ok' === $status || 'overdue' === $status ) {

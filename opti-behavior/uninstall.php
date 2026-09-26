@@ -47,6 +47,12 @@ delete_option( 'opti_behavior_db_size_cap_state' );
 delete_option( 'opti_behavior_db_schema_migration_state' );
 delete_option( 'opti_behavior_page_type_prune_migrated' );
 delete_option( 'opti_behavior_page_type_prune_state' );
+delete_option( 'opti_behavior_spam_few_scrolls_repair' );
+// Site change log (Pages tab "what changed in WordPress").
+delete_option( 'opti_behavior_site_changes' );
+delete_option( 'opti_behavior_site_changes_snapshot' );
+// Page X-Ray: buttons the owner picked per page.
+delete_option( 'opti_behavior_xray_picked_ctas' );
 delete_option( 'opti_behavior_heatmap_debug_settings' );
 delete_option( 'opti_behavior_heatmap_data_protection' );
 delete_option( 'opti_behavior_heatmap_last_integrity_check' );
@@ -84,6 +90,10 @@ delete_option( 'opti_behavior_onboarding_goal' );
 delete_option( 'opti_behavior_review_installed_at' );
 delete_option( 'opti_behavior_review_banner_status' );
 delete_option( 'opti_behavior_review_banner_remind_at' );
+// Setup guide (setup check + one-time messages)
+delete_option( 'opti_behavior_admin_visits_choice' );
+delete_option( 'opti_behavior_menu_notice' );
+delete_option( 'opti_behavior_guide_seen_version' );
 // A/B testing options.
 delete_option( 'opti_behavior_ab_free_limits' );
 delete_option( 'opti_behavior_ab_settings' );
@@ -113,6 +123,10 @@ delete_option( 'opti_behavior_heatmap_orphan_report_control' );
 delete_option( 'opti_behavior_heatmap_orphan_purge_cursor' );
 delete_option( 'opti_behavior_heatmap_orphan_purge_progress' );
 delete_option( 'opti_behavior_heatmap_orphan_retention_days' );
+// `_orphaned/` archive restore (Danger Zone recovery tool).
+delete_option( 'opti_behavior_heatmap_orphan_restore_cursor' );
+delete_option( 'opti_behavior_heatmap_orphan_restore_progress' );
+delete_option( 'opti_behavior_heatmap_orphan_restore_hold_until' );
 // Unified Retention Protocol (master raw-data retention + dimension backfill flag).
 delete_option( 'opti_behavior_data_retention' );
 delete_option( 'opti_behavior_dimension_backfill_done' );
@@ -130,12 +144,15 @@ delete_option( 'opti_behavior_report_email_settings' );
 delete_option( 'opti_behavior_report_schedules' );
 delete_option( 'opti_behavior_frontend_stats_bar' );
 delete_option( 'opti_behavior_onboarding_goal_recipe' );
+delete_option( 'opti_behavior_onboarding_create_funnels' );
 
 // Smart Insights (generator, scheduler, notifications, segment cache salt).
 delete_option( 'opti_behavior_smart_insights_last_generation' );
 delete_option( 'opti_behavior_smart_insights_notifications' );
 delete_option( 'opti_behavior_smart_insights_scheduler' );
 delete_option( 'opti_behavior_smart_insights_scheduler_state' );
+delete_option( 'opti_behavior_si_rules_version' );
+delete_option( 'opti_behavior_si_menu_severity' ); // Admin-menu lightbulb colour (Smart Insights repository).
 delete_option( 'opti_behavior_smart_insights_segment_cache_salt' );
 
 // Privacy salts + registration / API heartbeat state.
@@ -268,6 +285,7 @@ wp_clear_scheduled_hook( 'opti_behavior_engagement_counters_tick' );
 wp_clear_scheduled_hook( 'opti_behavior_page_type_prune_run' );
 wp_clear_scheduled_hook( 'opti_behavior_page_type_prune_restore' );
 wp_clear_scheduled_hook( 'opti_behavior_page_type_prune_purge' );
+wp_clear_scheduled_hook( 'opti_behavior_spam_few_scrolls_repair' );
 wp_clear_scheduled_hook( 'opti_behavior_heatmap_migration_batch' );
 wp_clear_scheduled_hook( 'opti_behavior_recording_orphan_sweep' );
 

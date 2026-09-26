@@ -1560,3 +1560,905 @@
 .ob-smart-insights-modal .ob-smart-insights-detail-side a.ob-smart-insights-report-card.is-current {
 	border-color: var(--ob-si-accent-border);
 }
+
+/* ==========================================================================
+   5. "How it works" loop strip (Opti_Behavior_Smart_Insights_Sensors)
+   Collect (one pill per module) > Understand > Fix > Prove.
+   ========================================================================== */
+
+.ob-smart-insights-center-page .ob-si-loop {
+	margin: 0 0 var(--ob-si-space-5);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-lg);
+	background: var(--ob-si-surface);
+	box-shadow: var(--ob-si-shadow-rest);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__summary {
+	display: flex;
+	align-items: center;
+	gap: var(--ob-si-space-3);
+	padding: var(--ob-si-space-3) var(--ob-si-space-4);
+	cursor: pointer;
+	list-style: none;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__summary::-webkit-details-marker {
+	display: none;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__summary:focus-visible {
+	outline: 2px solid var(--ob-si-accent);
+	outline-offset: 2px;
+	border-radius: var(--ob-si-radius-lg);
+}
+
+/* Chevron: points right when folded, down when open. */
+.ob-smart-insights-center-page .ob-si-loop__summary::before {
+	content: "";
+	flex: none;
+	width: 7px;
+	height: 7px;
+	border-right: 2px solid var(--ob-si-text-faint);
+	border-bottom: 2px solid var(--ob-si-text-faint);
+	transform: rotate(-45deg);
+	transition: transform 0.15s ease;
+}
+
+.ob-smart-insights-center-page .ob-si-loop[open] > .ob-si-loop__summary::before {
+	transform: rotate(45deg);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__title {
+	flex: none;
+	font-size: 14px;
+	font-weight: 700;
+	color: var(--ob-si-text);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__lede {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-size: 13px;
+	color: var(--ob-si-text-muted);
+}
+
+/* Folded: the seven module dots stay visible as a one-line status. */
+.ob-smart-insights-center-page .ob-si-loop__dots {
+	display: none;
+	flex: none;
+	gap: 5px;
+}
+
+.ob-smart-insights-center-page .ob-si-loop:not([open]) .ob-si-loop__dots {
+	display: inline-flex;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__dot {
+	display: inline-block;
+	flex: none;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	background: var(--ob-si-text-faint);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__dot.is-active {
+	background: var(--ob-si-better);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__dot.is-no_data {
+	background: var(--ob-si-medium);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__dot.is-needs_update {
+	background: var(--ob-si-accent);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__steps {
+	display: grid;
+	grid-template-columns: minmax(0, 2.8fr) repeat(3, minmax(0, 1fr));
+	gap: var(--ob-si-space-4);
+	margin: 0;
+	padding: 0 var(--ob-si-space-4) var(--ob-si-space-4);
+	list-style: none;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__step {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: var(--ob-si-space-1);
+	margin: 0;
+	padding: var(--ob-si-space-3) var(--ob-si-space-4);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-surface-muted);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__step.is-current {
+	border-color: var(--ob-si-accent-border);
+	background: var(--ob-si-accent-soft);
+}
+
+/* Arrow in the gap between two steps. */
+.ob-smart-insights-center-page .ob-si-loop__step + .ob-si-loop__step::before {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: calc(var(--ob-si-space-4) / -2 - 4px);
+	width: 0;
+	height: 0;
+	border-top: 5px solid transparent;
+	border-bottom: 5px solid transparent;
+	border-left: 7px solid var(--ob-si-border-strong);
+	transform: translateY(-50%);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__step-name {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__figure {
+	font-size: 26px;
+	font-weight: 700;
+	line-height: 1.15;
+	font-variant-numeric: tabular-nums;
+	color: var(--ob-si-text);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__caption {
+	font-size: 12.5px;
+	line-height: 1.4;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__link {
+	font-size: 16px;
+	font-weight: 700;
+	line-height: 1.6;
+	color: var(--ob-si-accent-strong);
+	text-decoration: none;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__link:hover,
+.ob-smart-insights-center-page .ob-si-loop__link:focus {
+	text-decoration: underline;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensors {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+	gap: var(--ob-si-space-2);
+	margin: var(--ob-si-space-1) 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensors li {
+	margin: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensor {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--ob-si-space-2);
+	height: 100%;
+	box-sizing: border-box;
+	padding: 7px 10px;
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-surface);
+	color: var(--ob-si-text);
+	text-decoration: none;
+	transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensor:hover {
+	border-color: var(--ob-si-border-strong);
+	box-shadow: var(--ob-si-shadow-hover);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensor:focus-visible {
+	outline: 2px solid var(--ob-si-accent);
+	outline-offset: 2px;
+	box-shadow: none;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensor .ob-si-loop__dot {
+	margin-top: 5px;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensor.is-locked {
+	background: var(--ob-si-surface-sunken);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensor.is-needs_update {
+	border-color: var(--ob-si-accent-border);
+	background: var(--ob-si-accent-soft);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensor-text {
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensor-text strong {
+	display: block;
+	font-size: 13px;
+	line-height: 1.35;
+}
+
+.ob-smart-insights-center-page .ob-si-loop__sensor-text small {
+	display: block;
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__note {
+	display: flex;
+	align-items: center;
+	gap: var(--ob-si-space-2);
+	margin: var(--ob-si-space-2) 0 0;
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--ob-si-text-muted);
+}
+
+@media (max-width: 1200px) {
+	.ob-smart-insights-center-page .ob-si-loop__steps {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.ob-smart-insights-center-page .ob-si-loop__step--collect {
+		grid-column: 1 / -1;
+	}
+
+	/* "Understand" starts a new row: no arrow pointing at it from nowhere. */
+	.ob-smart-insights-center-page .ob-si-loop__step--collect + .ob-si-loop__step::before {
+		display: none;
+	}
+}
+
+@media (max-width: 700px) {
+	.ob-smart-insights-center-page .ob-si-loop__steps {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.ob-smart-insights-center-page .ob-si-loop__step + .ob-si-loop__step::before {
+		display: none;
+	}
+
+	.ob-smart-insights-center-page .ob-si-loop__lede {
+		display: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-smart-insights-center-page .ob-si-loop__summary::before,
+	.ob-smart-insights-center-page .ob-si-loop__sensor {
+		transition: none;
+	}
+}
+
+/* ==========================================================================
+   6. Tabs (Insights / Page X-Ray) + the Page X-Ray period form and locked view
+   ========================================================================== */
+
+.ob-smart-insights-center-page .ob-si-tabs {
+	display: flex;
+	gap: var(--ob-si-space-2);
+	margin: 0 0 var(--ob-si-space-4);
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab {
+	padding: 8px 16px;
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-surface);
+	color: var(--ob-si-text-muted);
+	font-size: 14px;
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab:hover {
+	border-color: var(--ob-si-border-strong);
+	color: var(--ob-si-text);
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-current {
+	border-color: var(--ob-si-accent-border);
+	background: var(--ob-si-accent-soft);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab:focus-visible {
+	outline: 2px solid var(--ob-si-accent);
+	outline-offset: 2px;
+}
+
+/* Page X-Ray is a Pro tab: lock + PRO badge, and the locked view. */
+.ob-smart-insights-center-page .ob-si-tabs__lock {
+	width: 14px;
+	height: 14px;
+}
+
+/* The menu PRO badge is 8px white on #6366f1 (under 4.5:1): darker and
+   larger here, white on #4338ca = 7.9:1. */
+.ob-smart-insights-center-page .ob-si-tabs__tab .opti-menu-pro-badge,
+.ob-smart-insights-center-page .ob-si-xray-locked__title .opti-menu-pro-badge {
+	margin-left: 0;
+	padding: 1px 6px;
+	font-size: 10px;
+	line-height: 14px;
+	background: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+	gap: var(--ob-si-space-6);
+	align-items: start;
+	max-width: 1120px;
+	padding: var(--ob-si-space-6);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-lg);
+	background: var(--ob-si-surface);
+	box-shadow: var(--ob-si-shadow-rest);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__eyebrow {
+	display: inline-flex;
+	gap: 6px;
+	align-items: center;
+	margin: 0 0 var(--ob-si-space-2);
+	padding: 3px 10px;
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-accent-soft);
+	color: var(--ob-si-accent-strong);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__eyebrow svg {
+	width: 13px;
+	height: 13px;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__title {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	margin: 0 0 var(--ob-si-space-2);
+	font-size: 22px;
+	line-height: 1.3;
+	color: var(--ob-si-text);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__lead {
+	margin: 0 0 var(--ob-si-space-5);
+	color: var(--ob-si-text-muted);
+	font-size: 15px;
+	line-height: 1.5;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__features {
+	display: grid;
+	gap: var(--ob-si-space-3);
+	margin: 0 0 var(--ob-si-space-5);
+	padding: 0;
+	list-style: none;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__features li {
+	display: flex;
+	gap: var(--ob-si-space-3);
+	align-items: center;
+	margin: 0;
+	color: var(--ob-si-text);
+	font-size: 14px;
+	line-height: 1.4;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__feature-icon {
+	display: inline-flex;
+	flex: 0 0 32px;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-accent-soft);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__feature-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__action {
+	padding-top: var(--ob-si-space-4);
+	border-top: 1px solid var(--ob-si-border);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__text {
+	margin: 0 0 var(--ob-si-space-3);
+	color: var(--ob-si-text);
+	font-size: 14px;
+	font-weight: 600;
+}
+
+/* 44 px target (WCAG 2.5.5); WordPress keeps its own focus ring. */
+.ob-smart-insights-center-page .ob-si-xray-locked__cta.button {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	padding: 0 20px;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-locked__note {
+	margin: var(--ob-si-space-2) 0 0;
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+}
+
+/* Example report: the same blocks as a real dossier, sample figures. */
+.ob-smart-insights-center-page .ob-si-xray-demo {
+	margin: 0;
+	padding: var(--ob-si-space-4);
+	border-radius: var(--ob-si-radius-lg);
+	background: var(--ob-si-surface-sunken);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__caption {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	margin: 0 0 var(--ob-si-space-3);
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__caption svg {
+	width: 14px;
+	height: 14px;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__card {
+	padding: var(--ob-si-space-4);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-surface);
+	box-shadow: var(--ob-si-shadow-hover);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__head {
+	display: flex;
+	gap: var(--ob-si-space-4);
+	align-items: center;
+	justify-content: space-between;
+	padding-bottom: var(--ob-si-space-3);
+	border-bottom: 1px solid var(--ob-si-border);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__page {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+	margin: 0 0 2px;
+	color: var(--ob-si-text);
+	font-size: 16px;
+	font-weight: 700;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__chip {
+	padding: 1px 8px;
+	border: 1px solid var(--ob-si-accent-border);
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-accent-soft);
+	color: var(--ob-si-accent-strong);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 600;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__meta {
+	margin: 0;
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+	font-variant-numeric: tabular-nums;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__ring {
+	position: relative;
+	flex: 0 0 80px;
+	width: 80px;
+	height: 80px;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__ring svg {
+	width: 80px;
+	height: 80px;
+	transform: rotate(-90deg);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__ring circle {
+	fill: none;
+	stroke-width: 8;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__ring-track {
+	stroke: var(--ob-si-surface-sunken);
+}
+
+/* Ring colour = "watch" band; non-text contrast above 3:1 on white. */
+.ob-smart-insights-center-page .ob-si-xray-demo__ring-value {
+	stroke: var(--ob-si-high);
+	stroke-linecap: round;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__ring-text {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	line-height: 1.1;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__ring-text strong {
+	color: var(--ob-si-text);
+	font-size: 22px;
+	font-variant-numeric: tabular-nums;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__ring-text small {
+	color: var(--ob-si-high);
+	font-size: var(--ob-si-fs-micro);
+	font-weight: 700;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__title {
+	margin: var(--ob-si-space-4) 0 var(--ob-si-space-2);
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-body);
+	font-weight: 700;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__problems,
+.ob-smart-insights-center-page .ob-si-xray-demo__plan {
+	display: grid;
+	gap: var(--ob-si-space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* Severity = coloured strip AND a written label, never colour alone (WCAG 1.4.1). */
+.ob-smart-insights-center-page .ob-si-xray-demo__problems li {
+	display: flex;
+	gap: var(--ob-si-space-3);
+	align-items: flex-start;
+	margin: 0;
+	padding: 8px 10px;
+	border: 1px solid var(--ob-si-border);
+	border-left: 4px solid var(--ob-si-medium);
+	border-radius: var(--ob-si-radius-sm);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__problems li.is-critical {
+	border-left-color: var(--ob-si-critical);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__problems li.is-high {
+	border-left-color: var(--ob-si-high);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__level {
+	flex: 0 0 auto;
+	padding: 1px 8px;
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-medium-soft);
+	color: var(--ob-si-medium);
+	font-size: var(--ob-si-fs-label);
+	font-weight: 700;
+}
+
+.ob-smart-insights-center-page .is-critical .ob-si-xray-demo__level {
+	background: var(--ob-si-critical-soft);
+	color: var(--ob-si-critical);
+}
+
+.ob-smart-insights-center-page .is-high .ob-si-xray-demo__level {
+	background: var(--ob-si-high-soft);
+	color: var(--ob-si-high);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__problem {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+	line-height: 1.35;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__problem small {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 400;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__bands {
+	display: flex;
+	gap: 4px;
+	align-items: flex-end;
+	height: 88px;
+	padding: 0 2px;
+	border-bottom: 1px solid var(--ob-si-border-strong);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__bands span {
+	flex: 1 1 0;
+	border-radius: 3px 3px 0 0;
+	background: var(--ob-si-accent);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__axis {
+	display: flex;
+	justify-content: space-between;
+	margin: 4px 0 0;
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-label);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__bands-note {
+	margin: 6px 0 0;
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-meta);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__plan {
+	counter-reset: ob-si-demo-plan;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__plan li {
+	display: flex;
+	gap: var(--ob-si-space-2);
+	align-items: center;
+	justify-content: space-between;
+	margin: 0;
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-body);
+	counter-increment: ob-si-demo-plan;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__plan li::before {
+	content: counter(ob-si-demo-plan);
+	display: inline-flex;
+	flex: 0 0 22px;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	border-radius: 50%;
+	background: var(--ob-si-accent-soft);
+	color: var(--ob-si-accent-strong);
+	font-size: var(--ob-si-fs-label);
+	font-weight: 700;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__plan li > span:first-child {
+	flex: 1 1 auto;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-demo__tag {
+	flex: 0 0 auto;
+	padding: 1px 8px;
+	border: 1px solid var(--ob-si-border-strong);
+	border-radius: var(--ob-si-radius-pill);
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-label);
+	font-weight: 600;
+}
+
+@media (max-width: 960px) {
+	.ob-smart-insights-center-page .ob-si-xray-locked {
+		grid-template-columns: minmax(0, 1fr);
+		padding: var(--ob-si-space-4);
+	}
+}
+
+.ob-si-xray-page .ob-si-xray__controls {
+	display: flex;
+	align-items: center;
+	gap: var(--ob-si-space-2);
+}
+
+/* The header is the purple gradient: give the period form legible controls. */
+.ob-si-xray-page .ob-si-xray__controls select {
+	min-height: 34px;
+	border-color: rgba(255, 255, 255, 0.6);
+}
+
+.ob-si-xray-page .ob-si-xray__controls .button {
+	min-height: 34px;
+	border-color: rgba(255, 255, 255, 0.8);
+	background: #fff;
+	color: var(--ob-si-accent-strong);
+	font-weight: 600;
+}
+
+.ob-si-xray-page .ob-si-xray__controls .button:hover,
+.ob-si-xray-page .ob-si-xray__controls .button:focus {
+	background: var(--ob-si-accent-soft);
+	color: var(--ob-si-accent-strong);
+}
+
+/* Page X-Ray tab: always pulses while another view is open. */
+.ob-smart-insights-center-page .ob-si-tabs__tab {
+	position: relative;
+	display: inline-flex;
+	gap: 8px;
+	align-items: center;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-new {
+	border-color: var(--ob-si-accent-border);
+	color: var(--ob-si-accent-strong);
+	animation: ob-si-tab-pulse 2s ease-out infinite;
+}
+
+@keyframes ob-si-tab-pulse {
+	0% {
+		box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.45);
+	}
+
+	70% {
+		box-shadow: 0 0 0 10px rgba(79, 70, 229, 0);
+	}
+
+	100% {
+		box-shadow: 0 0 0 0 rgba(79, 70, 229, 0);
+	}
+}
+
+/* X-ray scanner: a thin light line sweeping inside the tab, back and forth. */
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-new {
+	overflow: hidden;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-new::after {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 4%;
+	width: 2px;
+	border-radius: 2px;
+	background: linear-gradient(to bottom, rgba(79, 70, 229, 0), rgba(79, 70, 229, 0.9) 50%, rgba(79, 70, 229, 0));
+	box-shadow: 0 0 8px 2px rgba(99, 102, 241, 0.55);
+	opacity: 0.85;
+	pointer-events: none;
+	animation: ob-si-tab-scan 1.8s ease-in-out infinite alternate;
+}
+
+@keyframes ob-si-tab-scan {
+	from {
+		left: 4%;
+	}
+
+	to {
+		left: calc(96% - 2px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-smart-insights-center-page .ob-si-tabs__tab.is-new {
+		animation: none;
+		box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.25);
+	}
+
+	.ob-smart-insights-center-page .ob-si-tabs__tab.is-new::after {
+		display: none;
+	}
+}
+
+/* 11. Correctness pass (1.9.1.5): merged data twins, shared "provisional" badge, funnel step bar, fix result. */
+.ob-smart-insights-center-page .ob-smart-insights-duplicates {
+	margin: 4px 0 0;
+	font-size: 12px;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-duplicates summary {
+	cursor: pointer;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-duplicates ul {
+	margin: 4px 0 0 18px;
+	list-style: disc;
+}
+
+/* Shared "Provisional · N visits" badge (insight cards, modal header, Page X-Ray hero). */
+.ob-smart-insights-center-page .ob-si-provisional {
+	display: inline-block;
+	margin: 6px 0 0;
+	padding: 2px 10px;
+	border-radius: 999px;
+	border: 1px dashed var(--ob-si-border);
+	background: transparent;
+	color: var(--ob-si-text-muted);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+/* Funnel insight: where visitors leave (one bar per step, the worst transition in red). */
+.ob-smart-insights-center-page .ob-si-steps {
+	list-style: none;
+	margin: 0 0 var(--ob-si-space-2);
+	padding: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-step {
+	position: relative;
+	display: flex;
+	justify-content: space-between;
+	gap: 8px;
+	margin: 0 0 4px;
+	padding: 6px 10px;
+	border-radius: var(--ob-si-radius-sm);
+	border: 1px solid var(--ob-si-border);
+	overflow: hidden;
+	font-size: 13px;
+}
+
+.ob-smart-insights-center-page .ob-si-step__bar {
+	position: absolute;
+	inset: 0 auto 0 0;
+	background: var(--ob-si-accent);
+	opacity: 0.12;
+	pointer-events: none;
+}
+
+.ob-smart-insights-center-page .ob-si-step__label,
+.ob-smart-insights-center-page .ob-si-step strong {
+	position: relative;
+}
+
+.ob-smart-insights-center-page .ob-si-step.is-leak-from,
+.ob-smart-insights-center-page .ob-si-step.is-leak-to {
+	border-color: var(--ob-si-critical);
+}
+
+.ob-smart-insights-center-page .ob-si-step.is-leak-to .ob-si-step__bar {
+	background: var(--ob-si-critical);
+	opacity: 0.18;
+}
+
+.ob-smart-insights-center-page .ob-si-steps__leak {
+	margin: 0 0 var(--ob-si-space-2);
+	font-weight: 600;
+	color: var(--ob-si-critical);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-result-verdict.is-improved strong {
+	color: var(--ob-si-low);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-result-verdict.is-worse strong {
+	color: var(--ob-si-critical);
+}

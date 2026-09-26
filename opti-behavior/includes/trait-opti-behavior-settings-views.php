@@ -2084,6 +2084,9 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                     <?php
                                     if ( 'queued' === $log_status ) {
                                         esc_html_e( 'Waiting for the background job to run…', 'opti-behavior' );
+                                    } elseif ( 'danger-zone-reset' === $log_type ) {
+                                        // Tables are emptied with TRUNCATE: there is no row count to show.
+                                        esc_html_e( 'Selected data deleted', 'opti-behavior' );
                                     } elseif ( ! $is_task_log ) {
                                         printf(
                                             /* translators: %d: number of sessions deleted */
@@ -2148,8 +2151,10 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                         count( $log['optimized_tables'] )
                                     );
                                 }
+                                // "Rows by table" only when at least one table lost rows.
+                                $has_table_rows = ! empty( $log['rows_by_table'] ) && is_array( $log['rows_by_table'] ) && array_sum( array_map( 'intval', $log['rows_by_table'] ) ) > 0;
                                 ?>
-                                <?php if ( ! empty( $history_details ) || ! empty( $log['rows_by_table'] ) || ! empty( $log['warnings'] ) || ! empty( $log['notes'] ) ) : ?>
+                                <?php if ( ! empty( $history_details ) || $has_table_rows || ! empty( $log['warnings'] ) || ! empty( $log['notes'] ) ) : ?>
                                     <div class="cleanup-history-details">
                                         <?php if ( ! empty( $history_details ) ) : ?>
                                             <span class="cleanup-history-detail-summary"><?php echo esc_html( implode( ' • ', $history_details ) ); ?></span>
@@ -2161,7 +2166,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                                 <?php endforeach; ?>
                                             </ul>
                                         <?php endif; ?>
-                                        <?php if ( ! empty( $log['rows_by_table'] ) && is_array( $log['rows_by_table'] ) ) : ?>
+                                        <?php if ( $has_table_rows ) : ?>
                                             <details class="cleanup-history-table-details">
                                                 <summary><?php esc_html_e( 'Rows by table', 'opti-behavior' ); ?></summary>
                                                 <ul>
@@ -2623,6 +2628,9 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 'consent_banner_analytics_description' => '',
                 'consent_banner_policy_label' => '',
                 'consent_banner_policy_url'   => '',
+                'consent_prefs_title'         => '',
+                'consent_prefs_description'   => '',
+                'consent_cookie_days'         => Opti_Behavior_Consent_Preferences::DEFAULT_CONSENT_DAYS,
             );
             $options = wp_parse_args( $options, $banner_defaults );
             // Old default accent (green) was saved on every settings save; show the brand purple instead.
@@ -3033,6 +3041,47 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             </div>
                         </div>
 
+                        <!-- Cookie preferences page ([opti_behavior_cookie_settings] shortcode) -->
+                        <?php // Class name must not contain "cookie" / "gdpr": admin-notices.css hides such divs (third-party nag killer). ?>
+                        <div class="setting-item ob-prefs-shortcode-settings" style="margin-bottom:24px;">
+                            <label class="setting-label">
+                                <span class="label-text"><?php esc_html_e( 'Cookie Preferences Shortcode', 'opti-behavior' ); ?></span>
+                                <span class="label-description"><?php esc_html_e( 'GDPR requires that visitors can change or withdraw their consent as easily as they gave it. Paste this shortcode into your Privacy Policy or Cookie Policy page: it shows the visitor\'s current choice and lets them change it at any time.', 'opti-behavior' ); ?></span>
+                            </label>
+                            <div class="setting-control">
+                                <div class="ob-shortcode-box">
+                                    <code class="ob-shortcode-box__code" id="ob_cookie_prefs_shortcode">[<?php echo esc_html( Opti_Behavior_Consent_Preferences::SHORTCODE ); ?>]</code>
+                                    <button type="button" class="button ob-shortcode-box__copy" data-ob-copy-target="ob_cookie_prefs_shortcode" data-ob-copied-label="<?php esc_attr_e( 'Copied!', 'opti-behavior' ); ?>"><?php esc_html_e( 'Copy', 'opti-behavior' ); ?></button>
+                                </div>
+                                <p class="description" style="margin:8px 0 16px;">
+                                    <?php
+                                    printf(
+                                        /* translators: 1: shortcode displaying a link, 2: CSS class name. */
+                                        esc_html__( 'Prefer a simple footer link that reopens the banner? Use %1$s, or add the CSS class %2$s to any link or menu item.', 'opti-behavior' ),
+                                        '<code>[' . esc_html( Opti_Behavior_Consent_Preferences::SHORTCODE ) . ' display="link"]</code>',
+                                        '<code>ob-consent-open</code>'
+                                    );
+                                    ?>
+                                </p>
+                                <div class="ob-consent-field-grid ob-consent-field-grid--two">
+                                    <div class="ob-consent-field">
+                                        <label for="ob_consent_prefs_title"><?php esc_html_e( 'Preferences Title', 'opti-behavior' ); ?></label>
+                                        <input type="text" id="ob_consent_prefs_title" name="consent_prefs_title" value="<?php echo esc_attr( $options['consent_prefs_title'] ); ?>" placeholder="<?php esc_attr_e( 'Cookie preferences', 'opti-behavior' ); ?>" class="regular-text">
+                                    </div>
+                                    <div class="ob-consent-field">
+                                        <label for="ob_consent_cookie_days"><?php esc_html_e( 'Remember the visitor\'s choice for', 'opti-behavior' ); ?></label>
+                                        <select id="ob_consent_cookie_days" name="consent_cookie_days">
+                                            <option value="180" <?php selected( (int) $options['consent_cookie_days'], 180 ); ?>><?php esc_html_e( '6 months (recommended by the CNIL)', 'opti-behavior' ); ?></option>
+                                            <option value="365" <?php selected( (int) $options['consent_cookie_days'], 365 ); ?>><?php esc_html_e( '12 months', 'opti-behavior' ); ?></option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <label for="ob_consent_prefs_description"><?php esc_html_e( 'Preferences Description', 'opti-behavior' ); ?></label>
+                                <textarea id="ob_consent_prefs_description" name="consent_prefs_description" rows="3" class="large-text" placeholder="<?php esc_attr_e( 'Choose whether we may use analytics cookies. You can change your mind at any time — your new choice applies immediately.', 'opti-behavior' ); ?>"><?php echo esc_textarea( $options['consent_prefs_description'] ); ?></textarea>
+                                <p class="description" style="margin-top:8px;"><?php esc_html_e( 'The switch label, its description, the button texts and the policy link reuse the banner texts above. After this period the banner asks the visitor again.', 'opti-behavior' ); ?></p>
+                            </div>
+                        </div>
+
                 </div><!-- /.ob-consent-card -->
 
                         <div class="settings-actions" style="margin-top:24px;">
@@ -3164,6 +3213,31 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 : '';
 
             // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+            $this->merge_cookie_preferences_options( $options );
+        }
+
+        /**
+         * Merge the cookie preference centre POST fields ([opti_behavior_cookie_settings]
+         * shortcode) into the given options array (by reference).
+         *
+         * @since 1.9.1
+         * @param array &$options Options array to update in-place.
+         */
+        private function merge_cookie_preferences_options( &$options ) {
+            // phpcs:disable WordPress.Security.NonceVerification.Missing -- Nonce verified in calling function.
+            $options['consent_prefs_title'] = isset( $_POST['consent_prefs_title'] )
+                ? sanitize_text_field( wp_unslash( $_POST['consent_prefs_title'] ) )
+                : '';
+            $options['consent_prefs_description'] = isset( $_POST['consent_prefs_description'] )
+                ? sanitize_textarea_field( wp_unslash( $_POST['consent_prefs_description'] ) )
+                : '';
+
+            $days = isset( $_POST['consent_cookie_days'] ) ? absint( wp_unslash( $_POST['consent_cookie_days'] ) ) : 0;
+            // phpcs:enable WordPress.Security.NonceVerification.Missing
+            $options['consent_cookie_days'] = in_array( $days, Opti_Behavior_Consent_Preferences::allowed_consent_days(), true )
+                ? $days
+                : Opti_Behavior_Consent_Preferences::DEFAULT_CONSENT_DAYS;
         }
 
         /**
@@ -3286,6 +3360,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             $options['consent_banner_analytics_description'] = $banner_analytics_description;
             $options['consent_banner_policy_label'] = $banner_policy_label;
             $options['consent_banner_policy_url']   = $banner_policy_url;
+            $this->merge_cookie_preferences_options( $options );
 
             update_option( 'opti_behavior_heatmap_option', maybe_serialize( $options ) );
 
@@ -5698,46 +5773,17 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 "UPDATE {$sessions_table} SET traffic_type = 'human', spam_reason = NULL WHERE traffic_type = 'spam' OR traffic_type IS NULL"
             );
 
-            // Mark sessions as spam if they fail ANY criterion (OR logic):
-            // A legitimate session must meet ALL: duration >= threshold AND scrolls >= min AND clicks >= min
-            // So spam = fails at least one criterion
-            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
-            $wpdb->query( $wpdb->prepare(
-                "UPDATE {$sessions_table} s
-                 LEFT JOIN (
-                     " . Opti_Behavior_Heatmap_Engagement_Counters::session_counts_subquery_sql() . "
-                 ) sc ON s.id = sc.session_id
-                 LEFT JOIN (
-                     " . Opti_Behavior_Heatmap_Engagement_Counters::session_counts_subquery_sql() . "
-                 ) cc ON s.id = cc.session_id
-                 SET s.traffic_type = 'spam',
-                     s.spam_reason = CONCAT_WS(',',
-                         CASE WHEN (
-                             CASE WHEN s.duration > 0 THEN s.duration
-                                  ELSE TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time))
-                             END
-                         ) < %d THEN 'short_duration' ELSE NULL END,
-                         CASE WHEN COALESCE(sc.scroll_count, 0) < %d THEN 'few_scrolls' ELSE NULL END,
-                         CASE WHEN COALESCE(cc.click_count, 0) < %d THEN 'few_clicks' ELSE NULL END
-                     )
-                 WHERE (s.traffic_type IS NULL OR s.traffic_type = 'human')
-                 AND (
-                     (
-                         CASE
-                             WHEN s.duration > 0 THEN s.duration
-                             ELSE TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time))
-                         END
-                     ) < %d
-                     OR COALESCE(sc.scroll_count, 0) < %d
-                     OR COALESCE(cc.click_count, 0) < %d
-                 )",
-                $spam_duration_threshold,
-                $spam_min_scrolls_threshold,
-                $spam_min_clicks_threshold,
-                $spam_duration_threshold,
-                $spam_min_scrolls_threshold,
-                $spam_min_clicks_threshold
-            ) );
+            // Mark sessions as spam if they fail ANY criterion (OR logic), through the
+            // shared multi-source marker so this path, the batch recalculation, the
+            // scheduled cleanup and the recordings filter all read the same evidence.
+            Opti_Behavior_Stats_Spam_Filter::mark_spam_sessions(
+                null,
+                array(
+                    'duration' => $spam_duration_threshold,
+                    'scrolls'  => $spam_min_scrolls_threshold,
+                    'clicks'   => $spam_min_clicks_threshold,
+                )
+            );
 
             // Clear all related caches
             // 1.9.0.6: index-friendly, delete-by-name helper (was 2 unescaped LIKE scans).

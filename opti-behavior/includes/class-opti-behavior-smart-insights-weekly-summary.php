@@ -30,6 +30,11 @@ class Opti_Behavior_Smart_Insights_Weekly_Summary {
 	const STATE_TOLERANCE = 0.10;
 
 	/**
+	 * Smallest change in visitors lost that can move an issue to Worse / Better.
+	 */
+	const STATE_MIN_DELTA = 5;
+
+	/**
 	 * Insight repository.
 	 *
 	 * @var Opti_Behavior_Smart_Insights_Repository
@@ -642,6 +647,11 @@ class Opti_Behavior_Smart_Insights_Weekly_Summary {
 			$action = $this->capabilities->reconcile_action_text( $action, $top_opportunity );
 		}
 
+		// The brief prints the short form (the numbers sit next to it already).
+		if ( '' !== $action && class_exists( 'Opti_Behavior_Smart_Insights_Recommendations' ) ) {
+			$action = Opti_Behavior_Smart_Insights_Recommendations::short_action( $action );
+		}
+
 		return array(
 			'id'               => isset( $top_opportunity['id'] ) ? (int) $top_opportunity['id'] : 0,
 			'signal_id'        => isset( $top_opportunity['signal_id'] ) ? sanitize_key( $top_opportunity['signal_id'] ) : '',
@@ -708,6 +718,23 @@ class Opti_Behavior_Smart_Insights_Weekly_Summary {
 		if ( in_array( $status, array( 'resolved', 'auto_resolved' ), true ) ) {
 			return 'resolved';
 		}
+		$state = $this->resolve_raw_change_state( $insight );
+		// An observation (too few visits to trust) has no direction: "Worse" on
+		// 4 visitors is noise, not news.
+		if ( in_array( $state, array( 'worse', 'better' ), true ) && ! empty( $insight['detection']['observation_only'] ) ) {
+			return 'steady';
+		}
+
+		return $state;
+	}
+
+	/**
+	 * Direction of an issue against its previous run, before the observation rule.
+	 *
+	 * @param array $insight Insight.
+	 * @return string new|worse|better|steady
+	 */
+	private function resolve_raw_change_state( $insight ) {
 
 		$detection = isset( $insight['detection'] ) && is_array( $insight['detection'] ) ? $insight['detection'] : array();
 		$previous  = $this->get_previous_run( $insight );
@@ -728,6 +755,11 @@ class Opti_Behavior_Smart_Insights_Weekly_Summary {
 			return ! empty( $detection['worsened'] ) ? 'worse' : 'steady';
 		}
 
+		// A change must be real in size as well as in share: 3 -> 4 visitors is
+		// +33 % and still nothing.
+		if ( abs( $after - $before ) < self::STATE_MIN_DELTA ) {
+			return 'steady';
+		}
 		if ( $before <= 0 ) {
 			return $after > 0 ? 'worse' : 'steady';
 		}
@@ -824,14 +856,18 @@ class Opti_Behavior_Smart_Insights_Weekly_Summary {
 	 */
 	private function revenue_exposure( $insight ) {
 		$revenue = isset( $insight['impact']['revenue'] ) && is_array( $insight['impact']['revenue'] ) ? $insight['impact']['revenue'] : array();
+		if ( class_exists( 'Opti_Behavior_Smart_Insights_Impact_Calculator' ) ) {
+			$revenue = Opti_Behavior_Smart_Insights_Impact_Calculator::current_revenue( $revenue );
+		}
 		if ( empty( $revenue['available'] ) || ! isset( $revenue['amount'] ) || ! is_numeric( $revenue['amount'] ) ) {
 			return array();
 		}
 
 		return array(
-			'available' => true,
-			'amount'    => (float) $revenue['amount'],
-			'currency'  => isset( $revenue['currency'] ) ? sanitize_text_field( (string) $revenue['currency'] ) : '',
+			'available'   => true,
+			'amount'      => (float) $revenue['amount'],
+			'currency'    => isset( $revenue['currency'] ) ? sanitize_text_field( (string) $revenue['currency'] ) : '',
+			'period_days' => isset( $revenue['period_days'] ) ? absint( $revenue['period_days'] ) : 0,
 		);
 	}
 
@@ -844,6 +880,9 @@ class Opti_Behavior_Smart_Insights_Weekly_Summary {
 	 * @return int
 	 */
 	private function measured_sessions( $insight ) {
+		if ( class_exists( 'Opti_Behavior_Smart_Insights_Impact_Calculator' ) && method_exists( 'Opti_Behavior_Smart_Insights_Impact_Calculator', 'sample_size' ) ) {
+			return Opti_Behavior_Smart_Insights_Impact_Calculator::sample_size( $insight );
+		}
 		$metrics = isset( $insight['metrics'] ) && is_array( $insight['metrics'] ) ? $insight['metrics'] : array();
 		foreach ( array( 'sessions', 'starts', 'entries', 'pageviews' ) as $key ) {
 			if ( isset( $metrics[ $key ] ) && is_numeric( $metrics[ $key ] ) && (int) $metrics[ $key ] > 0 ) {

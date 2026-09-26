@@ -73,7 +73,7 @@ if ( ! function_exists( 'opti_behavior_views_render_dashboard_header' ) ) {
 			<div class="dashboard-title-section">
 				<div class="dashboard-icon"><i data-lucide="bar-chart-3"></i></div>
 				<div class="dashboard-title-text">
-					<h1 class="dashboard-title"><?php echo esc_html__( 'Analytics Dashboard', 'opti-behavior' ); ?></h1>
+					<h1 class="dashboard-title"><?php echo esc_html__( 'Traffic Overview', 'opti-behavior' ); ?></h1>
 					<div class="dashboard-subtitle">
 						<span class="subtitle-text"><?php echo esc_html__( 'Real-time insights and user behavior analytics', 'opti-behavior' ); ?></span>
 					</div>

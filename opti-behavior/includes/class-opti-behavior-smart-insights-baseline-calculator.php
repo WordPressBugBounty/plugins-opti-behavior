@@ -273,6 +273,8 @@ class Opti_Behavior_Smart_Insights_Baseline_Calculator {
 		$baseline = $this->average_entity_rows( $rows, 'funnel', array( 'completion_rate', 'dropoff_rate', 'entries', 'completions' ) );
 		$baseline['avg_funnel_completion_rate'] = isset( $baseline['avg_completion_rate'] ) ? $baseline['avg_completion_rate'] : null;
 		$baseline['avg_funnel_dropoff_rate']    = isset( $baseline['avg_dropoff_rate'] ) ? $baseline['avg_dropoff_rate'] : null;
+		// Average drop between two consecutive steps (the drop-off signal compares its worst step to it).
+		$baseline['avg_funnel_step_dropoff_rate'] = class_exists( 'Opti_Behavior_Smart_Insights_Funnel_Aggregator' ) ? Opti_Behavior_Smart_Insights_Funnel_Aggregator::average_step_dropoff( $rows ) : null;
 		return $baseline;
 	}
 

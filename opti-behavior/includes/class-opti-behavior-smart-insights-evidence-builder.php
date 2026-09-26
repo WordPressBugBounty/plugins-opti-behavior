@@ -854,7 +854,7 @@ class Opti_Behavior_Smart_Insights_Evidence_Builder {
 			'field'        => __( 'Form fields', 'opti-behavior' ),
 			'heatmap_zone' => __( 'Interaction zones', 'opti-behavior' ),
 			'heatmap'      => __( 'Heatmap', 'opti-behavior' ),
-			'funnel'       => __( 'Funnel steps', 'opti-behavior' ),
+			'funnel'       => __( 'Funnel', 'opti-behavior' ),
 			'journey'      => __( 'User journey', 'opti-behavior' ),
 			'segment'      => __( 'Segments', 'opti-behavior' ),
 			'comparison'   => __( 'Before/after comparison', 'opti-behavior' ),

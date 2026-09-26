@@ -508,6 +508,9 @@
 	var wizardTestId = 0;
 
 	function initWizard() {
+		// Hides the floating Smart Insights launcher, which covered the wizard's
+		// bottom-right Next / Save / Launch buttons (smart-insights-notifications.css).
+		document.body.classList.add('opti-ab-wizard-open');
 		var $wizard  = $('#opti-ab-wizard');
 		var testId   = parseInt($wizard.data('test-id'), 10) || 0;
 		wizardTestId = testId;

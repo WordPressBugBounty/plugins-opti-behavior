@@ -40,6 +40,48 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 	const OUTCOME_HOOK = 'opti_behavior_smart_insights_outcome_check';
 
 	/**
+	 * Version of the Smart Insights / Page X-Ray RULES (not of the plugin):
+	 * when it changes, stored cards and dossiers were produced by older rules.
+	 * maybe_apply_rules_upgrade() then flushes the Page X-Ray caches (dossiers,
+	 * page reads) and queues ONE regeneration, whose run closes the cards the
+	 * new rules no longer confirm as `rule_updated` (never as wins).
+	 */
+	const RULES_VERSION = '1.9.1.5';
+	const RULES_OPTION  = 'opti_behavior_si_rules_version';
+
+	/**
+	 * Once per RULES_VERSION (admin screens only, see heatmap-core admin_init):
+	 * flush the caches built by older rules and queue one regeneration.
+	 *
+	 * @return bool True when the upgrade ran on this request.
+	 */
+	public static function maybe_apply_rules_upgrade() {
+		if ( self::RULES_VERSION === get_option( self::RULES_OPTION ) ) {
+			return false;
+		}
+		update_option( self::RULES_OPTION, self::RULES_VERSION, false );
+		/**
+		 * Detection / scoring rules changed: drop caches built by older rules
+		 * (Pro Page X-Ray lists, dossiers and page reads).
+		 *
+		 * @param string $rules_version New RULES_VERSION.
+		 */
+		do_action( 'opti_behavior_smart_insights_rules_upgraded', self::RULES_VERSION );
+		// Every site: the stored results count as stale, so the next Smart
+		// Insights view regenerates them (the list's auto-refresh-if-stale).
+		if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+			opti_behavior_delete_transients_by_prefix( array( 'opti_behavior_si_generated_', 'opti_behavior_si_attempt_' ) );
+		}
+		// Sites with the background scheduler on: regenerate without waiting.
+		$settings = self::get_settings();
+		if ( ! empty( $settings['enabled'] ) && class_exists( 'Opti_Behavior_Smart_Insights_Generator' ) ) {
+			wp_schedule_single_event( time() + MINUTE_IN_SECONDS, Opti_Behavior_Smart_Insights_Generator::CRON_HOOK );
+		}
+
+		return true;
+	}
+
+	/**
 	 * Get default scheduler settings.
 	 *
 	 * @return array

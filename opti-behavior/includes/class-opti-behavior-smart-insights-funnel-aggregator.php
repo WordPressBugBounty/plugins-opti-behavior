@@ -28,6 +28,12 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 
+	/**
+	 * A transition is a candidate for "the step where visitors leave" only
+	 * from this many visits entering it (fewer = noise).
+	 */
+	const TRANSITION_MIN_ENTERED = 20;
+
 	/** Cached table checks. @var array */
 	private $table_exists = array();
 
@@ -73,9 +79,10 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 				f.id AS funnel_id,
 				f.name AS funnel_name,
 				f.steps AS steps_json,
-				COUNT(t.id) AS entries,
+				COUNT(DISTINCT t.session_id) AS entries,
 				COUNT(DISTINCT t.session_id) AS sessions,
-				SUM(CASE WHEN t.completed = 1 THEN 1 ELSE 0 END) AS completions,
+				COUNT(t.id) AS entry_rows,
+				COUNT(DISTINCT CASE WHEN t.completed = 1 THEN t.session_id END) AS completions,
 				AVG(t.max_step_reached) AS avg_max_step_reached,
 				MAX(t.max_step_reached) AS observed_max_step,
 				MAX(t.last_activity) AS last_seen_at
@@ -103,13 +110,18 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 			$completion_rate = $entries > 0 ? round( ( $completions / $entries ) * 100, 2 ) : null;
 			$dropoff_rate    = null === $completion_rate ? null : round( 100 - $completion_rate, 2 );
 
+			$step_metrics = self::build_step_metrics( $steps, isset( $step_counts[ $funnel_id ] ) ? $step_counts[ $funnel_id ] : array(), $entries );
+			$flow         = self::build_transitions( $step_metrics );
+
 			$metrics[] = array(
 				'funnel_id'              => $funnel_id,
 				'funnel_name'            => sanitize_text_field( (string) $row['funnel_name'] ),
 				'entity_type'            => 'funnel',
 				'entity_id'              => (string) $funnel_id,
 				'entity_label'           => sanitize_text_field( (string) $row['funnel_name'] ),
+				// Visits (distinct sessions), never tracking rows: entry_rows is diagnostics only.
 				'entries'                => $entries,
+				'entry_rows'             => max( 0, (int) $row['entry_rows'] ),
 				'sessions'               => max( 0, (int) $row['sessions'] ),
 				'completions'            => $completions,
 				'completion_rate'        => $completion_rate,
@@ -117,7 +129,9 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 				'avg_max_step_reached'   => null !== $row['avg_max_step_reached'] ? round( (float) $row['avg_max_step_reached'], 2 ) : null,
 				'observed_max_step'      => max( 0, (int) $row['observed_max_step'] ),
 				'step_count'             => count( $steps ),
-				'steps'                  => $this->build_step_metrics( $steps, isset( $step_counts[ $funnel_id ] ) ? $step_counts[ $funnel_id ] : array(), $entries ),
+				'steps'                  => $step_metrics,
+				'transitions'            => $flow['transitions'],
+				'worst_transition'       => $flow['worst_transition'],
 				'tracking_data_complete' => $entries > 0,
 				'last_seen_at'           => isset( $row['last_seen_at'] ) ? (string) $row['last_seen_at'] : '',
 			);
@@ -131,7 +145,11 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 		return $this->get_funnel_metrics( $start_date, $end_date, $args );
 	}
 
-	/** Get counts by max step reached for all candidate funnels. */
+	/**
+	 * Visits per deepest step reached, for all candidate funnels: first ONE
+	 * row per (funnel, session) with its deepest step, then a count per step,
+	 * so a session with several tracking rows counts once.
+	 */
 	private function get_step_counts( $funnel_ids, $start_date, $end_date, $args = array() ) {
 		global $wpdb;
 
@@ -146,10 +164,14 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 		$params         = array_merge( $funnel_ids, array( $start_date, $end_date ) );
 		$spam_clause    = ! empty( $args['exclude_spam'] ) ? $this->get_tracking_spam_exclusion_clause( 't', $sessions_table ) : '';
 
-		$sql  = "SELECT funnel_id, max_step_reached, COUNT(*) AS sessions
-			FROM {$tracking_table} t
-			WHERE funnel_id IN ({$placeholders}) AND entry_time BETWEEN %s AND %s{$spam_clause}
-			GROUP BY funnel_id, max_step_reached";
+		$sql  = "SELECT x.funnel_id, x.max_step_reached, COUNT(*) AS sessions
+			FROM (
+				SELECT t.funnel_id, t.session_id, MAX(t.max_step_reached) AS max_step_reached
+				FROM {$tracking_table} t
+				WHERE t.funnel_id IN ({$placeholders}) AND t.entry_time BETWEEN %s AND %s{$spam_clause}
+				GROUP BY t.funnel_id, t.session_id
+			) x
+			GROUP BY x.funnel_id, x.max_step_reached";
 		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $params ), ARRAY_A );
 
 		$counts = array();
@@ -174,8 +196,16 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 		return array_values( $decoded );
 	}
 
-	/** Build aggregate step metrics from step definitions and max-step counts. */
-	private function build_step_metrics( $steps, $step_counts, $entries ) {
+	/**
+	 * Step metrics from the step definitions and the visits per deepest step
+	 * reached. Pure.
+	 *
+	 * @param array $steps       Step definitions (name / label, url_pattern, match_type).
+	 * @param array $step_counts Deepest step => visits.
+	 * @param int   $entries     Funnel visits.
+	 * @return array[] { step_number, label, reached, reach_rate, url_pattern, match_type }
+	 */
+	public static function build_step_metrics( $steps, $step_counts, $entries ) {
 		$metrics = array();
 		$count   = count( $steps );
 
@@ -196,10 +226,136 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 				'label'       => sanitize_text_field( (string) $name ),
 				'reached'     => $reached,
 				'reach_rate'  => $entries > 0 ? round( ( $reached / $entries ) * 100, 2 ) : null,
+				'url_pattern' => isset( $step['url_pattern'] ) ? sanitize_text_field( (string) $step['url_pattern'] ) : '',
+				'match_type'  => isset( $step['match_type'] ) ? sanitize_key( (string) $step['match_type'] ) : '',
 			);
 		}
 
 		return $metrics;
+	}
+
+	/**
+	 * Every step-to-next-step transition of a funnel, and the one that loses
+	 * the most visits (among transitions entered by at least
+	 * TRANSITION_MIN_ENTERED visits; ties: highest drop rate). Pure.
+	 *
+	 * @param array[] $step_metrics build_step_metrics() output.
+	 * @return array { transitions: [ { from_step, from_label, from_url, from_match, to_step, to_label, to_url, to_match, entered, continued, lost, drop_rate } ], worst_transition: array|null }
+	 */
+	public static function build_transitions( $step_metrics ) {
+		$step_metrics = array_values( (array) $step_metrics );
+		$transitions  = array();
+		$worst        = null;
+		$count        = count( $step_metrics );
+		for ( $i = 0; $i + 1 < $count; $i++ ) {
+			$from      = $step_metrics[ $i ];
+			$to        = $step_metrics[ $i + 1 ];
+			$entered   = max( 0, (int) $from['reached'] );
+			$continued = min( $entered, max( 0, (int) $to['reached'] ) );
+			$lost      = $entered - $continued;
+			$row       = array(
+				'from_step'  => (int) $from['step_number'],
+				'from_label' => (string) $from['label'],
+				'from_url'   => isset( $from['url_pattern'] ) ? (string) $from['url_pattern'] : '',
+				'from_match' => isset( $from['match_type'] ) ? (string) $from['match_type'] : '',
+				'to_step'    => (int) $to['step_number'],
+				'to_label'   => (string) $to['label'],
+				'to_url'     => isset( $to['url_pattern'] ) ? (string) $to['url_pattern'] : '',
+				'to_match'   => isset( $to['match_type'] ) ? (string) $to['match_type'] : '',
+				'entered'    => $entered,
+				'continued'  => $continued,
+				'lost'       => $lost,
+				'drop_rate'  => $entered > 0 ? round( $lost / $entered * 100, 2 ) : null,
+			);
+			$transitions[] = $row;
+			if ( $entered < self::TRANSITION_MIN_ENTERED ) {
+				continue;
+			}
+			if ( null === $worst || $lost > $worst['lost'] || ( $lost === $worst['lost'] && $row['drop_rate'] > $worst['drop_rate'] ) ) {
+				$worst = $row;
+			}
+		}
+
+		return array(
+			'transitions'      => $transitions,
+			'worst_transition' => $worst,
+		);
+	}
+
+	/**
+	 * Normalised step definitions of a funnel (match type + URL pattern per
+	 * step, case and trailing slash ignored): ONE definition of "the same
+	 * steps" for the insight de-duplication signature and the Funnels page
+	 * notice. Pure.
+	 *
+	 * @param array $steps Step definitions or build_step_metrics() rows.
+	 * @return array[] [ [ match_type, url_pattern ], ... ]
+	 */
+	public static function normalize_step_definitions( $steps ) {
+		$out = array();
+		foreach ( array_values( (array) $steps ) as $step ) {
+			$step  = is_array( $step ) ? $step : array();
+			$match = isset( $step['match_type'] ) ? strtolower( trim( (string) $step['match_type'] ) ) : '';
+			$url   = isset( $step['url_pattern'] ) ? strtolower( trim( (string) $step['url_pattern'] ) ) : '';
+			$out[] = array( '' === $match ? 'contains' : $match, '/' === $url ? '/' : rtrim( $url, '/' ) );
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Groups of active funnels that track the same steps (2+ funnels each).
+	 * Pure.
+	 *
+	 * @param array[] $funnels Rows { id, name, steps (JSON or array) }.
+	 * @return array[] [ [ { id, name }, ... ], ... ]
+	 */
+	public static function same_step_groups( $funnels ) {
+		$groups = array();
+		foreach ( (array) $funnels as $funnel ) {
+			$steps = isset( $funnel['steps'] ) ? $funnel['steps'] : array();
+			$steps = is_array( $steps ) ? $steps : json_decode( (string) $steps, true );
+			if ( ! is_array( $steps ) || count( $steps ) < 1 ) {
+				continue;
+			}
+			$key              = md5( wp_json_encode( self::normalize_step_definitions( $steps ) ) );
+			$groups[ $key ][] = array(
+				'id'   => isset( $funnel['id'] ) ? (int) $funnel['id'] : 0,
+				'name' => isset( $funnel['name'] ) ? sanitize_text_field( (string) $funnel['name'] ) : '',
+			);
+		}
+
+		return array_values(
+			array_filter(
+				$groups,
+				function ( $group ) {
+					return count( $group ) > 1;
+				}
+			)
+		);
+	}
+
+	/**
+	 * Site average of the step drop rate: mean drop rate of every transition
+	 * entered by at least TRANSITION_MIN_ENTERED visits, over the funnels of
+	 * the period (the baseline of the funnel drop-off signal). Pure.
+	 *
+	 * @param array[] $funnel_rows get_funnel_metrics() rows.
+	 * @return float|null
+	 */
+	public static function average_step_dropoff( $funnel_rows ) {
+		$sum = 0.0;
+		$n   = 0;
+		foreach ( (array) $funnel_rows as $row ) {
+			foreach ( isset( $row['transitions'] ) && is_array( $row['transitions'] ) ? $row['transitions'] : array() as $t ) {
+				if ( (int) $t['entered'] >= self::TRANSITION_MIN_ENTERED && null !== $t['drop_rate'] ) {
+					$sum += (float) $t['drop_rate'];
+					++$n;
+				}
+			}
+		}
+
+		return $n > 0 ? round( $sum / $n, 2 ) : null;
 	}
 
 	/**

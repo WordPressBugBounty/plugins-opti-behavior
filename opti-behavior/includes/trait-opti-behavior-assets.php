@@ -36,7 +36,23 @@ trait Opti_Behavior_Assets_Trait {
             'opti-behavior-admin-menu',
             OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/admin-menu.css',
             array(),
-            OPTI_BEHAVIOR_HEATMAP_VERSION // Plugin-owned asset: bust on every plugin update.
+            // Cache-bust on file change (mirrors dashboard_styles.css): the menu is
+            // on every admin screen, so a stale copy shows the group separators as
+            // plain, unstyled menu rows.
+            file_exists( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/admin-menu.css' )
+                ? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/admin-menu.css' )
+                : OPTI_BEHAVIOR_HEATMAP_VERSION
+        );
+
+        // Submenu group separators (reorder_submenu) are inert anchors: drop their
+        // href so they leave the tab order and read as plain text, not as links.
+        // The first group's separator is printed after the first row (WordPress
+        // links the top-level item to the first row): move it back above that row.
+        wp_register_script( 'opti-behavior-admin-menu', false, array(), OPTI_BEHAVIOR_HEATMAP_VERSION, true );
+        wp_enqueue_script( 'opti-behavior-admin-menu' );
+        wp_add_inline_script(
+            'opti-behavior-admin-menu',
+            'document.querySelectorAll(\'#adminmenu .wp-submenu a[href^="#ob-menu-"]\').forEach(function(a){a.classList.add("ob-menu-sep");if(!a.textContent.trim()){a.setAttribute("aria-hidden","true");}a.removeAttribute("href");var li=a.closest("li"),prev=li&&li.previousElementSibling;if(prev&&prev.classList.contains("wp-first-item")){prev.parentNode.insertBefore(li,prev);}});'
         );
 
         // Lightweight Smart Insights global notifications are allowed on non-Opti-Behavior admin pages.
@@ -45,7 +61,7 @@ trait Opti_Behavior_Assets_Trait {
                 'opti-behavior-smart-insights-notifications',
                 OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/smart-insights-notifications.css',
                 array(),
-                OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-notifications-v10'
+                OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-notifications-v11.' . (int) @filemtime( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/smart-insights-notifications.css' ) // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- A missing file only drops the cache buster.
             );
 
             wp_enqueue_script(
@@ -267,7 +283,10 @@ trait Opti_Behavior_Assets_Trait {
                 'opti-behavior-heatmaps',
                 OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/heatmaps.css',
                 array( 'opti-behavior-dashboard' ),
-                OPTI_BEHAVIOR_HEATMAP_VERSION
+                // filemtime: a CSS fix shipped without a version bump must not be hidden by the browser cache.
+                file_exists( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/heatmaps.css' )
+                    ? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/heatmaps.css' )
+                    : OPTI_BEHAVIOR_HEATMAP_VERSION
             );
             // Enqueue mobile simulator script from external file
             wp_enqueue_script(
@@ -317,6 +336,56 @@ trait Opti_Behavior_Assets_Trait {
                 OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/ai-insights-page.css',
                 array( 'opti-behavior-dashboard-styles' ),
                 OPTI_BEHAVIOR_HEATMAP_VERSION . '-roadmap-shared-header-v2'
+            );
+
+            // "How it works" page (same slug): its own styles, the bundled anime.js
+            // (MIT, this screen only) and the hub animation. Cache-bust on change.
+            $hiw_ver = function ( $rel ) {
+                $file = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/' . $rel;
+                return file_exists( $file ) ? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $file ) : OPTI_BEHAVIOR_HEATMAP_VERSION;
+            };
+            wp_enqueue_style(
+                'opti-behavior-how-it-works',
+                OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/how-it-works.css',
+                array( 'opti-behavior-ai-insights' ),
+                $hiw_ver( 'css/how-it-works.css' )
+            );
+            wp_enqueue_script(
+                'opti-behavior-anime',
+                OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/vendor/anime.min.js',
+                array(),
+                '3.2.2',
+                true
+            );
+            wp_enqueue_script(
+                'opti-behavior-how-it-works',
+                OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/how-it-works.js',
+                array( 'opti-behavior-anime' ),
+                $hiw_ver( 'js/how-it-works.js' ),
+                true
+            );
+            wp_localize_script(
+                'opti-behavior-how-it-works',
+                'optiBehaviorHowItWorks',
+                array(
+                    // One example per kind of site, cycled by the story loop.
+                    'examples' => array(
+                        array( 'path' => '/shop/product', 'button' => __( 'Add to cart', 'opti-behavior' ) ),
+                        array( 'path' => '/courses/intro', 'button' => __( 'Enroll now', 'opti-behavior' ) ),
+                        array( 'path' => '/blog/article', 'button' => __( 'Subscribe', 'opti-behavior' ) ),
+                        array( 'path' => '/downloads/guide', 'button' => __( 'Download', 'opti-behavior' ) ),
+                    ),
+                    'i18n' => array(
+                        /* translators: %s: label of the page's main button, e.g. "Add to cart". */
+                        'storyProblem' => __( 'Problem: “%s” is below the first screen', 'opti-behavior' ),
+                        /* translators: %s: label of the page's main button. */
+                        'storyFix'     => __( 'Suggested fix: move “%s” into the first screen', 'opti-behavior' ),
+                        /* translators: %s: label of the page's main button. */
+                        'storyProof'   => __( 'Proved after the fix: more visitors click “%s”', 'opti-behavior' ),
+                        'pause'        => __( 'Pause animation', 'opti-behavior' ),
+                        'play'         => __( 'Play animation', 'opti-behavior' ),
+                    ),
+                )
             );
         }
 
@@ -586,9 +655,14 @@ trait Opti_Behavior_Assets_Trait {
 				'opti-behavior-smart-insights',
 				OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/smart-insights.js',
 				array(),
-				OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-segment-intel-v3-2',
+				OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-segment-intel-v3-2.' . (int) @filemtime( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/smart-insights.js' ), // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- A missing file only drops the cache buster.
 				true
 			);
+
+			// Page X-Ray tab: script, styles and Chart.js are enqueued by Pro
+			// (Opti_Behavior_Pro_Smart_Insights_Page_Xray::enqueue_assets()). Only
+			// the handle is registered here so Pro reuses the bundled Chart.js.
+			wp_register_script( 'chart-js', OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/chart.umd.min.js', array(), OPTI_BEHAVIOR_HEATMAP_VERSION, true );
 
             $smart_insights_has_pro_access = false;
             if ( class_exists( 'Opti_Behavior_Smart_Insights_Capabilities' ) ) {
@@ -700,7 +774,7 @@ trait Opti_Behavior_Assets_Trait {
                         'nextAction'         => __( 'Next action', 'opti-behavior' ),
                         'defaultNextAction'  => __( 'Review the evidence, open the most relevant report, and decide whether this should move to In progress.', 'opti-behavior' ),
                         'likelyCauses'       => __( 'Likely causes', 'opti-behavior' ),
-                        'genericCausesToggle' => __( 'Possible causes (generic)', 'opti-behavior' ),
+                        'thingsToCheck'       => __( 'Things to check', 'opti-behavior' ),
                         /* translators: %s: formatted number of sessions. */
                         'causeSessions'      => __( '%s sessions', 'opti-behavior' ),
                         /* translators: %s: formatted percentage of affected sessions. */
@@ -730,6 +804,32 @@ trait Opti_Behavior_Assets_Trait {
                         'impactObservationNoSample' => __( 'Too little traffic to size the impact reliably. Treat this as an observation to confirm, not a loss to act on.', 'opti-behavior' ),
                         'impactObservationLabel' => __( 'Observation', 'opti-behavior' ),
                         'impactBasis'        => __( 'Measured on', 'opti-behavior' ),
+                        'dropOffRate'        => __( 'Drop-off rate', 'opti-behavior' ),
+                        'stepDropOffRate'    => __( 'Drop-off at this step', 'opti-behavior' ),
+                        // Shared "too few visits" badge: same msgid as Scorer::provisional_text(), same threshold.
+                        /* translators: %s: number of visits. */
+                        'provisionalVisits'  => __( 'Provisional · %s visits', 'opti-behavior' ),
+                        'provisionalBelow'   => class_exists( 'Opti_Behavior_Smart_Insights_Scorer' ) ? (string) Opti_Behavior_Smart_Insights_Scorer::PROVISIONAL_BELOW : '30',
+                        'provisionalHint'    => __( 'Too few visits for a firm verdict: read it as an observation to confirm.', 'opti-behavior' ),
+                        'funnelStepsTitle'   => __( 'Where visitors leave', 'opti-behavior' ),
+                        /* translators: 1: step, 2: next step, 3: visitors lost, 4: visitors who reached the step, 5: share lost. */
+                        'funnelLeakSentence' => __( 'Between “%1$s” and “%2$s”, %3$s of %4$s visitors leave (%5$s).', 'opti-behavior' ),
+                        /* translators: %s: number of visitors. */
+                        'stepReached'        => __( '%s reached', 'opti-behavior' ),
+                        'openFunnelStep'     => __( 'Open the funnel on this step', 'opti-behavior' ),
+                        'stepHeatmap'        => __( 'Heatmap of this step', 'opti-behavior' ),
+                        'stepRecordings'     => __( 'Recordings of this step', 'opti-behavior' ),
+                        'openPageXray'       => __( 'Open Page X-Ray', 'opti-behavior' ),
+                        'resultTitle'        => __( 'Result', 'opti-behavior' ),
+                        'resultBefore'       => __( 'Before', 'opti-behavior' ),
+                        'resultAfter'        => __( 'After', 'opti-behavior' ),
+                        /* translators: %s: date. */
+                        'resultMeasuringUntil' => __( 'Measuring until %s', 'opti-behavior' ),
+                        /* translators: %s: publication name and year. */
+                        'hypothesisSource'   => __( 'Source: %s', 'opti-behavior' ),
+                        'hypothesisPlanningMde' => __( 'Test sized for', 'opti-behavior' ),
+                        /* translators: %s: relative lift percentage. */
+                        'hypothesisPlanningMdeValue' => __( '+%s relative lift (planning assumption, not a benchmark)', 'opti-behavior' ),
                         'whyItMatters'       => __( 'Why it matters', 'opti-behavior' ),
                         'whatHappened'       => __( 'What happened', 'opti-behavior' ),
                         'trendComparison'    => __( 'Trend comparison', 'opti-behavior' ),
@@ -859,10 +959,13 @@ trait Opti_Behavior_Assets_Trait {
                         'sourceGroupExplanation' => __( 'The same signal fired on several traffic sources. Open a source to see its own diagnosis.', 'opti-behavior' ),
                         /* translators: %s: formatted money amount. */
                         'briefAmountAtRisk'  => __( '%s at risk', 'opti-behavior' ),
+                        /* translators: 1: amount, 2: number of days. */
+                        'briefAmountAtRiskDays' => __( '≈ %1$s at risk over %2$s days', 'opti-behavior' ),
                         /* translators: %s: number of visitors. */
                         'briefVisitorsAtRisk' => __( '%s visitors at risk', 'opti-behavior' ),
                         /* translators: %s: number of sessions the insight was measured on. */
                         'briefObservation'   => __( 'Observation on %s sessions', 'opti-behavior' ),
+                        'briefObservationUnknown' => __( 'Observation (volume not measured)', 'opti-behavior' ),
                         /* translators: %s: number of sessions the insight was measured on. */
                         'briefSessionsMeasured' => __( 'Measured on %s sessions', 'opti-behavior' ),
                         'stateNew'           => __( 'New', 'opti-behavior' ),
@@ -906,7 +1009,16 @@ trait Opti_Behavior_Assets_Trait {
                         'verdictLosers'      => __( 'Segments that lost', 'opti-behavior' ),
                         'verdictNextStep'    => __( 'Next experiment', 'opti-behavior' ),
                         'categoryLearning'   => __( 'Experiment learning', 'opti-behavior' ),
-                        'openReport'         => __( 'Open report', 'opti-behavior' ),
+                        // Stored category (English key) => label, Pro categories included.
+                        'categoryLabels'     => $this->get_smart_insights_category_labels_impl(),
+                        // Spam filter button of the Smart Insights header.
+                        'excludingSpam'      => __( 'Excluding Spam', 'opti-behavior' ),
+                        'includingSpam'      => __( 'Including Spam', 'opti-behavior' ),
+                        'excludingSpamTraffic'      => __( 'Excluding spam traffic', 'opti-behavior' ),
+                        'includingSpamTraffic'      => __( 'Including spam traffic', 'opti-behavior' ),
+                        'excludingSpamTrafficTitle' => __( 'Spam traffic is excluded from Smart Insights', 'opti-behavior' ),
+                        'includingSpamTrafficTitle' => __( 'Spam traffic is included in Smart Insights', 'opti-behavior' ),
+                        'openReport'       => __( 'Open report', 'opti-behavior' ),
                         'relatedReports'     => __( 'Related reports', 'opti-behavior' ),
                         'relatedReport'      => __( 'Related report', 'opti-behavior' ),
                         'proLocked'          => __( 'Pro preview', 'opti-behavior' ),
@@ -940,12 +1052,23 @@ trait Opti_Behavior_Assets_Trait {
                         'noMatchingInsightsBody' => __( 'Try broadening the filters or selecting a longer date range.', 'opti-behavior' ),
                         'selectCustomRangeTitle' => __( 'Custom range requires dates', 'opti-behavior' ),
                         'selectCustomRange'  => __( 'Select a start and end date to use a custom range.', 'opti-behavior' ),
-                        'statusNew'          => __( 'New', 'opti-behavior' ),
+                        'invalidDateRange'   => __( 'Please select a valid date range.', 'opti-behavior' ),
+                        'statusNew'        => __( 'New', 'opti-behavior' ),
                         'statusViewed'       => __( 'Reviewed', 'opti-behavior' ),
                         'statusInProgress'   => __( 'In progress', 'opti-behavior' ),
                         'statusResolved'     => __( 'Resolved', 'opti-behavior' ),
                         'statusIgnored'      => __( 'Ignored', 'opti-behavior' ),
                         'statusAutoResolved' => __( 'Auto-resolved', 'opti-behavior' ),
+                        'statusRuleUpdated' => __( 'Closed: rule updated', 'opti-behavior' ),
+                        'statusMergedDuplicate' => __( 'Merged into a twin card', 'opti-behavior' ),
+                        /* translators: %s: number of other funnels. */
+                        'alsoMatchesFunnel' => __( 'Also matches %s other funnel with identical data', 'opti-behavior' ),
+                        /* translators: %s: number of other funnels. */
+                        'alsoMatchesFunnels' => __( 'Also matches %s other funnels with identical data', 'opti-behavior' ),
+                        /* translators: %s: number of other items. */
+                        'alsoMatchesOne' => __( 'Also matches %s other item with identical data', 'opti-behavior' ),
+                        /* translators: %s: number of other items. */
+                        'alsoMatchesMany' => __( 'Also matches %s other items with identical data', 'opti-behavior' ),
                         'openInsight'        => __( 'Open insight', 'opti-behavior' ),
                         'smartInsight'       => __( 'Smart Insight', 'opti-behavior' ),
                         'close'              => __( 'Close', 'opti-behavior' ),
@@ -994,7 +1117,7 @@ trait Opti_Behavior_Assets_Trait {
                         'frictionEvents'                   => __( 'Friction events', 'opti-behavior' ),
                         'frictionReport'                   => __( 'Friction report', 'opti-behavior' ),
                         'funnelCompletionRate'             => __( 'Completion rate', 'opti-behavior' ),
-                        'funnelDropoffRate'                => __( 'Drop-off rate', 'opti-behavior' ),
+                        'funnelDropoffRate'                => __( 'Drop-off, first to last step', 'opti-behavior' ),
                         'funnelEntrants'                   => __( 'Funnel entrants', 'opti-behavior' ),
                         'heatmap'                          => __( 'Heatmap', 'opti-behavior' ),
                         'highPriority'                     => __( 'High priority', 'opti-behavior' ),
@@ -1029,7 +1152,7 @@ trait Opti_Behavior_Assets_Trait {
                         'recordingsFormContextDescription' => __( 'Recordings need page or visitor context before this form can be isolated.', 'opti-behavior' ),
                         'recordingsFormFilterUnsupported'  => __( 'Recordings cannot be filtered by this form yet. Inspect the form analytics report for field-level evidence.', 'opti-behavior' ),
                         'recurringPatterns'                => __( 'Recurring patterns', 'opti-behavior' ),
-                        'reportDestination'                => __( 'Report destination', 'opti-behavior' ),
+                        'reportScope'                      => __( 'Scope', 'opti-behavior' ),
                         'reviewErrors'                     => __( 'Review errors', 'opti-behavior' ),
                         'reviewErrorsForForm'              => __( 'Review errors for this form', 'opti-behavior' ),
                         'reviewErrorsForPage'              => __( 'Review errors for this page', 'opti-behavior' ),
@@ -1114,6 +1237,15 @@ trait Opti_Behavior_Assets_Trait {
 					? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $opti_behavior_smart_insights_center_css )
 					: OPTI_BEHAVIOR_HEATMAP_VERSION
 			);
+
+			// "How it works" strip (Opti_Behavior_Smart_Insights_Sensors): remember,
+			// per browser, that the viewer folded it.
+			if ( wp_script_is( 'opti-behavior-smart-insights', 'enqueued' ) ) {
+				wp_add_inline_script(
+					'opti-behavior-smart-insights',
+					'(function(){function run(){var d=document.querySelector("[data-ob-si-loop]");if(!d){return;}var k="obSiLoopFolded";try{if("1"===window.localStorage.getItem(k)){d.removeAttribute("open");}}catch(e){}d.addEventListener("toggle",function(){try{window.localStorage.setItem(k,d.open?"0":"1");}catch(e){}});}if("loading"===document.readyState){document.addEventListener("DOMContentLoaded",run);}else{run();}})();'
+				);
+			}
 		}
 
         // Add dashboard-specific dynamic scripts if on analytics page.

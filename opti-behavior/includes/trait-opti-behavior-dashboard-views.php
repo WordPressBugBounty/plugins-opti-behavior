@@ -81,7 +81,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     <div class="dashboard-icon"><i data-lucide="bar-chart-3"></i></div>
                     <div class="dashboard-title-text">
                         <h1 class="dashboard-title">
-                            <?php esc_html_e( 'Analytics Dashboard', 'opti-behavior' ); ?>
+                            <?php esc_html_e( 'Traffic Overview', 'opti-behavior' ); ?>
                             <?php opti_behavior_tooltip_e( $tooltips['dashboard_overview']['title'], $tooltips['dashboard_overview']['content'], $tooltips['dashboard_overview']['simple'], '', array( 'position' => 'bottom' ) ); ?>
                         </h1>
                         <div class="dashboard-subtitle">

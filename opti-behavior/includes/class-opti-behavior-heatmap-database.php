@@ -5395,9 +5395,7 @@ class Opti_Behavior_Heatmap_Database {
 		$sessions_deleted = 0;
 		$files_deleted    = 0;
 		$orphans          = 0;
-		$warnings         = array(
-			sprintf( 'Retention purge: deleted data older than %s (period: %s).', $cutoff, $period_label ),
-		);
+		$warnings         = array();
 
 		if ( is_array( $cascade ) ) {
 			$sessions_deleted = $cascade['sessions_deleted'];
@@ -5409,6 +5407,15 @@ class Opti_Behavior_Heatmap_Database {
 		}
 
 		$events_deleted = isset( $rows_by_table['optibehavior_events'] ) ? absint( $rows_by_table['optibehavior_events'] ) : 0;
+
+		// A note, not a warning: the purge ran as configured. The sentence says
+		// "deleted" only when something was deleted.
+		$rows_total = is_array( $rows_by_table ) ? array_sum( array_map( 'absint', $rows_by_table ) ) : 0;
+		$note       = ( $sessions_deleted > 0 || $rows_total > 0 || $files_deleted > 0 )
+			/* translators: 1: cutoff date, 2: retention period (e.g. "365 day(s)") */
+			? sprintf( __( 'Retention (%2$s): data older than %1$s deleted.', 'opti-behavior' ), $cutoff, $period_label )
+			/* translators: 1: cutoff date, 2: retention period (e.g. "365 day(s)") */
+			: sprintf( __( 'Retention (%2$s): no data older than %1$s to delete.', 'opti-behavior' ), $cutoff, $period_label );
 
 		$service = new Opti_Behavior_Smart_Cleanup_Service();
 		$service->add_cleanup_log(
@@ -5422,6 +5429,7 @@ class Opti_Behavior_Heatmap_Database {
 				'orphaned_visitors_deleted' => $orphans,
 				'status'                    => 'completed',
 				'warnings'                  => $warnings,
+				'notes'                     => array( $note ),
 			)
 		);
 	}

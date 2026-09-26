@@ -575,7 +575,7 @@ class Opti_Behavior_Welcome {
 				<div class="ob-consent-trial-badge"><?php esc_html_e( '✨ Free Offer', 'opti-behavior' ); ?></div>
 				<h3><?php esc_html_e( 'Start Your Free 6-Month Pro Trial', 'opti-behavior' ); ?></h3>
 				<p>
-					<?php esc_html_e( 'Get full access to Session Recordings, Form Analytics, Error Tracking, User Journey Maps, and AI Insights — completely free for 6 months. No credit card required.', 'opti-behavior' ); ?>
+					<?php esc_html_e( 'Get full access to Session Recordings, Form Analytics, Error Tracking, User Journey Maps, and Smart Insights — completely free for 6 months. No credit card required.', 'opti-behavior' ); ?>
 				</p>
 				<label class="ob-consent-trial-label" for="ob_start_trial">
 					<input type="checkbox" id="ob_start_trial" name="start_trial" value="1" form="ob-consent-form" checked="checked" />

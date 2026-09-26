@@ -473,7 +473,8 @@ class Opti_Behavior_Heatmap_Session {
 				'id'           => $session_id,
 				'visitor_id'   => $data['visitor_id'],
 				'start_time'   => current_time( 'mysql' ),
-				'referrer'     => isset( $data['referrer'] ) ? $data['referrer'] : '',
+				// Visitor-controlled (Referer header / tracker payload), shown in the admin.
+				'referrer'     => isset( $data['referrer'] ) && is_string( $data['referrer'] ) ? esc_url_raw( $data['referrer'], array( 'http', 'https' ) ) : '',
 				'utm_source'   => isset( $data['utm_source'] ) ? $data['utm_source'] : '',
 				'utm_medium'   => isset( $data['utm_medium'] ) ? $data['utm_medium'] : '',
 				'utm_campaign' => isset( $data['utm_campaign'] ) ? $data['utm_campaign'] : '',
@@ -619,21 +620,11 @@ class Opti_Behavior_Heatmap_Session {
 	 * @return string
 	 */
 	private function get_client_ip() {
-		$ip_keys = array( 'HTTP_CF_CONNECTING_IP', 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR' );
-
-		foreach ( $ip_keys as $key ) {
-			if ( array_key_exists( $key, $_SERVER ) === true ) {
-				$server_value = sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) );
-				foreach ( explode( ',', $server_value ) as $ip ) {
-					$ip = trim( $ip );
-					// Accept any valid IP address (including private ranges for local development)
-					if ( filter_var( $ip, FILTER_VALIDATE_IP ) !== false ) {
-						return $ip;
-					}
-				}
-			}
+		// Forwarding headers only from a trusted proxy (Cloudflare edge or a
+		// private-range reverse proxy) — see IP_Exclusion::get_visitor_ip().
+		if ( class_exists( 'Opti_Behavior_IP_Exclusion' ) ) {
+			return Opti_Behavior_IP_Exclusion::get_visitor_ip();
 		}
-
 		return isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '';
 	}
 

@@ -55,6 +55,20 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 	const REVENUE_SOURCE_MANUAL = 'manual_conversion_value';
 
 	/**
+	 * Version of the money rule. Rule 1 priced every lost visitor of any funnel,
+	 * form or page at one site-wide WooCommerce order (a 3-page reading funnel
+	 * showed "$2,686 at risk"). A stored revenue block of an older rule is never
+	 * shown again: see current_revenue().
+	 */
+	const REVENUE_RULE = 2;
+
+	/**
+	 * WooCommerce orders needed over the period before an average order is
+	 * trusted as a value (filter `opti_behavior_smart_insights_revenue_min_orders`).
+	 */
+	const MIN_ORDERS = 20;
+
+	/**
 	 * Basis identifiers, ordered from most to least specific.
 	 */
 	const BASIS_FUNNEL_DROPOFF   = 'funnel_dropoff';
@@ -62,6 +76,39 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 	const BASIS_ERROR_IMPACT     = 'error_impact';
 	const BASIS_CONVERSION_GAP   = 'conversion_gap';
 	const BASIS_ENGAGEMENT_GAP   = 'engagement_gap';
+	const BASIS_FRICTION         = 'friction';
+
+	/**
+	 * Metric keys that hold the size of the population an insight was measured
+	 * on, most specific first. Pro site-wide rows carry no `sessions` key of
+	 * their own on older builds: their population is the two error cohorts.
+	 */
+	const SAMPLE_KEYS = array( 'sessions', 'starts', 'entries', 'pageviews', 'segment_sessions', 'returning_sessions', 'click_sessions', 'recordings' );
+
+	/**
+	 * Visits (sessions, form starts, funnel entries…) an insight was measured on.
+	 *
+	 * One definition for the generator's observation gate and the weekly brief,
+	 * so "Observation on N sessions" always names the sample the gate used.
+	 *
+	 * @param array $insight Insight (or a bare metrics array).
+	 * @return int 0 when the volume is unknown.
+	 */
+	public static function sample_size( $insight ) {
+		$metrics = isset( $insight['metrics'] ) && is_array( $insight['metrics'] ) ? $insight['metrics'] : ( is_array( $insight ) ? $insight : array() );
+		foreach ( self::SAMPLE_KEYS as $key ) {
+			if ( isset( $metrics[ $key ] ) && is_numeric( $metrics[ $key ] ) && (int) $metrics[ $key ] > 0 ) {
+				return (int) $metrics[ $key ];
+			}
+		}
+		$cohorts = ( isset( $metrics['error_cohort_sessions'] ) && is_numeric( $metrics['error_cohort_sessions'] ) ? (int) $metrics['error_cohort_sessions'] : 0 )
+			+ ( isset( $metrics['non_error_cohort_sessions'] ) && is_numeric( $metrics['non_error_cohort_sessions'] ) ? (int) $metrics['non_error_cohort_sessions'] : 0 );
+		if ( $cohorts > 0 ) {
+			return $cohorts;
+		}
+
+		return 0;
+	}
 
 	/**
 	 * Memoized revenue context per date-range key.
@@ -69,6 +116,37 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 	 * @var array
 	 */
 	private $revenue_context_cache = array();
+
+	/**
+	 * Purchase-funnel answers per funnel id (one query per funnel per request).
+	 *
+	 * @var array
+	 */
+	private $purchase_funnel_cache = array();
+
+	/**
+	 * Absolute impact: losing this share of all the site's visits (x 100)
+	 * scores 100. See absolute_impact_score().
+	 */
+	const ABSOLUTE_IMPACT_FACTOR = 400;
+
+	/**
+	 * Absolute impact score of a loss against every visit of the site in the
+	 * range. Pure.
+	 *
+	 * @param float $users_lost    Visits lost.
+	 * @param int   $site_sessions Site visits in the range.
+	 * @param float $factor        Factor (ABSOLUTE_IMPACT_FACTOR).
+	 * @return int|null 0-100, null when the site total is unknown.
+	 */
+	public static function absolute_impact_score( $users_lost, $site_sessions, $factor = self::ABSOLUTE_IMPACT_FACTOR ) {
+		$site_sessions = (int) $site_sessions;
+		if ( $site_sessions <= 0 ) {
+			return null;
+		}
+
+		return (int) round( min( 100, max( 0, (float) $users_lost ) / $site_sessions * (float) $factor ) );
+	}
 
 	/**
 	 * Attach impact payloads to a correlated candidate batch.
@@ -134,14 +212,30 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 			}
 		);
 
+		// Relative (share of the batch's biggest leak) blended with absolute
+		// (share of ALL the site's visits in the range): the biggest leak of a
+		// quiet site is no longer 100 by construction.
+		$site_sessions = isset( $args['site_sessions'] ) ? max( 0, (int) $args['site_sessions'] ) : 0;
+		/**
+		 * Absolute impact factor: impact_absolute = users_lost / site sessions x factor
+		 * (400 = losing 25 % of all the site's visits scores 100).
+		 *
+		 * @param float $factor Factor.
+		 */
+		$absolute_factor = (float) apply_filters( 'opti_behavior_smart_insights_absolute_impact_factor', self::ABSOLUTE_IMPACT_FACTOR );
+
 		$rank = 0;
 		foreach ( array_keys( $ranking ) as $index ) {
 			++$rank;
+			$lost     = (float) $impacts[ $index ]['users_lost'];
+			$relative = $max_users_lost > 0 ? (int) round( min( 100, ( $lost / $max_users_lost ) * 100 ) ) : 0;
+			$absolute = self::absolute_impact_score( $lost, $site_sessions, $absolute_factor );
 			$impacts[ $index ]['impact_rank']           = $rank;
-			$impacts[ $index ]['impact_score']          = $max_users_lost > 0
-				? (int) round( min( 100, ( (float) $impacts[ $index ]['users_lost'] / $max_users_lost ) * 100 ) )
-				: 0;
+			$impacts[ $index ]['impact_relative']       = $relative;
+			$impacts[ $index ]['impact_absolute']       = $absolute;
+			$impacts[ $index ]['impact_score']          = null === $absolute ? $relative : (int) round( 0.5 * $relative + 0.5 * $absolute );
 			$impacts[ $index ]['batch_peak_users_lost'] = (int) round( $max_users_lost );
+			$impacts[ $index ]['site_sessions']         = $site_sessions;
 		}
 
 		foreach ( $impacts as $index => $impact ) {
@@ -199,7 +293,7 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 			'basis'                 => $basis['basis'],
 			'basis_label'           => $basis['basis_label'],
 			'population_label'      => $basis['population_label'],
-			'headline'              => $this->build_headline( $users_lost, $basis['basis'] ),
+			'headline'              => $this->build_headline( $users_lost, $basis['basis'], isset( $insight['detection']['worst_transition'] ) && is_array( $insight['detection']['worst_transition'] ) ? $insight['detection']['worst_transition'] : array() ),
 			'impact_score'          => 0,
 			'impact_rank'           => 0,
 			'batch_peak_users_lost' => $users_lost,
@@ -263,7 +357,7 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 			return null;
 		}
 
-		$revenue = $insight['impact']['revenue'];
+		$revenue = self::current_revenue( $insight['impact']['revenue'] );
 		if ( empty( $revenue['available'] ) || ! isset( $revenue['amount'] ) || ! is_numeric( $revenue['amount'] ) ) {
 			return null;
 		}
@@ -312,14 +406,23 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 	 * @param string $basis      Basis identifier.
 	 * @return string
 	 */
-	public function build_headline( $users_lost, $basis = '' ) {
+	public function build_headline( $users_lost, $basis = '', $step = array() ) {
 		$users_lost = max( 0, (int) $users_lost );
 		$formatted  = function_exists( 'number_format_i18n' ) ? number_format_i18n( $users_lost ) : (string) $users_lost;
 
 		switch ( $basis ) {
 			case self::BASIS_FUNNEL_DROPOFF:
-				/* translators: %s: number of visitors. */
-				return sprintf( _n( '%s visitor dropped out of this funnel', '%s visitors dropped out of this funnel', $users_lost, 'opti-behavior' ), $formatted );
+				// The step the rule measured (worst transition), when it is known.
+				if ( ! empty( $step['from_label'] ) && ! empty( $step['to_label'] ) ) {
+					/* translators: 1: number of visits, 2: step name, 3: next step name. */
+					return sprintf( _n( '%1$s visit left between “%2$s” and “%3$s”', '%1$s visits left between “%2$s” and “%3$s”', $users_lost, 'opti-behavior' ), $formatted, sanitize_text_field( (string) $step['from_label'] ), sanitize_text_field( (string) $step['to_label'] ) );
+				}
+				// Funnel entries are visits, not people: one visitor can enter twice.
+				/* translators: %s: number of visits. */
+				return sprintf( _n( '%s visit dropped out of this funnel', '%s visits dropped out of this funnel', $users_lost, 'opti-behavior' ), $formatted );
+			case self::BASIS_FRICTION:
+				/* translators: %s: number of visits. */
+				return sprintf( _n( '%s visit hit rage or dead clicks', '%s visits hit rage or dead clicks', $users_lost, 'opti-behavior' ), $formatted );
 			case self::BASIS_FORM_ABANDONMENT:
 				/* translators: %s: number of visitors. */
 				return sprintf( _n( '%s visitor abandoned this form', '%s visitors abandoned this form', $users_lost, 'opti-behavior' ), $formatted );
@@ -397,6 +500,20 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 		}
 
 		$sessions       = $this->positive_int( $metrics, array( 'sessions', 'pageviews', 'users' ) );
+
+		// Rage / dead clicks are priced on the visits that hit them, never on the
+		// visits that had a script error (the same site-wide row carries both).
+		// No friction session count (older Pro) = no loss figure at all.
+		if ( isset( $insight['signal_id'] ) && 'dead_or_rage_click_signal' === $insight['signal_id'] ) {
+			$friction = $this->positive_int( $metrics, array( 'friction_sessions' ) );
+			if ( $friction <= 0 ) {
+				return null;
+			}
+			$population = max( $friction, $sessions, self::sample_size( $metrics ) );
+
+			return $this->build_basis( self::BASIS_FRICTION, $population, $friction / $population );
+		}
+
 		$error_sessions = $this->positive_int( $metrics, array( 'error_sessions', 'affected_sessions' ) );
 		if ( $error_sessions > 0 ) {
 			$population = $sessions > 0 ? max( $sessions, $error_sessions ) : $error_sessions;
@@ -531,6 +648,7 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 			self::BASIS_ERROR_IMPACT,
 			self::BASIS_CONVERSION_GAP,
 			self::BASIS_ENGAGEMENT_GAP,
+			self::BASIS_FRICTION,
 		);
 	}
 
@@ -559,6 +677,10 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 			),
 			self::BASIS_ENGAGEMENT_GAP   => array(
 				'basis'      => __( 'Engagement gap', 'opti-behavior' ),
+				'population' => __( 'Sessions', 'opti-behavior' ),
+			),
+			self::BASIS_FRICTION         => array(
+				'basis'      => __( 'Rage and dead clicks', 'opti-behavior' ),
 				'population' => __( 'Sessions', 'opti-behavior' ),
 			),
 		);
@@ -610,11 +732,22 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 	}
 
 	/**
-	 * Calculate the WooCommerce revenue exposure behind a leak.
+	 * Money at risk behind a leak — only when the leak is tied to a sale.
 	 *
-	 * Revenue is a Pro-tier disclosure: the value is computed here so the story
-	 * payload stays complete, and the capability layer replaces it with a locked
-	 * hint for Free viewers.
+	 * - A funnel that ends at the checkout or the order confirmation (or that
+	 *   the `opti_behavior_smart_insights_purchase_funnel` filter flags) is
+	 *   valued at lost visitors x the funnel's own completion rate x the value
+	 *   of one order: a lost visitor buys at the rate of an average entrant of
+	 *   that funnel, not certainly.
+	 * - A form abandonment is valued only with the owner's own "value of one
+	 *   conversion" x the form's submit rate.
+	 * - Anything else (content funnels, errors, slow pages, engagement gaps)
+	 *   has no money figure: the insight shows the visitors it loses.
+	 * An average WooCommerce order needs MIN_ORDERS orders over the period;
+	 * below that the owner's own value is used when set, else no money.
+	 *
+	 * Revenue is a Pro-tier disclosure unless it comes from the owner's own
+	 * value: the capability layer replaces it with a locked hint for Free.
 	 *
 	 * @param int   $users_lost Users lost.
 	 * @param array $basis      Basis record.
@@ -623,25 +756,58 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 	 * @return array
 	 */
 	private function calculate_revenue_exposure( $users_lost, $basis, $insight, $context ) {
-		$unavailable = array(
-			'available' => false,
-			'amount'    => 0.0,
-			'currency'  => '',
-			'tier'      => 'pro',
-			'reason'    => 'revenue_source_unavailable',
-		);
+		$unavailable = function ( $reason ) {
+			return array(
+				'available' => false,
+				'amount'    => 0.0,
+				'currency'  => '',
+				'tier'      => 'pro',
+				'reason'    => $reason,
+				'rule'      => self::REVENUE_RULE,
+			);
+		};
+
+		$metrics = $this->collect_metric_bag( $insight, $context );
+		if ( self::BASIS_FUNNEL_DROPOFF === $basis['basis'] ) {
+			$funnel_id = isset( $metrics['funnel_id'] ) && is_numeric( $metrics['funnel_id'] ) ? absint( $metrics['funnel_id'] ) : 0;
+			if ( ! $this->is_purchase_funnel( $funnel_id ) ) {
+				return $unavailable( 'not_purchase_linked' );
+			}
+			$kind   = 'funnel';
+			$base   = $this->positive_int( $metrics, array( 'entries', 'funnel_entries' ) );
+			$done   = $this->positive_int( $metrics, array( 'completions', 'completed', 'funnel_completions' ) );
+			$factor = $base > 0 ? min( 1.0, $done / $base ) : 0.0;
+		} elseif ( self::BASIS_FORM_ABANDONMENT === $basis['basis'] ) {
+			$kind   = 'form';
+			$base   = $this->positive_int( $metrics, array( 'starts', 'form_starts' ) );
+			$done   = $this->positive_int( $metrics, array( 'submits', 'submissions', 'form_submissions' ) );
+			$factor = $base > 0 ? min( 1.0, $done / $base ) : 0.0;
+		} else {
+			return $unavailable( 'not_purchase_linked' );
+		}
+		if ( $factor <= 0 ) {
+			return $unavailable( 'no_conversion_observed' );
+		}
 
 		$date_range = isset( $context['date_range'] ) && is_array( $context['date_range'] ) ? $context['date_range'] : array();
 		$revenue    = $this->get_revenue_context( $date_range );
-		if ( empty( $revenue['available'] ) || $revenue['average_order_value'] <= 0 ) {
-			return $unavailable;
+		$manual     = self::get_manual_conversion_value();
+		$use_manual = 'form' === $kind
+			|| ( 'woocommerce' === $revenue['source'] && (int) $revenue['orders_sampled'] < $this->min_orders() );
+		if ( $use_manual && self::REVENUE_SOURCE_MANUAL !== $revenue['source'] ) {
+			if ( empty( $manual ) ) {
+				return $unavailable( 'form' === $kind ? 'no_conversion_value' : 'too_few_orders' );
+			}
+			$revenue = array(
+				'available'           => true,
+				'average_order_value' => (float) $manual['amount'],
+				'currency'            => (string) $manual['currency'],
+				'orders_sampled'      => 0,
+				'source'              => self::REVENUE_SOURCE_MANUAL,
+			);
 		}
-
-		$conversion_factor = $this->resolve_conversion_factor( $basis, $insight, $context );
-		if ( null === $conversion_factor || $conversion_factor <= 0 ) {
-			$unavailable['reason'] = 'conversion_factor_unavailable';
-
-			return $unavailable;
+		if ( empty( $revenue['available'] ) || $revenue['average_order_value'] <= 0 ) {
+			return $unavailable( 'revenue_source_unavailable' );
 		}
 
 		// A value the site owner typed in themselves is not a Pro disclosure: it
@@ -650,41 +816,140 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 
 		return array(
 			'available'           => true,
-			'amount'              => round( $users_lost * $conversion_factor * $revenue['average_order_value'], 2 ),
+			'amount'              => round( $users_lost * $factor * $revenue['average_order_value'], 2 ),
 			'currency'            => $revenue['currency'],
 			'average_order_value' => round( (float) $revenue['average_order_value'], 2 ),
-			'conversion_factor'   => round( (float) $conversion_factor, 4 ),
+			'conversion_factor'   => round( (float) $factor, 4 ),
 			'orders_sampled'      => (int) $revenue['orders_sampled'],
 			'source'              => $revenue['source'],
+			'kind'                => $kind,
+			'period_days'         => $this->period_days( $date_range ),
+			'rule'                => self::REVENUE_RULE,
 			'tier'                => $is_manual ? 'free' : 'pro',
 		);
 	}
 
 	/**
-	 * Resolve how many of the lost visitors would plausibly have purchased.
+	 * A stored or in-flight revenue block, or an unavailable block when it was
+	 * computed by an older money rule (those amounts are not shown any more).
 	 *
-	 * Purchase-intent bases (funnel drop-off, form abandonment, conversion gap)
-	 * already describe visitors at the conversion step, so the factor is 1. Other
-	 * bases are discounted by the site conversion rate; without one, the revenue
-	 * block stays unavailable rather than guessing.
-	 *
-	 * @param array $basis   Basis record.
-	 * @param array $insight Insight payload.
-	 * @param array $context Calculation context.
-	 * @return float|null
+	 * @param mixed $revenue Revenue block.
+	 * @return array
 	 */
-	private function resolve_conversion_factor( $basis, $insight, $context ) {
-		if ( in_array( $basis['basis'], array( self::BASIS_FUNNEL_DROPOFF, self::BASIS_FORM_ABANDONMENT, self::BASIS_CONVERSION_GAP ), true ) ) {
-			return 1.0;
+	public static function current_revenue( $revenue ) {
+		if ( is_array( $revenue ) && ! empty( $revenue['available'] ) && isset( $revenue['rule'] ) && (int) $revenue['rule'] >= self::REVENUE_RULE ) {
+			return $revenue;
+		}
+		if ( is_array( $revenue ) && empty( $revenue['available'] ) ) {
+			return $revenue;
 		}
 
-		$metrics         = $this->collect_metric_bag( $insight, $context );
-		$conversion_rate = $this->percentage( $metrics, array( 'site_avg_conversion_rate', 'conversion_rate' ) );
-		if ( null === $conversion_rate || $conversion_rate <= 0 ) {
-			return null;
+		return array(
+			'available' => false,
+			'amount'    => 0.0,
+			'currency'  => '',
+			'tier'      => 'pro',
+			'reason'    => 'revenue_rule_outdated',
+			'rule'      => self::REVENUE_RULE,
+		);
+	}
+
+	/**
+	 * Whether a funnel ends where money changes hands: the WooCommerce checkout
+	 * or its order confirmation.
+	 *
+	 * @param int $funnel_id Funnel id.
+	 * @return bool
+	 */
+	private function is_purchase_funnel( $funnel_id ) {
+		$funnel_id = absint( $funnel_id );
+		if ( isset( $this->purchase_funnel_cache[ $funnel_id ] ) ) {
+			return $this->purchase_funnel_cache[ $funnel_id ];
 		}
 
-		return min( 1.0, $conversion_rate / 100 );
+		$steps = array();
+		if ( $funnel_id > 0 ) {
+			global $wpdb;
+			$table  = $wpdb->prefix . 'opti_behavior_funnels';
+			$errors = $wpdb->suppress_errors( true );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; one-row read of a plugin table, memoized per request.
+			$raw = $wpdb->get_var( $wpdb->prepare( "SELECT steps FROM {$table} WHERE id = %d", $funnel_id ) );
+			$wpdb->suppress_errors( $errors );
+			$decoded = is_string( $raw ) ? json_decode( $raw, true ) : null;
+			$steps   = is_array( $decoded ) ? array_values( $decoded ) : array();
+		}
+
+		$is = false;
+		if ( ! empty( $steps ) ) {
+			$last    = end( $steps );
+			$pattern = is_array( $last ) && isset( $last['url_pattern'] ) ? strtolower( (string) $last['url_pattern'] ) : '';
+			$any     = is_array( $last ) && isset( $last['match_type'] ) && 'any' === $last['match_type'];
+			if ( '' !== $pattern && '*' !== $pattern && ! $any ) {
+				$needles = array( 'order-received' );
+				if ( function_exists( 'wc_get_page_id' ) ) {
+					$checkout = (int) wc_get_page_id( 'checkout' );
+					$path     = $checkout > 0 ? (string) wp_parse_url( (string) get_permalink( $checkout ), PHP_URL_PATH ) : '';
+					$path     = strtolower( untrailingslashit( $path ) );
+					if ( '' !== $path ) {
+						$needles[] = $path;
+					}
+				}
+				foreach ( $needles as $needle ) {
+					if ( false !== strpos( $pattern, $needle ) ) {
+						$is = true;
+						break;
+					}
+				}
+			}
+		}
+
+		/**
+		 * Whether a funnel ends at a purchase (its drop-offs can be priced).
+		 *
+		 * @since 1.9.1.2
+		 *
+		 * @param bool  $is        Detected: last step = checkout or order confirmation.
+		 * @param int   $funnel_id Funnel id.
+		 * @param array $steps     Funnel steps.
+		 */
+		$is = (bool) apply_filters( 'opti_behavior_smart_insights_purchase_funnel', $is, $funnel_id, $steps );
+
+		$this->purchase_funnel_cache[ $funnel_id ] = $is;
+
+		return $is;
+	}
+
+	/**
+	 * Orders needed before an average WooCommerce order is used.
+	 *
+	 * @return int
+	 */
+	private function min_orders() {
+		/**
+		 * Minimum number of WooCommerce orders over the period before the
+		 * average order is used to price a leak.
+		 *
+		 * @since 1.9.1.2
+		 *
+		 * @param int $min Minimum orders.
+		 */
+		return max( 1, (int) apply_filters( 'opti_behavior_smart_insights_revenue_min_orders', self::MIN_ORDERS ) );
+	}
+
+	/**
+	 * Days covered by a date range, 0 when unknown.
+	 *
+	 * @param array $date_range { from, to }.
+	 * @return int
+	 */
+	private function period_days( $date_range ) {
+		$from = isset( $date_range['from'] ) ? strtotime( substr( (string) $date_range['from'], 0, 10 ) ) : false;
+		$to   = isset( $date_range['to'] ) ? strtotime( substr( (string) $date_range['to'], 0, 10 ) ) : false;
+		if ( ! $from || ! $to || $to < $from ) {
+			return 0;
+		}
+
+		return (int) round( ( $to - $from ) / DAY_IN_SECONDS ) + 1;
 	}
 
 	/**

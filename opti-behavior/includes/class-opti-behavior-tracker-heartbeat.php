@@ -415,10 +415,12 @@ class Opti_Behavior_Tracker_Heartbeat {
 	 * Evaluate with a transient cache so the DB comparison runs at most once
 	 * per CHECK_INTERVAL regardless of admin traffic.
 	 *
+	 * Public: the "How it works" setup check reads it.
+	 *
 	 * @since 1.7.1
 	 * @return string[]
 	 */
-	private function get_cached_mismatches() {
+	public function get_cached_mismatches() {
 		$cached = get_transient( self::TRANSIENT_RESULT );
 		if ( is_array( $cached ) ) {
 			return $cached;

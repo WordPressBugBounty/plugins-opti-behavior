@@ -421,7 +421,14 @@
 .heatmaps-panel .heatmap-table th, .heatmaps-panel .heatmap-table td { padding: 10px 8px !important; box-sizing: border-box; }
 .heatmaps-panel .heatmap-table th:first-child,
 .heatmaps-panel .heatmap-table td.page-info { width: 200px !important; max-width: 200px !important; }
-.heatmaps-panel .heatmap-table th:nth-child(6), .heatmaps-panel .heatmap-table td.actions { width: 265px !important; }
+.heatmaps-panel .heatmap-table th:nth-child(6), .heatmaps-panel .heatmap-table td.actions { width: 340px !important; }
+/* Keep the Actions cell a real table cell. dashboard.css makes it a nowrap
+   flex box aligned right: with the third "Dossier" button the buttons no
+   longer fit and spilled LEFT over "Last Updated". A table cell keeps them
+   inside the column and lets them wrap on narrow screens instead. The mobile
+   grid rules further down still win (same specificity, later). */
+.heatmaps-panel .heatmap-table td.actions { display: table-cell !important; white-space: normal !important; }
+.heatmaps-panel .heatmap-table td.actions .heatmap-action-btn { margin: 3px 6px 3px 0; }
 .heatmaps-panel .simplified-heatmap-table { overflow-x: hidden !important; }
 .heatmaps-panel .heatmap-table .page-url { display:block !important; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
@@ -1669,3 +1676,10 @@
 	}
 }
 
+/* Locked Page X-Ray "Dossier" button: PRO badge at 7.9:1 (the menu badge is 4.47:1). */
+.heatmaps-modern-table .heatmap-action-xray.is-locked .opti-menu-pro-badge {
+	margin-left: 6px;
+	padding: 0 5px;
+	font-size: 10px;
+	background: #4338ca;
+}

@@ -301,8 +301,27 @@ class Opti_Behavior_Heatmap_Post_Metabox {
 	 */
 	private function get_provider_dimension_rows( $dimension, array $context ) {
 		$rows = apply_filters( 'opti_behavior_page_analytics_dimension_rows', null, sanitize_key( $dimension ), $context );
+		if ( ! is_array( $rows ) ) {
+			return null;
+		}
 
-		return is_array( $rows ) ? $rows : null;
+		// Provider rows (Pro) hold the same visitor-supplied strings as the
+		// Free queries: clean them the same way before they reach the admin JS.
+		foreach ( $rows as $i => $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			foreach ( $row as $key => $value ) {
+				if ( ! is_string( $value ) ) {
+					continue;
+				}
+				$rows[ $i ][ $key ] = in_array( $key, array( 'referrer_url', 'target_url', 'url' ), true )
+					? self::clean_tracked_url_for_output( $value )
+					: self::clean_tracked_text_for_output( $value );
+			}
+		}
+
+		return $rows;
 	}
 
 	/**
@@ -1380,7 +1399,43 @@ class Opti_Behavior_Heatmap_Post_Metabox {
 			ARRAY_A
 		);
 
+		foreach ( (array) $referrers as $i => $row ) {
+			if ( isset( $row['referrer_url'] ) && null !== $row['referrer_url'] ) {
+				$referrers[ $i ]['referrer_url'] = self::clean_tracked_url_for_output( $row['referrer_url'] );
+			}
+		}
+
 		wp_send_json_success( $referrers );
+	}
+
+	/**
+	 * Visitor-supplied strings leave the server without any character that can
+	 * break out of an HTML attribute, whatever version of the admin JS reads
+	 * them (rows stored before the ingest fix included).
+	 *
+	 * @param mixed $value Stored value.
+	 * @return string
+	 */
+	private static function clean_tracked_text_for_output( $value ) {
+		return trim( str_replace( array( '"', '<', '>', '`' ), '', wp_strip_all_tags( (string) $value ) ) );
+	}
+
+	/**
+	 * A stored URL: a well-formed http(s) / mailto / tel URL as esc_url_raw()
+	 * returns it, anything else as inert text.
+	 *
+	 * @param mixed $value Stored URL.
+	 * @return string
+	 */
+	private static function clean_tracked_url_for_output( $value ) {
+		$value = (string) $value;
+		if ( preg_match( '/^(https?|mailto|tel):/i', $value ) ) {
+			$url = esc_url_raw( $value, array( 'http', 'https', 'mailto', 'tel' ) );
+			if ( '' !== $url ) {
+				return $url;
+			}
+		}
+		return self::clean_tracked_text_for_output( $value );
 	}
 
 	/**
@@ -1457,6 +1512,16 @@ class Opti_Behavior_Heatmap_Post_Metabox {
 				)
 			)
 		);
+
+		// Visitor-supplied (CVE-2026-95686): clean rows stored before the ingest fix.
+		foreach ( (array) $outbound_clicks as $i => $row ) {
+			$outbound_clicks[ $i ]['target_url'] = self::clean_tracked_url_for_output( isset( $row['target_url'] ) ? $row['target_url'] : '' );
+			foreach ( array( 'element_tag', 'element_text' ) as $field ) {
+				if ( isset( $row[ $field ] ) ) {
+					$outbound_clicks[ $i ][ $field ] = self::clean_tracked_text_for_output( $row[ $field ] );
+				}
+			}
+		}
 
 		$sessions_left_without_click = max( 0, $total_sessions - $sessions_with_clicks );
 
@@ -1543,7 +1608,15 @@ class Opti_Behavior_Heatmap_Post_Metabox {
 		$data = array();
 		foreach ( $results as $row ) {
 			$code = strtoupper( $row->country ?: '' );
-			$name = $row->country_name ?: ( $code ?: 'Global' );
+			// Rows written before the ingest fix may hold a visitor-supplied name
+			// or code (CVE-2026-95809): only an ISO code and a clean label go out.
+			if ( ! preg_match( '/^[A-Z]{2}$/', $code ) ) {
+				$code = '';
+			}
+			$name = self::clean_tracked_text_for_output( $row->country_name );
+			if ( '' === $name ) {
+				$name = $code ?: 'Global';
+			}
 			$data[] = array(
 				'country'      => $code ?: 'Global',
 				'country_name' => $name,
@@ -1608,7 +1681,7 @@ class Opti_Behavior_Heatmap_Post_Metabox {
 		$data = array();
 		foreach ( $results as $row ) {
 			$data[] = array(
-				'name'  => $row->browser ?: 'Unknown',
+				'name'  => self::clean_tracked_text_for_output( $row->browser ) ?: 'Unknown',
 				'count' => intval( $row->count ),
 			);
 		}
@@ -1670,7 +1743,7 @@ class Opti_Behavior_Heatmap_Post_Metabox {
 		$data = array();
 		foreach ( $results as $row ) {
 			$data[] = array(
-				'name'  => $row->device ?: 'Unknown',
+				'name'  => self::clean_tracked_text_for_output( $row->device ) ?: 'Unknown',
 				'count' => intval( $row->count ),
 			);
 		}

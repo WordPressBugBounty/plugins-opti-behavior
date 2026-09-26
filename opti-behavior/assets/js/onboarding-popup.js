@@ -33,7 +33,7 @@
         optiBehaviorOnboarding.i18n.btnContinue,
         optiBehaviorOnboarding.i18n.btnContinue,
         optiBehaviorOnboarding.i18n.btnContinue,
-        optiBehaviorOnboarding.i18n.btnGoDashboard
+        optiBehaviorOnboarding.i18n.btnOpenGuide
     ];
 
     var arrowSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
@@ -212,6 +212,9 @@
         // Read the opt-in before the modal markup is replaced below.
         var createFunnels = isFinish && wantsRecommendedFunnels();
 
+        // Finishing the setup (never skipping it) opens the setup guide.
+        var openGuide = isFinish && !isPreview && !!optiBehaviorOnboarding.guideUrl;
+
         // Show success screen briefly
         var modal = overlay.querySelector('.ob-setup-modal');
         if (modal) {
@@ -221,7 +224,7 @@
                         '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>' +
                     '</div>' +
                     '<div class="ob-success-title">' + optiBehaviorOnboarding.i18n.setupComplete + '</div>' +
-                    '<div class="ob-success-desc">' + optiBehaviorOnboarding.i18n.setupCompleteDesc + '</div>' +
+                    '<div class="ob-success-desc">' + (openGuide ? optiBehaviorOnboarding.i18n.openingGuide : optiBehaviorOnboarding.i18n.setupCompleteDesc) + '</div>' +
                 '</div>';
         }
 
@@ -235,7 +238,7 @@
             data.append('goal', selectedGoals.join(','));
             data.append('create_funnels', createFunnels ? '1' : '0');
 
-            fetch(optiBehaviorOnboarding.ajaxUrl, {
+            var saved = fetch(optiBehaviorOnboarding.ajaxUrl, {
                 method: 'POST',
                 credentials: 'same-origin',
                 body: data
@@ -246,6 +249,16 @@
                     return createRecommendedFunnels();
                 }
             })['catch'](function () { /* dismissal already persisted server-side */ });
+
+            if (openGuide) {
+                // Leave only once the dismissal (and the funnels) are saved,
+                // and never sooner than the success screen needs to be read.
+                var shown = new Promise(function (resolve) { setTimeout(resolve, 1200); });
+                Promise.all([saved, shown]).then(function () {
+                    window.location.href = optiBehaviorOnboarding.guideUrl;
+                });
+                return;
+            }
         }
 
         // Fade out after short delay

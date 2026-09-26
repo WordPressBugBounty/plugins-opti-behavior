@@ -93,6 +93,7 @@ class Opti_Behavior_Smart_Insights_Scorer {
 		return array(
 			'priority_score' => (int) $priority_score,
 			'priority_label' => $this->get_priority_label( $priority_score ),
+			'priority_label_key' => self::get_priority_label_key( $priority_score ),
 		);
 	}
 
@@ -108,41 +109,18 @@ class Opti_Behavior_Smart_Insights_Scorer {
 		$defaults = array(
 			'same_issue_previous_period' => false,
 			'adaptive_low_traffic'       => false,
-			'tracking_data_complete'     => null,
 		);
 		$args     = wp_parse_args( $args, $defaults );
 
+		// Confidence comes from the evidence (how many visits the rule measured,
+		// how wide the interval of its rate is), never from the rule firing.
 		$page_sessions = isset( $metrics['sessions'] ) ? (int) $metrics['sessions'] : 0;
-		$points        = 0;
-
-		if ( $page_sessions >= 100 ) {
-			$points += 30;
-		}
-
-		if ( $page_sessions >= 300 ) {
-			$points += 20;
-		}
-
-		if ( $this->gap_exists( $detection, 'bounce_gap' ) ) {
-			$points += 15;
-		}
-
-		if ( $this->engagement_metric_confirms_issue( $detection ) ) {
-			$points += 20;
-		}
-
-		if ( ! empty( $args['same_issue_previous_period'] ) || ! empty( $detection['same_issue_previous_period'] ) ) {
-			$points += 15;
-		}
-
-		$tracking_complete = null === $args['tracking_data_complete']
-			? ( ! empty( $metrics['tracking_data_complete'] ) )
-			: (bool) $args['tracking_data_complete'];
-		if ( $tracking_complete ) {
-			$points += 10;
-		}
-
-		$points = min( 100, max( 0, $points ) );
+		$rate          = isset( $metrics['bounce_rate'] ) && is_numeric( $metrics['bounce_rate'] ) ? (float) $metrics['bounce_rate'] : null;
+		$points        = self::sample_confidence(
+			$page_sessions,
+			$rate,
+			array( 'same_issue_previous_period' => ! empty( $args['same_issue_previous_period'] ) || ! empty( $detection['same_issue_previous_period'] ) )
+		);
 
 		// Adaptive low-traffic periods may trigger at 50 sessions, but cannot be High confidence.
 		if ( ! empty( $args['adaptive_low_traffic'] ) || ! empty( $detection['adaptive_low_traffic'] ) ) {
@@ -150,9 +128,132 @@ class Opti_Behavior_Smart_Insights_Scorer {
 		}
 
 		return array(
-			'confidence_score' => (int) $points,
-			'confidence_label' => $this->get_confidence_label( $points ),
+			'confidence_score'     => (int) $points,
+			'confidence_label'     => $this->get_confidence_label( $points ),
+			'confidence_label_key' => self::get_confidence_label_key( $points ),
+			'confidence_sample' => $page_sessions,
+			'confidence_cap'    => self::sample_band_max( $page_sessions ),
 		);
+	}
+
+	/**
+	 * Confidence bands by measured population: below each key, the confidence
+	 * can never exceed the value (so under 30 visits it is always Low, under
+	 * 100 at best Medium). CONFIDENCE_MAX from 300 on.
+	 */
+	const CONFIDENCE_BANDS = array(
+		30  => 35,
+		100 => 60,
+		300 => 80,
+	);
+	const CONFIDENCE_MAX   = 95;
+	// Below this population a finding is provisional (the lowest band): one
+	// badge, one text, everywhere (insight cards, modal, Page X-Ray hero).
+	const PROVISIONAL_BELOW = 30;
+	// Same issue also detected in the previous equal-length period.
+	const RECURRENCE_BONUS = 10;
+	// z for a 95 % interval.
+	const WILSON_Z = 1.96;
+
+	/**
+	 * Whether a measured population is too small to be more than provisional.
+	 *
+	 * @param int $n Population.
+	 * @return bool
+	 */
+	public static function is_provisional( $n ) {
+		return (int) $n < self::PROVISIONAL_BELOW;
+	}
+
+	/**
+	 * THE "Provisional · N visits" text (the JS badge uses the same msgid
+	 * through the i18n key `provisionalVisits`).
+	 *
+	 * @param int $n Population.
+	 * @return string
+	 */
+	public static function provisional_text( $n ) {
+		/* translators: %s: number of visits. */
+		return sprintf( __( 'Provisional · %s visits', 'opti-behavior' ), number_format_i18n( max( 0, (int) $n ) ) );
+	}
+
+	/**
+	 * Highest confidence a population of $n can support (see CONFIDENCE_BANDS).
+	 *
+	 * @param int $n Measured population (distinct sessions, entrants, form starts).
+	 * @return int
+	 */
+	public static function sample_band_max( $n ) {
+		$n = max( 0, (int) $n );
+		foreach ( self::CONFIDENCE_BANDS as $below => $max ) {
+			if ( $n < $below ) {
+				return (int) $max;
+			}
+		}
+
+		return self::CONFIDENCE_MAX;
+	}
+
+	/**
+	 * Half-width of the 95 % Wilson score interval of a proportion.
+	 *
+	 * @param int   $n Population.
+	 * @param float $p Proportion 0-1.
+	 * @return float Half-width 0-1 (1 when n = 0).
+	 */
+	public static function wilson_half_width( $n, $p ) {
+		$n = (int) $n;
+		if ( $n <= 0 ) {
+			return 1.0;
+		}
+		$p  = max( 0.0, min( 1.0, (float) $p ) );
+		$z2 = self::WILSON_Z * self::WILSON_Z;
+
+		return ( self::WILSON_Z * sqrt( ( $p * ( 1 - $p ) / $n ) + ( $z2 / ( 4 * $n * $n ) ) ) ) / ( 1 + ( $z2 / $n ) );
+	}
+
+	/**
+	 * THE confidence of a finding (Free and Pro): the band of its measured
+	 * population, minus the Wilson half-width of its rate in points (a wider
+	 * interval = less sure), + RECURRENCE_BONUS when the same issue was also
+	 * detected in the previous period, never above the band. Pure.
+	 *
+	 * @param int        $n    Measured population.
+	 * @param float|null $rate Measured rate in percent (0-100), null when the rule has none.
+	 * @param array      $args same_issue_previous_period (bool).
+	 * @return int 0-95
+	 */
+	public static function sample_confidence( $n, $rate = null, $args = array() ) {
+		$n      = max( 0, (int) $n );
+		$cap    = self::sample_band_max( $n );
+		$points = $cap;
+		if ( null !== $rate && is_numeric( $rate ) && $n > 0 ) {
+			$points -= (int) round( self::wilson_half_width( $n, (float) $rate / 100 ) * 100 );
+		}
+		if ( is_array( $args ) && ! empty( $args['same_issue_previous_period'] ) ) {
+			$points += self::RECURRENCE_BONUS;
+		}
+
+		return (int) max( 0, min( $cap, $points ) );
+	}
+
+	/**
+	 * Canonical confidence key for a score: `high`, `medium` or `low`. The
+	 * thresholds live here only (get_confidence_label() translates the key).
+	 *
+	 * @param float $score Score.
+	 * @return string
+	 */
+	public static function get_confidence_label_key( $score ) {
+		$score = (float) $score;
+		if ( $score >= 70 ) {
+			return 'high';
+		}
+		if ( $score >= 40 ) {
+			return 'medium';
+		}
+
+		return 'low';
 	}
 
 	/**
@@ -288,7 +389,9 @@ class Opti_Behavior_Smart_Insights_Scorer {
 		}
 
 		$current = isset( $scores['confidence_score'] ) ? (int) $scores['confidence_score'] : 0;
-		$updated = min( 100, max( 0, $current + (int) $evidence['points'] ) );
+		// Correlated evidence adds points, never above what the sample supports.
+		$cap     = isset( $scores['confidence_cap'] ) && is_numeric( $scores['confidence_cap'] ) ? (int) $scores['confidence_cap'] : 100;
+		$updated = min( $cap, max( 0, $current + (int) $evidence['points'] ) );
 
 		$scores['confidence_score_before_evidence'] = $current;
 		$scores['evidence_confidence_points']       = (int) $evidence['points'];
@@ -306,21 +409,29 @@ class Opti_Behavior_Smart_Insights_Scorer {
 	 * @return string
 	 */
 	public function get_priority_label( $score ) {
+		return $this->translate_label( ucfirst( self::get_priority_label_key( $score ) ) );
+	}
+
+	/**
+	 * Canonical priority key for a score: `critical`, `high`, `medium` or
+	 * `low`. The thresholds live here only (get_priority_label() translates).
+	 *
+	 * @param float $score Score.
+	 * @return string
+	 */
+	public static function get_priority_label_key( $score ) {
 		$score = (float) $score;
-
 		if ( $score >= 80 ) {
-			return $this->translate_label( 'Critical' );
+			return 'critical';
 		}
-
 		if ( $score >= 60 ) {
-			return $this->translate_label( 'High' );
+			return 'high';
 		}
-
 		if ( $score >= 40 ) {
-			return $this->translate_label( 'Medium' );
+			return 'medium';
 		}
 
-		return $this->translate_label( 'Low' );
+		return 'low';
 	}
 
 	/**
@@ -396,17 +507,7 @@ class Opti_Behavior_Smart_Insights_Scorer {
 	 * @return string
 	 */
 	public function get_confidence_label( $score ) {
-		$score = (float) $score;
-
-		if ( $score >= 70 ) {
-			return $this->translate_label( 'High' );
-		}
-
-		if ( $score >= 40 ) {
-			return $this->translate_label( 'Medium' );
-		}
-
-		return $this->translate_label( 'Low' );
+		return $this->translate_label( ucfirst( self::get_confidence_label_key( $score ) ) );
 	}
 
 	/**
@@ -424,39 +525,6 @@ class Opti_Behavior_Smart_Insights_Scorer {
 		}
 
 		return (float) $left[ $left_key ] - (float) $right[ $right_key ];
-	}
-
-	/**
-	 * Whether a detection gap exists.
-	 *
-	 * @param array  $detection Detection output.
-	 * @param string $key       Gap key.
-	 * @return bool
-	 */
-	private function gap_exists( $detection, $key ) {
-		return isset( $detection[ $key ] ) && null !== $detection[ $key ] && 0 !== (float) $detection[ $key ];
-	}
-
-	/**
-	 * Whether scroll/time fallback confirms the issue.
-	 *
-	 * @param array $detection Detection output.
-	 * @return bool
-	 */
-	private function engagement_metric_confirms_issue( $detection ) {
-		if ( isset( $detection['scroll_gap'] ) && null !== $detection['scroll_gap'] && (float) $detection['scroll_gap'] <= -20 ) {
-			return true;
-		}
-
-		if ( isset( $detection['time_on_page_gap'] ) && null !== $detection['time_on_page_gap'] && (float) $detection['time_on_page_gap'] <= 0 ) {
-			return true;
-		}
-
-		if ( ! empty( $detection['fallback_used'] ) && ! empty( $detection['supporting_metrics'] ) ) {
-			return true;
-		}
-
-		return false;
 	}
 
 	/**

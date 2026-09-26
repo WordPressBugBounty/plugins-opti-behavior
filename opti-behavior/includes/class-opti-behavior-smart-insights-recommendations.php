@@ -23,6 +23,35 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Opti_Behavior_Smart_Insights_Recommendations {
 
+	/**
+	 * Short form of a next action, for the card and the weekly summary (the
+	 * modal keeps the full sentence): the part before the first ": " (the
+	 * numbers after it are already on the card), else the first sentence,
+	 * without a parenthesised figure, at most 90 characters. Pure.
+	 *
+	 * @param string $action Full action.
+	 * @return string
+	 */
+	public static function short_action( $action ) {
+		$action = trim( preg_replace( '/\s+/u', ' ', (string) $action ) );
+		if ( '' === $action ) {
+			return '';
+		}
+		$colon = mb_strpos( $action, ': ' );
+		if ( false !== $colon && $colon >= 12 ) {
+			$action = mb_substr( $action, 0, $colon );
+		} elseif ( preg_match( '/^(.{12,}?[.!?])\s/u', $action, $m ) ) {
+			$action = $m[1];
+		}
+		$action = trim( preg_replace( '/\s*\([^)]*\d[^)]*\)/u', '', $action ) );
+		$action = rtrim( $action, ' .,;' );
+		if ( mb_strlen( $action ) > 90 ) {
+			$action = rtrim( mb_substr( $action, 0, 89 ) ) . '…';
+		}
+
+		return $action;
+	}
+
 	const TEMPLATE_PAGE_LOW_ENGAGEMENT = 'page_low_engagement_v1';
 	const TEMPLATE_PAGE_HIGH_EXIT_RATE = 'page_high_exit_rate_v1';
 	const TEMPLATE_PAGE_LOW_SCROLL_DEPTH = 'page_low_scroll_depth_v1';

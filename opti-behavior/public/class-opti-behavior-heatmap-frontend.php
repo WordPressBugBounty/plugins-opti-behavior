@@ -99,6 +99,40 @@ class Opti_Behavior_Heatmap_Frontend {
 		// existed, so the stub never printed on a real frontend) still beats
 		// wp_print_head_scripts (priority 9) and every external script tag.
 		add_action( 'wp_head', array( $this, 'print_early_event_queue' ), 2 );
+
+		// Page X-Ray thumbnail render: no script at all (see the method).
+		add_action( 'template_redirect', array( $this, 'maybe_strip_scripts_for_xray_preview' ), 0 );
+	}
+
+	/**
+	 * Page X-Ray thumbnail: the dossier shows the page in a small sandboxed
+	 * iframe where no script may run, so every <script> tag of the page logged
+	 * a "Blocked script execution" error in the admin console. The thumbnail
+	 * render (?opti_xray_preview=1) is served without scripts — hence without
+	 * any tracker — and is never cached. No capability check: a sandboxed
+	 * frame sends no login cookie, and a page without its scripts exposes
+	 * nothing the public page does not.
+	 *
+	 * @return void
+	 */
+	public function maybe_strip_scripts_for_xray_preview() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- GET flag, read-only, no state change.
+		if ( ! isset( $_GET['opti_xray_preview'] ) || is_admin() ) {
+			return;
+		}
+		if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+			define( 'DONOTCACHEPAGE', true ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- Cross-plugin standard constant read by page caches.
+		}
+		nocache_headers();
+		ob_start(
+			static function ( $html ) {
+				// Scripts go; embedded frames (videos, maps) become a grey block of
+				// the same shape, since they would try to run their own scripts.
+				$html = (string) preg_replace( '#<script\b[^>]*>.*?</script\s*>#is', '', (string) $html );
+
+				return (string) preg_replace( '#<iframe\b[^>]*>.*?</iframe\s*>#is', '<div style="aspect-ratio:16/9;width:100%;background:#e5e7eb"></div>', $html );
+			}
+		);
 	}
 
 	/**
@@ -582,6 +616,14 @@ class Opti_Behavior_Heatmap_Frontend {
 			return;
 		}
 
+		// Page X-Ray measurement: the Smart Insights dossier loads the page in a
+		// hidden same-origin iframe to measure where its calls to action and
+		// headings sit. An administrator's measurement is not a visit: no tracker.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- GET flag, read-only, capability-gated.
+		if ( isset( $_GET['opti_xray_measure'] ) && current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
 		if ( ! $this->should_enqueue_scripts() ) {
 			return;
 		}
@@ -1044,6 +1086,11 @@ class Opti_Behavior_Heatmap_Frontend {
 			'detected_plugin_label' => $detected_label,
 			'show_builtin_banner'   => $show_builtin,
 			'consent_cookie_name'   => 'optibehavior_consent',
+			// Lifetime of the visitor's choice + cookie scope of the server-set
+			// cookies the consent manager must expire when consent is withdrawn.
+			'consent_cookie_days'   => class_exists( 'Opti_Behavior_Consent_Preferences' ) ? Opti_Behavior_Consent_Preferences::get_consent_days( $options ) : 365,
+			'cookie_path'           => defined( 'COOKIEPATH' ) && COOKIEPATH ? COOKIEPATH : '/',
+			'cookie_domain'         => defined( 'COOKIE_DOMAIN' ) && COOKIE_DOMAIN ? COOKIE_DOMAIN : '',
 			'pending_timeout'       => 8000,
 			'is_admin_user'         => current_user_can( 'manage_options' ),
 			'banner_position'       => $banner_position,

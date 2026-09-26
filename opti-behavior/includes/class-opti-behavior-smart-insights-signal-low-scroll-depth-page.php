@@ -10,6 +10,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+// Shared page rules (also loaded when the signal file is required on its own).
+if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Page_Rules', false ) ) {
+	require_once __DIR__ . '/class-opti-behavior-smart-insights-page-rules.php';
+}
+
 if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Page_Signal_Base' ) ) {
 	require_once __DIR__ . '/class-opti-behavior-smart-insights-page-signal-base.php';
 }
@@ -26,7 +31,8 @@ class Opti_Behavior_Smart_Insights_Signal_Low_Scroll_Depth_Page extends Opti_Beh
 	const CATEGORY     = 'Page Engagement';
 	const RULE_VERSION = '1.0.0';
 	const TEMPLATE_ID  = 'page_low_scroll_depth_v1';
-	const MIN_SESSIONS = 100;
+	// Shared with Page X-Ray (Page_Rules): one verdict per page and period.
+	const MIN_SESSIONS = Opti_Behavior_Smart_Insights_Page_Rules::MIN_VISITS;
 
 	/**
 	 * Return signal configuration.
@@ -77,33 +83,18 @@ class Opti_Behavior_Smart_Insights_Signal_Low_Scroll_Depth_Page extends Opti_Beh
 			'reason'             => '',
 		);
 
-		if ( $metrics['sessions'] < $threshold ) {
-			$detection['reason'] = 'insufficient_page_sessions';
-			return $detection;
-		}
-
-		if ( ! $this->is_metric_available( $metrics['avg_scroll_depth'] ) ) {
-			$detection['reason'] = 'scroll_depth_unavailable';
-			return $detection;
-		}
-
-		$absolute_low = (float) $metrics['avg_scroll_depth'] < 35;
-		$relative_low = $this->is_metric_available( $baselines['site_avg_scroll_depth'] ) && null !== $scroll_gap && $scroll_gap < -20;
-
-		if ( $absolute_low && $relative_low ) {
-			$detection['triggered'] = true;
-			$detection['reason']    = 'primary_rule';
-			return $detection;
-		}
-
-		if ( $absolute_low && ! $this->is_metric_available( $baselines['site_avg_scroll_depth'] ) ) {
-			$detection['triggered']     = true;
+		$verdict = Opti_Behavior_Smart_Insights_Page_Rules::scroll(
+			(int) $metrics['sessions'],
+			$this->is_metric_available( $metrics['avg_scroll_depth'] ) ? $metrics['avg_scroll_depth'] : null,
+			$this->is_metric_available( $baselines['site_avg_scroll_depth'] ) ? $baselines['site_avg_scroll_depth'] : null,
+			$threshold
+		);
+		$detection['triggered'] = $verdict['triggered'];
+		$detection['reason']    = $verdict['reason'];
+		if ( $verdict['fallback'] ) {
 			$detection['fallback_used'] = 'absolute_scroll_threshold';
-			$detection['reason']        = 'baseline_unavailable_fallback';
-			return $detection;
 		}
 
-		$detection['reason'] = 'scroll_depth_not_low_enough';
 		return $detection;
 	}
 }

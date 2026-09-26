@@ -357,6 +357,8 @@ class Opti_Behavior_Onboarding {
 				'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
 				'nonce'        => wp_create_nonce( 'opti_behavior_dismiss_onboarding' ),
 				'settingsUrl'  => admin_url( 'admin.php?page=opti-behavior-settings&settings_tab=scheduled-reports' ),
+				// Finishing the setup opens the "How it works" guide (setup check).
+				'guideUrl'     => admin_url( 'admin.php?page=opti-behavior-ai-insights' ),
 				// Auto-funnel opt-in: the bulk-create endpoint lives on the
 				// funnels page class and uses its own nonce (spec.md §4.2).
 				'funnelsNonce' => wp_create_nonce( 'opti_behavior_funnels' ),
@@ -371,9 +373,10 @@ class Opti_Behavior_Onboarding {
 					'step3of4'          => __( 'Step 3 of 4', 'opti-behavior' ),
 					'step4of4'          => __( 'Step 4 of 4', 'opti-behavior' ),
 					'btnContinue'       => __( 'Continue', 'opti-behavior' ),
-					'btnGoDashboard'    => __( 'Go to Dashboard', 'opti-behavior' ),
+					'btnOpenGuide'      => __( 'Open the setup guide', 'opti-behavior' ),
 					'setupComplete'     => __( 'Setup complete', 'opti-behavior' ),
 					'setupCompleteDesc' => __( 'Your dashboard is ready. Data will appear as visitors arrive on your site.', 'opti-behavior' ),
+					'openingGuide'      => __( 'Opening the setup guide…', 'opti-behavior' ),
 					/* translators: %s: funnel name matching the selected goal. */
 					'goalMatch'         => __( 'Best match for your goal: %s', 'opti-behavior' ),
 				),
@@ -549,6 +552,13 @@ class Opti_Behavior_Onboarding {
 								<div class="ob-feature-info"><?php esc_html_e( 'Private by design', 'opti-behavior' ); ?></div>
 							</div>
 						</div>
+
+						<?php if ( class_exists( 'Opti_Behavior_Setup_Guide' ) && Opti_Behavior_Setup_Guide::admin_visits_tracked() ) : ?>
+							<div class="ob-note-box">
+								<b><?php esc_html_e( 'Your own visits count too, for now.', 'opti-behavior' ); ?></b>
+								<?php esc_html_e( 'Handy for testing: browse your site and watch the data arrive. We will offer to exclude them in 2 days.', 'opti-behavior' ); ?>
+							</div>
+						<?php endif; ?>
 					</div>
 
 					<!-- STEP 2: Choose your goal -->
@@ -625,8 +635,8 @@ class Opti_Behavior_Onboarding {
 									<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#14b8a6" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.58-3.25 3.93L12 22"/><path d="M12 2a4 4 0 0 0-4 4c0 1.95 1.4 3.58 3.25 3.93"/><line x1="4.5" y1="9" x2="19.5" y2="9"/><circle cx="7.5" cy="14" r="1.5"/><circle cx="16.5" cy="14" r="1.5"/></svg>
 								</div>
 								<div>
-									<div class="ob-goal-name"><?php esc_html_e( 'AI Insights', 'opti-behavior' ); ?></div>
-									<div class="ob-goal-desc"><?php esc_html_e( 'Smart recommendations', 'opti-behavior' ); ?></div>
+									<div class="ob-goal-name"><?php esc_html_e( 'Smart Insights', 'opti-behavior' ); ?></div>
+									<div class="ob-goal-desc"><?php esc_html_e( 'What to fix first', 'opti-behavior' ); ?></div>
 								</div>
 							</div>
 						</div>
@@ -719,6 +729,11 @@ class Opti_Behavior_Onboarding {
 						<div class="ob-status-box">
 							<div class="ob-status-dot"></div>
 							<div class="ob-status-text"><?php esc_html_e( 'You can start exploring all features right away — real visitor data will appear as soon as your first real traffic arrives', 'opti-behavior' ); ?></div>
+						</div>
+
+						<div class="ob-note-box">
+							<b><?php esc_html_e( 'Next: the setup guide.', 'opti-behavior' ); ?></b>
+							<?php esc_html_e( 'It checks that visits arrive, then shows you how Opti-Behavior turns them into “what to fix first”.', 'opti-behavior' ); ?>
 						</div>
 					</div>
 

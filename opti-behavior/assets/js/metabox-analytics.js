@@ -102,6 +102,23 @@
 
 		var S = (window.optiBehaviorMetaboxData && window.optiBehaviorMetaboxData.i18n) || {};
 
+		// Every value below comes from visitor-supplied tracking data: escape it
+		// before it is concatenated into an innerHTML string (text or attribute).
+		function escHtml(value) {
+			return String(value === null || value === undefined ? '' : value)
+				.replace(/&/g, '&amp;')
+				.replace(/</g, '&lt;')
+				.replace(/>/g, '&gt;')
+				.replace(/"/g, '&quot;')
+				.replace(/'/g, '&#39;');
+		}
+
+		// Only http(s) / mailto / tel URLs become links; anything else
+		// (javascript:, data:, garbage) is shown as plain text.
+		function isHttpUrl(value) {
+			return typeof value === 'string' && /^(https?:\/\/|mailto:|tel:)[^\s"'<>`]+$/i.test(value);
+		}
+
 		// Load the top-line + Session Type block for the active period. Chart
 		// default range follows the selected period.
 		function loadPrimary() {
@@ -477,13 +494,13 @@
 
 							html += '<div class="optibehavior-list-item optibehavior-entry-item" style="display:grid;grid-template-columns:1fr auto;align-items:center;column-gap:2px;padding:8px 2px 8px 2px;background:#f8fafc;border-radius:6px;border-left:3px solid #3b82f6;">';
 							html += '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;"><span style="margin-right:6px;">' + typeIcon + '</span>';
-							if (isDirect) {
-								html += '<strong style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;display:block;box-sizing:border-box;max-width:calc(100% - 12px);padding-right:12px;">' + displayUrl + '</strong>';
+							if (isDirect || !isHttpUrl(fullUrl)) {
+								html += '<strong style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;display:block;box-sizing:border-box;max-width:calc(100% - 12px);padding-right:12px;">' + escHtml(displayUrl) + '</strong>';
 							} else {
-								html += '<a href="' + fullUrl + '" target="_blank" rel="noopener" class="optibehavior-url" title="' + fullUrl + '" style="font-weight:600;font-size:10px;color:#0f172a;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;display:block;box-sizing:border-box;max-width:calc(100% - 12px);padding-right:12px;">' + displayUrl + '</a>';
+								html += '<a href="' + escHtml(fullUrl) + '" target="_blank" rel="noopener" class="optibehavior-url" title="' + escHtml(fullUrl) + '" style="font-weight:600;font-size:10px;color:#0f172a;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;display:block;box-sizing:border-box;max-width:calc(100% - 12px);padding-right:12px;">' + escHtml(displayUrl) + '</a>';
 							}
 							html += '</div>';
-							html += '<div style="text-align:right;white-space:nowrap;flex:0 0 48px;min-width:48px;width:48px;margin-left:8px;"><span style="font-weight:600;color:#1e40af;">' + item.count + '</span><br><small style="color:#64748b;">' + (S.visits || 'visits') + '</small></div>';
+							html += '<div style="text-align:right;white-space:nowrap;flex:0 0 48px;min-width:48px;width:48px;margin-left:8px;"><span style="font-weight:600;color:#1e40af;">' + escHtml(item.count) + '</span><br><small style="color:#64748b;">' + (S.visits || 'visits') + '</small></div>';
 							html += '</div>';
 						});
 						html += '</div>';
@@ -547,13 +564,13 @@
 
 							html += '<div class="optibehavior-list-item optibehavior-exit-item" style="display:grid;grid-template-columns:1fr auto;align-items:center;column-gap:2px;padding:8px 2px 8px 2px;background:#f8fafc;border-radius:6px;border-left:3px solid #10b981;">';
 							html += '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;"><span style="margin-right:6px;">' + typeIcon + '</span>';
-							if (isLeft) {
-								html += '<strong style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;display:block;box-sizing:border-box;max-width:calc(100% - 12px);padding-right:12px;">' + displayUrl + '</strong>';
+							if (isLeft || !isHttpUrl(fullUrl)) {
+								html += '<strong style="font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;display:block;box-sizing:border-box;max-width:calc(100% - 12px);padding-right:12px;">' + escHtml(displayUrl) + '</strong>';
 							} else {
-								html += '<a href="' + fullUrl + '" target="_blank" rel="noopener" class="optibehavior-url" title="' + fullUrl + '" style="font-weight:600;font-size:10px;color:#0f172a;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;display:block;box-sizing:border-box;max-width:calc(100% - 12px);padding-right:12px;">' + displayUrl + '</a>';
+								html += '<a href="' + escHtml(fullUrl) + '" target="_blank" rel="noopener" class="optibehavior-url" title="' + escHtml(fullUrl) + '" style="font-weight:600;font-size:10px;color:#0f172a;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;display:block;box-sizing:border-box;max-width:calc(100% - 12px);padding-right:12px;">' + escHtml(displayUrl) + '</a>';
 							}
 							html += '</div>';
-							html += '<div style="text-align:right;white-space:nowrap;flex:0 0 64px;min-width:64px;width:64px;margin-left:8px;"><span style="font-weight:600;color:#059669;">' + item.count + '</span><br><small style="color:#64748b;">' + (S.clicks || 'clicks') + '</small></div>';
+							html += '<div style="text-align:right;white-space:nowrap;flex:0 0 64px;min-width:64px;width:64px;margin-left:8px;"><span style="font-weight:600;color:#059669;">' + escHtml(item.count) + '</span><br><small style="color:#64748b;">' + (S.clicks || 'clicks') + '</small></div>';
 							html += '</div>';
 						});
 						html += '</div>';
@@ -665,12 +682,12 @@
 
 						html += '<tr style="border-bottom:1px solid #e5e7eb;">';
 						html += '<td style="padding:8px 4px;font-size:11px;font-weight:600;color:#1e293b;">';
-						html += '<img src="' + flagUrl + '" alt="' + countryName + '" style="width:20px;height:15px;margin-right:8px;vertical-align:middle;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,0.1);">';
-						html += countryName;
+						html += '<img src="' + flagUrl + '" alt="' + escHtml(countryName) + '" style="width:20px;height:15px;margin-right:8px;vertical-align:middle;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,0.1);">';
+						html += escHtml(countryName);
 						html += '</td>';
 						html += '<td style="padding:8px 4px;text-align:right;font-size:11px;font-weight:600;">';
 						html += '<span style="display:inline-flex;align-items:center;gap:6px;">';
-						html += '<span style="background:#10b981;color:#fff;padding:4px 8px;border-radius:12px;font-size:11px;min-width:32px;text-align:center;">' + count + '</span>';
+						html += '<span style="background:#10b981;color:#fff;padding:4px 8px;border-radius:12px;font-size:11px;min-width:32px;text-align:center;">' + escHtml(count) + '</span>';
 						html += '<span style="color:#64748b;font-size:11px;">' + percentage + '%</span>';
 						html += '</span>';
 						html += '</td>';
@@ -766,12 +783,12 @@
 						html += '<td style="padding:8px 4px;font-size:11px;font-weight:600;color:#1e293b;">';
 						html += '<span style="display:inline-flex;align-items:center;gap:8px;">';
 						html += '<span style="display:inline-block;vertical-align:middle;">' + browserIconSVG + '</span>';
-						html += '<span>' + browserName + '</span>';
+						html += '<span>' + escHtml(browserName) + '</span>';
 						html += '</span>';
 						html += '</td>';
 						html += '<td style="padding:8px 4px;text-align:right;font-size:11px;font-weight:600;">';
 						html += '<span style="display:inline-flex;align-items:center;gap:6px;">';
-						html += '<span style="background:#10b981;color:#fff;padding:4px 8px;border-radius:12px;font-size:11px;min-width:32px;text-align:center;">' + count + '</span>';
+						html += '<span style="background:#10b981;color:#fff;padding:4px 8px;border-radius:12px;font-size:11px;min-width:32px;text-align:center;">' + escHtml(count) + '</span>';
 						html += '<span style="color:#64748b;font-size:11px;">' + percentage + '%</span>';
 						html += '</span>';
 						html += '</td>';
@@ -845,12 +862,12 @@
 						html += '<td style="padding:8px 4px;font-size:11px;font-weight:600;color:#1e293b;">';
 						html += '<span style="display:inline-flex;align-items:center;gap:8px;">';
 						html += '<span style="display:inline-block;vertical-align:middle;">' + deviceIconSVG + '</span>';
-						html += '<span>' + deviceName + '</span>';
+						html += '<span>' + escHtml(deviceName) + '</span>';
 						html += '</span>';
 						html += '</td>';
 						html += '<td style="padding:8px 4px;text-align:right;font-size:11px;font-weight:600;">';
 						html += '<span style="display:inline-flex;align-items:center;gap:6px;">';
-						html += '<span style="background:#10b981;color:#fff;padding:4px 8px;border-radius:12px;font-size:11px;min-width:32px;text-align:center;">' + count + '</span>';
+						html += '<span style="background:#10b981;color:#fff;padding:4px 8px;border-radius:12px;font-size:11px;min-width:32px;text-align:center;">' + escHtml(count) + '</span>';
 						html += '<span style="color:#64748b;font-size:11px;">' + percentage + '%</span>';
 						html += '</span>';
 						html += '</td>';

@@ -75,6 +75,8 @@ class Opti_Behavior_Heatmap_Autoloader {
 		'Opti_Behavior_Report_Mailer'           => 'includes/class-opti-behavior-report-mailer.php',
 		// Smart Insights classes.
 		'Opti_Behavior_Smart_Insights_Repository' => 'includes/class-opti-behavior-smart-insights-repository.php',
+		'Opti_Behavior_Smart_Insights_Sensors'  => 'includes/class-opti-behavior-smart-insights-sensors.php',
+		'Opti_Behavior_Smart_Insights_Page_Rules' => 'includes/class-opti-behavior-smart-insights-page-rules.php',
 		'Opti_Behavior_Smart_Insights_Metric_Aggregator' => 'includes/class-opti-behavior-smart-insights-metric-aggregator.php',
 		'Opti_Behavior_Smart_Insights_Source_Aggregator' => 'includes/class-opti-behavior-smart-insights-source-aggregator.php',
 		'Opti_Behavior_Smart_Insights_Device_Aggregator' => 'includes/class-opti-behavior-smart-insights-device-aggregator.php',

@@ -2301,6 +2301,31 @@
 				if (hexSpan) { hexSpan.textContent = picker.value; }
 			});
 		});
+
+		// Copy-to-clipboard for shortcode boxes ([opti_behavior_cookie_settings]).
+		document.querySelectorAll('[data-ob-copy-target]').forEach(function(btn) {
+			btn.addEventListener('click', function() {
+				var source = document.getElementById(btn.getAttribute('data-ob-copy-target'));
+				if (!source) { return; }
+				var text = source.textContent;
+				var original = btn.textContent;
+				var done = function() {
+					btn.textContent = btn.getAttribute('data-ob-copied-label') || original;
+					setTimeout(function() { btn.textContent = original; }, 1800);
+				};
+				if (navigator.clipboard && navigator.clipboard.writeText) {
+					navigator.clipboard.writeText(text).then(done, function() {});
+					return;
+				}
+				// Non-secure context (http): fall back to a selection-based copy.
+				var range = document.createRange();
+				range.selectNodeContents(source);
+				var selection = window.getSelection();
+				selection.removeAllRanges();
+				selection.addRange(range);
+				try { if (document.execCommand('copy')) { done(); } } catch (e) { /* leave the text selected */ }
+			});
+		});
 	}());
 
 	// =========================================================

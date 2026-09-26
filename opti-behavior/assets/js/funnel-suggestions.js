@@ -397,11 +397,16 @@
 
 	// Display-only preference: fired and forgotten, because a failed save costs
 	// one click on the next load and must not shout over a real status message.
-	function savePrefs(data) {
+	// Always sends BOTH keys: the server rewrites the whole meta row, so two quick
+	// toggles sending one key each raced and the last write dropped the other.
+	function savePrefs() {
 		if (!isListSurface()) {
 			return;
 		}
-		post('optibehavior_funnel_suggestions_prefs', data, function () {}, function () {});
+		post('optibehavior_funnel_suggestions_prefs', {
+			collapsed: collapsed ? 1 : 0,
+			show_created: showCreated ? 1 : 0
+		}, function () {}, function () {});
 	}
 
 	function render(payload) {
@@ -724,13 +729,13 @@
 		$(document).on('click', '#opti-funnel-suggestions-toggle', function () {
 			collapsed = !collapsed;
 			applyCollapsed();
-			savePrefs({ collapsed: collapsed ? 1 : 0 });
+			savePrefs();
 		});
 
 		$(document).on('click', '#opti-funnel-suggestions-created-toggle', function () {
 			showCreated = !showCreated;
 			applyShowCreated();
-			savePrefs({ show_created: showCreated ? 1 : 0 });
+			savePrefs();
 		});
 
 		// Consume the flash BEFORE the round-trip (one-shot: a manual refresh must

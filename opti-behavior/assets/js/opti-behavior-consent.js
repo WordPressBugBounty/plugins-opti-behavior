@@ -154,22 +154,265 @@
     // =========================================================================
 
     /**
-     * Grant consent: set cookie, fire event, hide banner.
+     * Lifetime of the visitor's choice, in days (site setting; CNIL good
+     * practice is 6 months).
+     *
+     * @return {number}
      */
-    function grantConsent() {
-        setCookie( CONSENT_COOKIE, 'granted', 365 );
-        hideBanner();
-        fireConsentEvent( 'granted' );
+    function consentDays() {
+        var days = parseInt( config.consent_cookie_days, 10 );
+        return days > 0 ? days : 180;
     }
 
     /**
-     * Reject consent: set cookie, fire event, hide banner.
+     * Expire a cookie on every path / domain scope the plugin may have used
+     * (JS trackers write on "/", the server-side A/B bucketer on COOKIEPATH).
+     *
+     * @param {string} name Cookie name.
+     */
+    function expireCookie( name ) {
+        var secure  = window.location.protocol === 'https:' ? '; Secure' : '';
+        var paths   = [ '/' ];
+        var domains = [ '' ];
+        if ( config.cookie_path && config.cookie_path !== '/' ) { paths.push( config.cookie_path ); }
+        if ( config.cookie_domain ) { domains.push( config.cookie_domain ); }
+
+        for ( var p = 0; p < paths.length; p++ ) {
+            for ( var d = 0; d < domains.length; d++ ) {
+                document.cookie = name + '=; path=' + paths[ p ] +
+                    ( domains[ d ] ? '; domain=' + domains[ d ] : '' ) +
+                    '; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax' + secure;
+            }
+        }
+    }
+
+    /**
+     * Remove every identifier the full-tracking mode stored on this device.
+     *
+     * Runs when consent is withdrawn and on every page load while the choice
+     * is "rejected", so an identifier re-written by a tracker during the
+     * withdrawal reload never survives. Deleting is not "storing" information
+     * (PECR-safe). Cookieless Anonymous tracking keeps no client-side state, so
+     * nothing it relies on is touched.
+     *
+     * @param {boolean} deep Also sweep the Pro recorder's local buffers.
+     */
+    function purgeTrackingStorage( deep ) {
+        var cookieNames = [
+            'optibehavior_sid', 'optibehavior_vid',
+            'opti_behavior_session_id', 'opti_behavior_visitor_id', 'opti_behavior_vid',
+            'opti_ab_v'
+        ];
+        var parts = document.cookie ? document.cookie.split( ';' ) : [];
+        for ( var i = 0; i < parts.length; i++ ) {
+            var cname = parts[ i ].split( '=' )[ 0 ].replace( /^\s+/, '' );
+            if ( /^opti_ab_\d+$/.test( cname ) ) { cookieNames.push( cname ); }
+        }
+        for ( var c = 0; c < cookieNames.length; c++ ) {
+            if ( getCookie( cookieNames[ c ] ) !== null ) { expireCookie( cookieNames[ c ] ); }
+        }
+
+        var keys   = [ 'optibehavior_vid', 'optibehavior_last_activity', 'optibehavior_session_start', 'opti_behavior_pro_session_data' ];
+        var stores = [];
+        try { stores.push( window.localStorage ); } catch ( e ) { /* storage blocked */ }
+        try { stores.push( window.sessionStorage ); } catch ( e2 ) { /* storage blocked */ }
+
+        for ( var s = 0; s < stores.length; s++ ) {
+            var store = stores[ s ];
+            if ( ! store ) { continue; }
+            try {
+                for ( var k = 0; k < keys.length; k++ ) { store.removeItem( keys[ k ] ); }
+                if ( deep ) {
+                    for ( var n = store.length - 1; n >= 0; n-- ) {
+                        var key = store.key( n );
+                        if ( key && key.indexOf( 'opti_behavior_pro_' ) === 0 ) { store.removeItem( key ); }
+                    }
+                }
+            } catch ( e3 ) { /* storage blocked */ }
+        }
+    }
+
+    /**
+     * Record the visitor's decision: set cookie, fire event, hide banner.
+     *
+     * Also handles a CHANGED decision (banner reopened, preference centre,
+     * third-party banner): the consent event fires again, and withdrawing a
+     * previously granted consent wipes the identifiers and reloads the page so
+     * every tracker restarts in cookieless anonymous mode.
+     *
+     * @param {string} status 'granted' or 'rejected'.
+     */
+    function applyConsent( status ) {
+        var previous = getCookie( CONSENT_COOKIE );
+
+        setCookie( CONSENT_COOKIE, status, consentDays() );
+        hideBanner();
+
+        if ( previous && previous !== status ) {
+            _resolved = false;
+        }
+        fireConsentEvent( status );
+        refreshPreferenceCards();
+
+        if ( previous === 'granted' && status === 'rejected' ) {
+            purgeTrackingStorage( true );
+            window.location.reload();
+        }
+    }
+
+    /**
+     * Close button / Escape. First visit: closing without choosing = refusal.
+     * Reopened banner ("manage my cookies"): closing keeps the stored choice —
+     * it must never silently withdraw a consent the visitor already gave.
+     */
+    function dismissBanner() {
+        if ( getStoredChoice() === 'pending' ) {
+            rejectConsent();
+        } else {
+            hideBanner();
+        }
+    }
+
+    /**
+     * Grant consent.
+     */
+    function grantConsent() {
+        applyConsent( 'granted' );
+    }
+
+    /**
+     * Reject (or withdraw) consent.
      */
     function rejectConsent() {
-        setCookie( CONSENT_COOKIE, 'rejected', 365 );
-        hideBanner();
-        fireConsentEvent( 'rejected' );
+        applyConsent( 'rejected' );
     }
+
+    // =========================================================================
+    // Preference centre ([opti_behavior_cookie_settings] shortcode)
+    // =========================================================================
+
+    /**
+     * Visitor's stored choice.
+     *
+     * @return {string} 'granted' | 'rejected' | 'pending'.
+     */
+    function getStoredChoice() {
+        var value = getCookie( CONSENT_COOKIE );
+        return ( value === 'granted' || value === 'rejected' ) ? value : 'pending';
+    }
+
+    /**
+     * Sync every preference card on the page with the stored choice.
+     *
+     * @param {string=} feedbackKey data-label-* key to announce (e.g. 'saved').
+     */
+    function refreshPreferenceCards( feedbackKey ) {
+        var cards = document.querySelectorAll( '[data-ob-cookie-prefs]' );
+        var choice = getStoredChoice();
+
+        for ( var i = 0; i < cards.length; i++ ) {
+            var card     = cards[ i ];
+            var status   = card.querySelector( '[data-ob-status]' );
+            var checkbox = card.querySelector( '[data-ob-analytics]' );
+            var feedback = card.querySelector( '[data-ob-feedback]' );
+
+            if ( status ) {
+                status.className   = 'ob-cookie-prefs__status ob-cookie-prefs__status--' + choice;
+                status.textContent = card.getAttribute( 'data-label-' + choice ) || choice;
+            }
+            if ( checkbox ) {
+                checkbox.checked = ( choice === 'granted' );
+            }
+            if ( feedback && feedbackKey ) {
+                feedback.textContent = card.getAttribute( 'data-label-' + feedbackKey ) || '';
+            }
+        }
+    }
+
+    /**
+     * Wire the preference cards and the "manage my cookies" triggers.
+     */
+    function initPreferenceCards() {
+        var cards = document.querySelectorAll( '[data-ob-cookie-prefs]' );
+
+        for ( var i = 0; i < cards.length; i++ ) {
+            ( function ( card ) {
+                if ( card.getAttribute( 'data-ob-ready' ) ) { return; }
+                card.setAttribute( 'data-ob-ready', '1' );
+
+                var inactive  = card.querySelector( '[data-ob-inactive]' );
+                var adminNote = card.querySelector( '[data-ob-admin-note]' );
+                var checkbox  = card.querySelector( '[data-ob-analytics]' );
+                var controls  = card.querySelectorAll( '[data-ob-action], [data-ob-analytics]' );
+
+                if ( inactive ) { inactive.hidden = true; }
+
+                // Administrators are always auto-granted: show why, keep it read-only.
+                if ( config.is_admin_user ) {
+                    if ( adminNote ) { adminNote.hidden = false; }
+                    return;
+                }
+
+                for ( var c = 0; c < controls.length; c++ ) { controls[ c ].disabled = false; }
+
+                card.addEventListener( 'click', function ( e ) {
+                    var target = e.target;
+                    while ( target && target !== card && ! ( target.getAttribute && target.getAttribute( 'data-ob-action' ) ) ) {
+                        target = target.parentNode;
+                    }
+                    if ( ! target || target === card ) { return; }
+
+                    var action = target.getAttribute( 'data-ob-action' );
+                    var grant  = action === 'accept' || ( action === 'save' && checkbox && checkbox.checked );
+
+                    if ( grant ) { grantConsent(); } else { rejectConsent(); }
+                    refreshPreferenceCards( 'saved' );
+                } );
+            }( cards[ i ] ) );
+        }
+
+        refreshPreferenceCards();
+
+        if ( ! document.documentElement.getAttribute( 'data-ob-consent-triggers' ) ) {
+            document.documentElement.setAttribute( 'data-ob-consent-triggers', '1' );
+            document.addEventListener( 'click', function ( e ) {
+                var el = e.target;
+                while ( el && el !== document ) {
+                    if ( el.getAttribute && ( el.getAttribute( 'data-ob-consent-open' ) ||
+                        ( el.classList && el.classList.contains( 'ob-consent-open' ) ) ) ) {
+                        e.preventDefault();
+                        openPreferences();
+                        return;
+                    }
+                    el = el.parentNode;
+                }
+            } );
+        }
+    }
+
+    /**
+     * Let the visitor review their choice: reopen the built-in banner, or
+     * scroll to a preference card when the banner is not ours to show.
+     */
+    function openPreferences() {
+        if ( config.show_builtin_banner && ! config.is_admin_user ) {
+            _customizeOpen = false;
+            showBanner();
+            return;
+        }
+        var card = document.querySelector( '[data-ob-cookie-prefs]' );
+        if ( card && card.scrollIntoView ) {
+            card.scrollIntoView( { behavior: 'smooth', block: 'center' } );
+        }
+    }
+
+    // Public API for themes / custom links: OptiBehaviorConsent.open().
+    window.OptiBehaviorConsent = {
+        open:      openPreferences,
+        accept:    function () { grantConsent(); },
+        reject:    function () { rejectConsent(); },
+        getStatus: getStoredChoice
+    };
 
     // =========================================================================
     // Third-party integrations
@@ -448,7 +691,7 @@
             closeBtn.className = 'ob-consent-banner__close';
             closeBtn.innerHTML = '&times;';
             closeBtn.setAttribute( 'aria-label', closeLabel );
-            closeBtn.addEventListener( 'click', function () { rejectConsent(); } );
+            closeBtn.addEventListener( 'click', function () { dismissBanner(); } );
             banner.appendChild( closeBtn );
         }
 
@@ -567,7 +810,7 @@
         banner.addEventListener( 'keydown', function ( e ) {
             var key = e.key || e.keyCode;
             if ( key === 'Escape' || key === 27 ) {
-                rejectConsent();
+                dismissBanner();
             }
             // Basic focus trap
             trapFocus( banner, e );
@@ -602,6 +845,8 @@
         checkbox.id      = 'ob-consent-analytics-toggle';
         checkbox.className = 'ob-consent-customize__checkbox';
         checkbox.setAttribute( 'aria-label', config.banner_analytics_aria || 'Allow analytics cookies' );
+        // Reopened banner ("manage my cookies"): reflect the stored choice.
+        checkbox.checked = ( getCookie( CONSENT_COOKIE ) === 'granted' );
 
         var slider = document.createElement( 'span' );
         slider.className = 'ob-consent-customize__slider';
@@ -783,6 +1028,10 @@
         // Update the module-level PENDING_TIMEOUT from resolved config.
         PENDING_TIMEOUT = parseInt( config.pending_timeout, 10 ) || 8000;
 
+        // Preference centre ([opti_behavior_cookie_settings]) + "manage my
+        // cookies" triggers work in every consent state.
+        initPreferenceCards();
+
         // 0. Admin users: auto-grant consent without showing banner.
         //    Admins manage the site — showing them a consent banner is not logical.
         //    NOTE: We set the cookie and mark resolved, but do NOT dispatch the
@@ -792,15 +1041,23 @@
         //    the event here would trigger the tracker's reload listener and
         //    cause an infinite reload loop.
         if ( config.is_admin_user ) {
-            setCookie( CONSENT_COOKIE, 'granted', 365 );
+            setCookie( CONSENT_COOKIE, 'granted', consentDays() );
             window.optiBehaviorConsentState = 'granted';
             _resolved = true;
+            refreshPreferenceCards();
             return;
         }
 
         // 1. Check existing consent cookie → fire event immediately
         var existing = getCookie( CONSENT_COOKIE );
         if ( existing === 'granted' || existing === 'rejected' ) {
+            // Refused / withdrawn: no full-tracking identifier may linger. Deep
+            // sweep: the recorder re-writes session-keyed markers while the
+            // withdrawal reload unloads the page, and once consent is refused
+            // it runs on in-memory storage only, so nothing it needs is lost.
+            if ( existing === 'rejected' ) {
+                purgeTrackingStorage( true );
+            }
             window.optiBehaviorConsentState = existing;
             fireConsentEvent( existing );
             return;
@@ -818,6 +1075,11 @@
             integrations[ detectedPlugin ]();
             return;
         }
+
+        // No valid choice and no third-party banner that could still report one
+        // (never chosen, or the stored choice expired after consent_cookie_days):
+        // identifiers written under an earlier consent must not outlive it.
+        purgeTrackingStorage( true );
 
         // 4. Built-in banner — visitor has unlimited time to decide
         //    Anonymous tracking is already running in the background.

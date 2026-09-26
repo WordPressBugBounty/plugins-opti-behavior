@@ -23,6 +23,16 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Opti_Behavior_Smart_Insights_Generator {
 
+	/**
+	 * Absolute floors of the rank-based priority labels (visits lost).
+	 */
+	// Critical needs at least max( this, CRITICAL_MIN_LOST_SHARE of the site's visits ) visits lost (filterable).
+	const PRIORITY_CRITICAL_MIN_LOST = 25;
+	const CRITICAL_MIN_LOST_SHARE    = 0.05;
+	// Critical also needs this measured sample and a High confidence.
+	const CRITICAL_MIN_SAMPLE        = 100;
+	const PRIORITY_HIGH_MIN_LOST     = 10;
+
 	const DEFAULT_PERIOD = 'last30days';
 	const CRON_HOOK      = 'opti_behavior_smart_insights_generate_daily';
 
@@ -53,6 +63,27 @@ class Opti_Behavior_Smart_Insights_Generator {
 	 * @var Opti_Behavior_Smart_Insights_Signal_Registry
 	 */
 	private $signal_registry;
+
+	/**
+	 * signal_id => rule_version of the signals evaluated by the current run.
+	 *
+	 * @var array
+	 */
+	private $evaluated_rule_versions = array();
+
+	/**
+	 * Site visits in the run's range (absolute impact, Critical floor).
+	 *
+	 * @var int
+	 */
+	private $run_site_sessions = 0;
+
+	/**
+	 * Group keys of the candidates merged into a data twin by this run.
+	 *
+	 * @var array
+	 */
+	private $merged_group_keys = array();
 
 	/**
 	 * Constructor.
@@ -139,6 +170,7 @@ class Opti_Behavior_Smart_Insights_Generator {
 		$candidate_insights = array();
 		$active_group_keys  = array();
 		$evaluated_signal_ids = array();
+		$this->evaluated_rule_versions = array();
 		$evaluated_entity_types = array();
 		$evaluated_signal_ids_by_entity = array();
 		// Bug 5 hardening: the additional-entity loop used to `continue` silently on
@@ -343,10 +375,13 @@ class Opti_Behavior_Smart_Insights_Generator {
 				}
 			}
 
+			$candidate_insights = $this->merge_data_twins( $candidate_insights, $args['exclude_spam'] );
+			$candidate_insights = $this->attach_step_pages( $candidate_insights );
 			$candidate_insights = $this->apply_noise_suppression( $candidate_insights );
 			$candidate_insights = $this->apply_correlation( $candidate_insights, $date_range, $signal_evaluation_args );
-			$candidate_insights = $this->apply_impact_scoring( $candidate_insights, $date_range, $signal_evaluation_args );
-			$candidate_insights = $this->apply_priority_ranking( $candidate_insights );
+			$this->run_site_sessions = isset( $baselines['site_sessions'] ) ? max( 0, (int) $baselines['site_sessions'] ) : 0;
+			$candidate_insights      = $this->apply_impact_scoring( $candidate_insights, $date_range, array_merge( (array) $signal_evaluation_args, array( 'site_sessions' => $this->run_site_sessions ) ) );
+			$candidate_insights      = $this->apply_priority_ranking( $candidate_insights );
 			$candidate_insights = $this->apply_noise_suppression_marking( $candidate_insights );
 			$candidate_insights = $this->apply_evidence_refs( $candidate_insights, $date_range, $signal_evaluation_args );
 
@@ -402,7 +437,39 @@ class Opti_Behavior_Smart_Insights_Generator {
 				do_action( 'opti_behavior_smart_insight_saved', $insight, (int) $stored_id );
 			}
 
-			$auto_resolve_spam_scope = null === $args['exclude_spam'] ? null : $this->normalize_spam_scope_key( $args['exclude_spam'] );
+			// A run only closes cards of its OWN spam scope: an unscoped run
+			// ('default' = cards without a scope suffix) used to pass null, which
+			// closed the cards of the other scopes it never evaluated.
+			$auto_resolve_spam_scope = $this->normalize_spam_scope_key( $args['exclude_spam'] );
+			$rule_updated            = 0;
+			$merged_duplicates       = 0;
+
+			// Every run (the admin auto-refresh runs without auto_resolve): the
+			// twins it merged, and the cards an older rule raised that this run
+			// did not confirm, are closed as retired statuses, never as wins.
+			if ( ! empty( $page_metrics ) || ! empty( $baselines['site_sessions'] ) ) {
+				// Cards merged into a data twin: closed as `merged_duplicate`.
+				if ( ! empty( $this->merged_group_keys ) && method_exists( $this->repository, 'close_merged_duplicates' ) ) {
+					$merged = $this->repository->close_merged_duplicates( $this->merged_group_keys );
+					if ( ! is_wp_error( $merged ) ) {
+						$merged_duplicates += (int) $merged;
+					}
+				}
+				// Then the cards an older rule raised and the current rule no
+				// longer confirms: closed as `rule_updated`, never as resolved.
+				if ( method_exists( $this->repository, 'close_outdated_rule_insights' ) ) {
+					$closed = $this->repository->close_outdated_rule_insights(
+						$date_range['from'],
+						$date_range['to'],
+						array_intersect_key( $this->evaluated_rule_versions, array_flip( array_values( array_unique( array_filter( $evaluated_signal_ids ) ) ) ) ),
+						array_values( array_unique( $active_group_keys ) ),
+						array( 'spam_scope' => $auto_resolve_spam_scope )
+					);
+					if ( ! is_wp_error( $closed ) ) {
+						$rule_updated += (int) $closed;
+					}
+				}
+			}
 
 			if ( ! empty( $args['auto_resolve'] ) && ( ! empty( $page_metrics ) || ! empty( $baselines['site_sessions'] ) ) ) {
 				if ( method_exists( $this->repository, 'auto_resolve_unseen_insights' ) ) {
@@ -461,6 +528,8 @@ class Opti_Behavior_Smart_Insights_Generator {
 				'generated_count' => count( array_unique( $stored_ids ) ),
 				'stored_ids'     => array_values( array_unique( $stored_ids ) ),
 				'auto_resolved'  => $auto_resolved,
+				'rule_updated'   => $rule_updated,
+				'merged_duplicates' => $merged_duplicates,
 				// Bug 5 hardening: per-entity signals/metrics/candidates/stored counts
 				// plus an explicit skip reason, so "the full run stored no
 				// funnel/form/error insights" can be diagnosed from the run result
@@ -1403,6 +1472,186 @@ class Opti_Behavior_Smart_Insights_Generator {
 	}
 
 	/**
+	 * The data a rule measured, as a signature: two candidates of the same
+	 * signal with the same signature describe the same thing (four funnels
+	 * tracking the same steps with the same visitors are one problem, not
+	 * four). Funnels: visits, completions, reached per step, normalised step
+	 * definitions; pages: the canonical URL; forms: form id, starts, submits.
+	 * Other entities have no signature (never merged). Pure.
+	 *
+	 * @param array $insight Insight.
+	 * @param array $metrics Metrics the rule measured.
+	 * @return string '' when the entity has no signature.
+	 */
+	public static function data_signature( $insight, $metrics ) {
+		$signal  = isset( $insight['signal_id'] ) ? sanitize_key( (string) $insight['signal_id'] ) : '';
+		$type    = isset( $insight['entity_type'] ) ? sanitize_key( (string) $insight['entity_type'] ) : '';
+		$metrics = is_array( $metrics ) ? $metrics : array();
+		$inputs  = null;
+		switch ( $type ) {
+			case 'funnel':
+				if ( empty( $metrics['steps'] ) || ! is_array( $metrics['steps'] ) || ! class_exists( 'Opti_Behavior_Smart_Insights_Funnel_Aggregator' ) ) {
+					break;
+				}
+				$inputs = array(
+					isset( $metrics['entries'] ) ? (int) $metrics['entries'] : 0,
+					isset( $metrics['completions'] ) ? (int) $metrics['completions'] : 0,
+					array_map(
+						function ( $step ) {
+							return is_array( $step ) && isset( $step['reached'] ) ? (int) $step['reached'] : 0;
+						},
+						array_values( $metrics['steps'] )
+					),
+					Opti_Behavior_Smart_Insights_Funnel_Aggregator::normalize_step_definitions( $metrics['steps'] ),
+				);
+				break;
+			case 'page':
+				$url = '';
+				foreach ( array( 'canonical_url', 'page_url', 'url' ) as $key ) {
+					if ( ! empty( $metrics[ $key ] ) && is_string( $metrics[ $key ] ) ) {
+						$url = $metrics[ $key ];
+						break;
+					}
+				}
+				$parts = '' !== $url ? wp_parse_url( $url ) : false;
+				if ( ! is_array( $parts ) || ( empty( $parts['host'] ) && empty( $parts['path'] ) ) ) {
+					break;
+				}
+				$path   = isset( $parts['path'] ) ? rtrim( strtolower( $parts['path'] ), '/' ) : '';
+				$inputs = array( isset( $parts['host'] ) ? strtolower( $parts['host'] ) : '', '' === $path ? '/' : $path );
+				break;
+			case 'form':
+				$form = isset( $metrics['form_id'] ) ? (string) $metrics['form_id'] : ( isset( $insight['entity_id'] ) ? (string) $insight['entity_id'] : '' );
+				if ( '' === $form ) {
+					break;
+				}
+				$inputs = array( $form, isset( $metrics['starts'] ) ? (int) $metrics['starts'] : 0, isset( $metrics['submits'] ) ? (int) $metrics['submits'] : 0 );
+				break;
+		}
+
+		return null === $inputs || '' === $signal ? '' : $signal . ':' . $type . ':' . md5( (string) wp_json_encode( $inputs ) );
+	}
+
+	/**
+	 * The tracked page behind the step visitors leave, for every funnel card
+	 * of the run, in ONE query: a step whose URL pattern is exactly one page's
+	 * path gets `detection.worst_transition.page_id` (the card then opens that
+	 * page's Page X-Ray). A pattern that matches several pages gets none.
+	 *
+	 * @param array $candidates Candidate records.
+	 * @return array
+	 */
+	private function attach_step_pages( $candidates ) {
+		global $wpdb;
+		$paths = array();
+		foreach ( (array) $candidates as $index => $candidate ) {
+			$worst = isset( $candidate['insight']['detection']['worst_transition'] ) && is_array( $candidate['insight']['detection']['worst_transition'] ) ? $candidate['insight']['detection']['worst_transition'] : null;
+			$url   = $worst && isset( $worst['from_url'] ) ? (string) $worst['from_url'] : '';
+			$path  = '' !== $url ? (string) wp_parse_url( $url, PHP_URL_PATH ) : '';
+			$path  = strtolower( rtrim( $path, '/' ) );
+			if ( '' !== $path && ( ! isset( $worst['from_match'] ) || in_array( $worst['from_match'], array( '', 'exact', 'contains', 'starts_with' ), true ) ) ) {
+				$paths[ $index ] = $path;
+			}
+		}
+		$table = $wpdb->prefix . 'optibehavior_pages';
+		if ( empty( $paths ) || ! $this->repository->table_exists_named( $table ) ) {
+			return $candidates;
+		}
+		$likes  = array();
+		$values = array();
+		foreach ( array_unique( $paths ) as $path ) {
+			$likes[]  = 'url LIKE %s';
+			$values[] = '%' . $wpdb->esc_like( $path ) . '%';
+		}
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- One lookup per generation run on a plugin table (name from $wpdb->prefix); every value bound, one LIKE placeholder per path.
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT id, url FROM {$table} WHERE " . implode( ' OR ', $likes ) . ' ORDER BY id ASC LIMIT 500', $values ), ARRAY_A );
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$exact = array();
+		foreach ( (array) $rows as $row ) {
+			$p = strtolower( rtrim( (string) wp_parse_url( (string) $row['url'], PHP_URL_PATH ), '/' ) );
+			// Several rows on one path (query strings, siblings): the first id is the page.
+			if ( '' !== $p && ! isset( $exact[ $p ] ) ) {
+				$exact[ $p ] = (int) $row['id'];
+			}
+		}
+		foreach ( $paths as $index => $path ) {
+			if ( isset( $exact[ $path ] ) ) {
+				$candidates[ $index ]['insight']['detection']['worst_transition']['page_id'] = $exact[ $path ];
+			}
+		}
+
+		return $candidates;
+	}
+
+	/**
+	 * Merge candidates that share a data signature into ONE card: the entity
+	 * with the most recent activity (tie: lowest id) stays, carries
+	 * `detection.duplicates` [ { entity_id, entity_label } ] for the UI, and
+	 * keeps its group key (history and status survive). The others are
+	 * dropped from the run; their stored cards are closed as
+	 * `merged_duplicate` (see generate_for_period()).
+	 *
+	 * @param array     $candidates   Candidate records.
+	 * @param bool|null $exclude_spam Run spam scope.
+	 * @return array
+	 */
+	private function merge_data_twins( $candidates, $exclude_spam = null ) {
+		$this->merged_group_keys = array();
+		if ( empty( $candidates ) || ! is_array( $candidates ) ) {
+			return is_array( $candidates ) ? $candidates : array();
+		}
+
+		$groups = array();
+		foreach ( $candidates as $index => $candidate ) {
+			if ( empty( $candidate['insight'] ) || ! is_array( $candidate['insight'] ) ) {
+				continue;
+			}
+			$signature = self::data_signature( $candidate['insight'], isset( $candidate['metrics'] ) ? $candidate['metrics'] : array() );
+			if ( '' !== $signature ) {
+				$groups[ $signature ][] = $index;
+			}
+		}
+
+		$drop = array();
+		foreach ( $groups as $indexes ) {
+			if ( count( $indexes ) < 2 ) {
+				continue;
+			}
+			usort(
+				$indexes,
+				function ( $a, $b ) use ( $candidates ) {
+					$seen_a = isset( $candidates[ $a ]['metrics']['last_seen_at'] ) ? (string) $candidates[ $a ]['metrics']['last_seen_at'] : '';
+					$seen_b = isset( $candidates[ $b ]['metrics']['last_seen_at'] ) ? (string) $candidates[ $b ]['metrics']['last_seen_at'] : '';
+					if ( $seen_a !== $seen_b ) {
+						return strcmp( $seen_b, $seen_a );
+					}
+					$id_a = isset( $candidates[ $a ]['insight']['entity_id'] ) ? (string) $candidates[ $a ]['insight']['entity_id'] : '';
+					$id_b = isset( $candidates[ $b ]['insight']['entity_id'] ) ? (string) $candidates[ $b ]['insight']['entity_id'] : '';
+					if ( is_numeric( $id_a ) && is_numeric( $id_b ) ) {
+						return (int) $id_a <=> (int) $id_b;
+					}
+					return strcmp( $id_a, $id_b );
+				}
+			);
+			$primary    = array_shift( $indexes );
+			$duplicates = array();
+			foreach ( $indexes as $index ) {
+				$twin         = $candidates[ $index ]['insight'];
+				$duplicates[] = array(
+					'entity_id'    => isset( $twin['entity_id'] ) ? sanitize_text_field( (string) $twin['entity_id'] ) : '',
+					'entity_label' => isset( $twin['entity_label'] ) ? sanitize_text_field( (string) $twin['entity_label'] ) : '',
+				);
+				$this->merged_group_keys[] = $this->build_insight_group_key( $this->apply_spam_scope_to_insight( $twin, $exclude_spam ) );
+				$drop[ $index ]            = true;
+			}
+			$candidates[ $primary ]['insight']['detection']               = isset( $candidates[ $primary ]['insight']['detection'] ) && is_array( $candidates[ $primary ]['insight']['detection'] ) ? $candidates[ $primary ]['insight']['detection'] : array();
+			$candidates[ $primary ]['insight']['detection']['duplicates'] = $duplicates;
+		}
+
+		return array_values( array_diff_key( $candidates, $drop ) );
+	}
+
+	/**
 	 * Collect stable signal IDs from a signal list.
 	 *
 	 * @param array  $signals     Signal instances.
@@ -1418,6 +1667,11 @@ class Opti_Behavior_Smart_Insights_Generator {
 				$definition = $signal->get_definition();
 				if ( is_array( $definition ) && ! empty( $definition['signal_id'] ) ) {
 					$ids[] = sanitize_key( $definition['signal_id'] );
+					// Current rule of every evaluated signal: older cards it no
+					// longer confirms close as `rule_updated`, not as a win.
+					if ( ! empty( $definition['rule_version'] ) ) {
+						$this->evaluated_rule_versions[ sanitize_key( $definition['signal_id'] ) ] = sanitize_text_field( (string) $definition['rule_version'] );
+					}
 					continue;
 				}
 			}
@@ -1730,6 +1984,7 @@ class Opti_Behavior_Smart_Insights_Generator {
 				'revenue'    => $revenue,
 				'sessions'   => isset( $insight['metrics']['sessions'] ) ? (int) $insight['metrics']['sessions'] : 0,
 				'sample'     => $this->resolve_observation_sample_size( $insight ),
+				'confidence' => Opti_Behavior_Smart_Insights_Scorer::get_confidence_label_key( $confidence ),
 				'signal_id'  => isset( $insight['signal_id'] ) ? (string) $insight['signal_id'] : '',
 				'has_impact' => $has_impact,
 			);
@@ -1767,19 +2022,74 @@ class Opti_Behavior_Smart_Insights_Generator {
 		$high_count     = min( $total - $critical_count, (int) round( 0.25 * $total ) );
 		$medium_count   = min( $total - $critical_count - $high_count, (int) round( 0.30 * $total ) );
 
-		$rank = 0;
-		foreach ( $sortable as $index => $entry ) {
-			++$rank;
+		/**
+		 * Visits lost a card needs to be Critical: max( PRIORITY_CRITICAL_MIN_LOST,
+		 * CRITICAL_MIN_LOST_SHARE of the site's visits in the range ).
+		 *
+		 * @param int $min_lost      Floor.
+		 * @param int $site_sessions Site visits in the range.
+		 */
+		$critical_min_lost = (int) apply_filters(
+			'opti_behavior_smart_insights_critical_min_lost',
+			max( self::PRIORITY_CRITICAL_MIN_LOST, (int) ceil( self::CRITICAL_MIN_LOST_SHARE * $this->run_site_sessions ) ),
+			$this->run_site_sessions
+		);
 
-			if ( $rank <= $critical_count ) {
-				$label_key = 'critical';
-			} elseif ( $rank <= $critical_count + $high_count ) {
-				$label_key = 'high';
-			} elseif ( $rank <= $critical_count + $high_count + $medium_count ) {
-				$label_key = 'medium';
-			} else {
-				$label_key = 'low';
+		// Tie groups: consecutive cards with the same numbers share one label
+		// (never "Medium" and "Low" because of the order they were read in).
+		$groups  = array();
+		$tie_sig = null;
+		foreach ( $sortable as $index => $entry ) {
+			$signature = $entry['blended'] . '|' . $entry['users_lost'] . '|' . $entry['revenue'] . '|' . $entry['sessions'];
+			if ( $signature !== $tie_sig ) {
+				$groups[] = array();
+				$tie_sig  = $signature;
 			}
+			$groups[ count( $groups ) - 1 ][] = $index;
+		}
+
+		$rank          = 0;
+		$critical_used = 0;
+		$labels        = array();
+		foreach ( $groups as $group ) {
+			$first = $rank + 1;
+			if ( $first <= $critical_count ) {
+				$group_label = 'critical';
+			} elseif ( $first <= $critical_count + $high_count ) {
+				$group_label = 'high';
+			} elseif ( $first <= $critical_count + $high_count + $medium_count ) {
+				$group_label = 'medium';
+			} else {
+				$group_label = 'low';
+			}
+			// Sharing never breaks the Critical quota: a tie group that would
+			// overflow it is High as a whole.
+			if ( 'critical' === $group_label && $critical_used + count( $group ) > $critical_count ) {
+				$group_label = 'high';
+			}
+			foreach ( $group as $index ) {
+				++$rank;
+				$entry     = $sortable[ $index ];
+				$label_key = $group_label;
+				// The quota is relative (the first card of a quiet week would
+				// always be Critical): absolute floors keep the label honest.
+				// Critical is earned: enough visits lost (money at risk counts as
+				// enough), a sample of CRITICAL_MIN_SAMPLE, a High confidence.
+				if ( 'critical' === $label_key && ( ( $entry['revenue'] <= 0 && $entry['users_lost'] < $critical_min_lost ) || $entry['sample'] < self::CRITICAL_MIN_SAMPLE || 'high' !== $entry['confidence'] ) ) {
+					$label_key = 'high';
+				}
+				if ( 'high' === $label_key && $entry['revenue'] <= 0 && $entry['users_lost'] < self::PRIORITY_HIGH_MIN_LOST ) {
+					$label_key = 'medium';
+				}
+				if ( 'critical' === $label_key ) {
+					++$critical_used;
+				}
+				$labels[ $index ] = array( $label_key, $rank );
+			}
+		}
+
+		foreach ( $sortable as $index => $entry ) {
+			list( $label_key, $rank ) = $labels[ $index ];
 
 			$insight           = $candidate_insights[ $index ]['insight'];
 			$insight['scores'] = isset( $insight['scores'] ) && is_array( $insight['scores'] ) ? $insight['scores'] : array();
@@ -2026,7 +2336,9 @@ class Opti_Behavior_Smart_Insights_Generator {
 		}
 
 		if ( isset( $insight['scores']['confidence_score'] ) ) {
-			$new_confidence = min( 100, (int) $insight['scores']['confidence_score'] + min( 10, $count * 3 ) );
+			// Seen in earlier periods: + RECURRENCE_BONUS, never above what the sample supports.
+			$cap            = isset( $insight['scores']['confidence_cap'] ) && is_numeric( $insight['scores']['confidence_cap'] ) ? (int) $insight['scores']['confidence_cap'] : 100;
+			$new_confidence = min( $cap, (int) $insight['scores']['confidence_score'] + Opti_Behavior_Smart_Insights_Scorer::RECURRENCE_BONUS );
 			$insight['scores']['confidence_score'] = $new_confidence;
 			if ( $scorer && method_exists( $scorer, 'get_confidence_label' ) ) {
 				$insight['scores']['confidence_label'] = $scorer->get_confidence_label( $new_confidence );
@@ -2066,15 +2378,11 @@ class Opti_Behavior_Smart_Insights_Generator {
 	 * @return int
 	 */
 	private function resolve_observation_sample_size( $insight ) {
-		$metrics = isset( $insight['metrics'] ) && is_array( $insight['metrics'] ) ? $insight['metrics'] : array();
-
-		foreach ( array( 'sessions', 'starts', 'entries', 'pageviews' ) as $key ) {
-			if ( isset( $metrics[ $key ] ) && is_numeric( $metrics[ $key ] ) && (int) $metrics[ $key ] > 0 ) {
-				return (int) $metrics[ $key ];
-			}
-		}
-
-		return 0;
+		// One definition with the weekly brief (Impact_Calculator::sample_size):
+		// it also reads the site-wide cohorts, segment, click and recording
+		// volumes, so a site-wide friction card is no longer an "observation on
+		// 0 sessions" on a site with thousands of visits.
+		return Opti_Behavior_Smart_Insights_Impact_Calculator::sample_size( $insight );
 	}
 
 	/**

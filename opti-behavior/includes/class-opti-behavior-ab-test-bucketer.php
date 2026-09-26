@@ -171,6 +171,17 @@ class Opti_Behavior_AB_Test_Bucketer {
 	private function get_cookie_assignment( $test_id ) {
 		$cookie_name = self::COOKIE_PREFIX . $test_id;
 
+		// Cookieless states (Anonymous Mode, or Full mode until the visitor
+		// accepts the banner): an assignment cookie left by an earlier consented
+		// visit or an older plugin version is neither trusted nor kept. Expiring
+		// a cookie is not "storing" information (PECR-safe).
+		if ( ! $this->cookies_allowed() ) {
+			if ( isset( $_COOKIE[ $cookie_name ] ) ) {
+				$this->expire_assignment_cookies( $test_id );
+			}
+			return false;
+		}
+
 		if ( isset( $_COOKIE[ $cookie_name ] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 			$value = absint( $_COOKIE[ $cookie_name ] );
 			if ( $value > 0 ) {
@@ -195,12 +206,11 @@ class Opti_Behavior_AB_Test_Bucketer {
 		// assign_variant() is deterministic: hash( visitor_id + test_id )
 		// always yields the same bucket for the same daily visitor hash, and
 		// get_db_assignment() resolves prior impressions for the same hash.
-		if ( ! $this->is_full_privacy_mode() ) {
-			return;
-		}
-
-		// Check consent before setting cookie.
-		if ( ! $this->has_consent() ) {
+		//
+		// Full mode behaves exactly the same until the visitor ACCEPTS the
+		// consent banner: banner untouched or "Reject" = cookieless bucketing,
+		// the cookie is only written once optibehavior_consent is 'granted'.
+		if ( ! $this->cookies_allowed() ) {
 			return;
 		}
 
@@ -322,6 +332,73 @@ class Opti_Behavior_AB_Test_Bucketer {
 		$options = maybe_unserialize( get_option( 'opti_behavior_heatmap_option', array() ) );
 		$mode    = is_array( $options ) && isset( $options['privacy_mode'] ) ? $options['privacy_mode'] : 'anonymous';
 		return 'full' === $mode;
+	}
+
+	/**
+	 * Whether the A/B assignment cookies may be read or written for this visitor.
+	 *
+	 * True only in Full privacy mode AND once the visitor accepted the consent
+	 * banner. Every other state (Anonymous Mode, banner untouched, "Reject")
+	 * buckets cookielessly: deterministic hash + recorded impression.
+	 *
+	 * @since 1.9.1
+	 * @return bool True when the opti_ab_<test_id> / vary cookies are allowed.
+	 */
+	private function cookies_allowed() {
+		if ( ! $this->is_full_privacy_mode() ) {
+			return false;
+		}
+
+		if ( ! $this->visitor_granted_consent() ) {
+			return false;
+		}
+
+		return $this->has_consent();
+	}
+
+	/**
+	 * Whether the visitor explicitly accepted the consent banner.
+	 *
+	 * Reads the `optibehavior_consent` cookie written by the consent manager
+	 * (built-in banner and third-party integrations alike), the same signal the
+	 * heatmap ingest and the Pro trackers use. A site owner relying on an
+	 * audience-measurement exemption can restore the pre-1.9.1 behaviour with
+	 * the `opti_behavior_ab_cookie_requires_consent` filter.
+	 *
+	 * @since 1.9.1
+	 * @return bool True when consent was granted (or is declared not required).
+	 */
+	private function visitor_granted_consent() {
+		if ( ! apply_filters( 'opti_behavior_ab_cookie_requires_consent', true ) ) {
+			return true;
+		}
+
+		if ( ! isset( $_COOKIE['optibehavior_consent'] ) ) {
+			return false;
+		}
+
+		return 'granted' === sanitize_text_field( wp_unslash( $_COOKIE['optibehavior_consent'] ) );
+	}
+
+	/**
+	 * Expire the assignment cookie of a test and the shared cache-vary cookie.
+	 *
+	 * @since 1.9.1
+	 * @param int $test_id Test ID.
+	 */
+	private function expire_assignment_cookies( $test_id ) {
+		$vary_cookie = class_exists( 'Opti_Behavior_Optimizer_Compat' )
+			? Opti_Behavior_Optimizer_Compat::AB_VARIANT_COOKIE
+			: 'opti_ab_v';
+		$path        = defined( 'COOKIEPATH' ) ? COOKIEPATH : '/';
+		$domain      = defined( 'COOKIE_DOMAIN' ) ? COOKIE_DOMAIN : '';
+
+		foreach ( array( self::COOKIE_PREFIX . $test_id, $vary_cookie ) as $cookie_name ) {
+			if ( ! headers_sent() ) {
+				setcookie( $cookie_name, '', time() - 3600, $path, $domain, is_ssl(), false );
+			}
+			unset( $_COOKIE[ $cookie_name ] );
+		}
 	}
 
 	private function has_consent() {

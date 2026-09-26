@@ -794,3 +794,21 @@
         padding: 16px !important;
     }
 }
+
+/* Short guidance line (own visits counted, next = setup guide). */
+.ob-setup-modal .ob-note-box {
+    background: #f5f3ff !important;
+    border: 0.5px solid #ddd6fe !important;
+    border-radius: 8px !important;
+    padding: 10px 14px !important;
+    margin: 12px 0 0 !important;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #4c1d95;
+    display: block !important;
+    height: auto !important;
+}
+
+.ob-setup-modal .ob-note-box b {
+    font-weight: 600;
+}

@@ -87,7 +87,9 @@ class Opti_Behavior_DB_Size_Cap {
 		$summary['total_mb'] = $measure['total_mb'];
 
 		if ( ! $summary['enabled'] ) {
-			$summary['note'] = __( 'No database size cap is configured — nothing was deleted.', 'opti-behavior' );
+			// No "nothing was deleted" here: the same run can still delete rows
+			// through the retention period, which writes its own note.
+			$summary['note'] = __( 'Database size cap: not configured.', 'opti-behavior' );
 			self::save_state( $summary );
 			return $summary;
 		}

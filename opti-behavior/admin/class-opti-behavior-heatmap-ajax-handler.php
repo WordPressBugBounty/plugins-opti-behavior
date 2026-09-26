@@ -494,10 +494,25 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			$debug_manager->log( "Event inserted with ID=$inserted_id (event=$event_numeric, device=$device)", 'info', 'ajax' );
 		}
 
+		// A click on a cookie / consent banner is not engagement: it must not lift
+		// the session over the minimum-clicks spam threshold. The heatmap row and
+		// file keep it; only the engagement counters skip it.
+		$is_consent_click = ( 16 === $event_numeric || 17 === $event_numeric )
+			&& class_exists( 'Opti_Behavior_Stats_Spam_Filter' )
+			&& method_exists( 'Opti_Behavior_Stats_Spam_Filter', 'is_consent_element' )
+			&& Opti_Behavior_Stats_Spam_Filter::is_consent_element(
+				array(
+					isset( $event_data['element_class'] ) ? $event_data['element_class'] : '',
+					isset( $event_data['element_id'] ) ? $event_data['element_id'] : '',
+					isset( $event_data['element_selector'] ) ? $event_data['element_selector'] : '',
+				)
+			);
+
 		// Session counters (events_count + click/scroll/move_count) are buffered
 		// and flushed once per AJAX batch by the caller (one UPDATE per session).
 		if ( class_exists( 'Opti_Behavior_Heatmap_Engagement_Counters' ) ) {
-			Opti_Behavior_Heatmap_Engagement_Counters::record( $session_id, $event_numeric );
+			// Event code 0 = counted in events_count only, never as a click.
+			Opti_Behavior_Heatmap_Engagement_Counters::record( $session_id, $is_consent_click ? 0 : $event_numeric );
 		} else {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
 			$wpdb->query(
@@ -512,7 +527,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// heatmap tracker. That counter is normally written by the session-recording
 		// beacon (rrweb), which can miss clicks the heatmap tracker captured, leaving a
 		// genuinely-clicked page reading 0 and getting hidden by the spam allow-list.
-		if ( 16 === $event_numeric || 17 === $event_numeric ) {
+		if ( ( 16 === $event_numeric || 17 === $event_numeric ) && ! $is_consent_click ) {
 			// Bug 4 — a bare click no longer clears is_bounce.
 			//
 			// The anti-spam classifier requires clicks >= min_clicks_threshold() (1 by
@@ -585,11 +600,14 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		$events_table        = $wpdb->prefix . 'optibehavior_events';
 		$session_pages_table = $wpdb->prefix . 'optibehavior_session_pages';
 
-		// Authoritative heatmap click count for this (session, page): desktop + mobile clicks.
+		// Authoritative heatmap click count for this (session, page): desktop + mobile clicks,
+		// cookie / consent banner clicks left out (same rule as the session counter).
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
 		$heatmap_clicks = (int) $wpdb->get_var(
 			$wpdb->prepare(
-				"SELECT COUNT(*) FROM {$events_table} WHERE session_id = %s AND page_id = %d AND event IN (16, 17)",
+				"SELECT COUNT(*) FROM {$events_table}
+				WHERE session_id = %s AND page_id = %d AND event IN (16, 17)
+				  AND CONCAT_WS(' ', element_class, element_id, element_selector) NOT REGEXP 'consent|cookie|gdpr|cmplz|onetrust|(^|[ .#])cky-'",
 				$session_id,
 				$page_id
 			)
@@ -2220,21 +2238,11 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	 * @return string
 	 */
 	private function get_client_ip() {
-		$ip_keys = array( 'HTTP_CF_CONNECTING_IP', 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR' );
-
-		foreach ( $ip_keys as $key ) {
-			if ( array_key_exists( $key, $_SERVER ) === true ) {
-				$server_value = sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) );
-				foreach ( explode( ',', $server_value ) as $ip ) {
-					$ip = trim( $ip );
-					// Accept any valid IP address (including private ranges for local development)
-					if ( filter_var( $ip, FILTER_VALIDATE_IP ) !== false ) {
-						return $ip;
-					}
-				}
-			}
+		// Forwarding headers only from a trusted proxy (Cloudflare edge or a
+		// private-range reverse proxy) — see IP_Exclusion::get_visitor_ip().
+		if ( class_exists( 'Opti_Behavior_IP_Exclusion' ) ) {
+			return Opti_Behavior_IP_Exclusion::get_visitor_ip();
 		}
-
 		return isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '';
 	}
 
@@ -2248,7 +2256,11 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// Determine privacy mode once up-front.
 		// In anonymous mode, Layers 3 and 3.5 (ip-api.com / ipwho.is) are skipped
 		// entirely so that no visitor IP is ever sent to a third-party service.
-		$is_anonymous_mode = ( 'anonymous' === $this->get_privacy_mode() );
+		// Full mode without the visitor's consent counts as anonymous here too,
+		// like every other tracking path (WordPress.org security review of
+		// 1.9.2: the IP reached ip-api.com / ipwho.is before consent).
+		$privacy_mode      = $this->get_privacy_mode();
+		$is_anonymous_mode = ( 'full' !== $privacy_mode ) || ! $this->visitor_has_consent();
 
 		// === Layer 1: CloudFlare CF-IPCountry header (instant, free) ===
 		if ( isset( $_SERVER['HTTP_CF_IPCOUNTRY'] ) && ! empty( $_SERVER['HTTP_CF_IPCOUNTRY'] ) ) {
@@ -2313,6 +2325,16 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// Also skip entirely in anonymous mode to avoid sending visitor IPs externally.
 		if ( $is_anonymous_mode ) {
 			$api_failed_recently = true;
+		}
+		// Site-wide budget for outbound lookups (both providers): a flood of
+		// uncached IPs can never tie up PHP workers on 3 s remote calls.
+		// Filter 0 = no limit.
+		if ( ! $is_anonymous_mode && class_exists( 'Opti_Behavior_Ingest_Gate' ) ) {
+			$lookup_budget = (int) apply_filters( 'opti_behavior_geo_lookups_per_minute', 40 );
+			if ( ! Opti_Behavior_Ingest_Gate::allow_hit( 'geo_lookup', $lookup_budget, MINUTE_IN_SECONDS, 'site' ) ) {
+				$is_anonymous_mode   = true; // Skips Layer 3.5 below as well.
+				$api_failed_recently = true;
+			}
 		}
 		if ( ! $api_failed_recently ) {
 			$api_url = 'http://ip-api.com/json/' . $ip . '?fields=status,message,countryCode,country,regionName,city,timezone';
@@ -2700,12 +2722,18 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		}
 
 		// Extract location data from client
-		$location_data = isset( $data['location'] ) ? $data['location'] : array();
-		$country = isset( $location_data['country'] ) ? strtoupper( $location_data['country'] ) : null;
-		$country_name = isset( $location_data['country_name'] ) ? $location_data['country_name'] : null;
-		$region = isset( $location_data['region'] ) ? $location_data['region'] : null;
-		$city = isset( $location_data['city'] ) ? $location_data['city'] : null;
-		$timezone = isset( $location_data['timezone'] ) ? $location_data['timezone'] : null;
+		// Every field is visitor-controlled. The country must be an ISO alpha-2
+		// code; its display name is never taken from the client (it was printed
+		// in the admin: CVE-2026-95809) but resolved server-side below.
+		$location_data = isset( $data['location'] ) && is_array( $data['location'] ) ? $data['location'] : array();
+		$country = isset( $location_data['country'] ) && is_string( $location_data['country'] ) ? strtoupper( trim( $location_data['country'] ) ) : null;
+		if ( null !== $country && ! preg_match( '/^[A-Z]{2}$/', $country ) ) {
+			$country = null;
+		}
+		$country_name = null;
+		$region = isset( $location_data['region'] ) ? self::sanitize_location_label( $location_data['region'] ) : null;
+		$city = isset( $location_data['city'] ) ? self::sanitize_location_label( $location_data['city'] ) : null;
+		$timezone = isset( $location_data['timezone'] ) ? self::sanitize_location_label( $location_data['timezone'] ) : null;
 
 		// Extract client timezone from session_start data (sent by frontend JS)
 		$client_timezone = '';
@@ -2927,7 +2955,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 				'visitor_id' => $visitor_id,
 				'user_id'    => $user_id,
 				'start_time' => current_time( 'mysql' ),
-				'referrer'   => isset( $data['referrer'] ) ? $data['referrer'] : '',
+				'referrer'   => self::sanitize_tracked_url( isset( $data['referrer'] ) ? $data['referrer'] : '', array( 'http', 'https' ) ),
 				'entry_page' => $session_url,
 				// In anonymous mode, store 'Anonymous' instead of real IP for analytics counting.
 				'ip'         => $is_effectively_anonymous ? 'Anonymous' : $this->get_client_ip(),
@@ -3414,6 +3442,51 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	}
 
 	/**
+	 * Normalise a URL received from the public tracker before it is stored.
+	 *
+	 * The ingest endpoint is public, so any URL field can carry an attribute
+	 * breakout (`"` / `<`) or a `javascript:` scheme. esc_url_raw() drops the
+	 * unsafe characters and returns '' for a scheme outside $protocols.
+	 *
+	 * @param mixed    $url       Raw value from the tracker payload.
+	 * @param string[] $protocols Allowed schemes.
+	 * @return string Safe URL, or '' when the value is not an acceptable URL.
+	 */
+	public static function sanitize_tracked_url( $url, $protocols = array( 'http', 'https', 'mailto', 'tel' ) ) {
+		if ( ! is_string( $url ) ) {
+			return '';
+		}
+		$url = trim( $url );
+		if ( '' === $url || strlen( $url ) > 2048 ) {
+			return '';
+		}
+		// Regex, not wp_parse_url(): parse_url() fails on some "tel:0612…" values.
+		if ( ! preg_match( '/^([a-z][a-z0-9+.\-]*):/i', $url, $m ) || ! in_array( strtolower( $m[1] ), $protocols, true ) ) {
+			return '';
+		}
+		return esc_url_raw( $url, $protocols );
+	}
+
+	/**
+	 * Normalise a free-text location label (region, city, timezone) sent by
+	 * the public tracker: plain text, no double quote / angle bracket /
+	 * backtick (apostrophes are kept: "Côte d'Azur"), 100 chars max.
+	 *
+	 * @param mixed $value Raw value.
+	 * @return string|null Clean label, or null when nothing usable is left.
+	 */
+	public static function sanitize_location_label( $value ) {
+		if ( ! is_string( $value ) ) {
+			return null;
+		}
+		$value = trim( str_replace( array( '"', '<', '>', '`' ), '', sanitize_text_field( $value ) ) );
+		if ( '' === $value ) {
+			return null;
+		}
+		return function_exists( 'mb_substr' ) ? mb_substr( $value, 0, 100 ) : substr( $value, 0, 100 );
+	}
+
+	/**
 	 * Handle referrer tracking data
 	 *
 	 * @param array  $data Session data.
@@ -3423,17 +3496,24 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		$debug_manager = $this->core->get_debug_manager();
 		$debug_manager->log( 'Processing referrer tracking', 'debug', 'ajax' );
 
+		// Visitor-supplied URLs, printed later in the admin: http(s) only.
+		$entry_url = self::sanitize_tracked_url( isset( $data['entryUrl'] ) ? $data['entryUrl'] : '', array( 'http', 'https' ) );
+		if ( '' === $entry_url ) {
+			return;
+		}
+		$referrer_url = self::sanitize_tracked_url( isset( $data['referrerUrl'] ) ? $data['referrerUrl'] : '', array( 'http', 'https' ) );
+
 		$analytics = $this->core->get_analytics();
 		$session = $this->core->get_session();
 
 		// Get or create page ID for the entry URL
-		$page_id = $analytics->get_or_create_page_id( $data['entryUrl'], '' );
+		$page_id = $analytics->get_or_create_page_id( $entry_url, '' );
 
 		$referrer_data = array(
 			'session_id'   => $session_id,
 			'page_id'      => $page_id,
-			'entry_url'    => $data['entryUrl'],
-			'referrer_url' => isset( $data['referrerUrl'] ) ? $data['referrerUrl'] : null,
+			'entry_url'    => $entry_url,
+			'referrer_url' => '' !== $referrer_url ? $referrer_url : null,
 			'utm_source'   => isset( $data['utmSource'] ) ? $data['utmSource'] : null,
 			'utm_medium'   => isset( $data['utmMedium'] ) ? $data['utmMedium'] : null,
 			'utm_campaign' => isset( $data['utmCampaign'] ) ? $data['utmCampaign'] : null,
@@ -3453,17 +3533,25 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	 * @param string $session_id Session ID.
 	 */
 	private function handle_outbound_click( $data, $session_id ) {
+		// Both URLs come from an unauthenticated visitor and are later printed in
+		// the admin: keep only well-formed http(s) / mailto / tel URLs.
+		$source_url = self::sanitize_tracked_url( isset( $data['sourceUrl'] ) ? $data['sourceUrl'] : '', array( 'http', 'https' ) );
+		$target_url = self::sanitize_tracked_url( isset( $data['targetUrl'] ) ? $data['targetUrl'] : '' );
+		if ( '' === $source_url || '' === $target_url ) {
+			return;
+		}
+
 		$analytics = $this->core->get_analytics();
 		$session = $this->core->get_session();
 
 		// Get or create page ID for the source URL
-		$page_id = $analytics->get_or_create_page_id( $data['sourceUrl'], '' );
+		$page_id = $analytics->get_or_create_page_id( $source_url, '' );
 
 		$click_data = array(
 			'session_id'    => $session_id,
 			'page_id'       => $page_id,
-			'source_url'    => $data['sourceUrl'],
-			'target_url'    => $data['targetUrl'],
+			'source_url'    => $source_url,
+			'target_url'    => $target_url,
 			'element_tag'   => isset( $data['elementTag'] ) ? $data['elementTag'] : null,
 			'element_id'    => isset( $data['elementId'] ) ? $data['elementId'] : null,
 			'element_class' => isset( $data['elementClass'] ) ? $data['elementClass'] : null,

@@ -463,6 +463,13 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Outcome_Evaluator' ) ) {
 			if ( ! empty( $outcome['verdict'] ) ) {
 				$outcome['verdict']       = sanitize_key( $outcome['verdict'] );
 				$outcome['verdict_label'] = self::get_verdict_label( $outcome['verdict'] );
+			} else {
+				// Still measuring: the day the "after" window closes (the modal's
+				// "Measuring until <date>").
+				$after = self::get_after_range( isset( $outcome['resolved_at'] ) ? $outcome['resolved_at'] : '' );
+				if ( is_array( $after ) ) {
+					$outcome['measure_until'] = $after['to'];
+				}
 			}
 
 			return $outcome;

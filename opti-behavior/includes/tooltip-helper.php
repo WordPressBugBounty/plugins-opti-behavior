@@ -88,8 +88,8 @@ function opti_behavior_get_dashboard_tooltips() {
 	return array(
 		// Dashboard Overview
 		'dashboard_overview' => array(
-			'title'   => __( 'What is the Analytics Dashboard?', 'opti-behavior' ),
-			'content' => __( 'The Analytics Dashboard gives you a complete overview of your website visitor behavior. Track visits, page views, session durations, scroll depth, and more — all in real time.', 'opti-behavior' ),
+			'title'   => __( 'What is Traffic Overview?', 'opti-behavior' ),
+			'content' => __( 'Traffic Overview gives you a complete overview of your website visitor behavior. Track visits, page views, session durations, scroll depth, and more — all in real time.', 'opti-behavior' ),
 			'simple'  => __( 'Your central hub for understanding how visitors interact with your website.', 'opti-behavior' ),
 		),
 		// Stats Cards

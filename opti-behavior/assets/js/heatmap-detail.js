@@ -2074,10 +2074,28 @@
 		 * Update device count badges
 		 */
 		updateDeviceCounts(counts) {
-			$('.device-count[data-device="desktop"]').text(counts.desktop || 0);
-			$('.device-count[data-device="mobile"]').text(counts.mobile || 0);
-			$('.device-count[data-device="tablet"]').text(counts.tablet || 0);
+			this.setDeviceCount('desktop', counts.desktop);
+			this.setDeviceCount('mobile', counts.mobile);
+			this.setDeviceCount('tablet', counts.tablet);
 			// Note: Header total recordings count is set by loadTotalRecordingsCount() (scoped to current view + filters)
+		}
+
+		/**
+		 * Write one device count: exact up to 9 999, compact above ("12 k",
+		 * "1,2 M") so a long number never widens its fixed-width button; the
+		 * exact figure stays in the title.
+		 */
+		setDeviceCount(device, value) {
+			const n = parseInt(value, 10) || 0;
+			let text = String(n);
+			if (n >= 10000) {
+				try {
+					text = new Intl.NumberFormat(document.documentElement.lang || undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+				} catch (e) {
+					text = Math.round(n / 1000) + 'k';
+				}
+			}
+			$('.device-count[data-device="' + device + '"]').text(text).attr('title', n.toLocaleString());
 		}
 
 		/**

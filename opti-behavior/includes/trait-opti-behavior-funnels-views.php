@@ -21,6 +21,38 @@ trait Opti_Behavior_Funnels_Views_Trait {
 	/**
 	 * Render the main funnels page
 	 */
+	/**
+	 * Notice on the funnel list: active funnels that track the same steps
+	 * (Funnel_Aggregator::same_step_groups(), the definition the insight
+	 * de-duplication uses) report the same numbers and the same insight.
+	 *
+	 * @param string $table_funnels Funnels table.
+	 * @return void
+	 */
+	private function render_same_step_funnels_notice( $table_funnels ) {
+		global $wpdb;
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only view switch.
+		if ( ! empty( $_GET['funnel'] ) || ! class_exists( 'Opti_Behavior_Smart_Insights_Funnel_Aggregator' ) ) {
+			return;
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; one read on the list screen.
+		$rows   = $wpdb->get_results( "SELECT id, name, steps FROM {$table_funnels} WHERE status = 'active' ORDER BY id ASC LIMIT 500", ARRAY_A );
+		$groups = Opti_Behavior_Smart_Insights_Funnel_Aggregator::same_step_groups( is_array( $rows ) ? $rows : array() );
+		if ( empty( $groups ) ) {
+			return;
+		}
+		?>
+		<div class="notice notice-info inline opti-funnels-same-steps">
+			<p><strong><?php esc_html_e( 'These funnels track the same steps.', 'opti-behavior' ); ?></strong> <?php esc_html_e( 'They measure the same visitors, so their numbers and their Smart Insights are the same. Keep one and delete or pause the others.', 'opti-behavior' ); ?></p>
+			<ul>
+				<?php foreach ( array_slice( $groups, 0, 5 ) as $group ) : ?>
+					<li><?php echo esc_html( implode( ' · ', wp_list_pluck( $group, 'name' ) ) ); ?></li>
+				<?php endforeach; ?>
+			</ul>
+		</div>
+		<?php
+	}
+
 	public function render_funnels() {
 		static $rendered = false;
 
@@ -129,6 +161,7 @@ trait Opti_Behavior_Funnels_Views_Trait {
 					</p>
 				</div>
 			<?php else : ?>
+				<?php $this->render_same_step_funnels_notice( $table_funnels ); ?>
 				<!-- Global KPI Summary Bar -->
 				<div class="opti-funnel-stats-bar" id="opti-funnel-stats-bar">
 					<div class="opti-funnel-stat-card">

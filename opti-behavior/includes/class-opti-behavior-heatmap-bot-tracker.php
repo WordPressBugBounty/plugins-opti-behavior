@@ -228,16 +228,12 @@ class Opti_Behavior_Heatmap_Bot_Tracker {
 	 * @return string
 	 */
 	private function get_client_ip() {
-		$ip = '';
-
-		if ( isset( $_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
-			$ip = sanitize_text_field( wp_unslash( $_SERVER['HTTP_X_FORWARDED_FOR'] ) );
-			$ip = explode( ',', $ip );
-			$ip = trim( $ip[0] );
-		} elseif ( isset( $_SERVER['HTTP_X_REAL_IP'] ) ) {
-			$ip = sanitize_text_field( wp_unslash( $_SERVER['HTTP_X_REAL_IP'] ) );
-		} elseif ( isset( $_SERVER['REMOTE_ADDR'] ) ) {
-			$ip = sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) );
+		// Forwarding headers only from a trusted proxy — see
+		// IP_Exclusion::get_visitor_ip().
+		if ( class_exists( 'Opti_Behavior_IP_Exclusion' ) ) {
+			$ip = Opti_Behavior_IP_Exclusion::get_visitor_ip();
+		} else {
+			$ip = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '';
 		}
 
 		// Validate IP address

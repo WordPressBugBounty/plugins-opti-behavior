@@ -113,6 +113,13 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 
 		$insight = $this->shape_recommended_actions( $insight );
 
+		// The card shows the short form of the next action (the modal the full one).
+		$first = isset( $insight['recommended_actions'] ) && is_array( $insight['recommended_actions'] ) ? reset( $insight['recommended_actions'] ) : '';
+		if ( is_array( $first ) ) {
+			$first = isset( $first['title'] ) ? $first['title'] : ( isset( $first['label'] ) ? $first['label'] : ( isset( $first['action'] ) ? $first['action'] : '' ) );
+		}
+		$insight['next_action_short'] = class_exists( 'Opti_Behavior_Smart_Insights_Recommendations' ) && is_string( $first ) ? Opti_Behavior_Smart_Insights_Recommendations::short_action( $first ) : '';
+
 		return apply_filters( 'opti_behavior_smart_insights_shape_payload', $insight, $context, $this->has_pro_access );
 	}
 
@@ -650,8 +657,13 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 			'hint'      => __( 'Revenue exposure for this leak is available in Pro.', 'opti-behavior' ),
 		);
 
+		// No money exists for this leak (not tied to a sale, too few orders, an
+		// amount of an older rule): nothing is locked, Pro shows no money either.
 		if ( ! is_array( $revenue ) || empty( $revenue['available'] ) ) {
-			return $locked;
+			return array(
+				'available' => false,
+				'locked'    => false,
+			);
 		}
 
 		$manual_source = class_exists( 'Opti_Behavior_Smart_Insights_Impact_Calculator' )
@@ -842,7 +854,7 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 	 * @return bool
 	 */
 	private function is_pro_only_report_type( $type ) {
-		return in_array( $type, array( 'session_recordings', 'user_journey', 'form_analytics', 'error_tracking' ), true );
+		return in_array( $type, array( 'session_recordings', 'user_journey', 'form_analytics', 'error_tracking', 'page_xray' ), true );
 	}
 
 	/**

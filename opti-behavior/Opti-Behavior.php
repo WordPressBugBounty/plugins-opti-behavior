@@ -3,7 +3,7 @@
  * Plugin Name: Opti-Behavior – Self-Hosted Heatmaps, Session Recordings, Funnels, A/B Testing & Smart Insights
  * Plugin URI:  https://optiuser.com/
  * Description: Self-hosted heatmaps, funnels, A/B WooCommerce testing, behavior analytics & Smart Insights for WordPress. Own your data and optimize what users do.
- * Version:     1.9.1
+ * Version:     1.9.2.1
  * Author:      OptiUser
  * Author URI:  https://optiuser.com/
  * License:     GPLv2 or later
@@ -81,13 +81,36 @@ if ( defined( 'OPTI_BEHAVIOR_HEATMAP' ) ) {
 }
 
 // Define plugin constants.
-define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.9.1' );
+define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.9.2.1' );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR', OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'includes/' );
 define( 'OPTI_BEHAVIOR_HEATMAP_ADMIN_DIR', OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'admin/' );
 define( 'OPTI_BEHAVIOR_HEATMAP_PUBLIC_DIR', OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'public/' );
 define( 'OPTI_BEHAVIOR_HEATMAP_ASSETS_URL', OPTI_BEHAVIOR_HEATMAP_PLUGIN_URL . 'assets/' );
+
+/*
+ * Capability flag: this Free hosts the Pro "Page X-Ray" tab of Smart Insights
+ * (tab bar, period form, locked view; filter
+ * `opti_behavior_smart_insights_page_xray_available`, action
+ * `opti_behavior_smart_insights_render_page_xray`). Pro hooks the tab only when
+ * it is defined. Never compare versions for this.
+ */
+define( 'OPTI_BEHAVIOR_SI_XRAY_HOST', 1 );
+
+/**
+ * Whether the Pro "Page X-Ray" tab can be opened on this request (Pro active,
+ * licence gate open, a Pro that ships the tab). Never throws.
+ *
+ * @return bool
+ */
+function opti_behavior_page_xray_available() {
+	try {
+		return (bool) apply_filters( 'opti_behavior_smart_insights_page_xray_available', false );
+	} catch ( Throwable $e ) {
+		return false;
+	}
+}
 
 /**
  * API Environment Configuration
@@ -262,6 +285,7 @@ function opti_behavior_is_plugin_admin_context() {
 		'opti-behavior-ai-insights',
 		'opti-behavior-funnels',
 		'opti-behavior-ab-testing',
+		'opti-behavior-smart-insights',
 	);
 
 	// Add PRO pages if PRO version is active
@@ -269,6 +293,7 @@ function opti_behavior_is_plugin_admin_context() {
 		$opti_behavior_pages[] = 'opti-behavior-recordings';
 		$opti_behavior_pages[] = 'opti-behavior-errors';
 		$opti_behavior_pages[] = 'opti-behavior-user-journey';
+		$opti_behavior_pages[] = 'opti-behavior-form-analytics';
 	}
 
 	// Check if we're doing an AJAX request for Opti-Behavior
@@ -445,6 +470,11 @@ add_action(
 
 		// Initialize delayed WordPress.org review reminder banner.
 		Opti_Behavior_Review_Banner::init();
+
+		// Initialize setup guide: "How it works" setup check + one-time
+		// "own visits" and "the menu changed" messages (plugin screens only).
+		require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-setup-guide.php';
+		Opti_Behavior_Setup_Guide::init();
 
 		// Initialize plugin tracker (works for both Free-only and Free+Pro setups)
 		// Sends installation data with 24h heartbeat, auto-detects plugin type

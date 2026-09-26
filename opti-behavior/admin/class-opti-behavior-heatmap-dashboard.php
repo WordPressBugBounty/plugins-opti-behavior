@@ -601,20 +601,47 @@ class Opti_Behavior_Heatmap_Dashboard {
 			30
 		);
 
-		// Lucide "layout-dashboard" icon (20x20)
-		$dashboard_icon = '<span style="display:inline-flex;align-items:center;margin-right:6px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></span>';
+		// Lucide "chart-line" icon (20x20): the page is the site traffic report.
+		$dashboard_icon = '<span style="display:inline-flex;align-items:center;margin-right:6px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="m19 9-5 5-4-4-3 3"/></svg></span>';
 		add_submenu_page(
 			'opti-behavior-analytics',
-			__( 'Dashboard', 'opti-behavior' ),
-			$dashboard_icon . __( 'Dashboard', 'opti-behavior' ),
+			__( 'Traffic', 'opti-behavior' ),
+			$dashboard_icon . __( 'Traffic', 'opti-behavior' ),
 			'manage_options',
 			'opti-behavior-analytics',
 			array( $this, 'render_dashboard' )
 		);
 
-		// Lucide "lightbulb" icon for Smart Insights (20x20).
-		$smart_insights_icon = '<span style="display:inline-flex;align-items:center;margin-right:6px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5A4.8 4.8 0 0 0 18 8 6 6 0 0 0 6 8c0 1.3.5 2.5 1.5 3.5.8.8 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg></span>';
-		$smart_insights_label = $smart_insights_icon . __( 'Insights', 'opti-behavior' );
+		// Lucide "lightbulb" icon for Smart Insights (20x20). It always pulses
+		// (`.opti-menu-insights-bulb`, admin-menu.css) in the colour of the open
+		// problems: green = nothing to fix, yellow = High / Medium, red = Critical.
+		// The level is stored by the repository when an insight changes, so
+		// building the menu costs no query and the public site nothing.
+		$smart_insights_severity = $this->get_smart_insights_menu_severity_impl();
+		$smart_insights_level    = sanitize_html_class( $smart_insights_severity['level'] );
+		if ( 'red' === $smart_insights_level ) {
+			$smart_insights_state = sprintf(
+				/* translators: %d: number of open Critical Smart Insights. */
+				_n( '%d critical problem to fix', '%d critical problems to fix', $smart_insights_severity['critical'], 'opti-behavior' ),
+				$smart_insights_severity['critical']
+			);
+		} elseif ( 'yellow' === $smart_insights_level ) {
+			$smart_insights_state = sprintf(
+				/* translators: %d: number of open High or Medium priority Smart Insights. */
+				_n( '%d problem to review', '%d problems to review', $smart_insights_severity['warning'], 'opti-behavior' ),
+				$smart_insights_severity['warning']
+			);
+		} else {
+			$smart_insights_state = __( 'No open problem', 'opti-behavior' );
+		}
+		$smart_insights_icon = '<span class="opti-menu-insights-bulb is-' . $smart_insights_level . '" style="display:inline-flex;align-items:center;margin-right:6px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5A4.8 4.8 0 0 0 18 8 6 6 0 0 0 6 8c0 1.3.5 2.5 1.5 3.5.8.8 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg></span>';
+		// Product name, kept as is in every locale (short enough for the 160px menu).
+		// A green light line sweeps across the text: an aria-hidden copy on top of
+		// it (`.opti-menu-insights-scan`), so screen readers read the label once.
+		$smart_insights_text  = esc_html( _x( 'Smart Insights', 'admin menu label, product name', 'opti-behavior' ) );
+		$smart_insights_label = $smart_insights_icon . '<span class="opti-menu-insights-text is-' . $smart_insights_level . '" title="' . esc_attr( $smart_insights_state ) . '">' . $smart_insights_text
+			. '<span class="opti-menu-insights-scan" aria-hidden="true">' . $smart_insights_text . '</span></span>'
+			. '<span class="screen-reader-text"> — ' . esc_html( $smart_insights_state ) . '</span>';
 
 		// Opening the Smart Insights screen marks everything as seen *before* the
 		// menu label is built (admin_menu runs before any load-{page} hook), so the
@@ -803,12 +830,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * Add Roadmap menu
 	 */
 	public function add_ai_insights_menu() {
-		// Lucide "sparkles" icon for the roadmap item (20x20)
-		$ai_icon = '<span style="display:inline-flex;align-items:center;margin-right:6px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg></span>';
+		// Lucide "compass" icon for the "How it works" item (20x20).
+		$ai_icon = '<span style="display:inline-flex;align-items:center;margin-right:6px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z"/></svg></span>';
 		add_submenu_page(
 			'opti-behavior-analytics',
-			__( 'Roadmap', 'opti-behavior' ),
-			$ai_icon . __( 'Roadmap', 'opti-behavior' ),
+			__( 'How it works', 'opti-behavior' ),
+			$ai_icon . __( 'How it works', 'opti-behavior' ),
 			'manage_options',
 			'opti-behavior-ai-insights',
 			array( $this, 'render_ai_insights' )
@@ -819,10 +846,14 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * Reorder Opti-Behavior submenu items for a logical flow.
 	 * Runs at priority 999 so all plugins (free + pro) have registered their items.
 	 *
-	 * Target order:
-	 * Dashboard -> Heatmaps -> Recordings -> Funnels -> A/B Testing ->
-	 * User Journeys -> Errors Tracking -> Forms -> Smart Insights ->
-	 * Settings -> Roadmap
+	 * Target order (the menu tells the product loop: the modules under
+	 * "Your data" collect, Smart Insights says what to fix, A/B Testing proves
+	 * the fix):
+	 * Dashboard
+	 * -- What to fix -- Smart Insights -> A/B Testing
+	 * -- Your data --   Heatmaps -> Recordings -> Funnels -> User Journeys ->
+	 *                   Errors Tracking -> Forms
+	 * --             -- Settings -> Roadmap
 	 */
 	public function reorder_submenu() {
 		global $submenu;
@@ -830,38 +861,102 @@ class Opti_Behavior_Heatmap_Dashboard {
 			return;
 		}
 
-		$items = $submenu['opti-behavior-analytics'];
+		$submenu['opti-behavior-analytics'] = self::group_submenu_items( $submenu['opti-behavior-analytics'] ); // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+	}
 
-		// Desired slug order
-		$slug_order = array(
-			'opti-behavior-analytics',       // Dashboard
-			'opti-behavior-heatmaps',        // Heatmaps
-			'opti-behavior-recordings',      // Recordings
-			'opti-behavior-funnels',         // Funnels
-			'opti-behavior-ab-testing',      // A/B Testing
-			'opti-behavior-user-journey',    // User Journeys
-			'opti-behavior-errors',          // Errors Tracking
-			'opti-behavior-form-analytics',  // Forms
-			'opti-behavior-smart-insights',  // Smart Insights
-			'opti-behavior-settings',        // Settings
-			'opti-behavior-ai-insights',     // Roadmap (last)
+	/**
+	 * Slug prefix of the inert group separators in the plugin submenu.
+	 *
+	 * A separator is pushed straight into `$submenu` (never through
+	 * add_submenu_page()), so WordPress finds no page hook for it and prints the
+	 * slug verbatim as the href: a plain in-page anchor that cannot reach an
+	 * admin screen or a "not allowed" error.
+	 */
+	const SUBMENU_SEPARATOR_PREFIX = '#ob-menu-';
+
+	/**
+	 * Order the plugin submenu into labelled groups.
+	 *
+	 * Pure function over the submenu rows (slug at index 2), so both editions and
+	 * any Free/Pro version pairing are handled the same way: Pro registers its
+	 * pages under the slugs of the Free upgrade placeholders, a group with no
+	 * registered page gets no separator, and unknown slugs keep their historical
+	 * place at the very end. Idempotent: separators from a previous pass are
+	 * dropped first.
+	 *
+	 * @param array $items Rows of `$submenu['opti-behavior-analytics']`.
+	 * @return array Ordered rows, separators included.
+	 */
+	public static function group_submenu_items( $items ) {
+		$groups = array(
+			'data'   => array(
+				'label' => __( 'Your data', 'opti-behavior' ),
+				'slugs' => array(
+					'opti-behavior-analytics',       // Dashboard (must stay the first ROW: WordPress links the top-level item to it).
+					'opti-behavior-heatmaps',        // Heatmaps
+					'opti-behavior-recordings',      // Recordings
+					'opti-behavior-funnels',         // Funnels
+					'opti-behavior-user-journey',    // User Journeys
+					'opti-behavior-errors',          // Errors Tracking
+					'opti-behavior-form-analytics',  // Forms
+				),
+			),
+			'fix'    => array(
+				'label' => __( 'What to fix', 'opti-behavior' ),
+				'slugs' => array(
+					'opti-behavior-smart-insights',  // Smart Insights
+					'opti-behavior-ab-testing',      // A/B Testing
+				),
+			),
+			'system' => array(
+				'label' => '',
+				'slugs' => array(
+					'opti-behavior-settings',        // Settings
+					'opti-behavior-ai-insights',     // How it works (last)
+				),
+			),
 		);
 
-		$ordered  = array();
-		$leftover = array();
-
-		// Index items by slug (position [2] in the submenu array)
+		// Index items by slug (position [2] in the submenu array).
 		$by_slug = array();
-		foreach ( $items as $item ) {
-			$slug = $item[2];
-			$by_slug[ $slug ] = $item;
+		foreach ( (array) $items as $item ) {
+			if ( ! is_array( $item ) || ! isset( $item[2] ) ) {
+				continue;
+			}
+			if ( 0 === strpos( (string) $item[2], self::SUBMENU_SEPARATOR_PREFIX ) ) {
+				continue;
+			}
+			$by_slug[ $item[2] ] = $item;
 		}
 
-		// Place items in desired order
-		foreach ( $slug_order as $slug ) {
-			if ( isset( $by_slug[ $slug ] ) ) {
-				$ordered[] = $by_slug[ $slug ];
-				unset( $by_slug[ $slug ] );
+		$ordered = array();
+		foreach ( $groups as $group_id => $group ) {
+			$rows = array();
+			foreach ( $group['slugs'] as $slug ) {
+				if ( isset( $by_slug[ $slug ] ) ) {
+					$rows[] = $by_slug[ $slug ];
+					unset( $by_slug[ $slug ] );
+				}
+			}
+			if ( empty( $rows ) ) {
+				continue;
+			}
+			$separator = array(
+				$group['label'],
+				'manage_options',
+				self::SUBMENU_SEPARATOR_PREFIX . $group_id,
+				$group['label'],
+			);
+			// WordPress links the top-level item to the FIRST row, so a separator
+			// never opens the menu: the first group's separator goes right after
+			// its first row, and the admin-menu inline script moves it back above
+			// that row on screen (assets trait, handle `opti-behavior-admin-menu`).
+			if ( empty( $ordered ) ) {
+				$ordered[] = array_shift( $rows );
+			}
+			$ordered[] = $separator;
+			foreach ( $rows as $row ) {
+				$ordered[] = $row;
 			}
 		}
 
@@ -870,7 +965,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$ordered[] = $item;
 		}
 
-		$submenu['opti-behavior-analytics'] = $ordered; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+		return $ordered;
 	}
 
 	/**
@@ -1755,6 +1850,11 @@ class Opti_Behavior_Heatmap_Dashboard {
 								<a href="<?php echo esc_url($heatmap['view_mobile_url']); ?>" class="button button-secondary button-small optibehavior-btn optibehavior-btn-mobile heatmap-action-btn" target="_blank" title="<?php echo esc_attr__('Open mobile heatmap', 'opti-behavior'); ?>"><i data-lucide="smartphone" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> <?php
 									// translators: %s: number of mobile sessions
 									printf( esc_html__('Mobile (%s)', 'opti-behavior'), esc_html(number_format($heatmap['sessions_mobile'])) ); ?></a>
+								<?php if ( class_exists( 'Opti_Behavior_Smart_Insights_Page' ) ) : ?>
+									<?php // Page X-Ray is Pro: without it the button carries a lock + PRO and opens the locked view. ?>
+									<?php $opti_behavior_xray_open = opti_behavior_page_xray_available(); ?>
+								<a href="<?php echo esc_url( Opti_Behavior_Smart_Insights_Page::xray_url( (int) $heatmap['id'] ) ); ?>" class="button button-secondary button-small optibehavior-btn heatmap-action-btn heatmap-action-xray<?php echo $opti_behavior_xray_open ? '' : ' is-locked'; ?>" title="<?php echo esc_attr__( 'Open the page dossier: every problem found on this page, in one place', 'opti-behavior' ); ?>"><i data-lucide="<?php echo $opti_behavior_xray_open ? 'stethoscope' : 'lock'; ?>" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> <?php esc_html_e( 'Dossier', 'opti-behavior' ); ?><?php if ( ! $opti_behavior_xray_open ) : ?><span class="opti-menu-pro-badge">PRO</span><?php endif; ?></a>
+								<?php endif; ?>
 							</td>
 							<?php echo apply_filters( 'opti_behavior_heatmap_list_row_after', '', $heatmap ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Output escaped by the filter callback ?>
 						</tr>
@@ -4094,7 +4194,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$table        = $wpdb->prefix . 'optibehavior_heatmap_pages';
 		$default_spam = $this->get_default_spam_exclusion_enabled() ? 1 : 0;
 
-		$where  = "(agg_synced_at IS NULL OR agg_spam_state <> %d) AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)";
+		$where  = "(agg_synced_at IS NULL OR agg_spam_state <> %d) AND (click_count > 0 OR move_count > 0 OR scroll_count > 0) AND page_id > 0";
 		$params = array( $default_spam );
 
 		if ( is_array( $page_ids ) && ! empty( $page_ids ) ) {
@@ -4304,6 +4404,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				"SELECT 1 FROM {$table}
 				WHERE (agg_synced_at IS NULL OR agg_spam_state <> %d)
 					AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)
+					AND page_id > 0
 				LIMIT 1",
 				$default_spam
 			)
@@ -4355,7 +4456,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 				AND agg_has_data = 0
 				AND agg_interactions = 0
 				AND agg_last_event IS NULL
-				AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)";
+				AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)
+				AND page_id > 0";
 
 		$limit = (int) $limit;
 		if ( $limit > 0 ) {
@@ -4564,7 +4666,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$daily_table  = $wpdb->prefix . 'optibehavior_heatmap_daily';
 		$default_spam = $this->get_default_spam_exclusion_enabled() ? 1 : 0;
 
-		$where  = "(daily_synced_at IS NULL OR daily_spam_state <> %d) AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)";
+		$where  = "(daily_synced_at IS NULL OR daily_spam_state <> %d) AND (click_count > 0 OR move_count > 0 OR scroll_count > 0) AND page_id > 0";
 		$params = array( $default_spam );
 
 		if ( is_array( $page_ids ) && ! empty( $page_ids ) ) {
@@ -4902,6 +5004,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				"SELECT 1 FROM {$table}
 				WHERE (daily_synced_at IS NULL OR daily_spam_state <> %d)
 					AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)
+					AND page_id > 0
 				LIMIT 1",
 				$default_spam
 			)
@@ -5021,21 +5124,21 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$hook       = self::HEATMAP_RECONCILE_CRON_HOOK;
 		$recurrence = 'hourly';
 
-		$next     = wp_next_scheduled( $hook );
-		$schedule = $next ? wp_get_schedule( $hook ) : false;
+		// This hook carries BOTH the hourly recurrence and one-off continuation
+		// ticks, so wp_next_scheduled() / wp_get_schedule() describe whichever
+		// is due first. With a continuation pending they reported "no recurring
+		// event" and every call added ANOTHER hourly event (QA-B-SCHEMA-019).
+		// Decide from the full recurring-event scan instead.
+		$recurring = $this->get_recurring_events_for_hook( $hook );
 
-		if ( $next && false === $schedule ) {
-			// A one-off continuation event exists but the recurring event does
-			// not; leave the continuation alone and add the recurrence.
-			$next = false;
-		} elseif ( $next && $recurrence !== $schedule ) {
-			wp_clear_scheduled_hook( $hook );
-			$next = false;
+		// Healthy steady state: exactly one recurring event with the right
+		// recurrence. Leave it (and any pending continuation) alone.
+		if ( 1 === count( $recurring ) && $recurrence === $recurring[0][1] ) {
+			return;
 		}
 
-		if ( ! $next ) {
-			wp_schedule_event( time() + MINUTE_IN_SECONDS, $recurrence, $hook );
-		}
+		wp_clear_scheduled_hook( $hook );
+		wp_schedule_event( time() + MINUTE_IN_SECONDS, $recurrence, $hook );
 	}
 
 	/**
@@ -5477,7 +5580,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$table = $wpdb->prefix . 'optibehavior_heatmap_pages';
 		$sql   = "SELECT DISTINCT page_id FROM {$table}
 			WHERE daily_synced_at IS NULL
-				AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)";
+				AND (click_count > 0 OR move_count > 0 OR scroll_count > 0)
+				AND page_id > 0";
 
 		$limit = (int) $limit;
 		if ( $limit > 0 ) {

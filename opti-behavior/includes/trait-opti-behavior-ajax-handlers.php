@@ -1417,59 +1417,18 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 ) );
             }
 
-            // Process this batch - mark sessions as spam based on criteria
-            $session_ids_placeholder = implode( ',', array_fill( 0, count( $sessions ), '%s' ) );
-
-            // Update sessions that fail ANY of the spam criteria:
-            // A legitimate session must meet ALL: duration >= threshold AND scrolls >= min AND clicks >= min
-            // So spam = fails at least one criterion (OR logic)
-            // phpcs:disable WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
-            // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-            $query = $wpdb->prepare(
-                "UPDATE " . $sessions_table . " s
-                 LEFT JOIN (
-                     SELECT session_id, COUNT(*) as scroll_count
-                     FROM " . $events_table . "
-                     WHERE session_id IN (" . $session_ids_placeholder . ")
-                     AND event IN (32, 33)
-                     GROUP BY session_id
-                 ) sc ON s.id = sc.session_id
-                 LEFT JOIN (
-                     SELECT session_id, COUNT(*) as click_count
-                     FROM " . $events_table . "
-                     WHERE session_id IN (" . $session_ids_placeholder . ")
-                     AND event IN (16, 17)
-                     GROUP BY session_id
-                 ) cc ON s.id = cc.session_id
-                 SET s.traffic_type = 'spam',
-                     s.spam_reason = CONCAT_WS(',',
-                         CASE WHEN (
-                             CASE WHEN s.duration > 0 THEN s.duration
-                                  ELSE TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time))
-                             END
-                         ) < %d THEN 'short_duration' ELSE NULL END,
-                         CASE WHEN COALESCE(sc.scroll_count, 0) < %d THEN 'few_scrolls' ELSE NULL END,
-                         CASE WHEN COALESCE(cc.click_count, 0) < %d THEN 'few_clicks' ELSE NULL END
-                     )
-                 WHERE s.id IN (" . $session_ids_placeholder . ")
-                 AND (
-                     (
-                         CASE
-                             WHEN s.duration > 0 THEN s.duration
-                             ELSE TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time))
-                         END
-                     ) < %d
-                     OR COALESCE(sc.scroll_count, 0) < %d
-                     OR COALESCE(cc.click_count, 0) < %d
-                 )",
-                array_merge( $sessions, $sessions, array( $spam_duration_threshold, $spam_min_scrolls_threshold, $spam_min_clicks_threshold ), $sessions, array( $spam_duration_threshold, $spam_min_scrolls_threshold, $spam_min_clicks_threshold ) )
+            // Process this batch through the shared multi-source marker. The inline
+            // UPDATE that lived here counted scrolls / clicks from optibehavior_events
+            // only; lean events mode no longer writes scroll rows there, so every
+            // recalculation flagged every session `few_scrolls` spam.
+            Opti_Behavior_Stats_Spam_Filter::mark_spam_sessions(
+                $sessions,
+                array(
+                    'duration' => $spam_duration_threshold,
+                    'scrolls'  => $spam_min_scrolls_threshold,
+                    'clicks'   => $spam_min_clicks_threshold,
+                )
             );
-            // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-            // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
-            // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-            $wpdb->query( $query );
-            // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-            // phpcs:enable WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
 
             // Update progress
             $total = get_transient( 'opti_behavior_spam_recalc_total' );
@@ -1641,10 +1600,13 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             $upload_dir = wp_upload_dir();
             $data_base  = trailingslashit( $upload_dir['basedir'] ) . 'opti-behavior-data';
 
+            // `_orphaned/` holds archived heatmap folders (maintenance passes,
+            // archive-page prune) and the prune manifest: heatmap data the site
+            // still stores, so it is sized and deleted with "Heatmap Data".
             $map = array(
                 'events'     => array( $data_base . '/events' ),
                 'recordings' => array( $data_base . '/recordings' ),
-                'heatmaps'   => array( $data_base . '/heatmaps' ),
+                'heatmaps'   => array( $data_base . '/heatmaps', $data_base . '/_orphaned' ),
             );
 
             if ( is_dir( $data_base ) ) {
@@ -1652,7 +1614,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 if ( is_array( $root_items ) ) {
                     foreach ( $root_items as $root_dir ) {
                         $folder_name = basename( $root_dir );
-                        if ( in_array( $folder_name, array( 'events', 'recordings', 'heatmaps' ), true ) ) {
+                        if ( in_array( $folder_name, array( 'events', 'recordings', 'heatmaps', '_orphaned' ), true ) ) {
                             continue;
                         }
 
@@ -3050,6 +3012,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                     }
                     if ( in_array( 'heatmaps', $selected_categories, true ) ) {
                         $file_dirs[] = $data_dir . '/heatmaps';
+                        $file_dirs[] = $data_dir . '/_orphaned';
                     }
 
                     foreach ( $file_dirs as $dir ) {
@@ -3125,9 +3088,17 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                     delete_option( 'opti_behavior_heatmap_page_resets' );
                 }
 
+                // The `_orphaned/` archive is gone: drop the cursors / progress of
+                // the passes that walk it, so no card keeps reporting old folders.
+                if ( $is_full_deletion || in_array( 'heatmaps', $selected_categories, true ) ) {
+                    $this->reset_heatmap_archive_state();
+                }
+
                 if ( in_array( 'smart_insights', $selected_categories, true ) ) {
                     $this->reset_smart_insights_deletion_state();
                 }
+
+                $this->log_danger_zone_reset( $selected_categories, count( $tables ), $files_deleted );
 
                 // Build a completion message that accurately reflects what was deleted
                 if ( $is_full_deletion ) {
@@ -3228,6 +3199,91 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
                 wp_clear_scheduled_hook( $batch_hook );
             }
+
+            // The menu lightbulb colour is a stored option (12 h safety TTL):
+            // without this it stays red / yellow for insights that no longer exist.
+            if ( class_exists( 'Opti_Behavior_Smart_Insights_Repository' ) && method_exists( 'Opti_Behavior_Smart_Insights_Repository', 'flush_menu_severity' ) ) {
+                Opti_Behavior_Smart_Insights_Repository::flush_menu_severity();
+            }
+        }
+
+        /**
+         * Forget the progress of the passes that walk the `_orphaned/` heatmap
+         * archive (purge, restore, dry-run report) once the Danger Zone deleted it.
+         * The retention window setting is kept.
+         *
+         * @since 1.9.1.9
+         */
+        private function reset_heatmap_archive_state() {
+            $options = array(
+                'Opti_Behavior_Heatmap_Orphan_Purge'   => array( 'CURSOR_OPTION', 'PROGRESS_OPTION' ),
+                'Opti_Behavior_Heatmap_Orphan_Restore' => array( 'CURSOR_OPTION', 'PROGRESS_OPTION', 'HOLD_OPTION' ),
+                'Opti_Behavior_Heatmap_Orphan_Report'  => array( 'CURSOR_OPTION', 'PROGRESS_OPTION', 'CONTROL_OPTION' ),
+            );
+
+            foreach ( $options as $class => $constants ) {
+                if ( ! class_exists( $class ) ) {
+                    continue;
+                }
+                foreach ( $constants as $constant ) {
+                    if ( defined( $class . '::' . $constant ) ) {
+                        delete_option( constant( $class . '::' . $constant ) );
+                    }
+                }
+            }
+        }
+
+        /**
+         * Write one Cleanup History entry for a Danger Zone data reset, so the
+         * history shows the reset instead of only the runs from before it.
+         *
+         * @since 1.9.1.9
+         * @param string[] $categories    Deleted category keys.
+         * @param int      $table_count   Number of tables emptied.
+         * @param int      $files_deleted Number of files deleted.
+         */
+        private function log_danger_zone_reset( $categories, $table_count, $files_deleted ) {
+            if ( ! class_exists( 'Opti_Behavior_Smart_Cleanup_Service' ) ) {
+                return;
+            }
+
+            $labels = array(
+                'sessions'       => __( 'Sessions & Pageviews', 'opti-behavior' ),
+                'visitors'       => __( 'Visitors', 'opti-behavior' ),
+                'events'         => __( 'Events & Interactions', 'opti-behavior' ),
+                'heatmaps'       => __( 'Heatmap Data', 'opti-behavior' ),
+                'recordings'     => __( 'Session Recordings', 'opti-behavior' ),
+                'traffic'        => __( 'Traffic Sources', 'opti-behavior' ),
+                'errors'         => __( 'Error Tracking', 'opti-behavior' ),
+                'smart_insights' => __( 'Smart Insights', 'opti-behavior' ),
+                'funnels'        => __( 'Funnels', 'opti-behavior' ),
+                'forms'          => __( 'Forms & Reports', 'opti-behavior' ),
+                'ab_testing'     => __( 'A/B Testing', 'opti-behavior' ),
+            );
+
+            $names = array();
+            foreach ( (array) $categories as $category ) {
+                $names[] = isset( $labels[ $category ] ) ? $labels[ $category ] : (string) $category;
+            }
+
+            ( new Opti_Behavior_Smart_Cleanup_Service() )->add_cleanup_log(
+                'danger-zone-reset',
+                0,
+                0,
+                $files_deleted,
+                array(
+                    'files_deleted' => $files_deleted,
+                    'status'        => 'completed',
+                    'notes'         => array(
+                        sprintf(
+                            /* translators: 1: number of emptied tables, 2: comma-separated list of data categories */
+                            _n( '%1$d table emptied: %2$s.', '%1$d tables emptied: %2$s.', $table_count, 'opti-behavior' ),
+                            $table_count,
+                            implode( ', ', $names )
+                        ),
+                    ),
+                )
+            );
         }
 
         /**
@@ -3988,6 +4044,49 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 		}
 
 		/**
+		 * Colour of the Smart Insights menu lightbulb for the current user.
+		 *
+		 * Reads the value the repository stores when an insight changes (no
+		 * query on a warm admin screen, nothing on the public site).
+		 *
+		 * @return array{level:string,critical:int,warning:int}
+		 */
+		private function get_smart_insights_menu_severity_impl() {
+			static $severity = null;
+
+			if ( null !== $severity ) {
+				return $severity;
+			}
+
+			$severity = array(
+				'level'    => 'green',
+				'critical' => 0,
+				'warning'  => 0,
+			);
+
+			if ( ! is_user_logged_in() || ! current_user_can( 'manage_options' ) ) {
+				return $severity;
+			}
+
+			$generator  = $this->get_smart_insights_generator_impl();
+			$repository = ( $generator && method_exists( $generator, 'get_repository' ) ) ? $generator->get_repository() : null;
+			if ( ! $repository || ! method_exists( $repository, 'get_menu_severity' ) ) {
+				return $severity;
+			}
+
+			$stored = $repository->get_menu_severity();
+			if ( is_array( $stored ) && in_array( $stored['level'] ?? '', array( 'green', 'yellow', 'red' ), true ) ) {
+				$severity = array(
+					'level'    => $stored['level'],
+					'critical' => max( 0, (int) ( $stored['critical'] ?? 0 ) ),
+					'warning'  => max( 0, (int) ( $stored['warning'] ?? 0 ) ),
+				);
+			}
+
+			return $severity;
+		}
+
+		/**
 		 * Mark Smart Insights as seen for the current user.
 		 *
 		 * Runs on the Smart Insights screen `load-` hook (before the admin menu
@@ -4408,6 +4507,18 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				}
 			}
 
+			// Locked Pro previews are represented by the ONE grouped
+			// `locked_preview` prompt below, never as individual cards
+			// (QA-F-SI-071): listed one by one they crowded out readable items.
+			$readable_items = array_values(
+				array_filter(
+					$items,
+					function( $item ) {
+						return is_array( $item ) && empty( $item['is_locked_preview'] );
+					}
+				)
+			);
+
 			$payload['unread_count']     = $unread_count;
 			$payload['highest_severity'] = $highest_label;
 			$center_url                  = $payload['center_url'];
@@ -4415,7 +4526,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				function( $item ) use ( $center_url ) {
 					return $this->format_smart_insights_notification_item_impl( $item, $center_url );
 				},
-				array_slice( $items, 0, 5 )
+				array_slice( $readable_items, 0, 5 )
 			);
 
 			if ( ! empty( $settings['include_locked_previews'] ) ) {
@@ -5093,6 +5204,8 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				'resolved'      => __( 'Resolved', 'opti-behavior' ),
 				'ignored'       => __( 'Ignored', 'opti-behavior' ),
 				'auto_resolved' => __( 'Auto-resolved', 'opti-behavior' ),
+				'rule_updated'     => __( 'Closed: rule updated', 'opti-behavior' ),
+				'merged_duplicate' => __( 'Merged into a twin card', 'opti-behavior' ),
 			);
 
 			return isset( $labels[ $status ] ) ? $labels[ $status ] : sanitize_text_field( $status );
@@ -6021,6 +6134,27 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 		 * @return string
 		 */
 		private function get_smart_insights_category_label_impl( $category ) {
+			$labels = $this->get_smart_insights_category_labels_impl();
+
+			return isset( $labels[ $category ] ) ? $labels[ $category ] : $category;
+		}
+
+		/**
+		 * Smart Insights category labels: stored category => display label.
+		 *
+		 * Stored categories are English keys; Pro adds its catalog categories
+		 * through `opti_behavior_smart_insights_category_labels`. The same map is
+		 * sent to smart-insights.js (i18n `categoryLabels`).
+		 *
+		 * @return array<string,string>
+		 */
+		private function get_smart_insights_category_labels_impl() {
+			static $cache = array();
+			$locale = determine_locale();
+			if ( isset( $cache[ $locale ] ) ) {
+				return $cache[ $locale ];
+			}
+
 			$labels = array(
 				'UX/CRO'               => __( 'UX / CRO', 'opti-behavior' ),
 				'Page Engagement'      => __( 'Engagement Issue', 'opti-behavior' ),
@@ -6032,9 +6166,21 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				'Technical Issue'      => __( 'Technical Issue', 'opti-behavior' ),
 				'Campaign Issue'       => __( 'Campaign Issue', 'opti-behavior' ),
 				'Revenue Opportunity'  => __( 'Revenue Opportunity', 'opti-behavior' ),
+				'Experiment Learning'  => __( 'Experiment learning', 'opti-behavior' ),
 			);
 
-			return isset( $labels[ $category ] ) ? $labels[ $category ] : $category;
+			$filtered = apply_filters( 'opti_behavior_smart_insights_category_labels', $labels );
+			if ( is_array( $filtered ) ) {
+				foreach ( $filtered as $key => $label ) {
+					if ( is_string( $key ) && '' !== $key && is_scalar( $label ) && '' !== (string) $label ) {
+						$labels[ $key ] = (string) $label;
+					}
+				}
+			}
+
+			$cache[ $locale ] = $labels;
+
+			return $labels;
 		}
 
 		/**

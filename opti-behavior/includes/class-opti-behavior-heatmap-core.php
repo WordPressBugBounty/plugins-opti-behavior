@@ -537,6 +537,14 @@ class Opti_Behavior_Heatmap_Core {
 		if ( class_exists( 'Opti_Behavior_Heatmap_Page_Type_Prune' ) ) {
 			Opti_Behavior_Heatmap_Page_Type_Prune::register_hooks();
 		}
+		// One-time repair of sessions the 1.9.1 bulk recalculation flagged `few_scrolls`.
+		if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ) {
+			Opti_Behavior_Stats_Spam_Filter::register_repair_hooks();
+		}
+		// [opti_behavior_cookie_settings]: visitor-facing cookie preference centre.
+		if ( class_exists( 'Opti_Behavior_Consent_Preferences' ) ) {
+			Opti_Behavior_Consent_Preferences::register_hooks();
+		}
 		add_action( Opti_Behavior_Heatmap_Engagement_Counters::TICK_HOOK, array( 'Opti_Behavior_Heatmap_Engagement_Counters', 'run_tick' ) );
 		add_action( 'opti_behavior_aggregate_daily_stats', array( $this, 'aggregate_daily_stats' ) );
 		add_action( 'opti_behavior_send_scheduled_reports', array( $this, 'process_scheduled_reports' ) );
@@ -653,6 +661,12 @@ class Opti_Behavior_Heatmap_Core {
 		if ( is_admin() && in_array( get_option( 'Activated_Plugin' ), array( 'opti-behavior', 'opti_behavior_heatmap' ) ) ) {
 			delete_option( 'Activated_Plugin' );
 			$this->database->activation();
+		}
+
+		// Smart Insights rules changed since the last admin visit: flush the
+		// dossiers built by the older rules and regenerate once.
+		if ( class_exists( 'Opti_Behavior_Smart_Insights_Scheduler' ) ) {
+			Opti_Behavior_Smart_Insights_Scheduler::maybe_apply_rules_upgrade();
 		}
 
 		// Check for version updates
@@ -2209,6 +2223,7 @@ class Opti_Behavior_Heatmap_Core {
 			'opti_behavior_spam_tier_run',                   // Spam/bot tier run-now + continuation (run_daily_spam_tier()).
 			'opti_behavior_engagement_counters_tick',        // Opti_Behavior_Heatmap_Engagement_Counters::TICK_HOOK (backfill + purge).
 			'opti_behavior_page_type_prune_run',             // 1.9.5 archive-page prune run-now + continuation.
+			'opti_behavior_spam_few_scrolls_repair',         // Opti_Behavior_Stats_Spam_Filter::FEW_SCROLLS_REPAIR_HOOK (one-time repair).
 			'opti_behavior_page_type_prune_restore',         // 1.9.5 archive-page prune restore pass.
 			'opti_behavior_page_type_prune_purge',           // 1.9.5 archive-page prune purge pass.
 			'opti_behavior_heatmap_migration_batch',         // Heatmap file-storage migration batch worker.

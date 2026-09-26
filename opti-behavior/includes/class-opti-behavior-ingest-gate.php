@@ -176,6 +176,50 @@ class Opti_Behavior_Ingest_Gate {
 	}
 
 	/**
+	 * Fixed-budget rate limiter for public ingest writes and outbound lookups.
+	 *
+	 * Counts one hit in a transient and answers false once `$limit` hits were
+	 * counted inside `$window` seconds. Scope `ip` keys the budget to the
+	 * visitor IP (Opti_Behavior_IP_Exclusion::get_visitor_ip(): forwarding
+	 * headers only from a trusted proxy); scope `site` is one budget for the
+	 * whole site. Callers only
+	 * consult it on rare paths (a NEW funnel entry, an uncached geolocation
+	 * lookup), never on every pageview. Added for the WordPress.org security
+	 * review of 1.9.2 (2026-09-25).
+	 *
+	 * @param string $bucket Budget name (a-z, 0-9, _).
+	 * @param int    $limit  Hits allowed per window; <= 0 disables the limit.
+	 * @param int    $window Window length in seconds.
+	 * @param string $scope  'ip' (default) or 'site'.
+	 * @return bool True when the hit is allowed (and was counted).
+	 */
+	public static function allow_hit( $bucket, $limit, $window, $scope = 'ip' ) {
+		$limit = (int) $limit;
+		if ( $limit <= 0 ) {
+			return true;
+		}
+
+		$who = 'site';
+		if ( 'ip' === $scope ) {
+			$ip = class_exists( 'Opti_Behavior_IP_Exclusion' ) ? Opti_Behavior_IP_Exclusion::get_visitor_ip() : '';
+			// A private / reserved connecting address is a reverse proxy or a
+			// local test run: every visitor shares it, so a per-IP budget would
+			// cap the whole site. It cannot be forged from outside, so skip.
+			if ( '' === $ip || false === filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE ) ) {
+				return true;
+			}
+			$who = substr( md5( $ip ), 0, 16 );
+		}
+		$key   = 'ob_rl_' . preg_replace( '/[^a-z0-9_]/', '', strtolower( (string) $bucket ) ) . '_' . $who;
+		$count = (int) get_transient( $key );
+		if ( $count >= $limit ) {
+			return false;
+		}
+		set_transient( $key, $count + 1, max( 1, (int) $window ) );
+		return true;
+	}
+
+	/**
 	 * Reset the per-request cache (used by tests / after settings save).
 	 *
 	 * @since 1.6.1
