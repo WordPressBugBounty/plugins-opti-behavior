@@ -1,7 +1,7 @@
-=== Opti-Behavior – Self-Hosted Heatmaps, Session Recordings, Funnels, A/B Testing & Smart Insights ===
+=== Opti-Behavior – Self-Hosted Heatmaps, Session Recordings, Funnels & A/B Testing ===
 Contributors: optiuser
 Donate link: https://optiuser.com/
-Tags: heatmap, session recording, ab testing, funnel, conversion
+Tags: heatmap, session recording, session replay, click tracking, ab testing
 
 Requires at least: 5.8
 Tested up to: 7.1
@@ -10,7 +10,7 @@ Stable tag: 1.9.2.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-See why visitors leave, fix it, prove it. Self-hosted heatmaps, funnels, A/B tests and Smart Insights that rank what to fix first.
+Self-hosted heatmaps, click tracking, funnels and A/B tests for WordPress and WooCommerce. Visitor data stays on your server. Session replay in Pro.
 
 == Description ==
 
@@ -67,7 +67,7 @@ In the free plugin, the Page X-Ray tab shows what it does and an example report.
 Opti-Behavior is built around one simple psychology principle: users reveal intent through behavior before they explain it with words.
 
 * 📊 [Real-Time Analytics](https://optiuser.com/opti-behavior/ob-feature-dashboard/) - See what visitors are doing now: sessions, pageviews, devices, traffic sources, countries, engagement, and bot-filtered activity.
-* 🔥 [Heatmaps](https://optiuser.com/opti-behavior/ob-feature-heatmaps/) - Discover what users notice, ignore, click, misclick, and scroll past so you can improve layout, CTAs, and page focus.
+* 🔥 [Heatmaps](https://optiuser.com/opti-behavior/ob-feature-heatmaps/) - See where visitors click on desktop and mobile. Scroll, move and attention heatmaps are Pro features.
 * 🧭 [Conversion Funnels](https://optiuser.com/opti-behavior/ob-feature-funnels/) - Find the exact step where motivation turns into abandonment, from landing page to checkout or lead form.
 * 🧪 [A/B Testing](https://optiuser.com/opti-behavior/ob-feature-ab-testing/) - Replace opinions with evidence by testing pages, elements, goals, and conversion paths directly in WordPress.
 * 💡 [Smart Insights](https://optiuser.com/opti-behavior/ob-feature-smart-insights/) - One card per problem, ranked by the visitors it costs, with the evidence, the next action and a before / after result.
@@ -95,7 +95,7 @@ The goal is not more dashboards. The goal is better decisions.
 
 = ✅ Core Features Included Free =
 
-* Click and scroll heatmaps for desktop and mobile behavior.
+* Click heatmaps for desktop and mobile.
 * Real-time traffic overview with visitors, sessions, pageviews, bounce rate, scroll depth, top pages, traffic sources, and visitor map.
 * Unlimited conversion funnels with multi-step drop-off analysis and device filtering.
 * Automatic funnel suggestions: Opti-Behavior detects your site type (WooCommerce, Easy Digital Downloads, blog, lead-gen, signup, membership, LMS, booking) and proposes ready-made funnels built from your own store URLs — create one in a click, or customize it in the builder first. Nothing is ever created without you asking.
@@ -105,7 +105,7 @@ The goal is not more dashboards. The goal is better decisions.
 * "How it works" page with a Setup check, a first-days checklist and the latest release notes.
 * Bot and spam detection and filtering for cleaner decisions.
 * Scheduled email reports: daily, weekly, or monthly.
-* Hybrid Storage engine designed to reduce database bloat by storing high-volume analytics events in optimized files.
+* Hybrid Storage engine that stores high-volume analytics events in files instead of the database. Database size [measured on one production site](https://optiuser.com/blog/wordpress-analytics-plugin-database-size/).
 * Cookie-free anonymous tracking by default, IP anonymization, and no third-party analytics data sharing. Full Tracking mode uses cookies only after the visitor accepts the consent banner, and the `[opti_behavior_cookie_settings]` shortcode lets visitors change or withdraw their choice at any time.
 * Multilingual admin: English, French, German, Spanish, Portuguese, and Italian.
 
@@ -119,14 +119,14 @@ Upgrade when you want to move from analytics to deeper behavior diagnosis:
 * **Friction Detection** - find rage clicks and dead clicks that signal frustration.
 * **Form Analytics** - measure field-level effort, abandonment, refill behavior, and completion time.
 * **User Journey Analytics** - use Sankey-style journey visualization to see common paths, exits, and opportunities.
+* **Scroll, move and attention heatmaps** - see how far visitors scroll, where the mouse moves and where attention stays.
 * **Advanced Heatmap Filtering** - segment heatmaps by country, browser, device, visitor type, and date.
 * **Advanced A/B Testing** - use visual edits, targeting, scheduling, WooCommerce tests, and revenue attribution.
 * **Pro Smart Insights signals** - errors, rage and dead clicks, slow pages, broken links and abandoned forms feed Smart Insights and Page X-Ray, with a session recording as proof when one exists.
-* **Priority Support** - get faster help when optimizing business-critical pages.
 
 🎁 **Try Pro FREE for 6 months** - no credit card required.
 
-[Explore Opti-Behavior Pro](https://optiuser.com/opti-behavior/) | 🚀 [Live Demo](https://demo.optiuser.com/?demo_login=go)
+[See Pro plans and prices](https://optiuser.com/opti-behavior/pricing/) | 🚀 [Live Demo](https://demo.optiuser.com/?demo_login=go)
 
 = 🛡️ Privacy & Performance by Design =
 
@@ -135,7 +135,7 @@ Opti-Behavior is made for WordPress site owners who want insight without giving 
 * **Self-hosted data** - visitor behavior stays on your WordPress server.
 * **No third-party analytics cloud** - analytics data is not sold or shared with external behavior platforms.
 * **Privacy controls** - cookie-free anonymous mode by default, IP anonymization, retention settings, consent banner and visitor cookie preferences, and uninstall cleanup options.
-* **Lightweight tracking** - minified trackers loaded with `defer` never block page rendering, and Hybrid Storage keeps databases lean.
+* **Lightweight tracking** - minified trackers loaded with `defer`. We measured PageSpeed on a test page with the plugin on and off: [see the article](https://optiuser.com/blog/analytics-plugin-slow-down-wordpress/). Database size [measured on one production site](https://optiuser.com/blog/wordpress-analytics-plugin-database-size/).
 * **WooCommerce ready** - analyze product pages, carts, checkout funnels, and revenue-focused experiments while keeping customer behavior data under your control.
 
 == Installation ==
@@ -160,7 +160,7 @@ Opti-Behavior is made for WordPress site owners who want insight without giving 
 1. Navigate to **Opti-Behavior** in your WordPress admin menu. The menu has two groups: **Your data** and **What to fix**.
 2. The plugin starts tracking automatically - no configuration required!
 3. Open **How it works**: the Setup check confirms that visits are received and offers to exclude your own visits.
-4. Visit **Traffic** to see real-time visitor activity and **Heatmaps** to see where visitors click and scroll.
+4. Visit **Traffic** to see real-time visitor activity and **Heatmaps** to see where visitors click.
 5. Open **Funnels**: Opti-Behavior proposes ready-made funnels for your site type, created in one click.
 6. Check **Smart Insights**: the first cards usually come after about 100 visits on a page, and the menu light turns red, yellow or green.
 7. Adjust **Settings** to customize tracking behavior and privacy options.
@@ -187,27 +187,27 @@ Page X-Ray is the per-page report of Smart Insights, in Opti-Behavior Pro. It an
 
 = Does this plugin slow down my website? =
 
-Opti-Behavior is designed to stay lightweight. The tracking scripts are minified and loaded with `defer`, so they never block page rendering, events are batched, and the Hybrid Storage engine can store high-volume analytics events in optimized files instead of writing every interaction directly to MySQL. As with any analytics tool, performance depends on hosting, traffic volume, and settings, but the plugin is built to minimize frontend impact.
+The tracking scripts are minified and loaded with `defer`, events are sent in batches, and the Hybrid Storage engine can store high-volume analytics events in files instead of writing every interaction directly to MySQL. We measured PageSpeed on a test page with the plugin on and off: [see the article](https://optiuser.com/blog/analytics-plugin-slow-down-wordpress/). As with any analytics tool, the result on your site depends on your hosting, traffic volume and settings.
 
-= Is this plugin GDPR compliant? =
+= What privacy controls does it include? =
 
-Opti-Behavior includes privacy controls that help with GDPR-friendly analytics: self-hosted data storage, IP anonymization, data retention controls, cookie-free anonymous tracking by default, a built-in consent banner (or your consent plugin) before Full Tracking sets any cookie, and the `[opti_behavior_cookie_settings]` shortcode so visitors can change or withdraw their choice at any time. You should still update your privacy policy and confirm your setup with your own legal requirements.
+Self-hosted: visitor data stays on your own server. Opti-Behavior includes IP anonymization, data retention controls, cookie-free anonymous tracking by default, a built-in consent banner (or your consent plugin) before Full Tracking sets any cookie, and the `[opti_behavior_cookie_settings]` shortcode so visitors can change or withdraw their choice at any time. These controls do not make a site compliant on their own: update your privacy policy and check your setup with your own legal adviser.
 
-= Is this plugin CCPA compliant? =
+= Does it work without cookies? =
 
-Opti-Behavior supports CCPA-friendly practices because visitor behavior data stays on your server and is not sold by Opti-Behavior. You can anonymize IP addresses, delete stored data, and use your existing consent or opt-out workflow before tracking starts.
+Yes. Anonymous mode, the default, sets no cookie: visits are counted on your own server. Full Tracking mode uses cookies only after the visitor accepts the consent banner. Whether your site still needs a consent banner depends on everything it loads, not only analytics: see [WordPress analytics without a cookie banner](https://optiuser.com/blog/wordpress-visitor-tracking-without-cookies/) and check with your data protection adviser.
 
 = How is this different from Microsoft Clarity? =
 
-Clarity is cloud-based and Microsoft may process behavioral data under its own terms. Opti-Behavior is WordPress-native and self-hosted, so visitor behavior data stays on your server. Opti-Behavior also includes funnels, scheduled reports, bot filtering, self-hosted A/B testing, and Smart Insights that ranks what to fix first and checks whether your fix worked.
+Clarity is a cloud service from Microsoft: behavior data is processed on Microsoft's servers under its terms. Opti-Behavior runs inside WordPress and keeps visitor data on your own server. It also includes funnels, scheduled reports, bot filtering, A/B testing, and Smart Insights that ranks what to fix first and checks whether your fix worked.
 
 = How is this different from Hotjar? =
 
-Hotjar sends behavior data to an external cloud and many advanced features require paid plans. Opti-Behavior keeps behavior analytics inside WordPress, includes heatmaps and funnels in the Free plugin, and adds recordings, form analytics, journeys, errors, and advanced A/B testing in Pro.
+Hotjar is a cloud service: behavior data is stored on Hotjar's servers. Opti-Behavior keeps behavior analytics inside WordPress, on your own server. Click heatmaps and funnels are in the Free plugin; recordings, scroll / move / attention heatmaps, form analytics, journeys, errors and advanced A/B testing are in Pro. See [Opti-Behavior vs Hotjar](https://optiuser.com/opti-behavior/compare/vs-hotjar/).
 
 = How is this different from Matomo? =
 
-Matomo is strong self-hosted analytics, but many behavior features are separate premium add-ons. Opti-Behavior focuses specifically on behavior analytics and conversion optimization for WordPress: heatmaps, funnels, A/B testing, recordings, forms, journeys, and friction insights.
+Matomo is a self-hosted web analytics platform. Opti-Behavior focuses on behavior analytics and conversion work inside WordPress: heatmaps, funnels and A/B testing in Free; recordings, forms, journeys and friction insights in Pro.
 
 = Are there any session or pageview limits? =
 
@@ -215,7 +215,7 @@ There are no artificial SaaS-style session caps in the plugin. Your practical li
 
 = Can I export my data? =
 
-Yes. Analytics data can be exported from the dashboard where export tools are available.
+Yes. The Traffic dashboard exports its data to CSV.
 
 = Does this work with caching plugins? =
 
@@ -223,7 +223,7 @@ Yes. Opti-Behavior is designed to work with common WordPress caching plugins suc
 
 = Will this work on multisite? =
 
-Yes. Opti-Behavior supports WordPress multisite and can be activated network-wide or on individual sites.
+Opti-Behavior works on multisite: each site keeps its own tables and data folder. After network activation, open each site's dashboard once. Multisite is not yet in our test suite, so please test on a staging copy first.
 
 = Does this plugin call any external services? =
 
