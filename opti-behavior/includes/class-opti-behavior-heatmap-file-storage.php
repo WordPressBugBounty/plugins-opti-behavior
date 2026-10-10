@@ -240,11 +240,10 @@ class Opti_Behavior_Heatmap_File_Storage {
 				$this->log( 'CRITICAL: cannot create/write data directory: ' . $dir, 'error' );
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 				error_log( '[Opti-Behavior] CRITICAL: Cannot create data directory: ' . $dir . ' — Check file permissions (755) on wp-content/uploads/opti-behavior-data/' );
-				set_transient(
-					'opti_behavior_file_storage_error',
-					'Opti-Behavior cannot write session recordings. The directory <code>' . esc_html( $this->base_dir . $type . '/' ) . '</code> is not writable. Please set permissions to 755 or contact your hosting provider.',
-					DAY_IN_SECONDS
-				);
+				// Admin notice + Setup check row (translated, with a support link).
+				if ( class_exists( 'Opti_Behavior_Storage_Health' ) ) {
+					Opti_Behavior_Storage_Health::report_failure( $dir, 'recordings' );
+				}
 				return false;
 			}
 
@@ -300,6 +299,9 @@ class Opti_Behavior_Heatmap_File_Storage {
 
 		if ( false === $written ) {
 			$this->log( 'ERROR: file_put_contents returned false for: ' . $filepath, 'error' );
+			if ( class_exists( 'Opti_Behavior_Storage_Health' ) ) {
+				Opti_Behavior_Storage_Health::report_failure( $filepath, 'recordings' );
+			}
 			return array( 'error' => 'Failed to write file - file_put_contents returned false' );
 		}
 
@@ -586,6 +588,9 @@ class Opti_Behavior_Heatmap_File_Storage {
 		$written = @file_put_contents( $log_path, $encoded_events . "\n", FILE_APPEND | LOCK_EX );
 		if ( false === $written ) {
 			$this->log( 'Append write failed for: ' . $log_path, 'warning' );
+			if ( class_exists( 'Opti_Behavior_Storage_Health' ) ) {
+				Opti_Behavior_Storage_Health::report_failure( $log_path, 'recordings' );
+			}
 			return array( 'error' => 'Failed to write file - append failed' );
 		}
 
@@ -1753,6 +1758,9 @@ class Opti_Behavior_Heatmap_File_Storage {
 
 		if ( false === $written ) {
 			$this->log( 'Failed to write file: ' . $filepath, 'error' );
+			if ( class_exists( 'Opti_Behavior_Storage_Health' ) ) {
+				Opti_Behavior_Storage_Health::report_failure( $filepath, 'recordings' );
+			}
 			return array( 'error' => 'Failed to write file' );
 		}
 

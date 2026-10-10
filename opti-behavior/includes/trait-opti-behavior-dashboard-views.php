@@ -578,9 +578,19 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                         $clicks_change_display   = abs( $clicks_change );
                                         $avg_time_change_display = abs( $avg_time_change );
 
-                                        // "Hot" badge heuristic: no dedicated data field exists, so approximate it
-                                        // from the existing views trend/change (presentation-only, no data-layer change).
-                                        $is_hot = ( 'up' === $views_trend && $views_change_display >= 50 );
+                                        // "Hot" needs a real base (OPT-590): computed with the row, see
+                                        // Opti_Behavior_Heatmap_Dashboard::is_top_page_hot().
+                                        $is_hot = ! empty( $page['is_hot'] );
+
+                                        // Trend "new" = no data in the previous period: a dash, no percentage.
+                                        $no_base_tip = __( 'No data for the previous period', 'opti-behavior' );
+                                        $render_change = function ( $trend, $trend_class, $arrow, $change_display ) use ( $no_base_tip ) {
+                                            if ( 'new' === $trend ) {
+                                                echo '<span class="metric-change neutral" title="' . esc_attr( $no_base_tip ) . '"><span class="metric-percent">&mdash;</span></span>';
+                                                return;
+                                            }
+                                            echo '<span class="metric-change ' . esc_attr( $trend_class ) . '"><span class="metric-arrow">' . esc_html( $arrow ) . '</span> <span class="metric-percent">' . esc_html( $change_display ) . '%</span></span>';
+                                        };
                                         ?>
                                         <div class="page-item">
                                             <div class="page-title-row">
@@ -604,26 +614,17 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                                 <div class="metric metric-views" title="<?php echo esc_attr__( 'Heatmap sessions', 'opti-behavior' ); ?>">
                                                     <i class="metric-icon" data-lucide="flame"></i>
                                                     <span class="metric-value"><?php echo esc_html( number_format_i18n( $sessions ) ); ?></span>
-                                                    <span class="metric-change <?php echo esc_attr( $views_trend_class ); ?>">
-                                                        <span class="metric-arrow"><?php echo esc_html( $views_arrow ); ?></span>
-                                                        <span class="metric-percent"><?php echo esc_html( $views_change_display ); ?>%</span>
-                                                    </span>
+                                                    <?php $render_change( $views_trend, $views_trend_class, $views_arrow, $views_change_display ); ?>
                                                 </div>
                                                 <div class="metric metric-clicks" title="<?php echo esc_attr__( 'Clicks', 'opti-behavior' ); ?>">
                                                     <i class="metric-icon" data-lucide="mouse-pointer-click"></i>
                                                     <span class="metric-value"><?php echo esc_html( number_format_i18n( $clicks ) ); ?></span>
-                                                    <span class="metric-change <?php echo esc_attr( $clicks_trend_class ); ?>">
-                                                        <span class="metric-arrow"><?php echo esc_html( $clicks_arrow ); ?></span>
-                                                        <span class="metric-percent"><?php echo esc_html( $clicks_change_display ); ?>%</span>
-                                                    </span>
+                                                    <?php $render_change( $clicks_trend, $clicks_trend_class, $clicks_arrow, $clicks_change_display ); ?>
                                                 </div>
                                                 <div class="metric metric-avg-time" title="<?php echo esc_attr__( 'Average time spent', 'opti-behavior' ); ?>">
                                                     <i class="metric-icon" data-lucide="clock"></i>
                                                     <span class="metric-value"><?php echo esc_html( $avg_time_formatted ); ?></span>
-                                                    <span class="metric-change <?php echo esc_attr( $avg_time_trend_class ); ?>">
-                                                        <span class="metric-arrow"><?php echo esc_html( $avg_time_arrow ); ?></span>
-                                                        <span class="metric-percent"><?php echo esc_html( $avg_time_change_display ); ?>%</span>
-                                                    </span>
+                                                    <?php $render_change( $avg_time_trend, $avg_time_trend_class, $avg_time_arrow, $avg_time_change_display ); ?>
                                                 </div>
                                             </div>
                                         </div>
@@ -952,7 +953,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
 
             // Check cache only when enough records exist to justify caching.
             $exclude_spam = $this->is_spam_excluded();
-            $cache_key = 'opti_behavior_user_intent_' . md5( 'frozen-baseline-v2|' . $start_date . $end_date . '|' . $baseline . '|' . ( $exclude_spam ? '1' : '0' ) );
+            $cache_key = opti_behavior_dashboard_cache_key( 'opti_behavior_user_intent_' . md5( 'frozen-baseline-v2|' . $start_date . $end_date . '|' . $baseline . '|' . ( $exclude_spam ? '1' : '0' ) ) );
             if ( $use_cache ) {
                 $cached = get_transient( $cache_key );
                 if ( false !== $cached ) {
@@ -1551,7 +1552,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                         <?php opti_behavior_tooltip_e( $tooltips['bot_traffic']['title'], $tooltips['bot_traffic']['content'], $tooltips['bot_traffic']['simple'], $tooltips['bot_traffic']['example'], array( 'position' => 'bottom' ) ); ?>
                     </h3>
                     <div class="widget-meta" id="bot-traffic-meta" style="<?php echo $has_data ? '' : 'display: none;'; ?>">
-                        <span class="total-count"><span id="bot-traffic-total"><?php echo esc_html( number_format( $total ) ); ?></span> <?php esc_html_e( 'visits', 'opti-behavior' ); ?></span>
+                        <span class="total-count"><span id="bot-traffic-total"><?php echo esc_html( number_format_i18n( $total ) ); ?></span> <?php esc_html_e( 'visits', 'opti-behavior' ); ?></span>
                         <span class="change-indicator <?php echo $change_pct > 0 ? 'positive' : 'negative'; ?>" id="bot-traffic-change" style="<?php echo $change_pct !== 0 ? '' : 'display: none;'; ?>">
                             <span id="bot-traffic-change-value"><?php echo $change_pct > 0 ? '↑' : '↓'; ?> <?php echo esc_html( abs( $change_pct ) ); ?>%</span>
                         </span>
@@ -1589,7 +1590,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                         <span class="bot-label ob-metric-label"><?php echo esc_html( $bot_label ); ?></span>
                                     </div>
                                     <div class="bot-stats ob-metric-values">
-                                        <span class="visitor-count"><?php echo esc_html( number_format( $count ) ); ?></span>
+                                        <span class="visitor-count"><?php echo esc_html( number_format_i18n( $count ) ); ?></span>
                                         <span class="visitor-percentage"><?php echo esc_html( $percentage ); ?>%</span>
                                         <span class="visitor-trend <?php echo esc_attr( $trend_class ); ?>">
                                             <?php if ( '' !== $trend_points ) : ?>
@@ -1887,155 +1888,56 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
         }
 
 		/**
-		 * Render the Pro Trial Banner.
+		 * Render the Pro trial notice (Traffic, Settings, How it works).
 		 *
-		 * Displays one of three banner variants depending on trial state:
-		 * - invite:  Encourages user to start 6-month free trial
-		 * - active:  Shows countdown and download link
-		 * - expired: Shows trial ended message with upgrade link
-		 *
-		 * Banner is hidden when Pro is active with valid manifest,
-		 * or when the user has recently dismissed it.
+		 * OPT-763 (WordPress.org guideline 7, GDPR art. 13): a dismissible
+		 * notice with one link to the trial page on optiuser.com. No one-click
+		 * trial, no request to optiuser.com from WordPress: the browser opens
+		 * the page when the admin clicks. Closing it is stored on this site
+		 * only and it never comes back. Hidden when Pro is active.
 		 *
 		 * @since 1.1.3
 		 */
 		private function render_pro_trial_banner() {
 			$state = $this->get_trial_banner_state();
 
-			if ( 'hidden' === $state['display'] ) {
+			if ( 'invite' !== $state['display'] || ! class_exists( 'Opti_Behavior_Trial_Invite' ) ) {
 				return;
 			}
 
-			// Build CSS classes
-			$classes = 'opti-behavior-trial-banner';
-			if ( 'active' === $state['display'] ) {
-				$classes .= ' opti-behavior-trial-active';
-			} elseif ( 'expired' === $state['display'] ) {
-				$classes .= ' opti-behavior-trial-expired';
+			$trial_url = Opti_Behavior_Trial_Invite::link_url( 'dashboard-banner' );
+			if ( '' === $trial_url ) {
+				return;
 			}
-
 			?>
-			<div class="<?php echo esc_attr( $classes ); ?>">
-				<?php if ( 'invite' === $state['display'] ) : ?>
-					<?php // --- INVITE STATE --- ?>
-					<div class="opti-behavior-trial-banner-content">
-						<div class="opti-behavior-trial-banner-icon">
-							<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></svg>
-						</div>
-						<div class="opti-behavior-trial-banner-text">
-							<p class="opti-behavior-trial-banner-title">
-								<?php
-								printf(
-									/* translators: %s: highlighted "6 months" text */
-									esc_html__( 'Try Pro FREE for %s — No Credit Card Needed!', 'opti-behavior' ),
-									'<span class="opti-behavior-trial-highlight">' . esc_html__( '6 Months', 'opti-behavior' ) . '</span>'
-								);
-								?>
-							</p>
-							<p class="opti-behavior-trial-banner-description">
-								<?php esc_html_e( 'Unlock session recordings, error tracking, user journeys, form analytics & advanced heatmaps. One click to activate.', 'opti-behavior' ); ?>
-							</p>
-							<div class="opti-behavior-trial-features">
-								<span class="opti-behavior-trial-feature-pill">
-									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
-									<?php esc_html_e( 'Recordings', 'opti-behavior' ); ?>
-								</span>
-								<span class="opti-behavior-trial-feature-pill">
-									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-									<?php esc_html_e( 'Error Tracking', 'opti-behavior' ); ?>
-								</span>
-								<span class="opti-behavior-trial-feature-pill">
-									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>
-									<?php esc_html_e( 'User Journeys', 'opti-behavior' ); ?>
-								</span>
-								<span class="opti-behavior-trial-feature-pill">
-									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-									<?php esc_html_e( 'Form Analytics', 'opti-behavior' ); ?>
-								</span>
-							</div>
-						</div>
-					</div>
-					<div class="opti-behavior-trial-banner-actions">
-						<button type="button" class="opti-behavior-trial-btn-start">
-							<span class="opti-behavior-trial-spinner"></span>
-							<span class="opti-behavior-trial-btn-icon">
-								<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12c0 1.1.9 2 2 2h14v-4"/><path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z"/></svg>
-							</span>
-							<?php esc_html_e( 'Start Free Trial', 'opti-behavior' ); ?>
-						</button>
-						<button type="button" class="opti-behavior-trial-btn-dismiss" title="<?php esc_attr_e( 'Dismiss', 'opti-behavior' ); ?>">
-							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-						</button>
-					</div>
-
-				<?php elseif ( 'active' === $state['display'] ) : ?>
-					<?php // --- ACTIVE STATE --- ?>
-					<div class="opti-behavior-trial-banner-content">
-						<div class="opti-behavior-trial-success-check">
-							<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-						</div>
-						<div class="opti-behavior-trial-banner-text">
-							<p class="opti-behavior-trial-banner-title">
-								<?php esc_html_e( 'Pro Trial Active', 'opti-behavior' ); ?>
-							</p>
-							<p class="opti-behavior-trial-banner-description">
-								<?php
-								if ( function_exists( 'opti_behavior_pro_active' ) && opti_behavior_pro_active() ) {
-									esc_html_e( 'All Pro features are unlocked. Enjoy session recordings, error tracking, and more!', 'opti-behavior' );
-								} else {
-									esc_html_e( 'Your trial is active! Download and install the Pro plugin to unlock all premium features.', 'opti-behavior' );
-								}
-								?>
-							</p>
-						</div>
-					</div>
-					<div class="opti-behavior-trial-banner-actions">
-						<span class="opti-behavior-trial-banner-countdown">
-							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+			<div class="notice notice-info inline opti-behavior-notice opti-behavior-trial-notice">
+				<p class="opti-behavior-trial-notice-row">
+					<span class="opti-behavior-trial-notice-icon" aria-hidden="true">
+						<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"/></svg>
+					</span>
+					<span class="opti-behavior-trial-notice-text">
+						<span class="opti-behavior-trial-notice-title">
 							<?php
 							printf(
-								/* translators: %d: number of days remaining */
-								esc_html__( '%d days left', 'opti-behavior' ),
-								(int) $state['days_left']
+								/* translators: %s: highlighted "6 months" text */
+								esc_html__( 'Try Pro free for %s — no credit card needed', 'opti-behavior' ),
+								'<strong>' . esc_html__( '6 months', 'opti-behavior' ) . '</strong>'
 							);
 							?>
 						</span>
-						<?php if ( ! ( function_exists( 'opti_behavior_pro_active' ) && opti_behavior_pro_active() ) ) : ?>
-							<a href="<?php echo esc_url( $state['download_url'] ); ?>" class="opti-behavior-trial-btn-download" target="_blank" rel="noopener noreferrer">
-								<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-								<?php esc_html_e( 'Download Pro Plugin', 'opti-behavior' ); ?>
-							</a>
-						<?php endif; ?>
-						<button type="button" class="opti-behavior-trial-btn-dismiss" title="<?php esc_attr_e( 'Dismiss', 'opti-behavior' ); ?>">
-							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-						</button>
-					</div>
-
-				<?php elseif ( 'expired' === $state['display'] ) : ?>
-					<?php // --- EXPIRED STATE --- ?>
-					<div class="opti-behavior-trial-banner-content">
-						<div class="opti-behavior-trial-banner-icon">
-							<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-						</div>
-						<div class="opti-behavior-trial-banner-text">
-							<p class="opti-behavior-trial-banner-title">
-								<?php esc_html_e( 'Your Pro Trial Has Ended', 'opti-behavior' ); ?>
-							</p>
-							<p class="opti-behavior-trial-banner-description">
-								<?php esc_html_e( 'Your 6-month free trial has expired. Upgrade to continue using session recordings, error tracking, and all premium features.', 'opti-behavior' ); ?>
-							</p>
-						</div>
-					</div>
-					<div class="opti-behavior-trial-banner-actions">
-						<a href="<?php echo esc_url( $state['download_url'] ); ?>" class="opti-behavior-trial-btn-upgrade" target="_blank" rel="noopener noreferrer">
-							<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-							<?php esc_html_e( 'Upgrade to Pro', 'opti-behavior' ); ?>
-						</a>
-						<button type="button" class="opti-behavior-trial-btn-dismiss" title="<?php esc_attr_e( 'Dismiss', 'opti-behavior' ); ?>">
-							<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-						</button>
-					</div>
-				<?php endif; ?>
+						<?php // OPT-792: what the trial unlocks, as small pills (existing menu labels). ?>
+						<span class="opti-behavior-trial-notice-features">
+							<span class="opti-behavior-trial-notice-pill"><?php esc_html_e( 'Recordings', 'opti-behavior' ); ?></span>
+							<span class="opti-behavior-trial-notice-pill"><?php esc_html_e( 'Error Tracking', 'opti-behavior' ); ?></span>
+							<span class="opti-behavior-trial-notice-pill"><?php esc_html_e( 'User Journeys', 'opti-behavior' ); ?></span>
+							<span class="opti-behavior-trial-notice-pill"><?php esc_html_e( 'Form Analytics', 'opti-behavior' ); ?></span>
+						</span>
+					</span>
+					<a href="<?php echo esc_url( $trial_url ); ?>" class="opti-behavior-trial-notice-link" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'See the Pro trial', 'opti-behavior' ); ?><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg><span class="screen-reader-text"> <?php esc_html_e( '(opens in a new tab)', 'opti-behavior' ); ?></span></a>
+					<button type="button" class="opti-behavior-trial-btn-dismiss" aria-label="<?php esc_attr_e( 'Dismiss', 'opti-behavior' ); ?>" title="<?php esc_attr_e( 'Dismiss', 'opti-behavior' ); ?>">
+						<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+					</button>
+				</p>
 			</div>
 			<?php
 		}

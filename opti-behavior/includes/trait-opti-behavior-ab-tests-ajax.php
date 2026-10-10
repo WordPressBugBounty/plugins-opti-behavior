@@ -223,13 +223,20 @@ trait Opti_Behavior_AB_Tests_Ajax {
 			$variant_stats = Opti_Behavior_AB_Test_Database::get_test_stats( $test_id );
 			$results       = Opti_Behavior_AB_Test_Engine::calculate_results( $variant_stats );
 
+			// One strict leader only: a tie (including 0 % vs 0 %, no data) crowns
+			// nobody — the test is just stopped (QA-B-AB-083b).
 			$best_rate = -1;
+			$best_ids  = array();
 			foreach ( $results as $r ) {
-				if ( $r->conversion_rate > $best_rate ) {
-					$best_rate  = $r->conversion_rate;
-					$variant_id = $r->variant_id;
+				$rate = (float) $r->conversion_rate;
+				if ( $rate > $best_rate ) {
+					$best_rate = $rate;
+					$best_ids  = array( (int) $r->variant_id );
+				} elseif ( $rate === $best_rate ) {
+					$best_ids[] = (int) $r->variant_id;
 				}
 			}
+			$variant_id = ( $best_rate > 0 && 1 === count( $best_ids ) ) ? $best_ids[0] : 0;
 		}
 
 		// Declare winner if we have a variant.
@@ -303,7 +310,7 @@ trait Opti_Behavior_AB_Tests_Ajax {
 		if ( is_object( $test_payload ) ) {
 			$target_name = '';
 			if ( ! empty( $test_payload->target_post_id ) ) {
-				$target_name = get_the_title( (int) $test_payload->target_post_id );
+				$target_name = $this->get_ab_plain_post_title( (int) $test_payload->target_post_id );
 			}
 			if ( empty( $target_name ) && ! empty( $test_payload->target_url ) ) {
 				$target_name = wp_parse_url( $test_payload->target_url, PHP_URL_PATH );
@@ -534,7 +541,7 @@ trait Opti_Behavior_AB_Tests_Ajax {
 
 			$targets[] = array(
 				'id'         => (int) $post->ID,
-				'title'      => get_the_title( $post ),
+				'title'      => $this->get_ab_plain_post_title( $post ),
 				'post_type'  => $post->post_type,
 				'type_label' => $type_label,
 				'url'        => $permalink ? $permalink : '',
@@ -550,6 +557,20 @@ trait Opti_Behavior_AB_Tests_Ajax {
 			'page'     => $page,
 			'per_page' => $per_page,
 		) );
+	}
+
+	/**
+	 * Post title as plain text for the admin JS.
+	 *
+	 * get_the_title() returns HTML (wptexturize turns "–" into "&#8211;" and
+	 * "&" into "&#038;"). The A/B admin JS prints these titles as text
+	 * (escHtml / .text()), so the entities would show as typed.
+	 *
+	 * @param int|WP_Post $post Post ID or object.
+	 * @return string Decoded title, never HTML-safe: the caller must escape it.
+	 */
+	private function get_ab_plain_post_title( $post ) {
+		return html_entity_decode( (string) get_the_title( $post ), ENT_QUOTES, get_bloginfo( 'charset' ) );
 	}
 
 	/**

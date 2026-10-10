@@ -102,6 +102,29 @@ class Opti_Behavior_Review_Banner {
 	}
 
 	/**
+	 * Whether the current admin screen is one of the plugin's own screens.
+	 *
+	 * The banner is never printed on WordPress screens (Dashboard, Plugins,
+	 * Posts...) nor on the welcome / trial install steps.
+	 *
+	 * @return bool
+	 */
+	public static function is_plugin_screen() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only screen detection.
+		$page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
+		if ( 0 !== strpos( $page, 'opti-behavior' ) ) {
+			return false;
+		}
+
+		$skip = array( 'opti-behavior-welcome', 'opti-behavior-install-trial' );
+		if ( class_exists( 'Opti_Behavior_Welcome' ) && defined( 'Opti_Behavior_Welcome::WELCOME_SLUG' ) ) {
+			$skip[] = Opti_Behavior_Welcome::WELCOME_SLUG;
+		}
+
+		return ! in_array( $page, $skip, true );
+	}
+
+	/**
 	 * Check whether the current admin should see the banner.
 	 *
 	 * @return bool
@@ -111,11 +134,15 @@ class Opti_Behavior_Review_Banner {
 			return false;
 		}
 
+		if ( ! self::is_plugin_screen() ) {
+			return false;
+		}
+
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return false;
 		}
 
-		if ( class_exists( 'Opti_Behavior_Welcome' ) && ! Opti_Behavior_Welcome::has_consent() ) {
+		if ( class_exists( 'Opti_Behavior_Welcome' ) && ! Opti_Behavior_Welcome::has_made_choice() ) {
 			return false;
 		}
 
@@ -181,9 +208,23 @@ class Opti_Behavior_Review_Banner {
 					<span class="dashicons dashicons-heart ob-rating-banner__heart" aria-hidden="true"></span>
 				</h2>
 				<p class="ob-rating-banner__text">
-					<?php esc_html_e( 'If you have a minute, can you write a ', 'opti-behavior' ); ?>
-					<a href="<?php echo esc_url( $review_url ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'little review', 'opti-behavior' ); ?></a>
-					<?php esc_html_e( ' for Opti-Behavior? It really helps us keep improving privacy-first heatmaps, funnels, and A/B testing.', 'opti-behavior' ); ?>
+					<?php
+					echo wp_kses(
+						sprintf(
+							/* translators: 1: opening link tag to the WordPress.org review form, 2: closing link tag. */
+							esc_html__( 'Enjoying Opti-Behavior? A %1$sshort review on WordPress.org%2$s helps us a lot.', 'opti-behavior' ),
+							'<a href="' . esc_url( $review_url ) . '" target="_blank" rel="noopener noreferrer">',
+							'</a>'
+						),
+						array(
+							'a' => array(
+								'href'   => array(),
+								'target' => array(),
+								'rel'    => array(),
+							),
+						)
+					);
+					?>
 				</p>
 				<p class="ob-rating-banner__text">
 					<?php esc_html_e( 'Do not hesitate to share your feature requests in the review - we read them and use them to improve the plugin.', 'opti-behavior' ); ?>

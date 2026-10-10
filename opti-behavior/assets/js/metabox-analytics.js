@@ -63,7 +63,7 @@
 
 		var fmt = function(n) {
 			try {
-				return new Intl.NumberFormat().format(n);
+				return (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(n) : String(n));
 			} catch (e) {
 				return n;
 			}

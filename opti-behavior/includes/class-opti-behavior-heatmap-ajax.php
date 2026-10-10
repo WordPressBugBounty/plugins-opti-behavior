@@ -433,10 +433,12 @@ class Opti_Behavior_Heatmap_Ajax {
 	/**
 	 * Return recording session IDs allowed by the global spam filter.
 	 *
-	 * @param array $page_ids Canonical page IDs.
+	 * @param array $page_ids         Canonical page IDs.
+	 * @param bool  $sessions_fallback Allow Path C (every session without a
+	 *                                 stored spam verdict) when Paths A/B are empty.
 	 * @return array Session IDs.
 	 */
-	private function get_spam_allowed_session_ids( $page_ids ) {
+	private function get_spam_allowed_session_ids( $page_ids, $sessions_fallback = true ) {
 		global $wpdb;
 
 		$page_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $page_ids ) ) ) );
@@ -488,6 +490,8 @@ class Opti_Behavior_Heatmap_Ajax {
 		// Path B: session_pages-backed sessions passing duration/scroll/click thresholds.
 		// Always run so legit human sessions without a Pro recording are admitted; union with Path A.
 		$params = array_merge( $page_ids, array( $spam_duration, $spam_scrolls, $spam_clicks ) );
+		// A visit referred by another site passes the thresholds (OPT-562).
+		$referred_sql = Opti_Behavior_Stats_Spam_Filter::external_referrer_sql( 's' );
 
 		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 		$allowed_pages = $wpdb->get_col(
@@ -498,13 +502,14 @@ class Opti_Behavior_Heatmap_Ajax {
 				WHERE {$page_clause}
 					AND (s.traffic_type IS NULL OR s.traffic_type = '' OR s.traffic_type NOT IN ('spam','bot','automated'))
 				GROUP BY sp.session_id
-				HAVING GREATEST(
+				HAVING MAX({$referred_sql}) = 1
+					OR (GREATEST(
 						MAX(COALESCE(s.duration, 0)),
 						MAX(COALESCE(TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time)), 0)),
 						MAX(COALESCE(sp.duration, 0))
 					) >= %d
 					AND MAX(COALESCE(sp.scroll_depth, 0)) >= %d
-					AND SUM(COALESCE(sp.clicks_count, 0)) >= %d",
+					AND SUM(COALESCE(sp.clicks_count, 0)) >= %d)",
 				$params
 			)
 		);
@@ -519,7 +524,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		// The downstream gate still intersects this against the page's actual
 		// files, so admitting non-spam session IDs here can't leak other pages.
 		$allowed_sessions = array();
-		if ( empty( $allowed ) && empty( $allowed_pages ) && $this->heatmap_table_exists( $sessions_table ) ) {
+		if ( $sessions_fallback && empty( $allowed ) && empty( $allowed_pages ) && $this->heatmap_table_exists( $sessions_table ) ) {
 			// phpcs:disable
 			$allowed_sessions = $wpdb->get_col(
 				"SELECT id FROM {$sessions_table}
@@ -618,6 +623,41 @@ class Opti_Behavior_Heatmap_Ajax {
 		}
 
 		return ! $this->is_session_in_lookup_strict( $session_id, (array) $known_lookup );
+	}
+
+	/**
+	 * Session IDs the spam gate admits for a page group (OPT-589).
+	 *
+	 * @param array $page_ids Canonical page IDs.
+	 * @return array Session IDs (own allow-list + Heatmaps list allow-list).
+	 */
+	private function get_spam_admission_session_ids( $page_ids ) {
+		// OPT-589: the detail's Clicks KPI admits the SAME sessions as its
+		// session pill / device chips (get_admissible_session_meta()): this
+		// class's own allow-list UNION the Heatmaps list allow-list (Free
+		// dashboard bridge), so the list and the detail count one click set.
+		$free_dashboard = null;
+		if ( class_exists( 'Opti_Behavior_Heatmap_Core' ) ) {
+			$free_core      = Opti_Behavior_Heatmap_Core::get_instance();
+			$free_dashboard = ( $free_core && method_exists( $free_core, 'get_dashboard' ) ) ? $free_core->get_dashboard() : null;
+			if ( $free_dashboard && ! method_exists( $free_dashboard, 'get_heatmap_session_allowlist_for_page_bridge' ) ) {
+				$free_dashboard = null;
+			}
+		}
+		// With the list allow-list available, never add Path C (every session
+		// of the site without a stored verdict, thresholds ignored): Free alone
+		// has no recording rows, so Path C answered for every page and admitted
+		// the threshold spam the list drops (OPT-589 QA: detail 120 vs list 90).
+		$session_ids = $this->get_spam_allowed_session_ids( $page_ids, null === $free_dashboard );
+		if ( null !== $free_dashboard ) {
+			foreach ( (array) $page_ids as $bridge_page_id ) {
+				$bridge_lookup = $free_dashboard->get_heatmap_session_allowlist_for_page_bridge( $bridge_page_id );
+				if ( ! empty( $bridge_lookup ) && is_array( $bridge_lookup ) ) {
+					$session_ids = array_merge( $session_ids, array_keys( $bridge_lookup ) );
+				}
+			}
+		}
+		return array_values( array_unique( $session_ids ) );
 	}
 
 	/**
@@ -1565,100 +1605,6 @@ class Opti_Behavior_Heatmap_Ajax {
 		// Advanced filters (OS / UTM / duration / pages & traffic).
 		$filters = array_merge( $filters, $this->collect_advanced_filter_params() );
 		$filters = $this->apply_advanced_session_filters( $filters );
-
-		// TEMP DEBUG: gated by ob_debug=1. Runs BEFORE cache so never served stale. Remove after diagnosis.
-		if ( ! empty( $_POST['ob_debug'] ) ) {
-			global $wpdb;
-			$dbg = array( 'ob_debug' => 'v7-filters', 'page_ids' => $page_ids, 'exclude_spam' => $filters['exclude_spam'] );
-			$dbg['filter_keys']       = array_keys( $filters );
-			$dbg['pre_session_ids']   = isset( $filters['session_ids'] ) ? $filters['session_ids'] : '(unset)';
-			$dbg['adv_dim_suffixes']  = isset( $filters['adv_dim_suffixes'] ) ? $filters['adv_dim_suffixes'] : '(unset)';
-
-			// (1) DB allow-list (Path A/B/C union).
-			$dbg_allowed          = $this->get_spam_allowed_session_ids( $page_ids );
-			$dbg['allowed_count'] = count( (array) $dbg_allowed );
-			$dbg['allowed_sample'] = array_slice( (array) $dbg_allowed, 0, 10 );
-			// Dump full sessions table id+token columns to see the real key shape.
-			// phpcs:disable
-			$dbg['sessions_dump'] = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}optibehavior_sessions LIMIT 5", ARRAY_A );
-			// phpcs:enable
-
-			// (2) session_pages raw rows for these pages.
-			$sessions_table      = $wpdb->prefix . 'optibehavior_sessions';
-			$session_pages_table = $wpdb->prefix . 'optibehavior_session_pages';
-			$sp_clause           = $this->build_page_ids_clause( 'page_id', $page_ids );
-			// phpcs:disable
-			$dbg['sp_row_count']  = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$session_pages_table} WHERE {$sp_clause}", $page_ids ) );
-			$dbg['sp_total_rows'] = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$session_pages_table}" );
-			$dbg['sess_total']    = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$sessions_table}" );
-			// phpcs:enable
-
-			// (3) heatmap storage + url hashes + files + parsed tokens.
-			$hs = class_exists( 'Opti_Behavior_Heatmap_Storage' ) ? Opti_Behavior_Heatmap_Storage::get_instance() : null;
-			$dbg['has_storage'] = (bool) $hs;
-			$url_hashes = array();
-			if ( $hs ) {
-				foreach ( $page_ids as $pid ) {
-					foreach ( (array) $hs->get_url_hashes_for_page( $pid ) as $h ) {
-						if ( $h ) { $url_hashes[] = $h; }
-					}
-				}
-			}
-			$url_hashes            = array_values( array_unique( $url_hashes ) );
-			$dbg['url_hashes']     = $url_hashes;
-			$upload_dir            = wp_upload_dir();
-			$files_found           = array();
-			$parsed_tokens         = array();
-			if ( $hs && method_exists( $hs, 'parse_filename_metadata' ) ) {
-				foreach ( $url_hashes as $h ) {
-					foreach ( array( 'clicks', 'moves', 'scrolls' ) as $folder ) {
-						$dir = $upload_dir['basedir'] . '/opti-behavior-data/' . $h . '/' . $folder;
-						foreach ( (array) glob( $dir . '/*.json' ) as $f ) {
-							$files_found[] = $folder . '/' . basename( $f );
-							$m = $hs->parse_filename_metadata( basename( $f ) );
-							if ( $m && ! empty( $m['session_id'] ) ) { $parsed_tokens[ (string) $m['session_id'] ] = true; }
-						}
-					}
-				}
-			}
-			$dbg['files_found']    = array_slice( $files_found, 0, 20 );
-			$dbg['file_count']     = count( $files_found );
-			$dbg['parsed_tokens']  = array_keys( $parsed_tokens );
-
-			// (4) bridge + direct known-lookup + orphan tokens.
-			$bridge = $this->get_known_db_session_lookup_via_bridge( $page_ids );
-			$dbg['bridge_type']    = ( null === $bridge ) ? 'null' : ( ( true === $bridge ) ? 'true(failsafe)' : 'array(' . count( (array) $bridge ) . ')' );
-			$direct = $this->get_known_db_session_lookup_direct( $page_ids );
-			$dbg['direct_type']    = ( true === $direct ) ? 'true(failsafe)' : 'array(' . count( (array) $direct ) . ')';
-			if ( $hs ) {
-				$orphan_tokens = $this->get_orphan_session_tokens_via_bridge( $page_ids, $url_hashes, $hs );
-				$dbg['orphan_token_count'] = count( (array) $orphan_tokens );
-				$dbg['orphan_tokens']      = array_slice( (array) $orphan_tokens, 0, 20 );
-			}
-
-			// (5) match test: does the allow-list lookup admit the file tokens?
-			$lookup = $this->build_session_lookup_map( (array) $dbg_allowed );
-			$match  = array();
-			foreach ( array_keys( $parsed_tokens ) as $tok ) {
-				$match[ (string) $tok ] = $this->is_session_allowed_by_lookup( $tok, $lookup ) ? 'ADMIT' : 'DROP';
-			}
-			$dbg['token_match'] = $match;
-
-			// (6) run the actual fast path with the real filters and report.
-			$fast_res = $this->generate_heatmap_data_fast( $page_id, $device, $type, $date_range, $filters );
-			if ( false === $fast_res ) {
-				$dbg['fast_result'] = 'FALSE (falls back to recordings)';
-			} elseif ( is_array( $fast_res ) ) {
-				$dbg['fast_result']        = 'array';
-				$dbg['fast_coords']        = count( $fast_res['coordinates'] ?? array() );
-				$dbg['fast_total_files']   = $fast_res['total_files'] ?? null;
-				$dbg['fast_session_ids']   = $fast_res['_debug_session_ids'] ?? '(n/a)';
-			} else {
-				$dbg['fast_result'] = wp_json_encode( $fast_res );
-			}
-
-			wp_send_json_success( $dbg );
-		}
 
 		// Create cache key that includes filters
 		$cache_key = $this->build_cache_key( $page_id, $device, $type, $date_range, $filters );
@@ -4288,26 +4234,30 @@ class Opti_Behavior_Heatmap_Ajax {
 			'quora.com', 'nextdoor.com',
 		);
 
-		$needle_likes = function ( $needle ) {
+		// Host-based, like the dashboard classifier (QA-B-DASH-073): a search /
+		// social name in a referrer path is a Referral, a same-site referrer is
+		// no referrer.
+		$raw_host  = "LOWER(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(s.referrer, '://', -1), '/', 1), '?', 1), '#', 1), '@', -1), ':', 1))";
+		$raw_host  = "IF(s.referrer LIKE '%%://%%', " . $raw_host . ", '')";
+		$host      = "TRIM(LEADING 'www.' FROM " . $raw_host . ')';
+		$site_host = strtolower( (string) preg_replace( '/^www\./i', '', (string) wp_parse_url( home_url(), PHP_URL_HOST ) ) );
+		$external  = "s.referrer IS NOT NULL AND s.referrer <> '' AND " . $raw_host . " <> ''"
+			. ( '' !== $site_host ? ' AND ' . $host . " <> '" . esc_sql( $site_host ) . "'" : '' );
+
+		$needle_likes = function ( $needle ) use ( $raw_host, $host ) {
 			if ( 0 === strpos( $needle, '=' ) ) {
-				// Exact-host needle: anchor on "://host" so short domains cannot
-				// match inside longer ones ("x.com" inside gmx.com etc.).
-				$host = esc_sql( substr( $needle, 1 ) );
-				return "(s.referrer LIKE '%%://" . $host . "/%%'"
-					. " OR s.referrer LIKE '%%://www." . $host . "/%%'"
-					. " OR s.referrer LIKE '%%://" . $host . "'"
-					. " OR s.referrer LIKE '%%://www." . $host . "')";
+				return $host . " = '" . esc_sql( strtolower( substr( $needle, 1 ) ) ) . "'";
 			}
-			return "s.referrer LIKE '%%" . esc_sql( $needle ) . "%%'";
+			return $raw_host . " LIKE '%%" . esc_sql( strtolower( $needle ) ) . "%%'";
 		};
 
 		$search_likes = array_map( $needle_likes, $search_needles );
 		$social_likes = array_map( $needle_likes, $social_needles );
 
 		return "CASE
-				WHEN s.referrer IS NOT NULL AND s.referrer <> '' AND (" . implode( ' OR ', $search_likes ) . ") THEN 'Organic Search'
-				WHEN s.referrer IS NOT NULL AND s.referrer <> '' AND (" . implode( ' OR ', $social_likes ) . ") THEN 'Social Media'
-				WHEN s.referrer IS NOT NULL AND s.referrer <> '' THEN 'Referral'
+				WHEN " . $external . " AND (" . implode( ' OR ', $search_likes ) . ") THEN 'Organic Search'
+				WHEN " . $external . " AND (" . implode( ' OR ', $social_likes ) . ") THEN 'Social Media'
+				WHEN " . $external . " THEN 'Referral'
 				WHEN LOWER(TRIM(s.utm_medium)) IN ('cpc','ppc','paid','paid_search') OR LOWER(TRIM(s.utm_source)) IN ('cpc','ppc','paid','paid_search') THEN 'Paid Ads'
 				WHEN LOWER(TRIM(s.utm_medium)) IN ('email','newsletter') OR LOWER(TRIM(s.utm_source)) IN ('email','newsletter') THEN 'Email'
 				WHEN LOWER(TRIM(s.utm_medium)) IN ('social','social_media') OR LOWER(TRIM(s.utm_source)) IN ('social','social_media') THEN 'Social Media'
@@ -4621,7 +4571,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$spam_lookup  = array();
 		$known_lookup = null; // null = orphan gate not applicable (spam filtering off, or bridge unavailable).
 		if ( ! empty( $filters['exclude_spam'] ) ) {
-			$spam_lookup  = $this->build_session_lookup_map( $this->get_spam_allowed_session_ids( $page_ids ) );
+			$spam_lookup  = $this->build_session_lookup_map( $this->get_spam_admission_session_ids( $page_ids ) );
 			$known_lookup = $this->get_known_db_session_lookup_via_bridge( $page_ids );
 			// Orphan-aware gate (RC-C, spec §3.2): when the Free bridge can tell
 			// which file tokens have NO DB trace at all, an empty spam allow-list

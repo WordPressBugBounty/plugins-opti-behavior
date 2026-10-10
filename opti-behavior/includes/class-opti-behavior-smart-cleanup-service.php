@@ -1131,6 +1131,99 @@ class Opti_Behavior_Smart_Cleanup_Service {
 	}
 
 	/**
+	 * Prune script-error and page-speed rows older than a short window.
+	 *
+	 * `optibehavior_errors` and `optibehavior_performance` get about one row
+	 * per page view, so on busy sites they grow faster than anything else.
+	 * They keep 30 days by default (user decision 2026-09-30) instead of the
+	 * detailed-data window; the per-message summary `optibehavior_error_types`
+	 * is not touched here. Bounded batches, leftovers go to the next daily run.
+	 *
+	 * @since 2026-09-30
+	 * @return array<string,int> Table suffix => rows deleted.
+	 */
+	public function prune_error_performance_rows() {
+		global $wpdb;
+
+		// Both columns are written with current_time( 'mysql' ) (site-local time).
+		$tables = array(
+			'optibehavior_errors'      => array(
+				'column' => 'occurred_at',
+				/**
+				 * Days of script-error rows kept (0 = follow the detailed-data window only).
+				 *
+				 * @since 2026-09-30
+				 * @param int $days Default 30.
+				 */
+				'days'   => absint( apply_filters( 'opti_behavior_errors_retention_days', 30 ) ),
+			),
+			'optibehavior_performance' => array(
+				'column' => 'measured_at',
+				/**
+				 * Days of page-speed rows kept (0 = follow the detailed-data window only).
+				 *
+				 * @since 2026-09-30
+				 * @param int $days Default 30.
+				 */
+				'days'   => absint( apply_filters( 'opti_behavior_performance_retention_days', 30 ) ),
+			),
+		);
+
+		/** This filter is documented in prune_bot_visits_log(). */
+		$max_rows   = max( 1000, absint( apply_filters( 'opti_behavior_bot_visits_prune_max_rows_per_run', 200000 ) ) );
+		$batch_size = 5000;
+		$result     = array();
+
+		foreach ( $tables as $suffix => $rule ) {
+			$result[ $suffix ] = 0;
+			if ( $rule['days'] < 1 || ! $this->table_exists( $suffix ) ) {
+				continue;
+			}
+
+			$table   = esc_sql( $wpdb->prefix . $suffix );
+			$column  = esc_sql( $rule['column'] );
+			$cutoff  = wp_date( 'Y-m-d H:i:s', time() - ( $rule['days'] * DAY_IN_SECONDS ) );
+			$deleted = 0;
+
+			while ( $deleted < $max_rows ) {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table/column from the allow-list above.
+				$affected = $wpdb->query(
+					$wpdb->prepare(
+						'DELETE FROM ' . $table . ' WHERE ' . $column . ' < %s LIMIT %d',
+						$cutoff,
+						min( $batch_size, $max_rows - $deleted )
+					)
+				);
+
+				if ( ! $affected ) {
+					break;
+				}
+
+				$deleted += (int) $affected;
+			}
+
+			$result[ $suffix ] = $deleted;
+		}
+
+		$rows_by_table = array_filter( $result );
+		if ( ! empty( $rows_by_table ) ) {
+			$this->add_cleanup_log(
+				'retention',
+				0,
+				0,
+				0,
+				array(
+					'rows_by_table' => $rows_by_table,
+					'trigger'       => 'errors_performance_window',
+					'status'        => 'completed',
+				)
+			);
+		}
+
+		return $result;
+	}
+
+	/**
 	 * Delete sessions matching conditions with cascading deletion.
 	 *
 	 * @since 1.2.7

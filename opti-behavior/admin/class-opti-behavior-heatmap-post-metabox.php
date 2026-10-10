@@ -571,7 +571,9 @@ class Opti_Behavior_Heatmap_Post_Metabox {
 
 		add_meta_box(
 			'optibehavior_editor_analytics',
-			'<i data-lucide="flame" style="width:16px;height:16px;vertical-align:middle;margin-right:4px;"></i>' . __( 'Post Analytics', 'opti-behavior' ),
+			// Product icon + title in one inline-flex span: the editor's postbox
+			// header spreads its children apart (the old flame sat far left).
+			'<span class="ob-metabox-title" style="display:inline-flex;align-items:center;gap:6px;"><img src="' . esc_url( OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'images/256x256.png' ) . '" alt="" width="20" height="20" style="border-radius:4px;" />' . esc_html__( 'Post Analytics', 'opti-behavior' ) . '</span>',
 			array( $this, 'render_editor_analytics_box' ),
 			array( 'post', 'page' ),
 			'normal',
@@ -764,6 +766,15 @@ class Opti_Behavior_Heatmap_Post_Metabox {
 		<div class="optibehavior-analytics-container" data-post-id="<?php echo esc_attr( $post->ID ); ?>" data-nonce="<?php echo esc_attr( $nonce ); ?>">
 			<!-- Top Filters Row -->
 			<div class="optibehavior-top-filters-row">
+				<?php if ( ! empty( $analytics_context['page_id'] ) && class_exists( 'Opti_Behavior_Smart_Insights_Page' ) ) : ?>
+					<?php // Page X-Ray dossier of this post (Pro): same link + lock / PRO badge as the Heatmaps list "Dossier" button. Top left of the box, the period select stays centred. ?>
+					<?php $opti_behavior_xray_open = function_exists( 'opti_behavior_page_xray_available' ) && opti_behavior_page_xray_available(); ?>
+					<a href="<?php echo esc_url( Opti_Behavior_Smart_Insights_Page::xray_url( (int) $analytics_context['page_id'] ) ); ?>" class="optibehavior-heatmap-link optibehavior-xray-link<?php echo $opti_behavior_xray_open ? '' : ' is-locked'; ?>" target="_blank" title="<?php echo esc_attr__( 'Open the page dossier: every problem found on this page, in one place', 'opti-behavior' ); ?>">
+						<i data-lucide="<?php echo $opti_behavior_xray_open ? 'stethoscope' : 'lock'; ?>" style="width:16px;height:16px;vertical-align:middle;"></i>
+						<span><?php esc_html_e( 'Page X-Ray', 'opti-behavior' ); ?></span>
+						<?php if ( ! $opti_behavior_xray_open ) : ?><span class="optibehavior-pro-badge">PRO</span><?php endif; ?>
+					</a>
+				<?php endif; ?>
 				<div class="optibehavior-active-period" data-period="<?php echo esc_attr( $analytics_context['period'] ); ?>" data-traffic-scope="<?php echo esc_attr( $analytics_context['traffic_scope'] ); ?>" aria-label="<?php echo esc_attr( $active_period_label ); ?>">
 				</div>
 				<div class="optibehavior-period-filter">
@@ -1021,7 +1032,7 @@ class Opti_Behavior_Heatmap_Post_Metabox {
 								</a>
 								<?php opti_behavior_tooltip_e( $metabox_tooltips['view_recordings']['title'], $metabox_tooltips['view_recordings']['content'], $metabox_tooltips['view_recordings']['simple'], '', array( 'position' => 'bottom', 'pro' => true ) ); ?>
 							<?php else : ?>
-								<a href="#" class="optibehavior-heatmap-link optibehavior-pro-only" title="<?php echo esc_attr__( 'Upgrade to Pro to view session recordings', 'opti-behavior' ); ?>">
+								<a href="<?php echo esc_url( class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::link_url( 'post-metabox' ) : '' ); ?>" class="optibehavior-heatmap-link optibehavior-pro-only" target="_blank" rel="noopener noreferrer" title="<?php echo esc_attr__( 'Upgrade to Pro to view session recordings', 'opti-behavior' ); ?>">
 									<i data-lucide="video" style="width:16px;height:16px;vertical-align:middle;"></i>
 									<span><?php echo esc_html__( 'Session Recordings', 'opti-behavior' ); ?></span>
 									<span class="optibehavior-pro-badge">PRO</span>

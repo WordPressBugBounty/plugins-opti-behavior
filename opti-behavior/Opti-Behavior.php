@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: Opti-Behavior – Self-Hosted Heatmaps, Session Recordings, Funnels, A/B Testing & Smart Insights
+ * Plugin Name: Opti-Behavior – Self-Hosted Heatmaps, Funnels, A/B Testing & Smart Insights
  * Plugin URI:  https://optiuser.com/
  * Description: Self-hosted heatmaps, funnels, A/B WooCommerce testing, behavior analytics & Smart Insights for WordPress. Own your data and optimize what users do.
- * Version:     1.9.2.1
+ * Version:     1.10.0
  * Author:      OptiUser
  * Author URI:  https://optiuser.com/
  * License:     GPLv2 or later
@@ -81,7 +81,7 @@ if ( defined( 'OPTI_BEHAVIOR_HEATMAP' ) ) {
 }
 
 // Define plugin constants.
-define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.9.2.1' );
+define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.10.0' );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR', OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'includes/' );
@@ -137,6 +137,9 @@ Opti_Behavior_Basename_Migration::init();
 // Load tooltip helper functions.
 require_once __DIR__ . '/includes/tooltip-helper.php';
 
+// Load URL privacy helpers (personal data stripped from tracked URLs, OPT-574).
+require_once __DIR__ . '/includes/opti-behavior-url-privacy.php';
+
 // Load dashboard cache helpers (TTL + invalidation).
 require_once __DIR__ . '/includes/opti-behavior-dashboard-cache.php';
 
@@ -167,10 +170,20 @@ add_action( 'init', array( 'Opti_Behavior_Pro_Ajax_Shim', 'maybe_register' ), 99
 require_once __DIR__ . '/includes/class-opti-behavior-filter-profiles.php';
 add_action( 'init', array( 'Opti_Behavior_Filter_Profiles', 'init' ) );
 
+// Storage health: data-folder probe on activation + failure reports from every
+// storage write path (front-end ingest included), so it is loaded everywhere.
+require_once __DIR__ . '/includes/class-opti-behavior-storage-health.php';
+
+// Admin numbers / dates in the WordPress language, not the browser's (admin
+// scripts + the front-end stats bar shown to admins; never the trackers).
+require_once __DIR__ . '/includes/class-opti-behavior-admin-locale.php';
+Opti_Behavior_Admin_Locale::init();
+
 // Register plugin hooks.
 register_activation_hook( __FILE__, 'Opti_Behavior_Heatmap_Core::activation' );
 register_activation_hook( __FILE__, array( 'Opti_Behavior_Welcome', 'on_activation' ) );
 register_activation_hook( __FILE__, array( 'Opti_Behavior_Review_Banner', 'on_activation' ) );
+register_activation_hook( __FILE__, array( 'Opti_Behavior_Storage_Health', 'on_activation' ) );
 // Seed the FREE-owned filter-profiles option on activation (no-op if present).
 register_activation_hook( __FILE__, array( 'Opti_Behavior_Filter_Profiles', 'seed' ) );
 register_deactivation_hook( __FILE__, 'Opti_Behavior_Heatmap_Core::deactivation' );
@@ -475,6 +488,13 @@ add_action(
 		// "own visits" and "the menu changed" messages (plugin screens only).
 		require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-setup-guide.php';
 		Opti_Behavior_Setup_Guide::init();
+
+		// "Cannot save data files" notice + "Check again" action.
+		Opti_Behavior_Storage_Health::init();
+
+		// Orange "database is getting large" notice (plugin tables > 1.5 GB).
+		require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-db-size-alert.php';
+		Opti_Behavior_DB_Size_Alert::init();
 
 		// Initialize plugin tracker (works for both Free-only and Free+Pro setups)
 		// Sends installation data with 24h heartbeat, auto-detects plugin type

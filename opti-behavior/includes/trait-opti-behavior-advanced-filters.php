@@ -343,20 +343,27 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 		 * ("%%needle%%") makes prepare() treat them as escaped literal "%"
 		 * characters, so the executed SQL still has single "%" wildcards.
 		 */
-		$needle_likes = function ( $needle ) {
+		/*
+		 * Match on the referrer HOST, like classify_traffic_channel() does (the
+		 * dashboard widgets): a search / social name in the PATH or query of a
+		 * referrer ("partner.example/?ref=google.com") is a Referral, and a
+		 * same-site referrer counts as no referrer (QA-B-DASH-073).
+		 * $raw_host = lower-cased host as written, $host = same without "www.".
+		 */
+		$raw_host  = "LOWER(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(s.referrer, '://', -1), '/', 1), '?', 1), '#', 1), '@', -1), ':', 1))";
+		$raw_host  = "IF(s.referrer LIKE '%%://%%', " . $raw_host . ", '')";
+		$host      = "TRIM(LEADING 'www.' FROM " . $raw_host . ')';
+		$site_host = function_exists( 'home_url' ) ? (string) wp_parse_url( home_url(), PHP_URL_HOST ) : '';
+		$site_host = strtolower( (string) preg_replace( '/^www\./i', '', $site_host ) );
+		$external  = "s.referrer IS NOT NULL AND s.referrer <> '' AND " . $raw_host . " <> ''"
+			. ( '' !== $site_host ? ' AND ' . $host . " <> '" . esc_sql( $site_host ) . "'" : '' );
+
+		$needle_likes = function ( $needle ) use ( $raw_host, $host ) {
 			if ( 0 === strpos( $needle, '=' ) ) {
-				/*
-				 * Exact-host needle: anchor on "://host" so the LIKE cannot
-				 * match the needle inside a longer domain (mirrors the exact
-				 * host comparison in classify_traffic_channel()).
-				 */
-				$host = esc_sql( substr( $needle, 1 ) );
-				return "(s.referrer LIKE '%%://" . $host . "/%%'"
-					. " OR s.referrer LIKE '%%://www." . $host . "/%%'"
-					. " OR s.referrer LIKE '%%://" . $host . "'"
-					. " OR s.referrer LIKE '%%://www." . $host . "')";
+				// Exact-host needle (www. ignored), mirrors classify_traffic_channel().
+				return $host . " = '" . esc_sql( strtolower( substr( $needle, 1 ) ) ) . "'";
 			}
-			return "s.referrer LIKE '%%" . esc_sql( $needle ) . "%%'";
+			return $raw_host . " LIKE '%%" . esc_sql( strtolower( $needle ) ) . "%%'";
 		};
 
 		$search_likes = array();
@@ -369,9 +376,9 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 		}
 
 		return "CASE
-				WHEN s.referrer IS NOT NULL AND s.referrer <> '' AND (" . implode( ' OR ', $search_likes ) . ") THEN 'Organic Search'
-				WHEN s.referrer IS NOT NULL AND s.referrer <> '' AND (" . implode( ' OR ', $social_likes ) . ") THEN 'Social Media'
-				WHEN s.referrer IS NOT NULL AND s.referrer <> '' THEN 'Referral'
+				WHEN " . $external . " AND (" . implode( ' OR ', $search_likes ) . ") THEN 'Organic Search'
+				WHEN " . $external . " AND (" . implode( ' OR ', $social_likes ) . ") THEN 'Social Media'
+				WHEN " . $external . " THEN 'Referral'
 				WHEN LOWER(TRIM(s.utm_medium)) IN ('cpc','ppc','paid','paid_search') OR LOWER(TRIM(s.utm_source)) IN ('cpc','ppc','paid','paid_search') THEN 'Paid Ads'
 				WHEN LOWER(TRIM(s.utm_medium)) IN ('email','newsletter') OR LOWER(TRIM(s.utm_source)) IN ('email','newsletter') THEN 'Email'
 				WHEN LOWER(TRIM(s.utm_medium)) IN ('social','social_media') OR LOWER(TRIM(s.utm_source)) IN ('social','social_media') THEN 'Social Media'
@@ -600,7 +607,7 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 						<span class="advanced-filters-locked-icon"><i data-lucide="lock"></i></span>
 						<h3><?php esc_html_e( 'Advanced funnel filters are a PRO feature', 'opti-behavior' ); ?></h3>
 						<p><?php esc_html_e( 'Segment this funnel by browser, country, device, traffic channel, UTM parameters and more.', 'opti-behavior' ); ?></p>
-						<a class="button button-primary" href="<?php echo esc_url( $upgrade_url ); ?>">
+						<a class="button button-primary" href="<?php echo esc_url( $upgrade_url ); ?>" target="_blank" rel="noopener noreferrer">
 							<?php esc_html_e( 'Upgrade to PRO', 'opti-behavior' ); ?>
 						</a>
 					</div>

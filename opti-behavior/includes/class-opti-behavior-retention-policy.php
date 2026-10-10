@@ -80,9 +80,16 @@ class Opti_Behavior_Retention_Policy {
 	const DEFAULT_FILES_RETENTION_DAYS = 90;
 
 	/**
-	 * Dashboard aggregates default: 0 = kept forever (user decision).
+	 * Dashboard aggregates default: 12 months (user decision 2026-09-30, was
+	 * 0 = forever). 0 stays available as an explicit "keep forever" choice.
 	 */
-	const DEFAULT_AGGREGATES_RETENTION_MONTHS = 0;
+	const DEFAULT_AGGREGATES_RETENTION_MONTHS = 12;
+
+	/**
+	 * Settings flag: the one-time move of saved "forever" (0) aggregates to
+	 * the 12-month default has run. A later explicit 0 is kept.
+	 */
+	const AGGREGATES_DEFAULT_MIGRATED = 'aggregates_default_12_applied';
 
 	/**
 	 * Upper bound for the optional aggregates cap (10 years).
@@ -127,11 +134,22 @@ class Opti_Behavior_Retention_Policy {
 				'aggregates_retention_months' => self::DEFAULT_AGGREGATES_RETENTION_MONTHS,
 				'db_max_mb'                   => self::DEFAULT_DB_MAX_MB,
 				'table_max_mb'                => self::DEFAULT_TABLE_MAX_MB,
+				self::AGGREGATES_DEFAULT_MIGRATED => true,
 			);
 			$settings = self::validate_tiers( $settings );
 			update_option( self::OPTION, $settings, false );
 
 			return $settings;
+		}
+
+		// One-shot: installs seeded with the old "forever" default (0) move to
+		// the 12-month default. Runs once; a later explicit 0 is respected.
+		if ( empty( $settings[ self::AGGREGATES_DEFAULT_MIGRATED ] ) ) {
+			if ( empty( $settings['aggregates_retention_months'] ) ) {
+				$settings['aggregates_retention_months'] = self::DEFAULT_AGGREGATES_RETENTION_MONTHS;
+			}
+			$settings[ self::AGGREGATES_DEFAULT_MIGRATED ] = true;
+			update_option( self::OPTION, self::validate_tiers( $settings ), false );
 		}
 
 		return self::validate_tiers(

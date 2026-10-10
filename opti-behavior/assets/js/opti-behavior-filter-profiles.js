@@ -32,6 +32,13 @@
 	var SAVE_ID = 'filter-profile-save';
 	var EDIT_ID = 'filter-profile-edit';
 
+	// Translated label from OptiBehaviorProfilesConfig.i18n (localized by PHP),
+	// English fallback (QA-B-HEAT-087).
+	function i18n(key, fallback) {
+		var cfg = window.OptiBehaviorProfilesConfig;
+		return (cfg && cfg.i18n && cfg.i18n[key]) || fallback;
+	}
+
 	function config() {
 		return window.OptiBehaviorProfilesConfig || null;
 	}
@@ -72,7 +79,7 @@
 		if (payload && payload.data && payload.data.message) {
 			return payload.data.message;
 		}
-		return 'Something went wrong. Please try again.';
+		return i18n('genericError', 'Something went wrong. Please try again.');
 	}
 
 	// ---- Field population (reverse of each page's collectAdvancedFilters) ----
@@ -312,13 +319,13 @@
 
 			var title = document.createElement('div');
 			title.className = 'ob-profile-popover-title';
-			title.textContent = 'Save current filters as new profile';
+			title.textContent = i18n('saveAsNew', 'Save current filters as new profile');
 
 			var input = document.createElement('input');
 			input.type = 'text';
 			input.className = 'ob-profile-popover-input';
 			input.maxLength = 60;
-			input.placeholder = 'New profile name';
+			input.placeholder = i18n('newProfileName', 'New profile name');
 
 			var actions = document.createElement('div');
 			actions.className = 'ob-profile-popover-actions';
@@ -326,12 +333,12 @@
 			var confirm = document.createElement('button');
 			confirm.type = 'button';
 			confirm.className = 'button button-primary';
-			confirm.textContent = 'Save';
+			confirm.textContent = i18n('save', 'Save');
 
 			var cancel = document.createElement('button');
 			cancel.type = 'button';
 			cancel.className = 'button';
-			cancel.textContent = 'Cancel';
+			cancel.textContent = i18n('cancel', 'Cancel');
 
 			actions.appendChild(confirm);
 			actions.appendChild(cancel);
@@ -342,7 +349,7 @@
 			function submit() {
 				var name = input.value.trim();
 				if (name === '') {
-					popoverError(popover, 'Please enter a profile name.');
+					popoverError(popover, i18n('nameRequired', 'Please enter a profile name.'));
 					input.focus();
 					return;
 				}
@@ -364,7 +371,7 @@
 					}
 				}).catch(function() {
 					confirm.disabled = false;
-					popoverError(popover, 'Network error. Please try again.');
+					popoverError(popover, i18n('networkError', 'Network error. Please try again.'));
 				});
 			}
 
@@ -394,17 +401,17 @@
 			var rename = document.createElement('button');
 			rename.type = 'button';
 			rename.className = 'ob-icon-select-option';
-			rename.textContent = 'Rename';
+			rename.textContent = i18n('rename', 'Rename');
 
 			var overwrite = document.createElement('button');
 			overwrite.type = 'button';
 			overwrite.className = 'ob-icon-select-option';
-			overwrite.textContent = 'Overwrite with current filters';
+			overwrite.textContent = i18n('overwrite', 'Overwrite with current filters');
 
 			var remove = document.createElement('button');
 			remove.type = 'button';
 			remove.className = 'ob-icon-select-option ob-profile-danger';
-			remove.textContent = 'Delete';
+			remove.textContent = i18n('delete', 'Delete');
 
 			popover.appendChild(rename);
 			popover.appendChild(overwrite);
@@ -438,12 +445,12 @@
 			var confirm = document.createElement('button');
 			confirm.type = 'button';
 			confirm.className = 'button button-primary';
-			confirm.textContent = 'Rename';
+			confirm.textContent = i18n('rename', 'Rename');
 
 			var cancel = document.createElement('button');
 			cancel.type = 'button';
 			cancel.className = 'button';
-			cancel.textContent = 'Cancel';
+			cancel.textContent = i18n('cancel', 'Cancel');
 
 			actions.appendChild(confirm);
 			actions.appendChild(cancel);
@@ -453,7 +460,7 @@
 			function submit() {
 				var name = input.value.trim();
 				if (name === '') {
-					popoverError(popover, 'Please enter a profile name.');
+					popoverError(popover, i18n('nameRequired', 'Please enter a profile name.'));
 					input.focus();
 					return;
 				}
@@ -474,7 +481,7 @@
 					}
 				}).catch(function() {
 					confirm.disabled = false;
-					popoverError(popover, 'Network error. Please try again.');
+					popoverError(popover, i18n('networkError', 'Network error. Please try again.'));
 				});
 			}
 
@@ -507,12 +514,12 @@
 					window.alert(errorMessage(payload));
 				}
 			}).catch(function() {
-				window.alert('Network error. Please try again.');
+				window.alert(i18n('networkError', 'Network error. Please try again.'));
 			});
 		}
 
 		function deleteProfile(profile) {
-			if (!window.confirm('Delete the "' + profile.name + '" filter profile? This cannot be undone.')) {
+			if (!window.confirm(i18n('deleteConfirm', 'Delete the "%s" filter profile? This cannot be undone.').replace('%s', profile.name))) {
 				return;
 			}
 			request('opti_behavior_filter_profiles_delete', {
@@ -528,7 +535,7 @@
 					window.alert(errorMessage(payload));
 				}
 			}).catch(function() {
-				window.alert('Network error. Please try again.');
+				window.alert(i18n('networkError', 'Network error. Please try again.'));
 			});
 		}
 

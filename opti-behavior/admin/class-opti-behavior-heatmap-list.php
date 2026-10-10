@@ -275,7 +275,7 @@ class Opti_Behavior_Heatmap_List extends WP_List_Table {
 		}
 
 		if ( ! $item->url ) {
-			return '<span class="optibehavior-cell-blank">' . esc_html( number_format( $item->{$column_name} ) ) . '</span>';
+			return '<span class="optibehavior-cell-blank">' . esc_html( number_format_i18n( $item->{$column_name} ) ) . '</span>';
 		}
 
 		$url         = $heatmap->get_heatmap_url( $item, $column_name );
@@ -283,7 +283,7 @@ class Opti_Behavior_Heatmap_List extends WP_List_Table {
 		$access_name = explode( '_', $column_name )[1];
 		$view_width  = apply_filters( 'opti_behavior_heatmap_width_' . $access_name . '_default', $heatmap::VIEW_WIDTH[ $access_from ] );
 
-		return '<a class="optibehavior-cell optibehavior-view" href="' . esc_attr( $url ) . '" data-url="' . esc_attr( $url ) . '" data-width="' . esc_attr( $view_width ) . '"><span class="count">' . esc_html( number_format( $item->{$column_name} ) ) . '</span> <span class="dashicons dashicons-external"></span></a>';
+		return '<a class="optibehavior-cell optibehavior-view" href="' . esc_attr( $url ) . '" data-url="' . esc_attr( $url ) . '" data-width="' . esc_attr( $view_width ) . '"><span class="count">' . esc_html( number_format_i18n( $item->{$column_name} ) ) . '</span> <span class="dashicons dashicons-external"></span></a>';
 	}
 
 	/**

@@ -181,6 +181,10 @@ class Opti_Behavior_Smart_Insights_Device_Aggregator {
 	/** Spam exclusion SQL matching dashboard behavior. */
 	private function get_spam_exclusion_clause( $table_alias = 's' ) {
 		global $wpdb;
+		if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ) {
+			// One counting universe with Traffic (OPT-588): stored verdict only.
+			return Opti_Behavior_Stats_Spam_Filter::session_sql( $table_alias, 'AND', true );
+		}
 		$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
 		$prefix         = $table_alias ? $table_alias . '.' : '';
 		$conditions     = array();
@@ -192,7 +196,12 @@ class Opti_Behavior_Smart_Insights_Device_Aggregator {
 		if ( $this->column_exists( $sessions_table, 'duration' ) ) {
 			$settings = function_exists( 'get_option' ) ? get_option( 'opti_behavior_traffic_settings', array( 'spam_detection_enabled' => true, 'spam_duration_threshold' => 3 ) ) : array();
 			if ( ! array_key_exists( 'spam_detection_enabled', $settings ) || ! empty( $settings['spam_detection_enabled'] ) ) {
-				$conditions[] = $prefix . 'duration >= ' . max( 0, isset( $settings['spam_duration_threshold'] ) ? absint( $settings['spam_duration_threshold'] ) : 3 );
+				$duration_condition = $prefix . 'duration >= ' . max( 0, isset( $settings['spam_duration_threshold'] ) ? absint( $settings['spam_duration_threshold'] ) : 3 );
+				if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) && $this->column_exists( $sessions_table, 'referrer' ) ) {
+					// A visit referred by another site passes the duration floor (OPT-562).
+					$duration_condition = Opti_Behavior_Stats_Spam_Filter::referrer_or_thresholds_sql( $duration_condition, $table_alias );
+				}
+				$conditions[] = $duration_condition;
 			}
 		}
 

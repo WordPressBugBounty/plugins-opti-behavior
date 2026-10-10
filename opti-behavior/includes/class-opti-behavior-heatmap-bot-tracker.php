@@ -175,8 +175,9 @@ class Opti_Behavior_Heatmap_Bot_Tracker {
 
 		// Get additional data
 		$ip = $this->get_client_ip();
-		$visited_url = $this->get_current_url();
-		$referrer = isset( $_SERVER['HTTP_REFERER'] ) ? esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) : '';
+		// Personal data (email, access_code, token…) out of the bot log (OPT-574).
+		$visited_url = opti_behavior_strip_sensitive_query_args( $this->get_current_url() );
+		$referrer = isset( $_SERVER['HTTP_REFERER'] ) ? opti_behavior_strip_sensitive_query_args( esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) ) : '';
 
 		// Store bot visit. Deferred to shutdown so the synchronous INSERT no
 		// longer runs inside template_redirect (perf fix, customer report

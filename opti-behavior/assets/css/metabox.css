@@ -208,6 +208,58 @@
 	justify-self: auto;
 }
 
+/* Page X-Ray button: top left of the box, the period select stays centred. */
+.optibehavior-top-filters-row {
+	position: relative;
+}
+
+.optibehavior-top-filters-row .optibehavior-xray-link {
+	position: absolute;
+	left: 24px;
+	top: 50%;
+	transform: translateY(-50%);
+}
+
+.optibehavior-top-filters-row .optibehavior-xray-link:hover {
+	transform: translateY(calc(-50% - 1px));
+}
+
+/* Pulse to draw the eye to the page dossier (user request 2026-09-30). */
+.optibehavior-top-filters-row .optibehavior-xray-link {
+	animation: optibehavior-xray-pulse 2s ease-out infinite;
+}
+
+.optibehavior-top-filters-row .optibehavior-xray-link:hover,
+.optibehavior-top-filters-row .optibehavior-xray-link:focus-visible {
+	animation-play-state: paused;
+}
+
+@keyframes optibehavior-xray-pulse {
+	0% {
+		box-shadow: 0 2px 4px rgba(99,102,241,.2), 0 0 0 0 rgba(139,92,246,.55);
+	}
+	70% {
+		box-shadow: 0 2px 4px rgba(99,102,241,.2), 0 0 0 10px rgba(139,92,246,0);
+	}
+	100% {
+		box-shadow: 0 2px 4px rgba(99,102,241,.2), 0 0 0 0 rgba(139,92,246,0);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.optibehavior-top-filters-row .optibehavior-xray-link {
+		animation: none;
+	}
+}
+
+@media (max-width: 782px) {
+	.optibehavior-top-filters-row .optibehavior-xray-link,
+	.optibehavior-top-filters-row .optibehavior-xray-link:hover {
+		position: static;
+		transform: none;
+	}
+}
+
 /* Chart range chips centered in the bottom controls row */
 .optibehavior-heatmap-controls .optibehavior-time-filters {
 	grid-column: 2;
@@ -296,6 +348,15 @@
 .optibehavior-heatmap-link:hover {
 	transform: translateY(-1px);
 	filter: brightness(.98);
+}
+
+/* WordPress a:hover / a:focus / a:active (0,1,1) beat the class above and
+   turned the label purple on the purple button: keep it white in every state. */
+a.optibehavior-heatmap-link:hover,
+a.optibehavior-heatmap-link:focus,
+a.optibehavior-heatmap-link:active,
+a.optibehavior-heatmap-link:visited {
+	color: #fff;
 }
 
 .optibehavior-heatmap-link.optibehavior-pro-only {

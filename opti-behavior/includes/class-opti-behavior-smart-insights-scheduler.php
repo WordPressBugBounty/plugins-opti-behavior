@@ -46,20 +46,48 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 	 * page reads) and queues ONE regeneration, whose run closes the cards the
 	 * new rules no longer confirm as `rule_updated` (never as wins).
 	 */
-	const RULES_VERSION = '1.9.1.5';
+	const RULES_VERSION = '1.9.3.1.1'; // OPT-588: one counting universe, wide entry step, 0-order checkout.
 	const RULES_OPTION  = 'opti_behavior_si_rules_version';
 
 	/**
-	 * Once per RULES_VERSION (admin screens only, see heatmap-core admin_init):
-	 * flush the caches built by older rules and queue one regeneration.
+	 * One-off regeneration queued by maybe_apply_rules_upgrade() on EVERY site
+	 * (scheduler on or off): cards stored by an older plugin version lack what
+	 * the new code stores (e.g. 1.10.0 "Things to check"), and the list only
+	 * reads stored rows. Same run as the "Refresh insights" button (OPT-546).
+	 */
+	const UPGRADE_REGENERATE_HOOK = 'opti_behavior_smart_insights_upgrade_regenerate';
+
+	/**
+	 * Value stored in RULES_OPTION: the rules version plus the Free and Pro
+	 * plugin versions, so a plugin update also counts as a rules change.
+	 *
+	 * @return string
+	 */
+	public static function current_rules_key() {
+		$key = self::RULES_VERSION;
+		if ( defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ) {
+			$key .= '|free-' . OPTI_BEHAVIOR_HEATMAP_VERSION;
+		}
+		if ( defined( 'OPTI_BEHAVIOR_PRO_VERSION' ) ) {
+			$key .= '|pro-' . OPTI_BEHAVIOR_PRO_VERSION;
+		}
+
+		return $key;
+	}
+
+	/**
+	 * Once per RULES_VERSION / plugin version (admin screens only, see
+	 * heatmap-core admin_init): flush the caches built by older rules and
+	 * queue one regeneration.
 	 *
 	 * @return bool True when the upgrade ran on this request.
 	 */
 	public static function maybe_apply_rules_upgrade() {
-		if ( self::RULES_VERSION === get_option( self::RULES_OPTION ) ) {
+		$rules_key = self::current_rules_key();
+		if ( $rules_key === get_option( self::RULES_OPTION ) ) {
 			return false;
 		}
-		update_option( self::RULES_OPTION, self::RULES_VERSION, false );
+		update_option( self::RULES_OPTION, $rules_key, false );
 		/**
 		 * Detection / scoring rules changed: drop caches built by older rules
 		 * (Pro Page X-Ray lists, dossiers and page reads).
@@ -77,8 +105,86 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 		if ( ! empty( $settings['enabled'] ) && class_exists( 'Opti_Behavior_Smart_Insights_Generator' ) ) {
 			wp_schedule_single_event( time() + MINUTE_IN_SECONDS, Opti_Behavior_Smart_Insights_Generator::CRON_HOOK );
 		}
+		// Every site: one regeneration of the default period, so no stored card
+		// keeps what the older version wrote until someone clicks Refresh.
+		if ( ! wp_next_scheduled( self::UPGRADE_REGENERATE_HOOK ) ) {
+			wp_schedule_single_event( time() + MINUTE_IN_SECONDS, self::UPGRADE_REGENERATE_HOOK );
+		}
 
 		return true;
+	}
+
+	/**
+	 * Cron callback of UPGRADE_REGENERATE_HOOK: regenerate the default period
+	 * exactly like the "Refresh insights" button (forced, site spam scope).
+	 *
+	 * @param object|null $generator Optional generator.
+	 * @return array|WP_Error Generation summary.
+	 */
+	public static function run_upgrade_regeneration( $generator = null ) {
+		$generator = self::get_generator( $generator );
+		if ( ! $generator || ! method_exists( $generator, 'get_date_range_for_period' ) || ! method_exists( $generator, 'generate_for_period' ) ) {
+			return new WP_Error( 'opti_behavior_smart_insights_scheduler_no_generator', __( 'Smart Insights generator is unavailable.', 'opti-behavior' ) );
+		}
+
+		$period = class_exists( 'Opti_Behavior_Smart_Insights_Generator' ) ? Opti_Behavior_Smart_Insights_Generator::DEFAULT_PERIOD : 'last30days';
+		$range  = $generator->get_date_range_for_period( $period );
+		if ( is_wp_error( $range ) ) {
+			return $range;
+		}
+
+		$exclude_spam = class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ? Opti_Behavior_Stats_Spam_Filter::is_enabled() : true;
+		try {
+			$result = $generator->generate_for_period(
+				$range['from'],
+				$range['to'],
+				array(
+					'force'           => true,
+					'source'          => 'plugin_upgrade',
+					'exclude_spam'    => $exclude_spam,
+					'candidate_limit' => 50,
+				)
+			);
+		} catch ( Throwable $e ) {
+			return new WP_Error( 'opti_behavior_smart_insights_upgrade_failed', $e->getMessage() );
+		}
+
+		// Busy generator (a Refresh or a cron batch holds the lock): try again later.
+		if ( is_wp_error( $result ) && false !== strpos( (string) $result->get_error_code(), 'lock' ) && ! wp_next_scheduled( self::UPGRADE_REGENERATE_HOOK ) ) {
+			wp_schedule_single_event( time() + 5 * MINUTE_IN_SECONDS, self::UPGRADE_REGENERATE_HOOK );
+		}
+		if ( ! is_wp_error( $result ) && method_exists( $generator, 'get_generated_transient_key' ) ) {
+			set_transient( $generator->get_generated_transient_key( $range['from'], $range['to'], $exclude_spam ), time(), DAY_IN_SECONDS );
+		}
+
+		return $result;
+	}
+
+	/**
+	 * One-time repair flag of the story parent loops (OPT-298).
+	 */
+	const PARENT_LOOP_REPAIR_OPTION = 'opti_behavior_si_parent_loop_repair';
+
+	/**
+	 * Once per site (admin screens only, see heatmap-core admin_init): clear the
+	 * parent of cards 1.9.2.x left in an A <-> B parent loop, which the list
+	 * could never draw. Runs one SELECT, then never again.
+	 *
+	 * @return int|false Rows repaired, false when already done.
+	 */
+	public static function maybe_repair_story_parent_loops() {
+		if ( '1' === (string) get_option( self::PARENT_LOOP_REPAIR_OPTION ) ) {
+			return false;
+		}
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Repository' ) ) {
+			return false;
+		}
+
+		$repository = new Opti_Behavior_Smart_Insights_Repository();
+		$repaired   = $repository->repair_story_parent_loops();
+		update_option( self::PARENT_LOOP_REPAIR_OPTION, '1', false );
+
+		return $repaired;
 	}
 
 	/**

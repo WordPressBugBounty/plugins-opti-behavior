@@ -225,7 +225,7 @@
 			// Click-count hover state ("Count Bar Display" setting): hovering a
 			// click hotspot on the Click heatmap shows how many clicks landed in
 			// that area. Counting runs against allCoordinates (REFERENCE px space).
-			// Pro-only: the PHP config sends count_bar = 0 when Pro is inactive.
+			// The PHP config sends count_bar = 0 when the setting is off.
 			this._clickCountContainerEl = null;          // container the click-count hover listeners are bound to
 			this._clickCountHoverDoc = null;             // preview iframe document the inner hover listener is bound to
 			this._clickCountTooltipEl = null;            // "N clicks in this area" tooltip bubble
@@ -257,7 +257,9 @@
 				date_range: this.normalizeDateRange(this.config.date_range || 'all'),
 				country: '',      // comma-separated country codes (e.g., "US,FR,DE")
 				browser: '',      // comma-separated browser names (e.g., "Chrome,Firefox")
-				visitor_type: 'guest',  // Default to Guest (logged-in users can see different page content)
+				// OPT-589: All Visitors by default = the Heatmaps list / Traffic
+				// session universe. The preview still renders the page as a guest.
+				visitor_type: '',
 				os: '',               // comma-separated OS names (e.g., "Windows,Android")
 				utm_campaign: '',
 				utm_source: '',
@@ -376,6 +378,18 @@
 					window.OptiBehaviorDebug[level](message, 'heatmap-detail');
 				}
 			}
+		}
+
+		/**
+		 * Null-safe localized string lookup with English fallback.
+		 *
+		 * @param {string} key      i18n key from the localized config.
+		 * @param {string} fallback English fallback text.
+		 * @returns {string} Localized string or fallback.
+		 */
+		t(key, fallback) {
+			const i18n = this.config && this.config.i18n;
+			return (i18n && i18n[key]) || fallback;
 		}
 
 		/**
@@ -1122,8 +1136,8 @@
 			if (this.filters.date_range !== 'custom') {
 				this.prefillDateInputs(this.filters.date_range);
 			}
-			// Guest is the default visitor-type: no "active filter" styling for it.
-			$('#filter-visitor-type').val(this.filters.visitor_type).toggleClass('has-value', this.filters.visitor_type !== 'guest');
+			// All Visitors is the default visitor-type: no "active filter" styling for it.
+			$('#filter-visitor-type').val(this.filters.visitor_type).toggleClass('has-value', this.filters.visitor_type !== '');
 
 			// Set initial A/B variant selector value if loaded from URL params
 			if (this.abTestId > 0 && this.variantId > 0) {
@@ -1456,7 +1470,7 @@
 		resetAdvancedFilters() {
 			$('#filter-duration-min, #filter-duration-max, #filter-entry-page, #filter-exit-page, #filter-referrer').val('');
 			$('#filter-traffic-channel').val('');
-			$('#filter-visitor-type').val('guest');
+			$('#filter-visitor-type').val('');
 
 			$('#advanced-filters-panel .multiselect-dropdown').each((index, dropdown) => {
 				const $dropdown = $(dropdown);
@@ -1468,7 +1482,7 @@
 			this.filters.country = '';
 			this.filters.browser = '';
 			this.filters.os = '';
-			this.filters.visitor_type = 'guest';
+			this.filters.visitor_type = '';
 			this.filters.utm_campaign = '';
 			this.filters.utm_source = '';
 			this.filters.utm_medium = '';
@@ -1498,9 +1512,9 @@
 				'entry_page', 'exit_page', 'referrer', 'traffic_channel'
 			];
 			let count = keys.reduce((n, k) => n + (this.filters[k] && String(this.filters[k]) !== '' ? 1 : 0), 0);
-			// Guest is the default: badge only when the user picked All Visitors ('')
-			// or Logged In explicitly.
-			if (this.filters.visitor_type !== 'guest') {
+			// All Visitors ('') is the default: badge only when the user picked
+			// Guest or Logged In explicitly.
+			if (this.filters.visitor_type) {
 				count++;
 			}
 
@@ -1983,7 +1997,7 @@
 				date_range: 'all',
 				country: '',
 				browser: '',
-				visitor_type: 'guest',  // Default to Guest (logged-in users can see different page content)
+				visitor_type: '',  // OPT-589: All Visitors (same sessions as the Heatmaps list)
 				os: '',
 				utm_campaign: '',
 				utm_source: '',
@@ -2017,7 +2031,9 @@
 
 			// Reset single-select elements
 			$('#filter-date-range').val('all').removeClass('has-value');
-			$('#filter-visitor-type').val('guest').removeClass('has-value');
+			$('#filter-visitor-type').val('').removeClass('has-value');
+			// The header scope caption follows the period back to All time (QA-B-HEAT-100).
+			this.updateHeroScopeLabel();
 
 			// Reset multi-select dropdowns
 			$('.multiselect-dropdown').each((index, dropdown) => {
@@ -2095,7 +2111,7 @@
 					text = Math.round(n / 1000) + 'k';
 				}
 			}
-			$('.device-count[data-device="' + device + '"]').text(text).attr('title', n.toLocaleString());
+			$('.device-count[data-device="' + device + '"]').text(text).attr('title', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(n) : String(n)));
 		}
 
 		/**
@@ -2530,6 +2546,7 @@
 			this.stopLoadingRequested = false; // Reset stop flag for new load
 			this.showLoading(this.config.i18n.loading || 'Loading heatmap data...', loadId);
 			this.allCoordinates = []; // Reset accumulated coordinates
+			this._hoverCoordinates = null; // Drop reprojected hover source (no stale hotspots across page_id loads)
 			this.allTrajectories = []; // Reset accumulated trajectories (for move heatmaps)
 			this.allDwellSpots = []; // Reset accumulated dwell-time spots (for move heatmaps)
 			this.currentBatch = 1;
@@ -3110,8 +3127,10 @@
 				pageUrl = pageUrl + sep0 + 'opti_heatmap_preview=1';
 			}
 
-			// If filtering by "guest" visitors, append parameter to show page as logged-out user
-			if (this.filters.visitor_type === 'guest' && pageUrl) {
+			// Show the page as a logged-out visitor unless the view is explicitly
+			// "Logged In" (OPT-589: All Visitors is the default, the background
+			// stays the guest render it always was).
+			if (this.filters.visitor_type !== 'logged_in' && pageUrl) {
 				pageUrl = pageUrl + '&opti_preview_as_guest=1';
 			}
 
@@ -4950,6 +4969,11 @@
 
 				this.heatmapInstance = window.h337.create(config);
 
+				// Same settings for the full-page layer the PNG download renders
+				// (the on-screen click canvas only covers a window of the page).
+				this._hmConfig = Object.assign({}, config);
+				delete this._hmConfig.container;
+
 				// Prepare data with proper format
 				let heatmapData;
 
@@ -5087,6 +5111,24 @@
 					this._canvasSpacePoints = scaledCoordinates.slice();
 					this._hmDataMax = Math.max(10, this.getMaxValue(scaledCoordinates));
 
+					// COUNT-BAR HOVER SOURCE: paint reprojects anchored clicks onto
+					// the live layout (data = _reprojectAnchoredClicks(...) above), so
+					// data.coordinates is the reprojected REFERENCE-space list actually
+					// drawn. The hover hit-test must search this exact list — not the
+					// raw this.allCoordinates — or the anchored blob and its tooltip
+					// hotspot land at two different positions.
+					// Non-anchored data: _reprojectAnchoredClicks returns its input
+					// unchanged, so this === this.allCoordinates -> zero behavior change.
+					this._hoverCoordinates = data.coordinates;
+					// Free paints click Y as an absolute page position (no ref->display
+					// scaling) and scales X only above 10 %: keep that exact space so the
+					// hover maps the cursor the way the dots were drawn (OPT-819).
+					this._hoverSpace = {
+						scaleX: shouldScaleX ? coordScaleX : 1,
+						width: displayWidth,
+						height: displayHeight
+					};
+
 					heatmapData = {
 						max: this._hmDataMax,
 						data: this._windowSubset(scaledCoordinates)
@@ -5098,12 +5140,15 @@
 
 					// Count Bar Display: capture hover over the preview so admins can
 					// see "N clicks in this area" on click hotspots (gated by the
-					// Settings → Data Collection "Count Bar Display" toggle; Pro only).
+					// Settings → Data Collection "Count Bar Display" toggle).
 					this._ensureClickCountHoverLayer();
 				} else {
 					// No data - just show the page without heatmap overlay
 					this.debug('info', 'No heatmap data to render - showing page only');
 					this.heatmapInstance = null;
+					// Nothing painted -> drop any stale reprojected hover list so a
+					// prior render's hotspots cannot leak onto an empty preview.
+					this._hoverCoordinates = null;
 					this._hideClickCountHoverLayer();
 				}
 
@@ -6335,6 +6380,10 @@
 		 * Load statistics
 		 */
 		async loadStats() {
+			// Only the latest request may paint: a slower answer for the view the
+			// user already left must not overwrite the current one (QA-B-HEAT-103).
+			this._statsSeq = (this._statsSeq || 0) + 1;
+			const statsSeq = this._statsSeq;
 			$('.stats-loading').show();
 			$('#top-elements-list').empty();
 
@@ -6358,6 +6407,9 @@
 					})
 				});
 
+				if (statsSeq !== this._statsSeq) {
+					return;
+				}
 				if (response.success && response.data) {
 					this.renderStats(response.data);
 				} else {
@@ -6365,6 +6417,9 @@
 					this.showComingSoonMessage();
 				}
 			} catch (error) {
+				if (statsSeq !== this._statsSeq) {
+					return;
+				}
 				this.debug('error', 'Failed to load stats:', error);
 				// Show coming soon message on error
 				this.showComingSoonMessage();
@@ -6465,14 +6520,15 @@
 			const title = i18n.top_elements_locked || 'Top Clicked Elements is a Pro feature';
 			const hint = i18n.top_elements_locked_hint || 'Upgrade to Opti-Behavior Pro to see which elements your visitors click the most.';
 			const cta = i18n.upgrade_cta || 'Upgrade to Pro';
-			const url = this.config.upgrade_url || 'https://optiuser.com/';
+			// OPT-764: the Pro trial page comes from PHP (Trial_Invite::link_url), no URL here.
+			const url = this.config.upgrade_url || '';
 			const icon = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="top-elements-empty-icon"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 			$list.html(`
 				<div class="top-elements-empty top-elements-locked">
 					${icon}
 					<p class="top-elements-empty-title">${this.escapeHtml(title)}</p>
 					<p class="top-elements-empty-hint">${this.escapeHtml(hint)}</p>
-					<a class="button button-primary top-elements-upgrade-btn" href="${this.escapeHtml(url)}">${this.escapeHtml(cta)}</a>
+					${url ? `<a class="button button-primary top-elements-upgrade-btn" href="${this.escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(cta)}</a>` : ''}
 				</div>
 			`);
 		}
@@ -6664,6 +6720,9 @@
 		 */
 		switchDevice(device) {
 			this.currentDevice = device;
+			// "Delete Heatmap Data" posts the device/type shown NOW, so the page
+			// comes back on that view (QA-B-HEAT-104).
+			$('input[name="opti_behavior_reset_device"]').val(device);
 
 			// Update UI
 			$('.device-btn').removeClass('active');
@@ -6734,6 +6793,7 @@
 			}
 
 			this.currentType = type;
+			$('input[name="opti_behavior_reset_type"]').val(type);
 
 			// Update UI
 			$('.heatmap-tab').removeClass('active');
@@ -6826,12 +6886,12 @@
 			if (statusMessage) {
 				progressText = (this.config.i18n.points_loaded_status || '%1$s - %2$s points loaded')
 					.replace('%1$s', statusMessage)
-					.replace('%2$s', totalPoints.toLocaleString());
+					.replace('%2$s', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : String(totalPoints)));
 			} else {
 				progressText = (this.config.i18n.batch_loaded || 'Batch %1$s/%2$s loaded (%3$s points)')
 					.replace('%1$s', currentBatch)
 					.replace('%2$s', totalBatches)
-					.replace('%3$s', totalPoints.toLocaleString());
+					.replace('%3$s', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : String(totalPoints)));
 			}
 			if (this.pendingOverlayVisible) {
 				this.updatePendingState(progressText, this.activeLoadId);
@@ -7093,12 +7153,12 @@
 				bgColor = 'rgba(255, 193, 7, 0.9)';
 				textColor = '#212529';
 				icon = '&#9632;'; // Square for stop
-				message = (this.config.i18n.stopped_points_loaded || 'Stopped - %s points loaded').replace('%s', totalPoints.toLocaleString());
+				message = (this.config.i18n.stopped_points_loaded || 'Stopped - %s points loaded').replace('%s', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : String(totalPoints)));
 			} else {
 				bgColor = 'rgba(40, 167, 69, 0.9)';
 				textColor = '#fff';
 				icon = '&#10003;'; // Checkmark for complete
-				message = (this.config.i18n.complete_points_loaded || 'Complete! %s points loaded').replace('%s', totalPoints.toLocaleString());
+				message = (this.config.i18n.complete_points_loaded || 'Complete! %s points loaded').replace('%s', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : String(totalPoints)));
 			}
 
 			// Create a completion indicator that fades out
@@ -7535,9 +7595,9 @@
 
 		/**
 		 * Whether the "Count Bar Display" setting (Settings → Data Collection)
-		 * allows the click-count hover bubble. This is a Pro-only feature: the
-		 * PHP config sends count_bar = 0 when the Pro plugin is inactive, and
-		 * a missing config value defaults to OFF in the Free plugin.
+		 * allows the click-count hover bubble (Free and Pro). The PHP config
+		 * sends count_bar = 0 when the setting is off; a missing config value
+		 * defaults to OFF.
 		 */
 		_isClickCountBarEnabled() {
 			if (!this.config || typeof this.config.count_bar === 'undefined') {
@@ -7659,8 +7719,16 @@
 			const offsetY = event.clientY - rect.top;
 			const refWidth = this.heatmapReferenceWidth || rect.width;
 			const refHeight = this.heatmapReferenceHeight || rect.height;
-			const refX = (offsetX / rect.width) * refWidth;
-			const refY = (offsetY / rect.height) * refHeight;
+			let refX = (offsetX / rect.width) * refWidth;
+			let refY = (offsetY / rect.height) * refHeight;
+			// Same space as the paint (see _hoverSpace in the click render):
+			// when the page height changed since the clicks were recorded, a
+			// proportional reference mapping answers above / below the blob.
+			const space = this._hoverSpace;
+			if (space && space.width > 0 && space.height > 0) {
+				refX = ((offsetX / rect.width) * space.width) / (space.scaleX || 1);
+				refY = (offsetY / rect.height) * space.height;
+			}
 
 			// Radius matches the h337 dot radius (40 canvas px ≈ 40 reference
 			// px at the common 1:1 coordinate scale), so the counted area is
@@ -7668,7 +7736,11 @@
 			const RADIUS = 40;
 			const radiusSq = RADIUS * RADIUS;
 			let count = 0;
-			const points = this.allCoordinates;
+			// Search the SAME list paint drew: the reprojected reference-space
+			// coordinates stashed in the click branch of createOverlayAndRenderHeatmap.
+			// Falls back to raw allCoordinates when no reproject ran (non-anchored
+			// data, where the two lists are identical anyway).
+			const points = this._hoverCoordinates || this.allCoordinates;
 			for (let i = 0; i < points.length; i++) {
 				const dx = (points[i].x || 0) - refX;
 				if (dx > RADIUS || dx < -RADIUS) {
@@ -7698,7 +7770,7 @@
 			// Tooltip text: "<N> clicks in this area" with the count bolded
 			// (locally computed number, not user input, so innerHTML is safe).
 			const template = this.t('click_count_tooltip', '{count} clicks in this area');
-			tip.innerHTML = template.replace('{count}', '<strong>' + count.toLocaleString() + '</strong>');
+			tip.innerHTML = template.replace('{count}', '<strong>' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(count) : String(count)) + '</strong>');
 			tip.style.display = 'block';
 
 			// Position above the cursor (below when clipped at the top),
@@ -7799,7 +7871,7 @@
 			const template = (this.config && this.config.i18n && this.config.i18n.scroll_depth_tooltip) ||
 				'{views} views ({percent}%) reached up to this point';
 			tip.innerHTML = template
-				.replace('{views}', '<strong>' + views.toLocaleString() + '</strong>')
+				.replace('{views}', '<strong>' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(views) : String(views)) + '</strong>')
 				.replace('{percent}', '<strong>' + pct.toFixed(1) + '</strong>');
 			tip.style.display = 'block';
 
@@ -8312,7 +8384,10 @@
 				// Get dimensions
 				const width = overlay ? parseInt(overlay.style.width) || container.scrollWidth : container.scrollWidth;
 				const height = overlay ? parseInt(overlay.style.height) || container.scrollHeight : container.scrollHeight;
-				const scale = 2;
+				// 2x for a sharp image, lowered on long pages so the final canvas stays
+				// inside this browser's canvas limit (an oversized canvas is blank).
+				const sizeCap = getMaxSafeCanvasScale(width * 2, height * 2);
+				const scale = 2 * Math.min(sizeCap.scaleX, sizeCap.scaleY);
 
 				// Create final canvas
 				const finalCanvas = document.createElement('canvas');
@@ -8469,10 +8544,14 @@
 				// Draw heatmap overlay on top
 				if (overlay) {
 					this.debug('debug', 'Drawing heatmap overlay...');
-					const heatmapCanvas = overlay.querySelector('canvas');
+					const fullLayer = this._renderFullPageHeatLayer(overlay);
+					const heatmapCanvas = fullLayer ? fullLayer.canvas : overlay.querySelector('canvas');
 					if (heatmapCanvas) {
 						ctx.drawImage(heatmapCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
-						this.debug('debug', 'Heatmap canvas drawn');
+						this.debug('debug', 'Heatmap canvas drawn' + (fullLayer ? ' (full-page layer)' : ''));
+					}
+					if (fullLayer) {
+						fullLayer.holder.remove();
 					}
 				}
 
@@ -8515,6 +8594,54 @@
 				if (typeof lucide !== 'undefined' && typeof lucide.createIcons === 'function') {
 					lucide.createIcons();
 				}
+			}
+		}
+
+		/**
+		 * Render the click heatmap of the WHOLE page into an off-screen canvas.
+		 *
+		 * On long pages the on-screen click canvas only covers a window of a few
+		 * viewports (#heatmap-window, see _createHeatmapWindow()). Stretching that
+		 * window over the full page made the downloaded PNG show the heat shifted
+		 * and paler than the screen. This draws every canvas-space point with the
+		 * same settings and the same global max, so the image matches the screen.
+		 *
+		 * @param {HTMLElement} overlay #heatmap-overlay element.
+		 * @return {{canvas: HTMLCanvasElement, holder: HTMLElement}|null} Null when
+		 *         the on-screen canvas already covers the whole page.
+		 */
+		_renderFullPageHeatLayer(overlay) {
+			if (!this._hmWindowEl || !this._hmWindowEl.isConnected || !(this._hmWindowHeight > 0) ||
+				!Array.isArray(this._canvasSpacePoints) || !this._hmConfig || !window.h337) {
+				return null;
+			}
+			const width = parseInt(overlay.style.width, 10) || 0;
+			const height = parseInt(overlay.style.height, 10) || 0;
+			if (!width || !height) {
+				return null;
+			}
+
+			const holder = document.createElement('div');
+			holder.style.cssText = 'position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;' +
+				'width:' + width + 'px;height:' + height + 'px;';
+			document.body.appendChild(holder);
+
+			try {
+				const instance = window.h337.create(Object.assign({}, this._hmConfig, { container: holder }));
+				instance.setData({
+					max: this._hmDataMax,
+					data: this._canvasSpacePoints.slice()
+				});
+				const canvas = holder.querySelector('canvas');
+				if (!canvas) {
+					holder.remove();
+					return null;
+				}
+				return { canvas: canvas, holder: holder };
+			} catch (e) {
+				this.debug('warn', 'Full-page heat layer failed, using the on-screen canvas:', e);
+				holder.remove();
+				return null;
 			}
 		}
 

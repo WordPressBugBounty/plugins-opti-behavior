@@ -239,30 +239,13 @@ trait Opti_Behavior_Assets_Trait {
                 true
             );
 
+            // OPT-763: dismiss only (stored on this site), no trial request.
             wp_localize_script(
                 'opti-behavior-pro-trial-banner',
                 'optiBehaviorTrial',
                 array(
-                    'ajaxUrl'               => admin_url( 'admin-ajax.php' ),
-                    'startNonce'            => wp_create_nonce( 'opti_behavior_start_trial' ),
-                    'dismissNonce'          => wp_create_nonce( 'opti_behavior_dismiss_trial' ),
-                    'trialState'            => $opti_behavior_trial_state['display'],
-                    'trialDaysLeft'         => $opti_behavior_trial_state['days_left'],
-                    'trialExpiresTimestamp' => $opti_behavior_trial_state['expires_timestamp'],
-                    'downloadUrl'           => $opti_behavior_trial_state['download_url'],
-                    'i18n'                  => array(
-                        'trialActivated' => __( 'Pro Trial Activated!', 'opti-behavior' ),
-                        'trialActiveDesc' => __( 'You have 6 months of free access to all Pro features. Download the Pro plugin to get started!', 'opti-behavior' ),
-                        'daysLeft'       => __( 'days left', 'opti-behavior' ),
-                        'downloadPro'    => __( 'Download Pro Plugin', 'opti-behavior' ),
-                        'dismiss'        => __( 'Dismiss', 'opti-behavior' ),
-                        'trialExpired'   => __( 'Trial expired', 'opti-behavior' ),
-                        'unknownError'   => __( 'Unknown error', 'opti-behavior' ),
-                        'requestFailed'  => __( 'Request failed', 'opti-behavior' ),
-                        'invalidResponse' => __( 'Invalid response', 'opti-behavior' ),
-                        'networkError'   => __( 'Network error', 'opti-behavior' ),
-                        'pleaseTryAgain' => __( 'Please try again.', 'opti-behavior' ),
-                    ),
+                    'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
+                    'dismissNonce' => wp_create_nonce( 'opti_behavior_dismiss_trial' ),
                 )
             );
         }
@@ -313,7 +296,10 @@ trait Opti_Behavior_Assets_Trait {
                 'opti-behavior-heatmaps',
                 OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/heatmaps.js',
                 array(), // No dependencies
-                OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . time(),
+                // filemtime: same as heatmaps.css; time() defeated the browser cache on every load.
+                file_exists( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/heatmaps.js' )
+                    ? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/heatmaps.js' )
+                    : OPTI_BEHAVIOR_HEATMAP_VERSION,
                 true
             );
             wp_localize_script(
@@ -323,6 +309,9 @@ trait Opti_Behavior_Assets_Trait {
                     'strings' => array(
                         'desyncTooltip' => __( 'Interaction files and detected sessions are out of sync for this page. Click Repair to refresh.', 'opti-behavior' ),
                         'repair'        => __( 'Repair', 'opti-behavior' ),
+                        'retry'         => __( 'Retry', 'opti-behavior' ),
+                        'tableError'    => __( 'The heatmap list could not be loaded (the server took too long or returned an error).', 'opti-behavior' ),
+                        'statsError'    => __( 'The heatmap numbers could not be loaded (the server took too long or returned an error).', 'opti-behavior' ),
                     ),
                 )
             );
@@ -427,6 +416,24 @@ trait Opti_Behavior_Assets_Trait {
                 array( 'opti-behavior-dashboard' ),
                 OPTI_BEHAVIOR_HEATMAP_VERSION
             );
+        }
+
+        // Pro feature page template of the 4 pages above (admin/partials/pro-feature-page.php):
+        // preview, cases, Free / Pro table, FAQ, demo button. Loaded after recordings-upgrade.css.
+        if ( ! opti_behavior_pro_active() ) {
+            foreach ( array( 'recordings', 'user-journey', 'errors', 'form-analytics' ) as $opti_behavior_pro_slug ) {
+                if ( strpos( $hook_suffix, 'opti-behavior-' . $opti_behavior_pro_slug ) === false ) {
+                    continue;
+                }
+                $opti_behavior_pro_css = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/pro-feature-page.css';
+                wp_enqueue_style(
+                    'opti-behavior-pro-feature-page',
+                    OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/pro-feature-page.css',
+                    array( 'opti-behavior-' . $opti_behavior_pro_slug . '-upgrade' ),
+                    OPTI_BEHAVIOR_HEATMAP_VERSION . ( file_exists( $opti_behavior_pro_css ) ? '.' . filemtime( $opti_behavior_pro_css ) : '' )
+                );
+                break;
+            }
         }
 
         // Add settings page styles for settings page
@@ -686,7 +693,10 @@ trait Opti_Behavior_Assets_Trait {
                     'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
                     'nonce'        => wp_create_nonce( 'opti_behavior_dashboard_nonce' ),
                     'hasProAccess' => $smart_insights_has_pro_access,
-                    'upgradeUrl'   => $this->get_pro_download_url_for_banner(),
+                    // OPT-764: the single Pro trial page (Trial_Invite::link_url), nothing sent from WordPress.
+                    'upgradeUrl'   => class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::link_url( 'smart-insights' ) : '',
+                    // OPT-551: discreet trial link on locked cards, '' unless the banner state is invite.
+                    'trialLinkUrl' => ( ! $smart_insights_has_pro_access && class_exists( 'Opti_Behavior_Trial_Invite' ) ) ? Opti_Behavior_Trial_Invite::invite_url( 'try-pro-smart-insights' ) : '',
                     'deepOpenInsightId' => isset( $_GET['insight_id'] ) ? absint( wp_unslash( $_GET['insight_id'] ) ) : 0, // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only deep-link state.
                     'excludeSpamDefault' => $smart_insights_exclude_spam ? '1' : '0',
                     'siteNow'      => current_time( 'mysql' ),
@@ -721,7 +731,8 @@ trait Opti_Behavior_Assets_Trait {
                         'statusUpdated'      => __( 'Smart Insight status updated.', 'opti-behavior' ),
                         'refreshComplete'    => __( 'Smart Insights refreshed.', 'opti-behavior' ),
                         'error'              => __( 'Unable to load Smart Insights. Please try again.', 'opti-behavior' ),
-                        'sessions'           => __( 'Sessions', 'opti-behavior' ),
+                        // OPT-588 (B): one unit on a card = visits (key figures say "visits lost").
+                        'sessions'           => __( 'Visits', 'opti-behavior' ),
                         'bounceRate'         => __( 'Bounce rate', 'opti-behavior' ),
                         'scrollDepth'        => __( 'Avg. scroll depth', 'opti-behavior' ),
                         'timeOnPage'         => __( 'Avg. time on page', 'opti-behavior' ),
@@ -765,16 +776,53 @@ trait Opti_Behavior_Assets_Trait {
                         'recurrenceHistory'  => __( 'Older overlapping detections are grouped into this card.', 'opti-behavior' ),
                         'relatedUnavailable' => __( 'No deep link available', 'opti-behavior' ),
                         'noApplicableReports' => __( 'No report applies directly to this insight.', 'opti-behavior' ),
-                        /* translators: %s: number of reports that do not apply to this insight. */
-                        'relatedOtherReport' => __( '%s other report does not apply to this insight', 'opti-behavior' ),
-                        /* translators: %s: number of reports that do not apply to this insight. */
-                        'relatedOtherReports' => __( '%s other reports do not apply to this insight', 'opti-behavior' ),
+                        // Card + detail anatomy (OPT-362): key-figure labels by impact basis, followed by " · <period>".
+                        'figureFunnelDropoff'   => __( 'visits lost at this step', 'opti-behavior' ),
+                        'figureFormAbandonment' => __( 'abandoned forms', 'opti-behavior' ),
+                        'figureErrorImpact'     => __( 'visitors hit this error', 'opti-behavior' ),
+                        'figureConversionGap'   => __( 'conversions lost vs. site average', 'opti-behavior' ),
+                        'figureEngagementGap'   => __( 'visitors lost vs. site average', 'opti-behavior' ),
+                        'figureFriction'        => __( 'visits with rage or dead clicks', 'opti-behavior' ),
+                        'figureVisitsLost'      => __( 'visits lost', 'opti-behavior' ),
+                        /* translators: 1: share of visitors lost at the step, 2: visitors lost, 3: visitors who reached the step. */
+                        'figureStepDropoff'     => __( 'Step drop-off %1$s (%2$s of %3$s)', 'opti-behavior' ),
+                        /* translators: 1: metric name, 2: value on this page, 3: site average. */
+                        'figureVsSite'          => __( '%1$s %2$s · site %3$s', 'opti-behavior' ),
+                        /* translators: 1: share of visitors who finished the funnel, 2: visitors who finished, 3: visitors who entered. */
+                        'funnelCompletion'      => __( 'Whole funnel completion: %1$s (%2$s of %3$s)', 'opti-behavior' ),
+                        /* translators: %s: the measured cause and its value. */
+                        'likelyCauseLine'       => __( 'Likely cause: %s', 'opti-behavior' ),
+                        /* translators: %s: number of visits. */
+                        'basedOnVisits'         => __( 'Based on %s visits', 'opti-behavior' ),
+                        'visitsMeasured'        => __( 'Visits measured', 'opti-behavior' ),
+                        'infoBadge'             => __( 'Info', 'opti-behavior' ),
+                        'proLockedShort'        => __( 'Pro', 'opti-behavior' ),
+                        /* translators: %s: number of related signals folded under the card. */
+                        'relatedSignalsLine'    => __( '+ %s related signals', 'opti-behavior' ),
+                        'whatHappened'          => __( 'What happened', 'opti-behavior' ),
+                        'nextSteps'             => __( 'Next steps', 'opti-behavior' ),
+                        'testThisChange'        => __( 'Test this change', 'opti-behavior' ),
+                        /* translators: %s: average visits per day. */
+                        'abTooLowTraffic'       => __( 'Traffic is too low for a reliable A/B test (~%s visits/day). Make the change, then mark this card “Resolved”: Smart Insights compares the next 14 days with the period before.', 'opti-behavior' ),
+                        /* translators: 1: traffic source, 2: metric name, 3: value for that source, 4: value for the other visitors. */
+                        'mostlyOneSource'       => __( 'Mostly one source: %1$s (%2$s %3$s vs. %4$s for other visitors). Check that traffic before changing the page.', 'opti-behavior' ),
+                        /* translators: %s: each funnel step with its visitor count. */
+                        'chartFunnelAria'       => __( 'Funnel steps: %s', 'opti-behavior' ),
                         'recommendedAction'  => __( 'Recommended action', 'opti-behavior' ),
                         'recommendedActions' => __( 'Recommended actions', 'opti-behavior' ),
                         'nextAction'         => __( 'Next action', 'opti-behavior' ),
                         'defaultNextAction'  => __( 'Review the evidence, open the most relevant report, and decide whether this should move to In progress.', 'opti-behavior' ),
                         'likelyCauses'       => __( 'Likely causes', 'opti-behavior' ),
                         'thingsToCheck'       => __( 'Things to check', 'opti-behavior' ),
+                        'generalThingsToCheck' => __( 'General things to check', 'opti-behavior' ),
+                        'checkLikely'        => __( 'Likely', 'opti-behavior' ),
+                        'checkRuledOut'      => __( 'Ruled out', 'opti-behavior' ),
+                        'checkNotMeasured'   => __( 'Not measured', 'opti-behavior' ),
+                        /* translators: %s: number of ruled-out checks. */
+                        'checkShowRuledOut'  => __( 'Show ruled out (%s)', 'opti-behavior' ),
+                        /* translators: 1: number of lost sessions measured, 2: number of sessions that continued. */
+                        'checkSample'        => __( 'Measured on %1$s lost and %2$s continued sessions', 'opti-behavior' ),
+                        'checkMoreWithPro'   => __( 'More checks with Pro: errors, form abandonment, rage clicks, mobile share and load time, compared between lost visitors and those who continued.', 'opti-behavior' ),
                         /* translators: %s: formatted number of sessions. */
                         'causeSessions'      => __( '%s sessions', 'opti-behavior' ),
                         /* translators: %s: formatted percentage of affected sessions. */
@@ -811,11 +859,6 @@ trait Opti_Behavior_Assets_Trait {
                         'provisionalVisits'  => __( 'Provisional · %s visits', 'opti-behavior' ),
                         'provisionalBelow'   => class_exists( 'Opti_Behavior_Smart_Insights_Scorer' ) ? (string) Opti_Behavior_Smart_Insights_Scorer::PROVISIONAL_BELOW : '30',
                         'provisionalHint'    => __( 'Too few visits for a firm verdict: read it as an observation to confirm.', 'opti-behavior' ),
-                        'funnelStepsTitle'   => __( 'Where visitors leave', 'opti-behavior' ),
-                        /* translators: 1: step, 2: next step, 3: visitors lost, 4: visitors who reached the step, 5: share lost. */
-                        'funnelLeakSentence' => __( 'Between “%1$s” and “%2$s”, %3$s of %4$s visitors leave (%5$s).', 'opti-behavior' ),
-                        /* translators: %s: number of visitors. */
-                        'stepReached'        => __( '%s reached', 'opti-behavior' ),
                         'openFunnelStep'     => __( 'Open the funnel on this step', 'opti-behavior' ),
                         'stepHeatmap'        => __( 'Heatmap of this step', 'opti-behavior' ),
                         'stepRecordings'     => __( 'Recordings of this step', 'opti-behavior' ),
@@ -865,6 +908,14 @@ trait Opti_Behavior_Assets_Trait {
                         'whereFirstDetected' => __( 'First detected', 'opti-behavior' ),
                         /* translators: %1$s: date, %2$s: metric value, %3$s: number of sessions. */
                         'whereChartTooltip'  => __( '%1$s: %2$s (%3$s sessions)', 'opti-behavior' ),
+                        /* translators: %1$s: metric label, %2$s: segment value, %3$s: value of the other visitors. */
+                        'whereCardHeadline'  => __( '%1$s %2$s vs %3$s', 'opti-behavior' ),
+                        /* translators: %s: signed gap in percentage points, e.g. +17.3. */
+                        'wherePointsGap'     => __( '%s pts', 'opti-behavior' ),
+                        'whereChartAverage'  => __( 'Average', 'opti-behavior' ),
+                        'whereChartHigh'     => __( 'High', 'opti-behavior' ),
+                        'whereChartLow'      => __( 'Low', 'opti-behavior' ),
+                        'whereChartNoData'   => __( 'No data', 'opti-behavior' ),
                         'whereChartEmpty'    => __( 'No daily data is available for this period yet.', 'opti-behavior' ),
                         'whereChartError'    => __( 'Unable to load the daily trend.', 'opti-behavior' ),
                         /* translators: %1$s: sessions measured, %2$s: sessions required. */
@@ -1026,6 +1077,7 @@ trait Opti_Behavior_Assets_Trait {
                         'proDiagnosisDescription' => __( 'Unlock segment breakdowns, related recordings, and advanced CRO recommendations.', 'opti-behavior' ),
                         'proEvidenceLocked'  => __( 'Detailed evidence is available in Pro.', 'opti-behavior' ),
                         'proRelatedLocked'   => __( 'Related recordings, journeys, and segment reports unlock in Pro.', 'opti-behavior' ),
+                        'trialLinkText'      => __( 'Try Pro free for 6 months', 'opti-behavior' ),
                         'segmentLockedTitle' => __( 'Advanced segment insight available in Pro', 'opti-behavior' ),
                         'segmentLockedBody'  => __( 'Upgrade to unlock device/source breakdowns, related session recordings, and advanced recommendations.', 'opti-behavior' ),
                         'weeklyLockedAria'   => __( 'Weekly CRO Summary is locked in Free mode', 'opti-behavior' ),
@@ -1314,6 +1366,7 @@ trait Opti_Behavior_Assets_Trait {
                 array(
                     'ajaxUrl' => admin_url( 'admin-ajax.php' ),
                     'nonce'   => wp_create_nonce( 'opti_behavior_filter_profiles' ),
+                    'i18n'    => ( class_exists( 'Opti_Behavior_Filter_Profiles' ) && method_exists( 'Opti_Behavior_Filter_Profiles', 'client_i18n' ) ) ? Opti_Behavior_Filter_Profiles::client_i18n() : array(),
                 )
             );
 
@@ -1357,6 +1410,7 @@ trait Opti_Behavior_Assets_Trait {
                         'mobile'                  => __( 'Mobile', 'opti-behavior' ),
                         'tablet'                  => __( 'Tablet', 'opti-behavior' ),
                         'vsLastPeriod'            => __( '% vs last period', 'opti-behavior' ),
+                        'noPreviousData'          => __( 'No data for the previous period', 'opti-behavior' ),
                         'mapUnavailable'          => __( 'Map unavailable', 'opti-behavior' ),
                         'mapUnavailableOffline'   => __( 'Map unavailable (offline)', 'opti-behavior' ),
                         'noScreenResolutionData'  => __( 'No screen resolution data available', 'opti-behavior' ),
@@ -1570,10 +1624,9 @@ trait Opti_Behavior_Assets_Trait {
      * Determine the current trial banner display state.
      *
      * Returns an array with:
-     *  - display: 'invite' | 'active' | 'expired' | 'hidden'
-     *  - days_left: int (0 when not active)
-     *  - expires_timestamp: int Unix timestamp (0 when not applicable)
-     *  - download_url: string URL to download Pro
+     *  - display: 'invite' | 'hidden' (OPT-763: no 'active' / 'expired' any more)
+     *  - days_left: int (always 0, kept for the array shape)
+     *  - expires_timestamp: int (always 0, kept for the array shape)
      *
      * @since 1.1.3
      * @return array Trial state data.
@@ -1583,101 +1636,41 @@ trait Opti_Behavior_Assets_Trait {
             'display'           => 'hidden',
             'days_left'         => 0,
             'expires_timestamp' => 0,
-            'download_url'      => '',
         );
 
-        // If Pro plugin is active, check the manifest to decide banner visibility.
-        // Only hide the banner if the user has a valid paid license (pro/premium/enterprise).
-        // If their license/trial has expired, they should still see the banner.
-        if ( function_exists( 'opti_behavior_pro_active' ) && opti_behavior_pro_active() ) {
-            if ( class_exists( 'Opti_Behavior_Manifest_Manager' ) ) {
-                $manifest_mgr = Opti_Behavior_Manifest_Manager::get_instance();
-
-                // If trial expired, show expired banner so user can upgrade.
-                // Guard with method_exists() for backward compatibility with older Pro versions.
-                if ( method_exists( $manifest_mgr, 'is_trial_expired' ) && $manifest_mgr->is_trial_expired() ) {
-                    $result['display']      = 'expired';
-                    $result['download_url'] = $this->get_pro_download_url_for_banner();
-                    return $result;
-                }
-
-                // If manifest confirms active Pro features, no banner needed.
-                if ( method_exists( $manifest_mgr, 'is_pro' ) && $manifest_mgr->is_pro() ) {
-                    return $result; // hidden
-                }
-            } else {
-                // Manifest manager not available but Pro constant is defined.
-                // Assume Pro is legitimately active; hide banner.
-                return $result; // hidden
-            }
-
-            // Pro plugin active but no valid pro manifest (e.g. license expired,
-            // free-tier fallback). Fall through to free-only logic below.
+        // OPT-763 (WP.org guideline 7, GDPR art. 13): the banner is a
+        // dismissible notice linking to the trial page on optiuser.com, the
+        // only state left is 'invite'. Pro active (plugin loaded, licensed or
+        // not) = no notice: Pro shows its own licence / trial notices.
+        if ( defined( 'OPTI_BEHAVIOR_PRO_VERSION' ) || ( function_exists( 'opti_behavior_pro_active' ) && opti_behavior_pro_active() ) ) {
+            return $result; // hidden
         }
 
-        // --- Free-only mode: decide banner state ---
-
-        $trial_started = (int) get_option( 'opti_behavior_pro_trial_started', 0 );
-
-        // Trial never started
-        if ( 0 === $trial_started ) {
-            // Check if user dismissed the banner
-            $dismissed = (int) get_option( 'opti_behavior_pro_trial_banner_dismissed', 0 );
-            if ( $dismissed > 0 ) {
-                // Re-show after 30 days
-                if ( ( time() - $dismissed ) < ( 30 * DAY_IN_SECONDS ) ) {
-                    return $result; // hidden
-                }
-            }
-            $result['display']      = 'invite';
-            $result['download_url'] = $this->get_pro_download_url_for_banner();
-            return $result;
+        // Closed once = closed for good (stored on this site only).
+        if ( (int) get_option( 'opti_behavior_pro_trial_banner_dismissed', 0 ) > 0 ) {
+            return $result; // hidden
         }
 
-        // Trial was started; check expiry
-        $expires   = $trial_started + ( 180 * DAY_IN_SECONDS );
-        $days_left = max( 0, (int) ceil( ( $expires - time() ) / DAY_IN_SECONDS ) );
-
-        if ( $days_left > 0 ) {
-            $result['display']           = 'active';
-            $result['days_left']         = $days_left;
-            $result['expires_timestamp'] = $expires;
-            $result['download_url']      = $this->get_pro_download_url_for_banner();
-        } else {
-            // Check if dismissed
-            $dismissed = (int) get_option( 'opti_behavior_pro_trial_banner_dismissed', 0 );
-            if ( $dismissed > 0 && ( time() - $dismissed ) < ( 30 * DAY_IN_SECONDS ) ) {
-                return $result; // hidden
-            }
-            $result['display']      = 'expired';
-            $result['download_url'] = $this->get_pro_download_url_for_banner();
+        // `opti_behavior_pro_trial_started` (old one-click trial, before
+        // OPT-763) drives no countdown any more: the licence server is the
+        // reference. It is only read so a site that already asked for a trial
+        // is not invited again.
+        if ( (int) get_option( 'opti_behavior_pro_trial_started', 0 ) > 0 ) {
+            return $result; // hidden
         }
 
+        $result['display'] = 'invite';
         return $result;
     }
 
     /**
-     * Build the Pro download URL for the trial banner (lightweight version).
+     * Public read of the trial banner state, for `Opti_Behavior_Trial_Invite`
+     * (discreet trial links on Heatmaps / Smart Insights, OPT-551).
      *
-     * Uses cached access code when available, falls back to URL without code.
-     *
-     * @since 1.1.3
-     * @return string Download URL.
+     * @return array Same shape as get_trial_banner_state().
      */
-    private function get_pro_download_url_for_banner() {
-        $current_user = wp_get_current_user();
-        $cache_key    = 'ob_dl_access_' . md5( $current_user->user_login . site_url() );
-        $access_code  = get_transient( $cache_key );
-
-        return add_query_arg(
-            array(
-                'site_url'    => rawurlencode( site_url() ),
-                'username'    => rawurlencode( $current_user->user_login ),
-                'email'       => rawurlencode( $current_user->user_email ),
-                'access_code' => rawurlencode( $access_code ? $access_code : '' ),
-            ),
-            'https://optiuser.com/opti-behavior/ob-download-pro/'
-        );
+    public function get_trial_banner_state_public() {
+        return $this->get_trial_banner_state();
     }
 }
 

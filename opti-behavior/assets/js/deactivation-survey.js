@@ -98,10 +98,13 @@
 			type: 'POST',
 			dataType: 'json',
 			data: requestData,
-			timeout: parseInt(surveyConfig.requestTimeout, 10) || 6000
+			// Short wait: the server keeps relaying the answer after we leave (OPT-643).
+			timeout: parseInt(surveyConfig.requestTimeout, 10) || 800
 		})
-		.fail(function() {
-			showError(getI18n('genericError'));
+		.fail(function(jqXHR, textStatus) {
+			if (textStatus !== 'timeout') {
+				showError(getI18n('genericError'));
+			}
 		})
 		.always(function() {
 			continueWithDeactivation();

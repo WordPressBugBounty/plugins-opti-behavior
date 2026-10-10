@@ -388,6 +388,61 @@ body.opti-stats-bar-collapsed {
 	opacity: 1;
 }
 
+/* Errors pill (2026-09-30): always a link to the Errors screen scoped to this
+   page; red outline only when the page has errors in the bar period. */
+.opti-stats-bar__item--errors-link.opti-stats-bar__item--has-errors {
+	border-color: rgba(239, 68, 68, 0.95);
+	background: rgba(239, 68, 68, 0.12);
+	box-shadow:
+		inset 0 0 0 1px rgba(239, 68, 68, 0.32),
+		0 0 0 1px rgba(239, 68, 68, 0.18),
+		0 0 12px rgba(239, 68, 68, 0.18);
+}
+
+.opti-stats-bar__item--errors-link.opti-stats-bar__item--has-errors:hover,
+.opti-stats-bar__item--errors-link.opti-stats-bar__item--has-errors:focus {
+	background: rgba(239, 68, 68, 0.20);
+	border-color: rgba(248, 113, 113, 1);
+	outline: none;
+}
+
+.opti-stats-bar__item--errors-link:focus-visible {
+	outline: 2px solid rgba(248, 113, 113, 1);
+	outline-offset: 2px;
+}
+
+.opti-stats-bar__item--errors-link.opti-stats-bar__item--has-errors svg {
+	color: rgba(248, 113, 113, 1);
+	opacity: 1;
+}
+
+/* Friction pill: same idea, yellow (errors red, recordings orange). */
+.opti-stats-bar__item--friction-link.opti-stats-bar__item--has-friction {
+	border-color: rgba(234, 179, 8, 0.95);
+	background: rgba(234, 179, 8, 0.12);
+	box-shadow:
+		inset 0 0 0 1px rgba(234, 179, 8, 0.32),
+		0 0 0 1px rgba(234, 179, 8, 0.18),
+		0 0 12px rgba(234, 179, 8, 0.18);
+}
+
+.opti-stats-bar__item--friction-link.opti-stats-bar__item--has-friction:hover,
+.opti-stats-bar__item--friction-link.opti-stats-bar__item--has-friction:focus {
+	background: rgba(234, 179, 8, 0.20);
+	border-color: rgba(250, 204, 21, 1);
+	outline: none;
+}
+
+.opti-stats-bar__item--friction-link:focus-visible {
+	outline: 2px solid rgba(250, 204, 21, 1);
+	outline-offset: 2px;
+}
+
+.opti-stats-bar__item--friction-link.opti-stats-bar__item--has-friction svg {
+	color: rgba(250, 204, 21, 1);
+	opacity: 1;
+}
+
 .opti-stats-bar__label {
 	color: var(--osb-muted);
 	font-size: 10px;

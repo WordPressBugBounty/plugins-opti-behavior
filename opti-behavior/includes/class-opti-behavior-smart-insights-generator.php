@@ -33,6 +33,21 @@ class Opti_Behavior_Smart_Insights_Generator {
 	const CRITICAL_MIN_SAMPLE        = 100;
 	const PRIORITY_HIGH_MIN_LOST     = 10;
 
+	// `detection.priority_ceiling` (set by a rule on its own card, OPT-588):
+	// label keys weakest first, and the highest score each ceiling allows.
+	const PRIORITY_KEYS_ORDER     = array( 'low', 'medium', 'high', 'critical' );
+	const PRIORITY_CEILING_SCORES = array(
+		'low'      => 39,
+		'medium'   => 59,
+		'high'     => 79,
+		'critical' => 100,
+	);
+	// `detection.priority_floor`: the lowest score each floor gives.
+	const PRIORITY_FLOOR_SCORES = array(
+		'medium' => 40,
+		'high'   => 60,
+	);
+
 	const DEFAULT_PERIOD = 'last30days';
 	const CRON_HOOK      = 'opti_behavior_smart_insights_generate_daily';
 
@@ -77,6 +92,13 @@ class Opti_Behavior_Smart_Insights_Generator {
 	 * @var int
 	 */
 	private $run_site_sessions = 0;
+
+	/**
+	 * Whether the correlator assigned this run's story roles.
+	 *
+	 * @var bool
+	 */
+	private $run_correlated = false;
 
 	/**
 	 * Group keys of the candidates merged into a data twin by this run.
@@ -385,7 +407,8 @@ class Opti_Behavior_Smart_Insights_Generator {
 			$candidate_insights = $this->apply_noise_suppression_marking( $candidate_insights );
 			$candidate_insights = $this->apply_evidence_refs( $candidate_insights, $date_range, $signal_evaluation_args );
 
-			$story_parent_ids = array();
+			$story_parent_ids    = array();
+			$story_parent_hidden = array();
 
 			foreach ( $candidate_insights as $candidate ) {
 				$insight = $candidate['insight'];
@@ -396,6 +419,23 @@ class Opti_Behavior_Smart_Insights_Generator {
 
 				if ( 'child' === $story_role && '' !== $story_scope_key && ! empty( $story_parent_ids[ $story_scope_key ] ) ) {
 					$insight['parent_insight_id'] = (int) $story_parent_ids[ $story_scope_key ];
+
+					// The list cannot show this story's parent (closed or
+					// suppressed): its children are hidden with it, never shown
+					// alone as duplicate cards (OPT-529).
+					if ( ! empty( $story_parent_hidden[ $story_scope_key ] ) ) {
+						$insight['suppressed_until'] = $story_parent_hidden[ $story_scope_key ];
+						$insight['detection']        = isset( $insight['detection'] ) && is_array( $insight['detection'] ) ? $insight['detection'] : array();
+						$insight['detection']['noise_suppressed']         = true;
+						$insight['detection']['noise_suppression_reason'] = 'story_parent_hidden';
+					}
+				}
+
+				// The correlator decided this run's story roles: a card that is now
+				// primary or alone must drop the parent an earlier run gave it, or
+				// two runs with swapped roles leave A -> B and B -> A (OPT-298).
+				if ( $this->run_correlated ) {
+					$insight['story_parent_resolved'] = true;
 				}
 
 				$insight = $this->apply_spam_scope_to_insight( $insight, $args['exclude_spam'] );
@@ -431,7 +471,8 @@ class Opti_Behavior_Smart_Insights_Generator {
 				}
 
 				if ( 'primary' === $story_role && '' !== $story_scope_key ) {
-					$story_parent_ids[ $story_scope_key ] = (int) $stored_id;
+					$story_parent_ids[ $story_scope_key ]    = (int) $stored_id;
+					$story_parent_hidden[ $story_scope_key ] = $this->get_hidden_story_parent_until( (int) $stored_id );
 				}
 
 				do_action( 'opti_behavior_smart_insight_saved', $insight, (int) $stored_id );
@@ -1826,6 +1867,13 @@ class Opti_Behavior_Smart_Insights_Generator {
 				$visible_per_group[ $group ] = 0;
 			}
 
+			// A story primary is never noise: hiding it left its children shown
+			// alone as duplicate cards (OPT-529, Webinar #1724 / #1725).
+			if ( isset( $candidate_insights[ $index ]['story_role'] ) && 'primary' === $candidate_insights[ $index ]['story_role'] ) {
+				$visible_per_group[ $group ]++;
+				continue;
+			}
+
 			if ( $this->is_low_value_insight( $insight ) && $visible_per_group[ $group ] >= $max_visible_low_value ) {
 				$candidate_insights[ $index ]['insight']['suppressed_until'] = gmdate( 'Y-m-d H:i:s', strtotime( '+7 days' ) );
 				$candidate_insights[ $index ]['insight']['detection'] = isset( $candidate_insights[ $index ]['insight']['detection'] ) && is_array( $candidate_insights[ $index ]['insight']['detection'] )
@@ -1839,6 +1887,44 @@ class Opti_Behavior_Smart_Insights_Generator {
 		}
 
 		return $candidate_insights;
+	}
+
+	/**
+	 * When the insight list cannot show a stored story primary, until when.
+	 *
+	 * The primary keeps the status the owner gave it (ignored, resolved...) and
+	 * may still carry a suppression window. Its children then get the same
+	 * window (7 days for a closed parent, renewed by every run) so the list
+	 * never shows them alone (OPT-529).
+	 *
+	 * @param int $insight_id Stored primary id.
+	 * @return string Suppression end (site time, MySQL format), '' when visible.
+	 */
+	private function get_hidden_story_parent_until( $insight_id ) {
+		global $wpdb;
+
+		if ( $insight_id <= 0 || ! is_object( $this->repository ) || ! method_exists( $this->repository, 'get_table_name' ) ) {
+			return '';
+		}
+
+		$table = $this->repository->get_table_name();
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Plugin table name from the repository.
+		$row = $wpdb->get_row( $wpdb->prepare( "SELECT status, suppressed_until FROM {$table} WHERE id = %d", $insight_id ), ARRAY_A );
+		if ( ! is_array( $row ) ) {
+			return '';
+		}
+
+		$now = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
+		if ( ! empty( $row['suppressed_until'] ) && (string) $row['suppressed_until'] > $now ) {
+			return (string) $row['suppressed_until'];
+		}
+
+		// Active cards of the list (ignored ones leave it with their story).
+		if ( in_array( (string) $row['status'], array( 'new', 'viewed', 'in_progress' ), true ) ) {
+			return '';
+		}
+
+		return gmdate( 'Y-m-d H:i:s', strtotime( '+7 days' ) );
 	}
 
 	/**
@@ -1951,6 +2037,33 @@ class Opti_Behavior_Smart_Insights_Generator {
 	 * @param array $candidate_insights Candidate records.
 	 * @return array
 	 */
+	/**
+	 * The priority ceiling a rule put on its card (`detection.priority_ceiling`
+	 * = low / medium / high), '' when none. Pure.
+	 *
+	 * @param array $insight Candidate insight.
+	 * @return string
+	 */
+	public static function priority_ceiling_of( $insight ) {
+		$ceiling = isset( $insight['detection']['priority_ceiling'] ) && is_string( $insight['detection']['priority_ceiling'] ) ? strtolower( $insight['detection']['priority_ceiling'] ) : '';
+
+		return in_array( $ceiling, array( 'low', 'medium', 'high' ), true ) ? $ceiling : '';
+	}
+
+	/**
+	 * The priority floor a rule put on its card (`detection.priority_floor`
+	 * = medium / high), '' when none. Never Critical: Critical stays earned
+	 * by the rank and its floors. Pure.
+	 *
+	 * @param array $insight Candidate insight.
+	 * @return string
+	 */
+	public static function priority_floor_of( $insight ) {
+		$floor = isset( $insight['detection']['priority_floor'] ) && is_string( $insight['detection']['priority_floor'] ) ? strtolower( $insight['detection']['priority_floor'] ) : '';
+
+		return in_array( $floor, array( 'medium', 'high' ), true ) ? $floor : '';
+	}
+
 	private function rank_candidates_by_blended_priority( $candidate_insights ) {
 		$sortable = array();
 
@@ -1976,8 +2089,16 @@ class Opti_Behavior_Smart_Insights_Generator {
 				? (float) $insight['impact']['revenue']['amount']
 				: 0.0;
 
+			// A rule may cap its own card (OPT-588: a wide entry step such as
+			// home -> any page always loses most visitors; never Critical).
+			$ceiling = self::priority_ceiling_of( $insight );
+			if ( '' !== $ceiling ) {
+				$blended = min( $blended, self::PRIORITY_CEILING_SCORES[ $ceiling ] );
+			}
+
 			$sortable[ $index ] = array(
 				'index'      => (int) $index,
+				'ceiling'    => $ceiling,
 				'raw'        => (int) round( $raw ),
 				'blended'    => (int) min( 100, max( 0, $blended ) ),
 				'users_lost' => isset( $scores['impact']['users_lost'] ) ? (int) $scores['impact']['users_lost'] : 0,
@@ -2081,6 +2202,9 @@ class Opti_Behavior_Smart_Insights_Generator {
 				if ( 'high' === $label_key && $entry['revenue'] <= 0 && $entry['users_lost'] < self::PRIORITY_HIGH_MIN_LOST ) {
 					$label_key = 'medium';
 				}
+				if ( '' !== $entry['ceiling'] && array_search( $label_key, self::PRIORITY_KEYS_ORDER, true ) > array_search( $entry['ceiling'], self::PRIORITY_KEYS_ORDER, true ) ) {
+					$label_key = $entry['ceiling'];
+				}
 				if ( 'critical' === $label_key ) {
 					++$critical_used;
 				}
@@ -2099,6 +2223,15 @@ class Opti_Behavior_Smart_Insights_Generator {
 			$observation_only = ! $entry['has_impact'] || $entry['users_lost'] < 5 || $entry['sample'] < 30;
 			if ( $observation_only && in_array( $label_key, array( 'critical', 'high' ), true ) ) {
 				$label_key = 'medium';
+			}
+			// A rule may raise its own card to a floor when the finding is a
+			// fact, not an estimate (OPT-588: N checkouts and 0 orders), as
+			// long as at least 5 visits are concerned.
+			$floor = self::priority_floor_of( $insight );
+			if ( '' !== $floor && $entry['users_lost'] >= 5 && array_search( $label_key, self::PRIORITY_KEYS_ORDER, true ) < array_search( $floor, self::PRIORITY_KEYS_ORDER, true ) ) {
+				$label_key        = $floor;
+				$observation_only = false;
+				$entry['blended'] = max( $entry['blended'], self::PRIORITY_FLOOR_SCORES[ $floor ] );
 			}
 
 			$insight['scores']['priority_raw']        = $entry['raw'];
@@ -2140,6 +2273,8 @@ class Opti_Behavior_Smart_Insights_Generator {
 	 * @return array
 	 */
 	private function apply_correlation( $candidate_insights, $date_range, $args ) {
+		$this->run_correlated = false;
+
 		if ( empty( $candidate_insights ) || ! is_array( $candidate_insights ) ) {
 			return is_array( $candidate_insights ) ? $candidate_insights : array();
 		}
@@ -2171,6 +2306,8 @@ class Opti_Behavior_Smart_Insights_Generator {
 		if ( ! is_array( $correlated ) || count( $correlated ) !== count( $candidate_insights ) ) {
 			return $candidate_insights;
 		}
+
+		$this->run_correlated = true;
 
 		return $correlated;
 	}
@@ -2222,6 +2359,14 @@ class Opti_Behavior_Smart_Insights_Generator {
 
 		if ( ! is_array( $scored ) || count( $scored ) !== count( $candidate_insights ) ) {
 			return $candidate_insights;
+		}
+
+		// Every card was priced by this run: one without an impact block now
+		// loses nothing, the repository must not keep its old figure (OPT-530).
+		foreach ( $scored as $index => $candidate ) {
+			if ( isset( $candidate['insight'] ) && is_array( $candidate['insight'] ) ) {
+				$scored[ $index ]['insight']['impact_resolved'] = true;
+			}
 		}
 
 		return $scored;

@@ -5469,6 +5469,12 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
         grid-template-columns: 1fr;
     }
 
+    /* Phones: briefing sections stack; the has-N-sections rules would otherwise win. */
+    .ob-smart-insights-briefing-grid.has-2-sections,
+    .ob-smart-insights-briefing-grid.has-3-sections {
+        grid-template-columns: 1fr;
+    }
+
     .ob-smart-insights-center-main,
     .ob-smart-insights-center-evidence,
     .ob-smart-insights-center-side {
@@ -6737,7 +6743,10 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 .ob-smart-insights-evidence-ref-actions {
 	align-items: center;
 	display: inline-flex;
+	flex-wrap: wrap; /* OPT-516 D11: two buttons wrap at 375 px instead of overflowing. */
 	gap: 6px;
+	max-width: 100%;
+	min-width: 0;
 }
 
 .ob-smart-insights-evidence-ref-action.is-disabled {
@@ -8181,11 +8190,22 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	}
 }
 
+/* How it works: this .wrap has no right margin, so the -20px right bleed
+   ran 20px past the screen at every width (horizontal scroll, OPT-335). */
+.opti-behavior-ai-insights-page > .roadmap-dashboard-header {
+	margin-right: 0;
+}
+
 @media (max-width: 782px) {
 	.opti-behavior-dashboard-page .dashboard-header {
 		align-items: stretch;
 		flex-direction: column;
 		padding: 22px 20px;
+	}
+
+	/* How it works: WordPress keeps only a 10px left gutter here (OPT-335). */
+	.opti-behavior-ai-insights-page > .roadmap-dashboard-header {
+		margin-left: -10px;
 	}
 
 	.opti-behavior-dashboard-page .dashboard-title-section {
@@ -9183,4 +9203,517 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	font-weight: 400;
 	letter-spacing: normal;
 	text-transform: none;
+}
+
+/* ==========================================================================
+   Smart Insights card + detail anatomy (OPT-362)
+   Shared by the Smart Insights screen, the dashboard widget and the detail
+   modal (portaled to <body>), so plain values, no page-scoped tokens.
+   ========================================================================== */
+
+.ob-si-card__head {
+	align-items: flex-start;
+	display: flex;
+	gap: 8px;
+	min-width: 0;
+}
+
+.ob-si-card .ob-si-card__title {
+	-webkit-line-clamp: unset;
+	color: #1d2327;
+	display: block;
+	flex: 1 1 auto;
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1.35;
+	margin: 0;
+	min-width: 0;
+	overflow: visible;
+	overflow-wrap: anywhere;
+	text-overflow: clip;
+	white-space: normal;
+}
+
+.ob-si-pill {
+	background: #f0f0f1;
+	border: 1px solid #dcdcde;
+	border-radius: 999px;
+	color: #50575e;
+	flex: 0 0 auto;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1.2;
+	padding: 3px 10px;
+	white-space: nowrap;
+}
+
+.ob-si-pill.is-critical { background: #fcf0f1; border-color: #f0b8bb; color: #b32d2e; }
+.ob-si-pill.is-high { background: #fcf5ec; border-color: #f2cc96; color: #9a5b00; }
+.ob-si-pill.is-medium { background: #fcf9e8; border-color: #e9d887; color: #6f5d00; }
+.ob-si-pill.is-low { background: #f0f6fc; border-color: #b6d2ee; color: #135e96; }
+.ob-si-pill.is-info { background: #eef3f7; border-color: #c3d1dc; color: #3c5368; }
+
+.ob-si-subline {
+	align-items: center;
+	color: #50575e;
+	display: flex;
+	flex-wrap: wrap;
+	font-size: 13px;
+	gap: 4px 6px;
+	line-height: 1.4;
+	min-width: 0;
+}
+
+.ob-si-subline__entity {
+	color: #2271b1;
+	font-weight: 500;
+	overflow-wrap: anywhere;
+	text-decoration: none;
+}
+
+span.ob-si-subline__entity {
+	color: #1d2327;
+}
+
+.ob-si-subline__entity:hover,
+.ob-si-subline__entity:focus {
+	text-decoration: underline;
+}
+
+.ob-si-subline__sep {
+	color: #a7aaad;
+}
+
+/* OPT-374: category + "New" pills under the title. */
+.ob-si-badges {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.ob-si-badge {
+	background: #ffffff;
+	border: 1px solid #cbd5e1;
+	border-radius: 999px;
+	color: #334155;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	line-height: 1.3;
+	padding: 3px 10px;
+	text-transform: uppercase;
+}
+
+.ob-si-badge.is-category {
+	background: #eef2ff;
+	border-color: #c7d2fe;
+	color: #3730a3;
+}
+
+/* Key figures as tiles: the main one tinted by severity, the context neutral. */
+.ob-si-figures {
+	align-items: stretch;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.ob-si-figures__main {
+	background: #eef2ff;
+	border: 1px solid #c7d2fe;
+	border-radius: 12px;
+	display: flex;
+	flex: 1 1 200px;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	padding: 12px 18px;
+}
+
+.ob-si-figures__value {
+	color: #4338ca;
+	font-size: 30px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+	line-height: 1.1;
+}
+
+.is-critical .ob-si-figures__main,
+[data-ob-si-severity="critical"] .ob-si-figures__main { background: #fef2f2; border-color: #fecaca; }
+.is-critical .ob-si-figures__value,
+[data-ob-si-severity="critical"] .ob-si-figures__value { color: #b91c1c; }
+.is-high .ob-si-figures__main,
+[data-ob-si-severity="high"] .ob-si-figures__main { background: #fff7ed; border-color: #fed7aa; }
+.is-high .ob-si-figures__value,
+[data-ob-si-severity="high"] .ob-si-figures__value { color: #c2410c; }
+.is-medium .ob-si-figures__main,
+[data-ob-si-severity="medium"] .ob-si-figures__main { background: #fefce8; border-color: #fde68a; }
+.is-medium .ob-si-figures__value,
+[data-ob-si-severity="medium"] .ob-si-figures__value { color: #a16207; }
+.is-info .ob-si-figures__main,
+[data-ob-si-severity="info"] .ob-si-figures__main,
+.ob-si-figures__main.is-observation { background: #f8fafc; border-color: #e2e8f0; }
+.is-info .ob-si-figures__value,
+[data-ob-si-severity="info"] .ob-si-figures__value { color: #334155; }
+
+.ob-si-figures__value-text {
+	color: #1d2327;
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1.35;
+}
+
+.ob-si-figures__tag {
+	color: #50575e;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.ob-si-figures__label,
+.ob-si-figures__context,
+.ob-si-figures__completion {
+	color: #50575e;
+	font-size: 13px;
+	line-height: 1.4;
+}
+
+.ob-si-figures__context {
+	align-items: center;
+	background: #f8fafc;
+	border: 1px solid #e2e8f0;
+	border-radius: 12px;
+	color: #1d2327;
+	display: flex;
+	flex: 1 1 200px;
+	font-weight: 600;
+	padding: 12px 18px;
+}
+
+.ob-si-figures__completion {
+	margin: 8px 0 0;
+}
+
+/* G1 — funnel step bars. */
+.ob-si-g1 {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ob-si-g1 li {
+	margin: 0;
+}
+
+.ob-si-g1__step {
+	align-items: center;
+	display: grid;
+	gap: 8px;
+	grid-template-columns: minmax(70px, 30%) minmax(0, 1fr) auto;
+}
+
+.ob-si-g1__label {
+	color: #1d2327;
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+.ob-si-g1__track {
+	background: #e9edf3;
+	border-radius: 999px;
+	display: block;
+	height: 8px;
+	overflow: hidden;
+}
+
+.ob-si-g1.is-full .ob-si-g1__track {
+	border-radius: 6px;
+	height: 18px;
+}
+
+.ob-si-g1__bar {
+	background: #94a3b8;
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+}
+
+.ob-si-g1__step.is-leak .ob-si-g1__bar {
+	background: linear-gradient(90deg, #6366f1, #4f46e5);
+}
+
+.ob-si-card__chart {
+	background: #f8fafc;
+	border: 1px solid #eef2f7;
+	border-radius: 12px;
+	padding: 12px 14px;
+}
+
+.ob-si-g1__count {
+	color: #1d2327;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+}
+
+.ob-si-g1__gap {
+	color: #8c8f94;
+	font-size: 11px;
+	line-height: 1.2;
+	padding-left: calc(30% + 8px);
+}
+
+.ob-si-g1__gap.is-worst {
+	color: #b91c1c;
+	font-weight: 700;
+}
+
+.ob-si-g1__gap.is-worst span {
+	background: #fef2f2;
+	border: 1px solid #fecaca;
+	border-radius: 999px;
+	display: inline-block;
+	margin: 2px 0;
+	padding: 0 8px;
+}
+
+/* Card mini chart: ~56 px — 11 px labels, only the red gap is labelled. */
+.ob-si-g1.is-compact .ob-si-g1__label,
+.ob-si-g1.is-compact .ob-si-g1__count,
+.ob-si-g1.is-compact .ob-si-g1__gap {
+	font-size: 11px;
+	line-height: 12px;
+}
+
+.ob-si-g1.is-compact .ob-si-g1__gap:not(.is-worst):not(.is-skipped) {
+	display: none;
+}
+
+.ob-si-cause {
+	border-left: 3px solid #cbd5e1;
+	color: #475569;
+	font-size: 13px;
+	line-height: 1.45;
+	margin: 0;
+	padding: 2px 0 2px 10px;
+}
+
+/* OPT-374: the action as a green "Next action" block, button at its foot. */
+.ob-si-action {
+	background: #f0fdf4;
+	border: 1px solid #bbf7d0;
+	border-radius: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 14px 16px;
+}
+
+.ob-si-action__eyebrow {
+	color: #047857;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	line-height: 1.3;
+	text-transform: uppercase;
+}
+
+.ob-si-action__text {
+	color: #0f172a;
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 1.45;
+	margin: 0 0 4px;
+	overflow-wrap: anywhere;
+}
+
+.ob-si-action .ob-smart-insights-report-cta {
+	align-items: center;
+	display: inline-flex;
+	gap: 6px;
+	justify-content: center;
+	line-height: 1.3;
+	min-height: 36px;
+	padding: 6px 14px;
+	text-align: center;
+	white-space: normal;
+}
+
+.ob-si-action .ob-smart-insights-report-cta:focus-visible {
+	box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #4f46e5;
+	outline: none;
+}
+
+.ob-si-action .ob-smart-insights-next-report {
+	color: #475569;
+}
+
+/* OPT-374: "Priority 79" + bar in the card footer. */
+.ob-si-card__meta {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 18px;
+}
+
+.ob-si-priority {
+	align-items: center;
+	color: #475569;
+	display: inline-flex;
+	font-size: 12px;
+	gap: 8px;
+}
+
+.ob-si-priority strong {
+	color: #0f172a;
+	font-variant-numeric: tabular-nums;
+}
+
+.ob-si-priority__track {
+	background: #e2e8f0;
+	border-radius: 999px;
+	display: block;
+	height: 6px;
+	overflow: hidden;
+	width: 64px;
+}
+
+.ob-si-priority__bar {
+	background: #4f46e5;
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+}
+
+.ob-si-priority.is-critical .ob-si-priority__bar { background: #dc2626; }
+.ob-si-priority.is-high .ob-si-priority__bar { background: #ea580c; }
+.ob-si-priority.is-medium .ob-si-priority__bar { background: #d97706; }
+
+.ob-si-action .ob-smart-insights-report-cta svg {
+	height: 14px;
+	width: 14px;
+}
+
+.ob-si-card__foot {
+	align-items: center;
+	border-top: 1px solid #f0f0f1;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+	justify-content: space-between;
+	padding-top: 12px;
+}
+
+.ob-si-based-on {
+	color: #50575e;
+	font-size: 12px;
+}
+
+.ob-si-card__foot .ob-smart-insights-card-actions {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 0 0 0 auto;
+}
+
+/* Widget card (dashboard). */
+.ob-smart-insights-card.ob-si-card {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+/* Detail modal. */
+.ob-si-detail .ob-smart-insights-detail-header h2 {
+	-webkit-line-clamp: unset;
+	display: block;
+	overflow: visible;
+	overflow-wrap: anywhere;
+}
+
+.ob-si-detail .ob-smart-insights-detail-header-actions {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+}
+
+.ob-si-detail .ob-si-detail-chart {
+	margin-top: 12px;
+}
+
+.ob-si-detail .ob-si-steps__links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 10px 0 0;
+}
+
+.ob-si-next-steps {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin: 0;
+	padding-left: 20px;
+}
+
+.ob-si-next-steps li {
+	color: #1d2327;
+	font-size: 13px;
+	line-height: 1.45;
+	margin: 0;
+}
+
+.ob-si-next-steps li.is-main strong {
+	display: block;
+	margin-bottom: 8px;
+}
+
+.ob-si-next-steps li.is-ab-advice {
+	color: #50575e;
+	list-style: none;
+	margin-left: -20px;
+}
+
+.ob-si-next-source {
+	border-left: 3px solid #dba617;
+	color: #1d2327;
+	font-size: 13px;
+	line-height: 1.45;
+	margin: 0 0 10px;
+	padding-left: 8px;
+}
+
+.ob-si-evidence-refs:empty {
+	display: none;
+}
+
+@media (max-width: 782px) {
+	.ob-si-figures {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	/* Stacked tiles: no 200px basis (it would become a 200px height). */
+	.ob-si-figures__main,
+	.ob-si-figures__context {
+		flex: 0 0 auto;
+	}
+
+	.ob-si-g1__step {
+		grid-template-columns: minmax(60px, 35%) minmax(0, 1fr) auto;
+	}
+
+	.ob-si-g1__gap {
+		padding-left: calc(35% + 8px);
+	}
+
+	.ob-si-card__foot .ob-smart-insights-card-actions {
+		margin-left: 0;
+	}
 }

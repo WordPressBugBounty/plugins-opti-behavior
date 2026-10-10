@@ -345,6 +345,7 @@ class Opti_Behavior_AB_Test_Page {
 			'validate_select_target'  => __( 'Please select WordPress content or enter a same-site URL.', 'opti-behavior' ),
 			'validate_min_variants'   => __( 'You need at least 2 variants.', 'opti-behavior' ),
 			'validate_min_goals'      => __( 'You need at least 1 goal.', 'opti-behavior' ),
+			'validate_goal_selector'  => __( 'This is not a CSS selector, so clicks would never be counted (XPath is not supported). Example: #menu a, .buy-button', 'opti-behavior' ),
 			/* translators: %s: current total of variant traffic weights as a percentage. */
 			'validate_weights_total'  => __( 'Variant traffic weights must total 100%. Current total: %s%.', 'opti-behavior' ),
 			'launch_test'             => __( 'Launch Test', 'opti-behavior' ),
@@ -924,7 +925,7 @@ class Opti_Behavior_AB_Test_Page {
 					intval( $free_limits['max_goals_per_test'] )
 				);
 				?>
-				<a href="https://opti-behavior.com/pro" target="_blank" rel="noopener"><?php esc_html_e( 'Upgrade to Pro for unlimited tests →', 'opti-behavior' ); ?></a>
+				<a href="<?php echo esc_url( class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::link_url( 'ab-tests-limits' ) : '' ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Upgrade to Pro for unlimited tests →', 'opti-behavior' ); ?></a>
 			</p>
 		</div>
 		<?php endif; ?>

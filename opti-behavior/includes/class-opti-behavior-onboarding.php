@@ -127,8 +127,8 @@ class Opti_Behavior_Onboarding {
 			return true;
 		}
 
-		// Must have consent.
-		if ( ! class_exists( 'Opti_Behavior_Welcome' ) || ! Opti_Behavior_Welcome::has_consent() ) {
+		// Must have answered the welcome screen (accepted or declined sharing).
+		if ( ! class_exists( 'Opti_Behavior_Welcome' ) || ! Opti_Behavior_Welcome::has_made_choice() ) {
 			return false;
 		}
 

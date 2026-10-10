@@ -1612,6 +1612,13 @@
 					alert(_s.stepNamesRequired || 'Please fill in all step names');
 					return false;
 				}
+				// A URL match with a blank URL would match no page (QA-B-FUNNEL-064/073).
+				if (!urlPattern && matchType !== 'any' && matchType !== 'pageview') {
+					valid = false;
+					alert(_s.stepUrlRequired || 'Please enter a URL for each step (or choose "Any page").');
+					$(this).find('.step-url-pattern').trigger('focus');
+					return false;
+				}
 				steps.push({ name: stepName, match_type: matchType, url_pattern: urlPattern || '*' });
 			});
 			if (!valid) return;
@@ -2495,11 +2502,21 @@
 
 		$('.funnel-steps-container[data-funnel-id="' + funnelId + '"]').html('<div class="funnel-loading"><span class="loading-spinner"></span><span>' + (_s.loading || 'Loading...') + '</span></div>');
 
+		// Only the LATEST request may paint: a slow answer for a period the user
+		// already left must not overwrite the newer one (QA-B-FUNNEL-077).
+		const seqMap = loadFunnelDetail.requestSeq || (loadFunnelDetail.requestSeq = {});
+		const requestSeq = (seqMap[funnelId] || 0) + 1;
+		seqMap[funnelId] = requestSeq;
+		const isStale = function() { return seqMap[funnelId] !== requestSeq; };
+
 		$.ajax({
 			url: optiBehaviorFunnels.ajaxUrl,
 			type: 'POST',
 			data: ajaxData,
 			success: function(response) {
+				if (isStale()) {
+					return;
+				}
 				if (response.success && response.data) {
 					updateFunnelDetailKpis(response.data);
 					renderFunnelAnalytics(funnelId, response.data);
@@ -2508,6 +2525,9 @@
 				}
 			},
 			error: function() {
+				if (isStale()) {
+					return;
+				}
 				showFunnelError(funnelId);
 			}
 		});

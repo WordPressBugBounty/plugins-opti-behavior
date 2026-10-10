@@ -242,7 +242,7 @@ trait Opti_Behavior_AI_Insights_Views_Trait {
 	 */
 	private function render_ai_insights_content() {
 		$support_url = 'https://optiuser.com/contact-support/';
-		$pro_url     = 'https://optiuser.com/pro';
+		$pro_url     = 'https://optiuser.com/opti-behavior/pricing/';
 		$data        = $this->get_how_it_works_data();
 		$sensors     = $data['sensors'];
 		$states      = array(
@@ -404,8 +404,17 @@ trait Opti_Behavior_AI_Insights_Views_Trait {
 						<svg class="ob-hiw-wires" viewBox="0 0 720 600" aria-hidden="true" focusable="false">
 							<ellipse class="ob-hiw-orbit" cx="360" cy="235" rx="300" ry="195"/>
 							<?php foreach ( $layout as $id => $pos ) : ?>
-								<?php $off = ! isset( $sensors[ $id ] ) || in_array( $sensors[ $id ]['state'], array( $states['locked'], $states['no_data'] ), true ); ?>
-								<path class="ob-hiw-wire<?php echo $off ? ' is-off' : ''; ?>" id="ob-hiw-w-<?php echo esc_attr( $id ); ?>" data-spark d="<?php echo esc_attr( $pos[2] ); ?>"/>
+								<?php
+								// Wire look: locked (or unknown) = grey and still; on but no data for
+								// the period = dashes flowing to the hub; data = solid line + spark.
+								$wire = '';
+								if ( ! isset( $sensors[ $id ] ) || $states['locked'] === $sensors[ $id ]['state'] ) {
+									$wire = ' is-off';
+								} elseif ( $states['no_data'] === $sensors[ $id ]['state'] ) {
+									$wire = ' is-listening';
+								}
+								?>
+								<path class="ob-hiw-wire<?php echo esc_attr( $wire ); ?>" id="ob-hiw-w-<?php echo esc_attr( $id ); ?>" data-spark style="--c:var(--c-<?php echo esc_attr( $id ); ?>)" d="<?php echo esc_attr( $pos[2] ); ?>"/>
 								<circle class="ob-hiw-spark" data-for="ob-hiw-w-<?php echo esc_attr( $id ); ?>" r="3.2" cx="0" cy="0"/>
 							<?php endforeach; ?>
 							<path class="ob-hiw-wire" d="M360 445 L 360 372"/>

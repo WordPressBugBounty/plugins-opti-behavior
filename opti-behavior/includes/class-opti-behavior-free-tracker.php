@@ -48,11 +48,65 @@ class Opti_Behavior_Free_Tracker {
 	const OPTION_TRACKED = 'opti_behavior_tracked';
 
 	/**
+	 * Option caching the final has_data_7d answer ('1' or '0').
+	 *
+	 * @var string
+	 */
+	const OPTION_HAS_DATA_7D = 'opti_behavior_has_data_7d';
+
+	/**
 	 * Heartbeat interval in seconds (24 hours).
 	 *
 	 * @var int
 	 */
 	const HEARTBEAT_INTERVAL = 86400; // 24 hours
+
+	/**
+	 * Cron hook of the status message (daily event + one-off catch-up runs).
+	 *
+	 * @var string
+	 */
+	const HEARTBEAT_HOOK = 'opti_behavior_daily_heartbeat';
+
+	/**
+	 * Transient holding the timestamp before which no new attempt is made after
+	 * a failed send (API unreachable, 5xx...). Covered by the uninstall
+	 * `_transient_opti_behavior_%` sweep.
+	 *
+	 * @var string
+	 */
+	const RETRY_AFTER_TRANSIENT = 'opti_behavior_tracker_retry_after';
+
+	/**
+	 * Pause after a failed send, in seconds (12 hours).
+	 *
+	 * @var int
+	 */
+	const RETRY_PAUSE = 43200;
+
+	/**
+	 * HTTP timeout of every call to the API, in seconds.
+	 *
+	 * @var int
+	 */
+	const HTTP_TIMEOUT = 3;
+
+	/**
+	 * HTTP timeout of track-deactivate, in seconds. The call runs inside the
+	 * Deactivate click, so an unreachable API must not hold the Plugins page
+	 * (OPT-643: click -> deactivated < 4 s with the survey).
+	 *
+	 * @var int
+	 */
+	const DEACTIVATE_TIMEOUT = 2;
+
+	/**
+	 * Outcome of the last send_heartbeat() call: 'ok', 'rate_limited',
+	 * 'transport' (WP_Error), 'http' (other status) or 'skipped'.
+	 *
+	 * @var string
+	 */
+	private $last_result = '';
 
 	/**
 	 * Singleton instance.
@@ -83,8 +137,8 @@ class Opti_Behavior_Free_Tracker {
 		// Initialize tracking on admin_init (only for logged-in admins)
 		add_action( 'admin_init', array( $this, 'maybe_track' ) );
 
-		// Schedule daily heartbeat cron
-		add_action( 'opti_behavior_daily_heartbeat', array( $this, 'send_heartbeat' ) );
+		// Daily heartbeat cron (also runs the one-off catch-up queued by maybe_track()).
+		add_action( self::HEARTBEAT_HOOK, array( $this, 'run_scheduled_heartbeat' ) );
 
 		// Register activation hook for scheduling
 		register_activation_hook( OPTI_BEHAVIOR_HEATMAP, array( $this, 'schedule_heartbeat' ) );
@@ -103,6 +157,25 @@ class Opti_Behavior_Free_Tracker {
 	}
 
 	/**
+	 * True when an active, registered Opti-Behavior Pro sends its own daily signed
+	 * site status (OPT-690/693): Free then sends no track-install and hides its
+	 * "Share installation status" card. Old Pro, unregistered Pro or no Pro = false.
+	 * The stored Yes / No choice is never touched here.
+	 *
+	 * @return bool
+	 */
+	public static function pro_handles_status() {
+		if ( ! function_exists( 'opti_behavior_pro_sends_site_status' ) ) {
+			return false;
+		}
+		try {
+			return true === (bool) opti_behavior_pro_sends_site_status();
+		} catch ( \Throwable $e ) {
+			return false;
+		}
+	}
+
+	/**
 	 * Schedule the daily heartbeat cron job and send an immediate heartbeat.
 	 *
 	 * Called on plugin activation. Sends a heartbeat right away so the API
@@ -111,26 +184,86 @@ class Opti_Behavior_Free_Tracker {
 	 * @return void
 	 */
 	public function schedule_heartbeat() {
-		if ( ! wp_next_scheduled( 'opti_behavior_daily_heartbeat' ) ) {
-			wp_schedule_event( time() + self::HEARTBEAT_INTERVAL, 'daily', 'opti_behavior_daily_heartbeat' );
+		// Pro sends the site status itself: nothing from Free.
+		if ( self::pro_handles_status() ) {
+			$this->last_result = 'skipped';
+			return;
 		}
 
+		// No consent (never answered, or "Continue without sharing"): no cron, nothing sent.
+		if ( ! get_option( 'opti_behavior_consent_accepted' ) && ! $this->is_local_debug() ) {
+			return;
+		}
+
+		$this->ensure_daily_event();
+
 		// Send immediate heartbeat on activation to re-activate status in the API
-		$this->send_heartbeat();
+		// (short timeout, skipped while a failed send is still paused).
+		$this->run_scheduled_heartbeat();
+	}
+
+	/**
+	 * Schedule the daily cron event when nothing is queued on the hook.
+	 *
+	 * @return void
+	 */
+	private function ensure_daily_event() {
+		if ( ! wp_next_scheduled( self::HEARTBEAT_HOOK ) ) {
+			wp_schedule_event( time() + self::HEARTBEAT_INTERVAL, 'daily', self::HEARTBEAT_HOOK );
+		}
+	}
+
+	/**
+	 * Cron callback: send the status message unless a failed send is still paused.
+	 *
+	 * A transport failure (API unreachable, timeout) or any answer other than
+	 * 200 / 429 pauses every new attempt for RETRY_PAUSE; a 200 clears the pause.
+	 *
+	 * @return bool True if the API accepted the heartbeat.
+	 */
+	public function run_scheduled_heartbeat() {
+		// Pro sends the site status itself: the cron stays, the run sends nothing.
+		if ( self::pro_handles_status() || self::is_retry_paused() ) {
+			$this->last_result = 'skipped';
+			return false;
+		}
+
+		$sent = $this->send_heartbeat();
+		if ( 'transport' === $this->last_result || 'http' === $this->last_result ) {
+			set_transient( self::RETRY_AFTER_TRANSIENT, time() + self::RETRY_PAUSE, self::RETRY_PAUSE );
+		}
+		return $sent;
+	}
+
+	/**
+	 * Whether a failed send is still inside its retry pause.
+	 *
+	 * @return bool
+	 */
+	public static function is_retry_paused() {
+		$until = (int) get_transient( self::RETRY_AFTER_TRANSIENT );
+		return $until > time();
 	}
 
 	/**
 	 * Maybe track the installation.
 	 *
-	 * Checks if tracking is needed based on:
-	 * 1. First time install (never tracked before)
-	 * 2. Heartbeat interval elapsed (24 hours since last heartbeat)
+	 * Never talks to the API itself (admin_init must not wait on a remote
+	 * server): when a heartbeat is due (first time, or 24 hours since the last
+	 * one) it queues a one-off run of the cron hook, which sends it in the
+	 * background.
 	 *
 	 * @return void
 	 */
 	public function maybe_track() {
 		// Only track for admins
 		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		// Pro sends the site status itself. Nothing queued; once Pro is gone the next
+		// admin_init resumes here (only with a stored Yes, checked just below).
+		if ( self::pro_handles_status() ) {
 			return;
 		}
 
@@ -145,17 +278,17 @@ class Opti_Behavior_Free_Tracker {
 		$last_heartbeat = get_option( self::OPTION_LAST_HEARTBEAT, 0 );
 		$time_since_last = time() - (int) $last_heartbeat;
 
-		// Send heartbeat if:
-		// 1. Never tracked before (last_heartbeat = 0)
-		// 2. Heartbeat interval has elapsed
-		if ( 0 === $last_heartbeat || $time_since_last >= self::HEARTBEAT_INTERVAL ) {
-			$this->send_heartbeat();
-		}
+		// Ensure the daily cron is scheduled (no send here).
+		$this->ensure_daily_event();
 
-		// Ensure cron is scheduled — guard with wp_next_scheduled() to avoid
-		// an unnecessary DB query on every admin page load.
-		if ( ! wp_next_scheduled( 'opti_behavior_daily_heartbeat' ) ) {
-			$this->schedule_heartbeat();
+		// Heartbeat due when never tracked before (last_heartbeat = 0) or the
+		// interval has elapsed, and no failed send is paused: queue a one-off
+		// run now unless the hook already runs within the next minute.
+		if ( ( 0 === $last_heartbeat || $time_since_last >= self::HEARTBEAT_INTERVAL ) && ! self::is_retry_paused() ) {
+			$next = wp_next_scheduled( self::HEARTBEAT_HOOK );
+			if ( false === $next || $next > time() + MINUTE_IN_SECONDS ) {
+				wp_schedule_single_event( time(), self::HEARTBEAT_HOOK );
+			}
 		}
 	}
 
@@ -169,10 +302,17 @@ class Opti_Behavior_Free_Tracker {
 	 * @return bool True if successful, false otherwise.
 	 */
 	public function send_heartbeat() {
+		// Pro sends the site status itself (also covers Pro's own deactivation call).
+		if ( self::pro_handles_status() ) {
+			$this->last_result = 'skipped';
+			return false;
+		}
+
 		// Respect admin consent — do not transmit any data until accepted.
 		// Local-debug bypass: when running against the local API with WP_DEBUG on,
 		// allow the heartbeat to fire without requiring the welcome-screen consent.
 		if ( ! get_option( 'opti_behavior_consent_accepted' ) && ! $this->is_local_debug() ) {
+			$this->last_result = 'skipped';
 			return false;
 		}
 
@@ -226,6 +366,15 @@ class Opti_Behavior_Free_Tracker {
 			'admin_email'         => $admin_email,
 		);
 
+		// has_data_7d is part of data-sharing text v2 only: sites that accepted the
+		// previous text keep the old payload until they accept the new one.
+		if ( class_exists( 'Opti_Behavior_Welcome' ) && Opti_Behavior_Welcome::get_consent_version() >= 2 ) {
+			$has_data_7d = self::get_has_data_7d();
+			if ( null !== $has_data_7d ) {
+				$data['has_data_7d'] = $has_data_7d;
+			}
+		}
+
 		// Send tracking request
 		$response = wp_remote_post(
 			$api_url . 'track-install',
@@ -234,7 +383,7 @@ class Opti_Behavior_Free_Tracker {
 				'headers'     => array(
 					'Content-Type' => 'application/json',
 				),
-				'timeout'     => 15,
+				'timeout'     => self::HTTP_TIMEOUT,
 				'sslverify'   => $sslverify,
 				'blocking'    => true,
 			)
@@ -242,6 +391,7 @@ class Opti_Behavior_Free_Tracker {
 
 		// Check for errors
 		if ( is_wp_error( $response ) ) {
+			$this->last_result = 'transport';
 			// Log error but don't expose it to user
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Debug logging only when WP_DEBUG is on.
@@ -258,6 +408,10 @@ class Opti_Behavior_Free_Tracker {
 			// Update last heartbeat time
 			update_option( self::OPTION_LAST_HEARTBEAT, time() );
 			update_option( self::OPTION_TRACKED, true );
+			if ( false !== get_transient( self::RETRY_AFTER_TRANSIENT ) ) {
+				delete_transient( self::RETRY_AFTER_TRANSIENT );
+			}
+			$this->last_result = 'ok';
 			return true;
 		}
 
@@ -265,8 +419,11 @@ class Opti_Behavior_Free_Tracker {
 		if ( 429 === $response_code ) {
 			// Rate limited - try again next interval
 			update_option( self::OPTION_LAST_HEARTBEAT, time() );
+			$this->last_result = 'rate_limited';
 			return false;
 		}
+
+		$this->last_result = 'http';
 
 		// Log other errors
 		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
@@ -308,7 +465,7 @@ class Opti_Behavior_Free_Tracker {
 				'headers'   => array(
 					'Content-Type' => 'application/json',
 				),
-				'timeout'   => 10,
+				'timeout'   => self::DEACTIVATE_TIMEOUT,
 				'sslverify' => $sslverify,
 				'blocking'  => true,
 			)
@@ -318,7 +475,7 @@ class Opti_Behavior_Free_Tracker {
 		delete_option( self::OPTION_LAST_HEARTBEAT );
 
 		// Clear the scheduled cron (will be re-scheduled on activation)
-		wp_clear_scheduled_hook( 'opti_behavior_daily_heartbeat' );
+		wp_clear_scheduled_hook( self::HEARTBEAT_HOOK );
 
 		if ( is_wp_error( $response ) ) {
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
@@ -409,6 +566,47 @@ class Opti_Behavior_Free_Tracker {
 	}
 
 	/**
+	 * Whether this site recorded at least one page view in its first 7 days.
+	 *
+	 * 1 = a pageview with view_time <= install time + 7 days (sticky: once 1, stays 1);
+	 * 0 = none and the 7 days are over (final too); null = no install time, or still
+	 * inside the 7 days without data (the field is then not sent).
+	 *
+	 * @return int|null
+	 */
+	public static function get_has_data_7d() {
+		$stored = get_option( self::OPTION_HAS_DATA_7D, '' );
+		if ( '1' === $stored || '0' === $stored ) {
+			return (int) $stored;
+		}
+
+		$installed_at = (int) get_option( 'opti_behavior_review_installed_at', 0 );
+		if ( $installed_at <= 0 ) {
+			return null;
+		}
+
+		global $wpdb;
+		$window_end = $installed_at + 7 * DAY_IN_SECONDS;
+		// view_time is stored in site time (current_time( 'mysql' )).
+		$cutoff = wp_date( 'Y-m-d H:i:s', $window_end );
+		$table  = $wpdb->prefix . 'optibehavior_pageviews';
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- one indexed row probe, once a day; table name from $wpdb->prefix.
+		$found = $wpdb->get_var( $wpdb->prepare( "SELECT 1 FROM {$table} WHERE view_time <= %s LIMIT 1", $cutoff ) );
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		if ( $found ) {
+			update_option( self::OPTION_HAS_DATA_7D, '1', false );
+			return 1;
+		}
+		if ( time() >= $window_end && empty( $wpdb->last_error ) ) {
+			update_option( self::OPTION_HAS_DATA_7D, '0', false );
+			return 0;
+		}
+		return null;
+	}
+
+	/**
 	 * Clear tracking data on uninstall.
 	 *
 	 * @return void
@@ -416,6 +614,8 @@ class Opti_Behavior_Free_Tracker {
 	public static function uninstall() {
 		delete_option( self::OPTION_LAST_HEARTBEAT );
 		delete_option( self::OPTION_TRACKED );
-		wp_clear_scheduled_hook( 'opti_behavior_daily_heartbeat' );
+		delete_option( self::OPTION_HAS_DATA_7D );
+		delete_transient( self::RETRY_AFTER_TRANSIENT );
+		wp_clear_scheduled_hook( self::HEARTBEAT_HOOK );
 	}
 }

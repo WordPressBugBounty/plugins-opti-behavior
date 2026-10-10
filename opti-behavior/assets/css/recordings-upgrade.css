@@ -400,3 +400,63 @@
     }
 }
 
+
+/* OPT-551: what the trial / download button sends + no automatic billing. */
+.ob-trial-info {
+    margin: 10px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #646970;
+}
+
+.ob-trial-info a {
+    color: inherit;
+    text-decoration: underline;
+}
+
+/* OPT-552: locked pages — the two lines sit right under the Download button,
+   same small secondary style as on the banner, centred and not wider than the
+   button text block. */
+.upgrade-card .ob-trial-info {
+    max-width: 560px;
+    margin: 14px auto 0;
+    color: #50575e;
+    text-align: center;
+}
+
+.upgrade-card .ob-trial-info a {
+    color: #2271b1;
+    text-underline-offset: 2px;
+}
+
+.upgrade-card .ob-trial-info a:hover {
+    color: #135e96;
+}
+
+.upgrade-card .ob-trial-info a:focus-visible {
+    outline: 2px solid #2271b1;
+    outline-offset: 2px;
+    border-radius: 2px;
+    box-shadow: none;
+}
+
+.upgrade-card .ob-trial-info + .help-text {
+    margin-top: 12px;
+}
+
+@media (max-width: 600px) {
+    .upgrade-card .ob-trial-info {
+        margin-top: 12px;
+    }
+
+    /* The Download button text ran past its box at 375 px (WordPress core
+       sets line-height 46px on .button-hero below 782 px). */
+    .upgrade-card .button.button-hero {
+        max-width: 100%;
+        box-sizing: border-box;
+        padding: 12px 20px;
+        line-height: 1.4;
+        white-space: normal;
+        text-align: center;
+    }
+}

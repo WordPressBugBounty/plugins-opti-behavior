@@ -180,15 +180,20 @@
    3. Weekly CRO Summary card
    ========================================================================== */
 
-/* Composition: analyst briefing (left) + compact KPI tiles (right) on row 1,
-   recommended action + trend watch as equal-height panels on row 2, and the
-   scope note as a full-width footnote. DOM order is untouched. */
+/* Composition (OPT-374, no empty boxes): the four KPI tiles as one compact
+   strip, the analyst briefing across the full width (titles never cut), then
+   the recommended action beside the trend watch, each panel as tall as its
+   content; scope note last. DOM order is untouched. */
 .ob-smart-insights-center-page .ob-smart-insights-summary-report.is-briefing {
-	align-items: stretch;
+	align-items: start;
 	display: grid;
 	gap: var(--ob-si-space-3);
-	grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-	grid-template-rows: auto auto auto;
+	grid-template-areas:
+		"metrics metrics"
+		"lead lead"
+		"action watch"
+		"scope scope";
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 /* --- Shared panel shell ------------------------------------------------- */
@@ -211,8 +216,7 @@
 
 .ob-smart-insights-center-page .ob-smart-insights-briefing-lead {
 	background: linear-gradient(180deg, var(--ob-si-surface-muted) 0%, var(--ob-si-surface) 46%);
-	grid-column: 1;
-	grid-row: 1;
+	grid-area: lead;
 }
 
 .ob-smart-insights-center-page .ob-smart-insights-briefing-lead > strong {
@@ -264,10 +268,11 @@
 	letter-spacing: normal;
 	line-height: 1.35;
 	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
+	overflow: visible;
+	overflow-wrap: anywhere;
+	text-overflow: clip;
 	text-transform: none;
-	white-space: nowrap;
+	white-space: normal;
 }
 
 .ob-smart-insights-center-page .ob-smart-insights-briefing-lead .ob-smart-insights-brief-amount {
@@ -319,21 +324,39 @@
 	margin-left: 0;
 }
 
+/* HX (OPT-374): visitors-at-risk bar between the title and the numbers. */
+.ob-smart-insights-center-page .ob-smart-insights-brief-list li.has-meter .ob-smart-insights-brief-title {
+	flex: 0 1 40%;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-meter {
+	background: #e9edf3;
+	border-radius: 999px;
+	display: block;
+	flex: 1 1 auto;
+	height: 8px;
+	min-width: 60px;
+	overflow: hidden;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-meter > span {
+	background: linear-gradient(90deg, #6366f1, #4f46e5);
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+}
+
 /* --- KPI stat tiles (row 1, right) --------------------------------------- */
 
-/* 2x2 of short, equal-height tiles. The old single tall row left ~80% of each
-   box empty because it stretched to the height of the briefing column. */
+/* One strip of four short tiles across the full width (OPT-374): no tile is
+   stretched to the height of the briefing any more. */
 .ob-smart-insights-center-page .ob-smart-insights-summary-metrics {
-	align-content: stretch;
 	align-self: stretch;
 	display: grid;
 	gap: var(--ob-si-space-3);
-	grid-column: 2;
-	grid-row: 1;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	grid-template-rows: repeat(2, minmax(74px, 1fr));
+	grid-area: metrics;
+	grid-template-columns: repeat(3, minmax(0, 0.7fr)) minmax(0, 1.6fr);
 	margin: 0;
-	max-height: 210px;
 }
 
 .ob-smart-insights-center-page .ob-smart-insights-summary-metrics span {
@@ -344,17 +367,17 @@
 	box-sizing: border-box;
 	display: flex;
 	flex-direction: column;
-	gap: var(--ob-si-space-2);
-	justify-content: space-between;
+	gap: var(--ob-si-space-1);
+	justify-content: center;
 	min-width: 0;
 	padding: var(--ob-si-space-3) var(--ob-si-space-4);
 }
 
+/* Labels wrap on narrow tiles ("High priority" on two lines), never cut. */
 .ob-smart-insights-center-page .ob-smart-insights-summary-metrics small {
 	display: block;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	overflow-wrap: anywhere;
+	white-space: normal;
 }
 
 .ob-smart-insights-center-page .ob-smart-insights-summary-metrics strong {
@@ -366,13 +389,25 @@
 	line-height: 1.05;
 }
 
+/* The mover is a sentence: the wide tile shows it whole (wraps, never cut). */
 .ob-smart-insights-center-page .ob-smart-insights-summary-metrics .is-mover strong {
 	font-size: var(--ob-si-fs-body);
 	font-weight: 600;
-	line-height: 1.3;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	line-height: 1.35;
+	overflow: visible;
+	overflow-wrap: anywhere;
+	text-overflow: clip;
+	white-space: normal;
+}
+
+/* Trend-watch page names wrap instead of being cut. */
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section .ob-smart-insights-summary-item-main strong {
+	-webkit-line-clamp: unset;
+	display: block;
+	overflow: visible;
+	overflow-wrap: anywhere;
+	text-overflow: clip;
+	white-space: normal;
 }
 
 /* --- Recommended action (row 2, left) ------------------------------------ */
@@ -380,8 +415,7 @@
 .ob-smart-insights-center-page .ob-smart-insights-summary-next-action {
 	background: var(--ob-si-success-surface);
 	border-color: var(--ob-si-success-border);
-	grid-column: 1;
-	grid-row: 2;
+	grid-area: action;
 }
 
 .ob-smart-insights-center-page .ob-smart-insights-summary-next-action > span {
@@ -399,10 +433,31 @@
 	overflow: hidden;
 }
 
-/* Link pinned to the bottom so it aligns with the trend-watch panel footer. */
+/* HX (OPT-374): action and trend watch end level (no hole under the green
+   block); the sentence on top, "Open insight" as a button on the floor. */
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action,
+.ob-smart-insights-center-page .ob-smart-insights-briefing-grid {
+	align-self: stretch;
+}
+
 .ob-smart-insights-center-page .ob-smart-insights-summary-next-action .ob-smart-insights-summary-link {
+	align-items: center;
 	align-self: flex-start;
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-success-border);
+	border-radius: var(--ob-si-radius-md);
+	display: inline-flex;
+	font-weight: 600;
 	margin-top: auto;
+	min-height: 32px;
+	padding: 4px 14px;
+	text-decoration: none;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action .ob-smart-insights-summary-link:hover,
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action .ob-smart-insights-summary-link:focus-visible {
+	border-color: var(--ob-si-success-text);
+	text-decoration: underline;
 }
 
 /* --- Trend watch / recurring patterns (row 2, right) --------------------- */
@@ -411,8 +466,7 @@
 	align-items: stretch;
 	display: grid;
 	gap: var(--ob-si-space-3);
-	grid-column: 2;
-	grid-row: 2;
+	grid-area: watch;
 }
 
 .ob-smart-insights-center-page .ob-smart-insights-briefing-section h3 {
@@ -439,9 +493,11 @@
 	row-gap: var(--ob-si-space-1);
 }
 
+/* The title keeps a readable width: when the chips do not fit beside it,
+   they wrap under it instead of squeezing it to one letter per line (OPT-546). */
 .ob-smart-insights-center-page .ob-smart-insights-summary-item-main {
-	flex: 1 1 auto;
-	min-width: 0;
+	flex: 1 1 160px;
+	min-width: min(160px, 100%);
 }
 
 .ob-smart-insights-center-page .ob-smart-insights-summary-item-main strong {
@@ -454,8 +510,11 @@
 .ob-smart-insights-center-page .ob-smart-insights-summary-item-meta {
 	align-items: center;
 	display: flex;
-	flex: 0 0 auto;
+	flex: 0 1 auto;
+	flex-wrap: wrap;
 	gap: var(--ob-si-space-2);
+	max-width: 100%;
+	min-width: 0;
 }
 
 /* "+N more issues" sits on the panel floor so both row-2 panels end level. */
@@ -473,11 +532,129 @@
 	border-top: 1px solid var(--ob-si-border);
 	color: var(--ob-si-text-faint);
 	font-size: var(--ob-si-fs-meta);
-	grid-column: 1 / -1;
-	grid-row: 3;
+	grid-area: scope;
 	line-height: 1.5;
 	margin: 0;
 	padding-top: var(--ob-si-space-3);
+}
+
+/* --- HX (OPT-374, "reduce the height"): compact summary ------------------
+   KPI tiles on one line (label left, value right), tighter brief rows, and
+   the recommended action + trend watch as two slim full-width bands. */
+.ob-smart-insights-center-page .ob-smart-insights-summary-report.is-briefing {
+	gap: var(--ob-si-space-2);
+	grid-template-areas:
+		"metrics metrics"
+		"lead lead"
+		"action action"
+		"watch watch"
+		"scope scope";
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics {
+	gap: var(--ob-si-space-2);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics span {
+	align-items: center;
+	flex-direction: row;
+	gap: var(--ob-si-space-2);
+	justify-content: space-between;
+	padding: 8px 14px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics strong {
+	font-size: 20px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics .is-mover {
+	justify-content: flex-start;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-metrics .is-mover small {
+	flex: 0 0 auto;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-lead {
+	gap: 4px;
+	padding: 10px 16px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-brief-list li {
+	min-height: 32px;
+	padding: 4px 0;
+}
+
+/* Action band: label | sentence | button on one row. */
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action {
+	align-items: center;
+	flex-direction: row;
+	gap: var(--ob-si-space-3);
+	padding: 8px 16px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action > span {
+	flex: 0 0 auto;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action strong {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-next-action .ob-smart-insights-summary-link {
+	align-self: center;
+	flex: 0 0 auto;
+	margin-top: 0;
+}
+
+/* Trend watch band: label | item | "+N more" on one row. */
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section {
+	align-items: center;
+	flex-direction: row;
+	gap: var(--ob-si-space-3);
+	padding: 8px 16px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section h3 {
+	flex: 0 0 auto;
+	margin: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section .ob-smart-insights-summary-list {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section .ob-smart-insights-summary-list {
+	align-items: center;
+	flex-direction: row;
+	gap: var(--ob-si-space-3);
+}
+
+/* One row while it fits; with 2 chips + "Open insight" (Recurring patterns)
+   the chips drop under the title instead of crushing it (OPT-546). */
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section .ob-smart-insights-summary-item {
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	min-height: 0;
+	min-width: 0;
+	padding: 4px 12px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section .ob-smart-insights-summary-item-meta {
+	flex-direction: row;
+	flex-wrap: wrap;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-briefing-section .ob-smart-insights-summary-more {
+	flex: 0 0 auto;
+	margin: 0;
+	padding-top: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-summary-scope {
+	padding-top: var(--ob-si-space-2);
 }
 
 /* ==========================================================================
@@ -486,31 +663,35 @@
 
 @media (max-width: 1100px) {
 	.ob-smart-insights-center-page .ob-smart-insights-summary-report.is-briefing {
+		align-items: stretch;
+		grid-template-areas:
+			"metrics"
+			"lead"
+			"action"
+			"watch"
+			"scope";
 		grid-template-columns: minmax(0, 1fr);
 		grid-template-rows: auto;
-	}
-
-	.ob-smart-insights-center-page .ob-smart-insights-briefing-lead,
-	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics,
-	.ob-smart-insights-center-page .ob-smart-insights-summary-next-action,
-	.ob-smart-insights-center-page .ob-smart-insights-briefing-grid,
-	.ob-smart-insights-center-page .ob-smart-insights-summary-scope {
-		grid-column: 1;
-		grid-row: auto;
-	}
-
-	/* Full width: the four tiles read best as one compact row again. */
-	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics {
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		grid-template-rows: minmax(74px, auto);
-		max-height: none;
 	}
 }
 
 @media (max-width: 782px) {
 	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		grid-template-rows: repeat(2, minmax(74px, auto));
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics .is-mover {
+		grid-column: 1 / -1;
+	}
+
+	/* Three short tiles on a phone: room for "RECURRING" on one line. */
+	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics span {
+		padding: var(--ob-si-space-3);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics small {
+		letter-spacing: 0.02em;
+		overflow-wrap: normal;
 	}
 
 	.ob-smart-insights-center-page .ob-smart-insights-brief-list li {
@@ -528,6 +709,44 @@
 
 	.ob-smart-insights-center-page .ob-smart-insights-brief-list .ob-smart-insights-summary-link {
 		margin-left: auto;
+	}
+
+	/* Phone: KPI label above its value (three narrow tiles). */
+	.ob-smart-insights-center-page .ob-smart-insights-summary-metrics span {
+		align-items: flex-start;
+		flex-direction: column;
+		gap: 2px;
+		justify-content: center;
+	}
+
+	/* Phone: the two bands stack their parts again. */
+	.ob-smart-insights-center-page .ob-smart-insights-summary-next-action,
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-section {
+		align-items: stretch;
+		flex-direction: column;
+		gap: var(--ob-si-space-2);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-summary-next-action .ob-smart-insights-summary-link {
+		align-self: flex-start;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-section .ob-smart-insights-summary-list {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-section .ob-smart-insights-summary-item {
+		flex-wrap: wrap;
+	}
+
+	/* Phone: title on its own row, the bar takes the full row under it. */
+	.ob-smart-insights-center-page .ob-smart-insights-brief-list li.has-meter .ob-smart-insights-brief-title {
+		flex: 1 1 100%;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-brief-meter {
+		flex: 1 1 100%;
 	}
 }
 
@@ -1076,6 +1295,12 @@
 	--ob-si-low: #0f766e;
 	--ob-si-low-soft: #f0fdfa;
 	--ob-si-low-border: #99f6e4;
+	--ob-si-better: #047857;
+	--ob-si-better-soft: #ecfdf5;
+	--ob-si-better-border: #a7f3d0;
+	--ob-si-steady: #475569;
+	--ob-si-steady-soft: #f8fafc;
+	--ob-si-steady-border: #cbd5e1;
 	--ob-si-success-surface: #f0fdf4;
 	--ob-si-success-border: #bbf7d0;
 	--ob-si-success-text: #065f46;
@@ -1085,6 +1310,14 @@
 	--ob-si-fs-body: 13px;
 	--ob-si-fs-title: 15px;
 	--ob-si-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	/* HX (OPT-374): no beige left in the dialog — the old "warm" tokens of
+	   dashboard.css (segment health, traffic mix, teasers…) map to slate. */
+	--ob-si-warm: #f8fafc;
+	--ob-si-warm-strong: #f1f5f9;
+	--ob-si-border-soft: #e2e8f0;
+	--ob-si-ink: #0f172a;
+	--ob-si-muted: #475569;
+	--ob-si-faint: #64748b;
 }
 
 /* One typeface, one numeral system, everywhere in the dialog. */
@@ -1559,6 +1792,770 @@
 
 .ob-smart-insights-modal .ob-smart-insights-detail-side a.ob-smart-insights-report-card.is-current {
 	border-color: var(--ob-si-accent-border);
+}
+
+/* HX (OPT-374): no grey slab under a short sidebar — the aside has no
+   background and follows the scroll, so its sections stay in view. */
+.ob-smart-insights-modal .ob-smart-insights-detail-side {
+	align-self: start;
+	background: transparent;
+	position: sticky;
+	top: calc(var(--ob-si-detail-header-h, 0px) + 16px);
+}
+
+/* Compact pill buttons with an icon (step links, evidence rows). */
+.ob-smart-insights-modal .ob-si-steps__links {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 12px 0 0;
+}
+
+.ob-smart-insights-modal .ob-si-btn,
+.ob-smart-insights-modal .ob-smart-insights-where-shortcuts a,
+.ob-smart-insights-modal a.ob-smart-insights-evidence-ref-action {
+	align-items: center;
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-accent-border);
+	border-radius: 999px;
+	box-shadow: none;
+	box-sizing: border-box;
+	color: var(--ob-si-accent-strong);
+	display: inline-flex;
+	font-size: 13px;
+	font-weight: 600;
+	gap: 6px;
+	line-height: 1.2;
+	min-height: 32px;
+	padding: 5px 14px;
+	text-decoration: none;
+	transition: background-color 0.15s ease, border-color 0.15s ease;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-modal .ob-si-btn:hover,
+.ob-smart-insights-modal .ob-smart-insights-where-shortcuts a:hover,
+.ob-smart-insights-modal a.ob-smart-insights-evidence-ref-action:hover {
+	background: var(--ob-si-accent-soft);
+	border-color: var(--ob-si-accent);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-modal .ob-si-btn.is-primary {
+	background: var(--ob-si-accent);
+	border-color: var(--ob-si-accent);
+	color: #ffffff;
+}
+
+.ob-smart-insights-modal .ob-si-btn.is-primary:hover {
+	background: var(--ob-si-accent-strong);
+	border-color: var(--ob-si-accent-strong);
+	color: #ffffff;
+}
+
+.ob-smart-insights-modal .ob-si-btn:focus-visible,
+.ob-smart-insights-modal .ob-smart-insights-where-shortcuts a:focus-visible,
+.ob-smart-insights-modal a.ob-smart-insights-evidence-ref-action:focus-visible {
+	box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px var(--ob-si-accent);
+	outline: none;
+}
+
+.ob-smart-insights-modal .ob-si-btn svg,
+.ob-smart-insights-modal a.ob-smart-insights-evidence-ref-action svg {
+	flex: 0 0 auto;
+	height: 14px;
+	width: 14px;
+}
+
+/* Evidence rows: the page name wraps instead of being cut with "…". */
+.ob-smart-insights-modal .ob-smart-insights-evidence-ref-label {
+	overflow: visible;
+	overflow-wrap: anywhere;
+	text-overflow: clip;
+	white-space: normal;
+}
+
+/* OPT-417: "Things to check" — one row per measured check. Verdict pill
+   (mark + word, readable without colour), label, measured sentence and
+   sample sizes in small, report link as a pill. ✓ likely first, ? not
+   measured next, ✗ ruled out folded under "Show ruled out (n)". */
+.ob-smart-insights-modal .ob-si-checks {
+	display: grid;
+	gap: 8px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ob-smart-insights-modal .ob-si-checks .ob-si-check {
+	--ob-si-check-ink: var(--ob-si-steady);
+	--ob-si-check-soft: var(--ob-si-steady-soft);
+	--ob-si-check-border: var(--ob-si-steady-border);
+	align-items: center;
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-border);
+	border-left: 3px solid var(--ob-si-check-ink);
+	border-radius: var(--ob-si-radius-md);
+	box-shadow: var(--ob-si-shadow-rest);
+	display: grid;
+	gap: 8px 12px;
+	grid-template-columns: minmax(118px, max-content) minmax(0, 1fr);
+	margin: 0;
+	padding: 10px 14px;
+}
+
+.ob-smart-insights-modal .ob-si-checks .ob-si-check::before,
+.ob-smart-insights-modal .ob-si-checks__links .ob-si-checks__link::before {
+	content: none;
+	display: none;
+}
+
+.ob-smart-insights-modal .ob-si-check .ob-si-check__action {
+	grid-column: 2;
+	justify-self: start;
+	max-width: 100%;
+	white-space: normal;
+}
+
+.ob-smart-insights-modal .ob-si-check.is-likely {
+	--ob-si-check-ink: var(--ob-si-high);
+	--ob-si-check-soft: var(--ob-si-high-soft);
+	--ob-si-check-border: var(--ob-si-high-border);
+}
+
+.ob-smart-insights-modal .ob-si-check.is-ruled-out {
+	--ob-si-check-ink: var(--ob-si-better);
+	--ob-si-check-soft: var(--ob-si-better-soft);
+	--ob-si-check-border: var(--ob-si-better-border);
+}
+
+.ob-smart-insights-modal .ob-si-check.is-not-measured {
+	border-left-color: var(--ob-si-border-strong);
+}
+
+.ob-smart-insights-modal .ob-si-check__verdict {
+	align-items: center;
+	align-self: start;
+	background: var(--ob-si-check-soft);
+	border: 1px solid var(--ob-si-check-border);
+	border-radius: var(--ob-si-radius-pill);
+	box-sizing: border-box;
+	color: var(--ob-si-check-ink);
+	display: inline-flex;
+	font-size: var(--ob-si-fs-meta);
+	font-style: normal;
+	font-weight: 700;
+	gap: 6px;
+	justify-self: start;
+	line-height: 1.2;
+	padding: 4px 10px 4px 4px;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-modal .ob-si-check__mark {
+	align-items: center;
+	background: var(--ob-si-check-ink);
+	border-radius: 50%;
+	color: #ffffff;
+	display: inline-flex;
+	flex: 0 0 auto;
+	font-size: 11px;
+	font-weight: 700;
+	height: 18px;
+	justify-content: center;
+	line-height: 1;
+	width: 18px;
+}
+
+.ob-smart-insights-modal .ob-si-check__body {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-measured-causes .ob-si-check__label {
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
+.ob-smart-insights-modal .ob-si-checks span.ob-si-check__evidence,
+.ob-smart-insights-modal .ob-si-checks__links span.ob-si-check__evidence {
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-meta);
+	line-height: 1.45;
+}
+
+.ob-smart-insights-modal .ob-si-checks span.ob-si-check__sample {
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-label);
+	line-height: 1.4;
+}
+
+.ob-smart-insights-modal .ob-si-check.is-ruled-out .ob-si-check__label {
+	color: var(--ob-si-text-muted);
+	font-weight: 500;
+}
+
+.ob-smart-insights-modal .ob-si-checks__ruled-out {
+	margin: 10px 0 0;
+}
+
+.ob-smart-insights-modal .ob-si-checks__ruled-out > summary {
+	align-items: center;
+	border-radius: var(--ob-si-radius-sm);
+	color: var(--ob-si-accent-strong);
+	cursor: pointer;
+	display: inline-flex;
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+	gap: 6px;
+	list-style: none;
+	min-height: 32px;
+	padding: 0 4px;
+}
+
+.ob-smart-insights-modal .ob-si-checks__ruled-out > summary::-webkit-details-marker {
+	display: none;
+}
+
+.ob-smart-insights-modal .ob-si-checks__ruled-out > summary::before {
+	border-bottom: 2px solid currentColor;
+	border-right: 2px solid currentColor;
+	content: "";
+	height: 6px;
+	transform: rotate(-45deg);
+	transition: transform 0.15s ease;
+	width: 6px;
+}
+
+.ob-smart-insights-modal .ob-si-checks__ruled-out[open] > summary::before {
+	transform: rotate(45deg);
+}
+
+.ob-smart-insights-modal .ob-si-checks__ruled-out > summary:focus-visible {
+	box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px var(--ob-si-accent);
+	outline: none;
+}
+
+.ob-smart-insights-modal .ob-si-checks__ruled-out[open] > .ob-si-checks {
+	margin-top: 8px;
+}
+
+.ob-smart-insights-modal .ob-si-checks__links {
+	display: grid;
+	gap: 8px;
+	list-style: none;
+	margin: 12px 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-modal .ob-si-checks__link {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 12px;
+	margin: 0;
+}
+
+.ob-smart-insights-modal .ob-si-checks__pro {
+	align-items: center;
+	background: var(--ob-si-surface-muted);
+	border: 1px dashed var(--ob-si-border-strong);
+	border-radius: var(--ob-si-radius-md);
+	color: var(--ob-si-text-muted);
+	display: flex;
+	font-size: var(--ob-si-fs-meta);
+	gap: 10px;
+	line-height: 1.45;
+	margin: 12px 0 0;
+	padding: 10px 14px;
+}
+
+.ob-smart-insights-modal .ob-si-checks__pro .ob-smart-insights-badge {
+	background: var(--ob-si-accent-soft);
+	border: 1px solid var(--ob-si-accent-border);
+	border-radius: var(--ob-si-radius-pill);
+	color: var(--ob-si-accent-strong);
+	flex: 0 0 auto;
+	font-size: var(--ob-si-fs-label);
+	font-weight: 700;
+	padding: 2px 8px;
+}
+
+@media (max-width: 782px) {
+	.ob-smart-insights-modal .ob-si-checks .ob-si-check {
+		grid-template-columns: minmax(0, 1fr);
+		padding: 10px 12px;
+	}
+
+	.ob-smart-insights-modal .ob-si-check .ob-si-check__action {
+		grid-column: 1;
+	}
+
+	.ob-smart-insights-modal .ob-si-checks__pro {
+		align-items: flex-start;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-smart-insights-modal .ob-si-checks__ruled-out > summary::before {
+		transition: none;
+	}
+}
+
+/* HX (OPT-374): footer — status on the left, "Open Page X-Ray" on the right
+   as a pill like the other detail buttons (icon inline, arrow). */
+.ob-smart-insights-modal .ob-smart-insights-detail-footer-actions {
+	width: 100%;
+}
+
+.ob-smart-insights-modal .button.ob-smart-insights-xray-cta {
+	align-items: center;
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-accent-border);
+	border-radius: 999px;
+	box-shadow: none;
+	color: var(--ob-si-accent-strong);
+	display: inline-flex;
+	font-size: 13px;
+	font-weight: 600;
+	gap: 6px;
+	line-height: 1.2;
+	margin-left: auto;
+	min-height: 34px;
+	padding: 6px 16px;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-modal .button.ob-smart-insights-xray-cta::after {
+	content: "→" / "";
+	transition: transform 0.15s ease;
+}
+
+.ob-smart-insights-modal .button.ob-smart-insights-xray-cta:hover,
+.ob-smart-insights-modal .button.ob-smart-insights-xray-cta:focus {
+	background: var(--ob-si-accent-soft);
+	border-color: var(--ob-si-accent);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-modal .button.ob-smart-insights-xray-cta:hover::after {
+	transform: translateX(2px);
+}
+
+.ob-smart-insights-modal .button.ob-smart-insights-xray-cta:focus-visible {
+	box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px var(--ob-si-accent);
+	outline: none;
+}
+
+.ob-smart-insights-modal .button.ob-smart-insights-xray-cta svg {
+	flex: 0 0 auto;
+	height: 16px;
+	margin: 0;
+	width: 16px;
+}
+
+@media (max-width: 782px) {
+	.ob-smart-insights-modal .button.ob-smart-insights-xray-cta {
+		justify-content: center;
+		margin-left: 0;
+	}
+}
+
+/* HX (OPT-374): evidence figures as ONE aligned row of equal tiles (the main
+   one keeps its tint), wrapping into full rows only when space runs out —
+   no full-width first tile, no lonely tile with a hole beside it. */
+.ob-smart-insights-modal .ob-smart-insights-detail .ob-smart-insights-evidence.is-detail-evidence {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail .ob-smart-insights-evidence.is-detail-evidence > .ob-smart-insights-evidence-item,
+.ob-smart-insights-modal .ob-smart-insights-detail .ob-smart-insights-evidence.is-detail-evidence > .ob-smart-insights-evidence-item.is-primary {
+	box-sizing: border-box;
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	gap: 2px;
+	grid-column: auto;
+	justify-content: flex-start;
+	min-width: 96px;
+	padding: 10px 12px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail .ob-smart-insights-evidence.is-detail-evidence > .ob-smart-insights-evidence-item strong,
+.ob-smart-insights-modal .ob-smart-insights-detail .ob-smart-insights-evidence.is-detail-evidence > .ob-smart-insights-evidence-item.is-primary strong {
+	font-size: 20px;
+	line-height: 1.15;
+}
+
+/* Five or more figures: rows of three (then two…), never one lonely tile. */
+.ob-smart-insights-modal .ob-smart-insights-detail .ob-smart-insights-evidence.is-detail-evidence:has(> .ob-smart-insights-evidence-item:nth-child(5)) > .ob-smart-insights-evidence-item {
+	min-width: 28%;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-detail .ob-smart-insights-evidence.is-detail-evidence > :not(.ob-smart-insights-evidence-item) {
+	flex: 1 1 100%;
+}
+
+/* HX (OPT-374): "Where is the problem?" — each segment card answers first
+   (gap chip + "Metric A vs B"), then two full-width bars on one scale, the
+   daily line with its caption, the sample size. */
+.ob-smart-insights-modal .ob-smart-insights-where-bar {
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-border);
+	border-radius: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px 14px;
+	transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar:hover {
+	border-color: var(--ob-si-accent-border);
+	box-shadow: var(--ob-si-shadow-rest);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar:focus-visible {
+	border-color: var(--ob-si-accent);
+	box-shadow: 0 0 0 3px var(--ob-si-accent-soft);
+	outline: none;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar.is-active {
+	background: var(--ob-si-accent-soft);
+	border-color: var(--ob-si-accent);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-card-head,
+.ob-smart-insights-modal .ob-smart-insights-where-card-label {
+	margin: 0;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-card-label {
+	font-size: 15px;
+}
+
+/* No trend to read: no lone "·" in the corner. */
+.ob-smart-insights-modal .ob-smart-insights-where-trend.is-insufficient {
+	display: none;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-card-headline {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 10px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-card-gap {
+	background: var(--ob-si-accent-soft);
+	border: 1px solid var(--ob-si-accent-border);
+	border-radius: 999px;
+	color: var(--ob-si-accent-strong);
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+	padding: 2px 10px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar.is-worse .ob-smart-insights-where-card-gap {
+	background: #fef2f2;
+	border-color: #fecaca;
+	color: #b91c1c;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar.is-better .ob-smart-insights-where-card-gap {
+	background: #f0fdf4;
+	border-color: #bbf7d0;
+	color: #047857;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-card-compare {
+	color: var(--ob-si-text);
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar-rows {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar-row {
+	align-items: center;
+	display: grid;
+	gap: 10px;
+	grid-template-columns: minmax(84px, 26%) minmax(0, 1fr) 52px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar-row .ob-smart-insights-where-bar-name {
+	color: var(--ob-si-text-muted);
+	font-size: 12px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar-row .ob-smart-insights-where-bar-track {
+	background: #e9edf3;
+	border-radius: 999px;
+	display: block;
+	height: 10px;
+	overflow: hidden;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar-row .ob-smart-insights-where-bar-fill {
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar-row .ob-smart-insights-where-bar-fill.is-segment {
+	background: var(--ob-si-accent);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar.is-worse .ob-smart-insights-where-bar-row .ob-smart-insights-where-bar-fill.is-segment {
+	background: #dc2626;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar-row .ob-smart-insights-where-bar-fill.is-complement {
+	background: #94a3b8;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar-row .ob-smart-insights-where-bar-value {
+	color: var(--ob-si-text);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+	text-align: right;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-card-spark {
+	align-items: center;
+	display: grid;
+	gap: 2px 10px;
+	grid-template-columns: minmax(0, 1fr);
+	margin: 0;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-sparkline {
+	height: auto;
+	overflow: visible;
+	width: 100%;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-sparkline-line {
+	stroke-width: 2;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-sparkline-axis {
+	fill: var(--ob-si-text-faint);
+	font-size: 10px;
+	font-variant-numeric: tabular-nums;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-sparkline-grid {
+	stroke: #eef2f7;
+	stroke-dasharray: 3 3;
+}
+
+/* Hover read-out (daily chart + sparklines). */
+.ob-smart-insights-modal [data-ob-si-tipwrap] {
+	display: block;
+	position: relative;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-tip {
+	background: #0f172a;
+	border-radius: 6px;
+	box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+	color: #ffffff;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+	left: 0;
+	line-height: 1.3;
+	padding: 5px 9px;
+	pointer-events: none;
+	position: absolute;
+	top: 0;
+	transform: translate(-50%, calc(-100% - 10px));
+	white-space: nowrap;
+	z-index: 5;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-tip[hidden] {
+	display: none;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-hover-line {
+	stroke: #94a3b8;
+	stroke-dasharray: 3 3;
+	stroke-width: 1;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-hover-dot {
+	fill: #ffffff;
+	stroke: var(--ob-si-accent);
+	stroke-width: 2.5;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-bar.is-worse .ob-smart-insights-where-hover-dot {
+	stroke: #dc2626;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-hit {
+	cursor: crosshair;
+}
+
+/* Days outside the measured range: shaded and labelled "No data". */
+.ob-smart-insights-modal .ob-smart-insights-where-chart-nodata {
+	fill: #f1f5f9;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-nodata-label {
+	fill: #94a3b8;
+	font-size: 11px;
+	font-style: italic;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-spark-caption,
+.ob-smart-insights-modal .ob-smart-insights-where-bar-meta {
+	color: var(--ob-si-text-faint);
+	font-size: 11px;
+}
+
+/* The re-scope hint: one quiet line, not a grey slab. */
+.ob-smart-insights-modal .ob-smart-insights-segment-scope-status {
+	background: none;
+	border: 0;
+	color: var(--ob-si-text-faint);
+	font-size: 12px;
+	font-style: normal;
+	margin: 4px 0 0;
+	padding: 0;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-segment-scope-status::before {
+	content: "ⓘ" / "";
+	margin-right: 6px;
+}
+
+/* Daily chart: title + average / high / low, then a readable line chart. */
+.ob-smart-insights-modal .ob-smart-insights-where-chart-head {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+	justify-content: space-between;
+	margin: 16px 0 6px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-head .ob-smart-insights-where-chart-title {
+	color: var(--ob-si-text);
+	font-size: 14px;
+	margin: 0;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-stats {
+	display: flex;
+	gap: 6px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-stats span {
+	align-items: baseline;
+	background: var(--ob-si-surface-muted);
+	border: 1px solid var(--ob-si-border);
+	border-radius: 999px;
+	display: inline-flex;
+	gap: 6px;
+	padding: 3px 10px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-stats small {
+	color: var(--ob-si-text-faint);
+	font-size: 11px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-stats strong {
+	color: var(--ob-si-text);
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart {
+	color: var(--ob-si-accent);
+	height: auto;
+	overflow: visible;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-grid {
+	stroke: #eef2f7;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-axis {
+	fill: var(--ob-si-text-faint);
+	font-size: 11px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-line.is-current {
+	stroke: var(--ob-si-accent);
+	stroke-width: 2.5;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-line.is-segment {
+	stroke: #dc2626;
+	stroke-width: 2.5;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-dot {
+	fill: #ffffff;
+	stroke: var(--ob-si-accent);
+	stroke-width: 1.5;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-marker {
+	stroke: #dc2626;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-marker-label {
+	fill: #b91c1c;
+	font-size: 11px;
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-legend .is-current::before {
+	background: var(--ob-si-accent);
+}
+
+.ob-smart-insights-modal .ob-smart-insights-where-chart-legend .is-segment::before {
+	background: #dc2626;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-smart-insights-modal .ob-smart-insights-where-bar {
+		transition: none;
+	}
+}
+
+/* One column (≤ 900px): the aside follows the main column, no sticking. */
+@media (max-width: 900px) {
+	.ob-smart-insights-modal .ob-smart-insights-detail-side {
+		position: static;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-smart-insights-modal .ob-si-btn,
+	.ob-smart-insights-modal a.ob-smart-insights-evidence-ref-action,
+	.ob-smart-insights-modal .button.ob-smart-insights-xray-cta::after {
+		transition: none;
+	}
 }
 
 /* ==========================================================================
@@ -2393,6 +3390,157 @@
 	list-style: disc;
 }
 
+/* OPT-378 A: merged signals of the same problem, one figure each. Drawn in
+   the detail modal, which sits outside the page wrapper. */
+.ob-smart-insights-center-page .ob-si-also-seen,
+.ob-smart-insights-modal .ob-si-also-seen {
+	margin: 4px 0 0;
+	font-size: 12px;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-smart-insights-center-page .ob-si-also-seen ul,
+.ob-smart-insights-modal .ob-si-also-seen ul {
+	margin: 2px 0 0 18px;
+	list-style: disc;
+}
+
+.ob-smart-insights-center-page .ob-si-also-seen__figure,
+.ob-smart-insights-modal .ob-si-also-seen__figure {
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+}
+
+/* OPT-378 C: G2 (previous period vs this period) and G3 (this group vs the
+   others) = two bars on one scale, same look as the G1 funnel bars. The
+   card's own bar takes the indigo accent, the comparison stays grey. */
+.ob-si-gbar {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+}
+
+.ob-si-gbar__metric {
+	color: #64748b;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+.ob-si-gbar ul {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ob-si-gbar__row {
+	align-items: center;
+	display: grid;
+	gap: 8px;
+	grid-template-columns: minmax(64px, 34%) minmax(0, 1fr) auto;
+	margin: 0;
+}
+
+.ob-si-gbar__label {
+	color: #1d2327;
+	font-size: 12px;
+	line-height: 1.3;
+	overflow-wrap: anywhere;
+}
+
+.ob-si-gbar__track {
+	background: #e9edf3;
+	border-radius: 999px;
+	display: block;
+	height: 8px;
+	overflow: hidden;
+}
+
+.ob-si-gbar.is-full .ob-si-gbar__track {
+	border-radius: 6px;
+	height: 18px;
+}
+
+.ob-si-gbar__bar {
+	background: #94a3b8;
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+}
+
+.ob-si-gbar__row.is-focus .ob-si-gbar__bar {
+	background: linear-gradient(90deg, #6366f1, #4f46e5);
+}
+
+.ob-si-gbar__value {
+	color: #1d2327;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.ob-si-gbar.is-compact .ob-si-gbar__label,
+.ob-si-gbar.is-compact .ob-si-gbar__value {
+	font-size: 11px;
+	line-height: 12px;
+}
+
+/* OPT-378 B: the recordings of the page as the proof button (locked in Free)
+   and "Start an A/B test" as a lighter second action. */
+.ob-si-action .ob-si-proof-locked,
+.ob-si-next-steps .ob-si-proof-locked {
+	align-items: center;
+	cursor: not-allowed;
+	display: inline-flex;
+	gap: 6px;
+	justify-content: center;
+	line-height: 1.3;
+	min-height: 36px;
+	opacity: 0.85;
+	padding: 6px 14px;
+	text-align: center;
+	white-space: normal;
+}
+
+.ob-si-action .ob-si-ab-action,
+.ob-si-next-steps .ob-si-ab-action {
+	align-items: center;
+	display: inline-flex;
+	gap: 6px;
+	justify-content: center;
+	line-height: 1.3;
+	min-height: 32px;
+	padding: 4px 12px;
+	text-align: center;
+	white-space: normal;
+}
+
+.ob-si-next-steps .ob-si-ab-action {
+	margin-top: 6px;
+}
+
+.ob-si-action .ob-si-proof-locked svg,
+.ob-si-action .ob-si-ab-action svg,
+.ob-si-next-steps .ob-si-proof-locked svg,
+.ob-si-next-steps .ob-si-ab-action svg {
+	flex: 0 0 auto;
+	height: 14px;
+	width: 14px;
+}
+
+/* OPT-378 D4: evidence labels wrap, never "FUNNEL EN…". */
+.ob-smart-insights-modal .ob-smart-insights-evidence.is-detail-evidence .ob-smart-insights-evidence-item span {
+	overflow: visible;
+	overflow-wrap: anywhere;
+	text-overflow: clip;
+	white-space: normal;
+}
+
 /* Shared "Provisional · N visits" badge (insight cards, modal header, Page X-Ray hero). */
 .ob-smart-insights-center-page .ob-si-provisional {
 	display: inline-block;
@@ -2461,4 +3609,403 @@
 
 .ob-smart-insights-center-page .ob-smart-insights-result-verdict.is-worse strong {
 	color: var(--ob-si-critical);
+}
+
+/* ==========================================================================
+   Card anatomy (OPT-362): one white column of six zones, 16 px apart.
+   Components (.ob-si-figures, .ob-si-g1, .ob-si-action…) live at the end of
+   dashboard_styles.css, shared with the dashboard widget and the modal.
+   ========================================================================== */
+
+/* OPT-374: story column + "Next action" column (wide screens), footer across. */
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card {
+	background: var(--ob-si-surface);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-lg);
+	box-shadow: var(--ob-si-shadow-rest);
+	display: grid;
+	gap: 16px 24px;
+	grid-template-columns: minmax(0, 1fr);
+	padding: 20px 20px 16px 28px;
+	position: relative;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card:hover {
+	box-shadow: var(--ob-si-shadow-hover);
+}
+
+.ob-smart-insights-center-page .ob-si-card__main {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	min-width: 0;
+}
+
+/* Title, "?" and severity pill stay on one row; the title wraps instead. */
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card .ob-si-card__head {
+	flex-wrap: nowrap;
+}
+
+.ob-smart-insights-center-page .ob-si-card__chart .ob-si-g1 {
+	gap: 6px;
+}
+
+.ob-smart-insights-center-page .ob-si-card__aside {
+	display: flex;
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-card__aside .ob-si-action {
+	flex: 1 1 auto;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card .ob-si-card__foot {
+	grid-column: 1 / -1;
+}
+
+/* HX (OPT-374): no side column — it always left a hole under the green block.
+   The action is a full-width green band: eyebrow + sentence left, button
+   right; stacked on narrow screens. */
+@media (min-width: 783px) {
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action {
+		align-items: center;
+		column-gap: 24px;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		row-gap: 4px;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action__eyebrow,
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action__text {
+		grid-column: 1;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action__text {
+		margin: 0;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action .ob-smart-insights-report-cta,
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action .ob-smart-insights-next-report {
+		grid-column: 2;
+		grid-row: 1 / span 2;
+		max-width: 280px;
+	}
+}
+
+/* HX (OPT-374, "card too tall"): one row per idea, about half the old height.
+   Pills + sub-line on one row; key figure tile with its context as a plain
+   line under it, the mini funnel beside it; slimmer action band and footer. */
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card {
+	gap: 12px 24px;
+	padding: 16px 18px 12px 26px;
+}
+
+.ob-smart-insights-center-page .ob-si-card__main {
+	gap: 10px;
+}
+
+.ob-smart-insights-center-page .ob-si-card__tags {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 12px;
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-card__tags:empty {
+	display: none;
+}
+
+.ob-smart-insights-center-page .ob-si-card__story {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.ob-smart-insights-center-page .ob-si-card__story .ob-si-figures__main {
+	flex: 0 0 auto;
+	gap: 2px;
+	padding: 10px 14px;
+}
+
+.ob-smart-insights-center-page .ob-si-card__story .ob-si-figures__value {
+	font-size: 26px;
+}
+
+/* The context figure is a sentence, not a second box. */
+.ob-smart-insights-center-page .ob-si-card__story .ob-si-figures__context {
+	background: none;
+	border: 0;
+	border-radius: 0;
+	flex: 1 1 220px;
+	font-size: 13px;
+	padding: 0 2px;
+}
+
+.ob-smart-insights-center-page .ob-si-card__story .ob-si-card__chart {
+	align-content: center;
+	display: grid;
+	padding: 10px 14px;
+}
+
+/* Right column without a chart: likely cause + related signals, centred. */
+.ob-smart-insights-center-page .ob-si-card__evidence {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	justify-content: center;
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-card__evidence > * {
+	margin: 0;
+}
+
+@media (min-width: 783px) {
+	.ob-smart-insights-center-page .ob-si-card__story.has-side {
+		align-items: stretch;
+		grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+	}
+
+	/* Beside the evidence: tile on top, context line under it, same height. */
+	.ob-smart-insights-center-page .ob-si-card__story.has-side .ob-si-figures {
+		align-content: stretch;
+		flex-direction: column;
+		flex-wrap: nowrap;
+		gap: 6px;
+	}
+
+	.ob-smart-insights-center-page .ob-si-card__story.has-side .ob-si-figures__main {
+		flex: 1 1 auto;
+		justify-content: center;
+	}
+
+	.ob-smart-insights-center-page .ob-si-card__story.has-side .ob-si-figures__context {
+		flex: 0 0 auto;
+	}
+
+	/* No chart: the context figure heads the right column (above the cause
+	   and related signals); the tile spans both rows on the left. */
+	.ob-smart-insights-center-page .ob-si-card__story.has-side:not(.has-chart) {
+		column-gap: 20px;
+		grid-template-rows: auto auto;
+		row-gap: 8px;
+	}
+
+	.ob-smart-insights-center-page .ob-si-card__story.has-side:not(.has-chart) .ob-si-figures {
+		display: contents;
+	}
+
+	.ob-smart-insights-center-page .ob-si-card__story.has-side:not(.has-chart) .ob-si-figures__main {
+		grid-column: 1;
+		grid-row: 1 / span 2;
+	}
+
+	.ob-smart-insights-center-page .ob-si-card__story.has-side:not(.has-chart) .ob-si-figures__context {
+		align-self: end;
+		color: #1d2327;
+		font-size: 15px;
+		grid-column: 2;
+		grid-row: 1;
+	}
+
+	.ob-smart-insights-center-page .ob-si-card__story.has-side:not(.has-chart) .ob-si-card__evidence {
+		align-self: start;
+		grid-column: 2;
+		grid-row: 2;
+	}
+
+	.ob-smart-insights-center-page .ob-si-card__story.has-side.is-solo:not(.has-chart) .ob-si-figures__context {
+		align-self: center;
+		grid-row: 1 / span 2;
+	}
+
+	/* Observation alone (no figure, no evidence): one full-width tile. */
+	.ob-smart-insights-center-page .ob-si-card__story.is-solo:has(.ob-si-figures.is-observation) {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.ob-smart-insights-center-page .ob-si-card__story.has-side:not(.has-chart) .ob-si-figures.is-observation + .ob-si-card__evidence {
+		grid-row: 1 / span 2;
+		align-self: center;
+	}
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action {
+	gap: 4px;
+	padding: 10px 14px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action__text {
+	margin: 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action .ob-smart-insights-report-cta {
+	min-height: 32px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card .ob-si-card__foot {
+	padding-top: 10px;
+}
+
+@media (max-width: 782px) {
+	.ob-smart-insights-center-page .ob-si-card__story .ob-si-figures__context {
+		flex: 0 0 auto;
+	}
+}
+
+/* HX (OPT-374): "View details" is the card's main action — the only filled
+   button (brand violet + arrow); the proof link in the green band becomes a
+   light green button; the status select stays the quietest. */
+.ob-smart-insights-center-page .ob-smart-insights-center-card .button.ob-smart-insights-detail-btn.is-detail {
+	align-items: center;
+	background: var(--ob-si-accent);
+	border: 1px solid var(--ob-si-accent);
+	border-radius: 8px;
+	box-shadow: 0 1px 2px rgba(67, 56, 202, 0.25);
+	color: #ffffff;
+	display: inline-flex;
+	font-size: 13px;
+	font-weight: 600;
+	gap: 6px;
+	line-height: 1.2;
+	min-height: 34px;
+	padding: 6px 16px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .button.ob-smart-insights-detail-btn.is-detail::after {
+	content: "→" / "";
+	transition: transform 0.15s ease;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .button.ob-smart-insights-detail-btn.is-detail:hover,
+.ob-smart-insights-center-page .ob-smart-insights-center-card .button.ob-smart-insights-detail-btn.is-detail:focus {
+	background: var(--ob-si-accent-strong);
+	border-color: var(--ob-si-accent-strong);
+	color: #ffffff;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .button.ob-smart-insights-detail-btn.is-detail:hover::after {
+	transform: translateX(2px);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .button.ob-smart-insights-detail-btn.is-detail:focus-visible {
+	box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px var(--ob-si-accent);
+	outline: none;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action .button.button-primary.ob-smart-insights-report-cta {
+	background: #ffffff;
+	border: 1px solid #6ee7b7;
+	border-radius: 8px;
+	box-shadow: none;
+	color: var(--ob-si-success-text);
+	font-weight: 600;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action .button.button-primary.ob-smart-insights-report-cta:hover,
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action .button.button-primary.ob-smart-insights-report-cta:focus {
+	background: #dcfce7;
+	border-color: #34d399;
+	color: var(--ob-si-success-text);
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action .button.button-primary.ob-smart-insights-report-cta:focus-visible {
+	box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #059669;
+	outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-smart-insights-center-page .ob-smart-insights-center-card .button.ob-smart-insights-detail-btn.is-detail::after {
+		transition: none;
+	}
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card.is-info .ob-smart-insights-severity-rail {
+	background: #8fa6b8;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card h3.ob-si-card__title {
+	-webkit-line-clamp: unset;
+	display: block;
+	font-size: 16px;
+	font-weight: 600;
+	overflow: visible;
+	text-overflow: clip;
+	white-space: normal;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card .ob-smart-insights-center-children {
+	color: #50575e;
+	font-size: 13px;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card .ob-smart-insights-center-children summary {
+	cursor: pointer;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card .ob-smart-insights-center-children ul {
+	margin: 8px 0 0;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card .ob-smart-insights-status-control select {
+	max-width: 160px;
+}
+
+@media (max-width: 782px) {
+	.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card {
+		padding: 16px 16px 12px 24px;
+	}
+}
+
+/* OPT-551: discreet "Try Pro free for 6 months" text link. */
+.ob-try-pro-link {
+    font-size: 12px;
+    color: #2271b1;
+    text-decoration: underline;
+    white-space: nowrap;
+}
+
+.ob-try-pro-link:hover,
+.ob-try-pro-link:focus {
+    color: #135e96;
+}
+
+/* OPT-552: Smart Insights — the link sits under the "unlock in Pro" note in
+   the green action band, in the page violet, never a second banner. */
+.ob-try-pro-link--smart-insights {
+    display: inline-block;
+    align-self: flex-start;
+    justify-self: start;
+    padding: 7px 0;
+    line-height: 18px;
+    font-weight: 600;
+    color: #4f46e5;
+    text-underline-offset: 3px;
+    border-radius: 4px;
+}
+
+.ob-try-pro-link--smart-insights::before {
+    content: "\2726";
+    display: inline-block;
+    margin-right: 5px;
+    font-size: 11px;
+}
+
+.ob-try-pro-link--smart-insights:hover,
+.ob-try-pro-link--smart-insights:focus {
+    color: #4338ca;
+}
+
+.ob-try-pro-link--smart-insights:focus-visible {
+    outline: 2px solid #4f46e5;
+    outline-offset: 2px;
+    box-shadow: none;
+}
+
+@media (min-width: 783px) {
+    .ob-smart-insights-center-page .ob-smart-insights-center-card .ob-si-action .ob-try-pro-link--smart-insights {
+        grid-column: 2;
+        margin-top: -4px;
+    }
 }

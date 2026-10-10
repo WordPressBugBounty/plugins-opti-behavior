@@ -247,46 +247,67 @@ if ( ! function_exists( 'opti_behavior_flush_dirty_dashboard_caches' ) ) {
 	add_action( 'admin_init', 'opti_behavior_flush_dirty_dashboard_caches', 5 );
 }
 
+if ( ! function_exists( 'opti_behavior_dashboard_cache_generation' ) ) {
+	/**
+	 * Current Analytics Dashboard cache generation.
+	 *
+	 * Every dashboard widget transient key embeds this integer (see
+	 * {@see opti_behavior_dashboard_cache_key()}). Bumping it invalidates every
+	 * widget cache at once in O(1): the next read builds a key that has no
+	 * stored row. The option is autoloaded, so reading it costs no query.
+	 *
+	 * @since 2026-10-08
+	 * @return int Generation >= 1.
+	 */
+	function opti_behavior_dashboard_cache_generation() {
+		$generation = (int) get_option( 'opti_behavior_dash_cache_gen', 1 );
+		return $generation > 0 ? $generation : 1;
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_dashboard_cache_key' ) ) {
+	/**
+	 * Namespace a dashboard widget transient key with the cache generation.
+	 *
+	 * Every transient whose prefix is listed in
+	 * {@see opti_behavior_dashboard_widget_cache_registry()} must be built
+	 * through this helper, otherwise a flush cannot reach it. The key keeps
+	 * its registry prefix, so maintenance sweeps by prefix still find it.
+	 *
+	 * @since 2026-10-08
+	 * @param string $key Transient key (registry prefix + hash).
+	 * @return string Key suffixed with `_g<generation>`.
+	 */
+	function opti_behavior_dashboard_cache_key( $key ) {
+		return (string) $key . '_g' . opti_behavior_dashboard_cache_generation();
+	}
+}
+
 if ( ! function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
 	/**
 	 * Flush every registered Analytics Dashboard widget's transient cache.
 	 *
-	 * Safe to call frequently — only deletes transient rows; next dashboard hit
-	 * re-aggregates. The `LIKE` sweep is built dynamically from
-	 * {@see opti_behavior_dashboard_widget_cache_registry()} so every widget
-	 * shares one invalidation path and adding a widget to the registry is the
-	 * only step needed to wire it into this sweep (Bug #4 fix — previously
-	 * only `summary_stats`/`top_users`/`dashboard_traffic_series` were swept;
-	 * 8 other widgets cached results with no invalidation path at all).
+	 * 2026-10-08: bumps the cache generation (one UPDATE by primary key) instead
+	 * of sweeping wp_options. The former sweep was a SELECT with 32 `LIKE`
+	 * clauses over wp_options on the visitor tracking path and on admin
+	 * loads; on a large options table it took ~725 ms per call and shared
+	 * hosts reported it as MySQL abuse (Hostinger, forexwikitrading.com,
+	 * 2026-09-14). Rows of older generations are never read again and expire
+	 * on their own TTL (WordPress removes expired transients).
+	 *
 	 * Callers that change a session's classification call this via
 	 * {@see Opti_Behavior_Stats_Spam_Filter::clear_traffic_classification_caches()}
-	 * and the ajax handler's `clear_behavior_classification_caches()`.
+	 * and the ajax handler's `clear_behavior_classification_caches()`;
+	 * tracking-path callers go through
+	 * {@see opti_behavior_invalidate_dashboard_caches_throttled()}.
 	 *
 	 * @since 1.2.9
-	 * @return int Number of option rows deleted.
+	 * @return int New cache generation.
 	 */
 	function opti_behavior_invalidate_dashboard_caches() {
-		global $wpdb;
-
-		$prefixes = array();
-		foreach ( opti_behavior_dashboard_widget_cache_registry() as $widget_prefixes ) {
-			foreach ( (array) $widget_prefixes as $prefix ) {
-				$prefix = (string) $prefix;
-				if ( '' !== $prefix ) {
-					$prefixes[] = $prefix;
-				}
-			}
-		}
-		$prefixes = array_values( array_unique( $prefixes ) );
-
-		if ( empty( $prefixes ) ) {
-			return 0;
-		}
-
-		// 1.9.0.6: index-friendly, SELECT-then-DELETE-by-name sweep (see
-		// opti_behavior_delete_transients_by_prefix() for why the old
-		// `LIKE '_transient_…'` DELETE locked up wp_options under load).
-		$rows = opti_behavior_delete_transients_by_prefix( $prefixes );
+		$next = opti_behavior_dashboard_cache_generation() + 1;
+		// Autoload so readers get the generation from alloptions, no query.
+		update_option( 'opti_behavior_dash_cache_gen', $next, true );
 
 		opti_behavior_cache_sweep_mark_clean( 'dashboard' );
 
@@ -294,11 +315,34 @@ if ( ! function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
 		 * Fires after dashboard caches are flushed.
 		 *
 		 * @since 1.2.9
-		 * @param int $rows Number of option rows removed.
+		 * @since 2026-10-08 Receives the new cache generation (no rows are deleted any more).
+		 * @param int $next New cache generation.
 		 */
-		do_action( 'opti_behavior_dashboard_caches_invalidated', $rows );
+		do_action( 'opti_behavior_dashboard_caches_invalidated', $next );
 
-		return $rows;
+		return $next;
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_invalidate_dashboard_caches_throttled' ) ) {
+	/**
+	 * Dashboard cache flush for the visitor tracking path.
+	 *
+	 * At most one generation bump per 60 s site-wide, so a burst of tracking
+	 * hits does not rewrite the autoloaded option (and the alloptions cache)
+	 * on every request. A skipped call flags the family dirty and the next
+	 * admin request flushes it before any dashboard read
+	 * ({@see opti_behavior_flush_dirty_dashboard_caches()}).
+	 *
+	 * @since 2026-10-08
+	 * @return bool True when the caches were flushed by this call.
+	 */
+	function opti_behavior_invalidate_dashboard_caches_throttled() {
+		if ( ! opti_behavior_cache_sweep_due( 'dashboard', 60 ) ) {
+			return false;
+		}
+		opti_behavior_invalidate_dashboard_caches();
+		return true;
 	}
 }
 
@@ -346,6 +390,97 @@ if ( ! function_exists( 'opti_behavior_flush_heatmap_caches' ) ) {
 		do_action( 'opti_behavior_heatmap_caches_invalidated', $next );
 
 		return $next;
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_heatmap_ingest_flush_default_window' ) ) {
+	/**
+	 * Default ingest flush window, by the size of the install.
+	 *
+	 * A young site has a handful of heatmaps and a cheap list: every tracked
+	 * click batch rotates the caches, so the Heatmaps screen shows a new page
+	 * at once (stag.optiuser.com, 2026-10-10: 3 pages visited in 5 minutes, the
+	 * list said "1" for up to 15 minutes). Above 700 heatmaps the 5-minute
+	 * throttle applies.
+	 *
+	 * The row count lives in an autoloaded option refreshed at most once an
+	 * hour: no extra query on the tracking path.
+	 *
+	 * @since 2026-10-10
+	 * @return int Seconds. 0 = rotate on every ingest.
+	 */
+	function opti_behavior_heatmap_ingest_flush_default_window() {
+		/**
+		 * Heatmaps (mapping rows) above which ingest rotates the heatmap caches
+		 * at most once per 5 minutes instead of on every tracked click batch.
+		 *
+		 * @since 2026-10-10
+		 * @param int $threshold Default 700. 0 = never throttled.
+		 */
+		$threshold = (int) apply_filters( 'opti_behavior_heatmap_ingest_flush_pages_threshold', 700 );
+		if ( $threshold <= 0 ) {
+			return 0;
+		}
+
+		$now   = time();
+		$scale = get_option( 'opti_behavior_heatmap_ingest_scale', array() );
+		if ( ! is_array( $scale ) || ! isset( $scale['rows'], $scale['at'] )
+			|| (int) $scale['at'] > $now || ( $now - (int) $scale['at'] ) >= HOUR_IN_SECONDS ) {
+			global $wpdb;
+			$table = $wpdb->prefix . 'optibehavior_heatmap_pages';
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Size guard on own table; cached in an option right below.
+			$rows  = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+			$scale = array(
+				'rows' => $rows,
+				'at'   => $now,
+			);
+			update_option( 'opti_behavior_heatmap_ingest_scale', $scale, true );
+		}
+
+		return (int) $scale['rows'] > $threshold ? 5 * MINUTE_IN_SECONDS : 0;
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_flush_heatmap_caches_on_ingest' ) ) {
+	/**
+	 * Throttled heatmap cache invalidation for the tracking (ingest) path.
+	 *
+	 * Every tracked click batch used to call opti_behavior_flush_heatmap_caches(),
+	 * so on a busy site the version rotated on nearly every visit: the Heatmaps
+	 * list / stats caches were always cold and each visit also wrote an
+	 * autoloaded option (forexwikitrading.com, 2026-09-30). Ingest now rotates
+	 * the version at most once per window; deletes, resets and migrations keep
+	 * calling the immediate flush. Admin numbers may lag new clicks by up to the
+	 * window (the list TTL is 15 minutes anyway). Small installs have no window
+	 * (opti_behavior_heatmap_ingest_flush_default_window()).
+	 *
+	 * @since 2026-09-30
+	 * @return bool True when the caches were rotated by this call.
+	 */
+	function opti_behavior_flush_heatmap_caches_on_ingest() {
+		/**
+		 * Minimum seconds between two ingest-driven heatmap cache rotations.
+		 *
+		 * @since 2026-09-30
+		 * @param int $window Default 300 (5 minutes) on a large heatmap install,
+		 *                    0 (rotate on every ingest) on a small one.
+		 */
+		$window = max( 0, (int) apply_filters( 'opti_behavior_heatmap_ingest_flush_window', opti_behavior_heatmap_ingest_flush_default_window() ) );
+		if ( 0 === $window ) {
+			// Small install: no throttle, no timestamp to keep.
+			opti_behavior_flush_heatmap_caches();
+			return true;
+		}
+		$last   = (int) get_option( 'opti_behavior_heatmap_cache_ver_at', 0 );
+		$now    = time();
+		if ( $window > 0 && $last > 0 && ( $now - $last ) < $window ) {
+			return false;
+		}
+
+		// Autoloaded like the version itself: read from alloptions, no query.
+		update_option( 'opti_behavior_heatmap_cache_ver_at', (string) $now, true );
+		opti_behavior_flush_heatmap_caches();
+		return true;
 	}
 }
 

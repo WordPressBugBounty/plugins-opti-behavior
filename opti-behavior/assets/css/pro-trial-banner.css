@@ -434,3 +434,297 @@
         padding: 8px 16px;
     }
 }
+
+/* OPT-551: what the trial / download button sends + no automatic billing. */
+.ob-trial-info {
+    margin: 10px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #646970;
+}
+
+.ob-trial-info a {
+    color: inherit;
+    text-decoration: underline;
+}
+
+/* OPT-552: on the purple banner the grey lines were unreadable (#646970 on
+   #4f46e5). Light, small, secondary to the title, kept tight so the banner
+   does not grow more than these two lines. */
+.opti-behavior-trial-banner .ob-trial-info {
+    margin: 2px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, 0.94);
+}
+
+.opti-behavior-trial-banner .ob-trial-info a {
+    color: #ffffff;
+    text-underline-offset: 2px;
+}
+
+.opti-behavior-trial-banner .ob-trial-info a:hover {
+    text-decoration-thickness: 2px;
+}
+
+.opti-behavior-trial-banner .ob-trial-info a:focus-visible,
+.opti-behavior-trial-btn-start:focus-visible,
+.opti-behavior-trial-btn-dismiss:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+    border-radius: 4px;
+    box-shadow: none;
+}
+
+@media (max-width: 600px) {
+    .opti-behavior-trial-banner .ob-trial-info {
+        margin-top: 0;
+    }
+}
+
+/* ===== TRIAL NOTICE (OPT-763) =====
+ * Dismissible WordPress notice with one link to the trial page on
+ * optiuser.com; replaces the one-click trial banner. Markup:
+ * trait-opti-behavior-dashboard-views.php render_pro_trial_banner(). */
+/* OPT-792: the sober white notice (OPT-766) did not catch the eye. Brand
+ * banner: violet gradient of the page header, big title with "6 months" in
+ * yellow, Pro feature pills, yellow link button, close. The WordPress notice
+ * box becomes a transparent wrapper; the row carries the banner. No looping
+ * animation (one short slide-in, off with prefers-reduced-motion). */
+.notice.opti-behavior-trial-notice {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+
+/* admin-notices.css forces `padding: 12px !important` on every
+ * .opti-behavior-notice (up to #wpbody-content div.notice.opti-behavior-notice). */
+#wpbody-content div.notice.opti-behavior-notice.opti-behavior-trial-notice,
+.wrap > div.notice.opti-behavior-notice.opti-behavior-trial-notice,
+div.notice.opti-behavior-notice.opti-behavior-trial-notice.opti-behavior-trial-notice {
+    padding: 0 !important;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas: "icon text link close";
+    align-items: center;
+    gap: 12px 16px;
+    margin: 0;
+    padding: 18px 20px;
+    border-radius: 12px;
+    overflow: hidden;
+    background:
+        radial-gradient(circle at 88% -60%, rgba(253, 224, 71, 0.22) 0, rgba(253, 224, 71, 0) 45%),
+        linear-gradient(135deg, #4338ca 0%, #6d28d9 55%, #5b21b6 100%);
+    box-shadow: 0 6px 20px rgba(67, 56, 202, 0.28);
+    font-size: 13px;
+    line-height: 1.5;
+    color: #ffffff;
+    animation: opti-behavior-trial-slideIn 0.4s ease-out;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-icon {
+    grid-area: icon;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #fde047;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-text {
+    grid-area: text;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-title {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+    color: #ffffff;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-title strong {
+    padding: 1px 8px;
+    border-radius: 6px;
+    /* Dark chip, not a yellow tint: a yellow tint over the gradient + halo
+     * lightened the background under the yellow text (below AA 4.5:1). */
+    background: rgba(30, 27, 75, 0.5);
+    box-shadow: inset 0 0 0 1px rgba(253, 224, 71, 0.35);
+    color: #fde047;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-features {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 999px;
+    background: rgba(30, 27, 75, 0.38);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+    color: #ffffff;
+    white-space: nowrap;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-pill::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #fde047;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-link {
+    grid-area: link;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 42px;
+    padding: 0 20px;
+    border-radius: 10px;
+    background: #fde047;
+    color: #1e1b4b;
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+    box-shadow: 0 2px 10px rgba(15, 12, 60, 0.3);
+    transition: background-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-link:hover,
+.opti-behavior-trial-notice .opti-behavior-trial-notice-link:focus {
+    background: #facc15;
+    color: #1e1b4b;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-link:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(15, 12, 60, 0.36);
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-link:active {
+    transform: translateY(0);
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-link:focus {
+    box-shadow: none;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-link:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-notice-link svg {
+    flex: 0 0 auto;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-btn-dismiss {
+    grid-area: close;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 8px;
+    color: #ffffff;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-btn-dismiss:hover {
+    background: rgba(255, 255, 255, 0.26);
+    color: #ffffff;
+}
+
+.opti-behavior-trial-notice .opti-behavior-trial-btn-dismiss:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
+
+/* Closing: the script removes the notice after 400 ms. */
+.opti-behavior-trial-notice.opti-behavior-trial-dismissing .opti-behavior-trial-notice-row {
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+@media (max-width: 600px) {
+    .opti-behavior-trial-notice .opti-behavior-trial-notice-row {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-areas:
+            "icon  title close"
+            "feats feats feats"
+            "link  link  link";
+        align-items: start;
+        gap: 12px;
+        padding: 16px;
+    }
+
+    /* Title beside the icon, pills and button on the full width below. */
+    .opti-behavior-trial-notice .opti-behavior-trial-notice-text {
+        display: contents;
+    }
+
+    .opti-behavior-trial-notice .opti-behavior-trial-notice-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+    }
+
+    .opti-behavior-trial-notice .opti-behavior-trial-notice-title {
+        grid-area: title;
+        align-self: center;
+        font-size: 16px;
+    }
+
+    .opti-behavior-trial-notice .opti-behavior-trial-notice-features {
+        grid-area: feats;
+    }
+
+    .opti-behavior-trial-notice .opti-behavior-trial-notice-link {
+        min-height: 44px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .opti-behavior-trial-notice .opti-behavior-trial-notice-row {
+        animation: none;
+    }
+
+    .opti-behavior-trial-notice .opti-behavior-trial-notice-link,
+    .opti-behavior-trial-notice .opti-behavior-trial-btn-dismiss,
+    .opti-behavior-trial-notice.opti-behavior-trial-dismissing .opti-behavior-trial-notice-row {
+        transition: none;
+    }
+
+    .opti-behavior-trial-notice .opti-behavior-trial-notice-link:hover {
+        transform: none;
+    }
+}

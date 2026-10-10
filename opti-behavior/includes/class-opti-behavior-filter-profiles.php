@@ -75,6 +75,33 @@ class Opti_Behavior_Filter_Profiles {
 	private static $instance = null;
 
 	/**
+	 * Labels of the shared filter modules (opti-behavior-filter-profiles.js /
+	 * -filter-ui.js), localized as OptiBehaviorProfilesConfig.i18n on every
+	 * screen that loads the panel, Free and Pro (QA-B-HEAT-087).
+	 *
+	 * @return array<string,string>
+	 */
+	public static function client_i18n() {
+		return array(
+			'genericError'         => __( 'Something went wrong. Please try again.', 'opti-behavior' ),
+			'saveAsNew'            => __( 'Save current filters as new profile', 'opti-behavior' ),
+			'newProfileName'       => __( 'New profile name', 'opti-behavior' ),
+			'save'                 => __( 'Save', 'opti-behavior' ),
+			'cancel'               => __( 'Cancel', 'opti-behavior' ),
+			'rename'               => __( 'Rename', 'opti-behavior' ),
+			'overwrite'            => __( 'Overwrite with current filters', 'opti-behavior' ),
+			'delete'               => __( 'Delete', 'opti-behavior' ),
+			/* translators: %s: filter profile name. */
+			'deleteConfirm'        => __( 'Delete the "%s" filter profile? This cannot be undone.', 'opti-behavior' ),
+			'nameRequired'         => __( 'Please enter a profile name.', 'opti-behavior' ),
+			'networkError'         => __( 'Network error. Please try again.', 'opti-behavior' ),
+			'searchPages'          => __( 'Search pages', 'opti-behavior' ),
+			/* translators: %s: keyword typed in the page search. */
+			'matchPagesContaining' => __( 'Match pages containing "%s"', 'opti-behavior' ),
+		);
+	}
+
+	/**
 	 * Boot the singleton and register the AJAX handlers.
 	 *
 	 * @since 1.8.3.0

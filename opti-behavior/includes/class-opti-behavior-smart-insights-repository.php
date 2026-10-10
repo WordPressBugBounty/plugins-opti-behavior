@@ -319,7 +319,8 @@ class Opti_Behavior_Smart_Insights_Repository {
 			}
 
 			$data['detection_json'] = $this->encode_json_field( $detection, array() );
-			$this->preserve_existing_story_blocks( $data, $existing );
+			$this->preserve_existing_story_blocks( $data, $existing, ! empty( $insight['story_parent_resolved'] ), ! empty( $insight['impact_resolved'] ) );
+			$this->guard_story_parent( $data, (int) $existing['id'] );
 			$data['created_at'] = $existing['created_at'];
 			$data['status']     = $is_ignored && $is_material_worsening ? self::STATUS_NEW : $existing_status;
 
@@ -634,7 +635,10 @@ class Opti_Behavior_Smart_Insights_Repository {
 		$limit   = max( 1, min( 500, absint( $args['limit'] ) ) );
 		$offset  = max( 0, absint( $args['offset'] ) );
 
-		$sql      = "SELECT * FROM {$this->table} WHERE " . implode( ' AND ', $where ) . " ORDER BY {$orderby} {$order} LIMIT %d OFFSET %d";
+		// `id` breaks ties (one generation run stamps many rows with the same
+		// time), so LIMIT / OFFSET pages never repeat or skip a row (OPT-268).
+		$tiebreak = 'id' === $orderby ? '' : ", id {$order}";
+		$sql      = "SELECT * FROM {$this->table} WHERE " . implode( ' AND ', $where ) . " ORDER BY {$orderby} {$order}{$tiebreak} LIMIT %d OFFSET %d";
 		$values[] = $limit;
 		$values[] = $offset;
 
@@ -913,6 +917,9 @@ class Opti_Behavior_Smart_Insights_Repository {
 			$output[] = $latest;
 		}
 
+		$output = $this->merge_entity_families( $output );
+		$output = $this->attach_action_signals( $output );
+
 		usort(
 			$output,
 			function( $a, $b ) {
@@ -921,6 +928,235 @@ class Opti_Behavior_Smart_Insights_Repository {
 		);
 
 		return array_values( $output );
+	}
+
+	/**
+	 * One card per problem and entity (OPT-378 A): open cards of the same
+	 * family (Recommendations::merge_family()), entity and period become the
+	 * card with the most visits lost (then the higher priority score, then the
+	 * first in the set). The others ride on it as `also_seen_here` (detail
+	 * line, one figure each) and their ids in `merged_ids`. Closed cards and
+	 * cards without a family are untouched.
+	 *
+	 * @param array $insights Collapsed decoded rows.
+	 * @return array
+	 */
+	public function merge_entity_families( $insights ) {
+		if ( ! is_array( $insights ) || count( $insights ) < 2 || ! class_exists( 'Opti_Behavior_Smart_Insights_Recommendations' ) ) {
+			return is_array( $insights ) ? array_values( $insights ) : array();
+		}
+
+		$open   = array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS );
+		$groups = array();
+		foreach ( array_values( $insights ) as $index => $insight ) {
+			$family = is_array( $insight ) && isset( $insight['signal_id'] ) ? Opti_Behavior_Smart_Insights_Recommendations::merge_family( $insight['signal_id'] ) : '';
+			$status = isset( $insight['status'] ) ? sanitize_key( $insight['status'] ) : '';
+			$entity = isset( $insight['entity_id'] ) ? (string) $insight['entity_id'] : '';
+			if ( '' === $family || '' === $entity || ! in_array( $status, $open, true ) ) {
+				continue;
+			}
+			$group_key = (string) ( $insight['group_key'] ?? '' );
+			$scope     = false !== strpos( $group_key, '|si_spam_scope:' ) ? substr( $group_key, strpos( $group_key, '|si_spam_scope:' ) ) : '';
+			$key       = implode( '|', array( $family, (string) ( $insight['entity_type'] ?? '' ), $entity, (string) ( $insight['date_from'] ?? '' ), (string) ( $insight['date_to'] ?? '' ), $scope ) );
+
+			$groups[ $key ][] = $index;
+		}
+
+		$insights = array_values( $insights );
+		$drop     = array();
+		foreach ( $groups as $indexes ) {
+			if ( count( $indexes ) < 2 ) {
+				continue;
+			}
+			usort(
+				$indexes,
+				function( $a, $b ) use ( $insights ) {
+					$lost_a = self::merge_users_lost( $insights[ $a ] );
+					$lost_b = self::merge_users_lost( $insights[ $b ] );
+					if ( $lost_a !== $lost_b ) {
+						return $lost_a < $lost_b ? 1 : -1;
+					}
+					$prio_a = isset( $insights[ $a ]['scores']['priority_score'] ) ? (float) $insights[ $a ]['scores']['priority_score'] : 0.0;
+					$prio_b = isset( $insights[ $b ]['scores']['priority_score'] ) ? (float) $insights[ $b ]['scores']['priority_score'] : 0.0;
+					if ( $prio_a !== $prio_b ) {
+						return $prio_a < $prio_b ? 1 : -1;
+					}
+
+					return $a - $b;
+				}
+			);
+
+			$primary = array_shift( $indexes );
+			$also    = isset( $insights[ $primary ]['also_seen_here'] ) && is_array( $insights[ $primary ]['also_seen_here'] ) ? $insights[ $primary ]['also_seen_here'] : array();
+			$ids     = isset( $insights[ $primary ]['merged_ids'] ) && is_array( $insights[ $primary ]['merged_ids'] ) ? $insights[ $primary ]['merged_ids'] : array();
+			foreach ( $indexes as $index ) {
+				$row    = $insights[ $index ];
+				$also[] = array(
+					'id'           => isset( $row['id'] ) ? (int) $row['id'] : 0,
+					'signal_id'    => (string) ( $row['signal_id'] ?? '' ),
+					'signal_name'  => (string) ( $row['signal_name'] ?? '' ),
+					'entity_type'  => (string) ( $row['entity_type'] ?? '' ),
+					'entity_id'    => (string) ( $row['entity_id'] ?? '' ),
+					'entity_label' => (string) ( $row['entity_label'] ?? '' ),
+					'metrics'      => isset( $row['metrics'] ) && is_array( $row['metrics'] ) ? $row['metrics'] : array(),
+					'detection'    => isset( $row['detection'] ) && is_array( $row['detection'] ) ? $row['detection'] : array(),
+					'users_lost'   => self::merge_users_lost( $row ),
+				);
+				if ( ! empty( $row['id'] ) ) {
+					$ids[] = (int) $row['id'];
+				}
+				$drop[ $index ] = true;
+			}
+			$insights[ $primary ]['also_seen_here'] = $also;
+			$insights[ $primary ]['merged_ids']     = array_values( array_unique( $ids ) );
+		}
+
+		if ( ! $drop ) {
+			return $insights;
+		}
+
+		return array_values( array_diff_key( $insights, $drop ) );
+	}
+
+	/**
+	 * Action signals ride on the card of their page (OPT-378 B,
+	 * Recommendations::ACTION_SIGNALS): a session_recording_opportunity
+	 * becomes the host's `recording_action` (recordings count), an
+	 * ab_test_opportunity its `ab_action` — only when the test can run
+	 * (hypothesis: 2 × sessions per variant / daily sessions <= 90 days, else
+	 * the detection's test_days_needed <= 90). Host = an open problem card of
+	 * the same entity, period and spam scope (highest priority score, then
+	 * visits lost). The action cards are never returned as cards: rows stay
+	 * in the table untouched.
+	 *
+	 * @param array $insights Collapsed decoded rows.
+	 * @return array
+	 */
+	public function attach_action_signals( $insights ) {
+		if ( ! is_array( $insights ) || ! class_exists( 'Opti_Behavior_Smart_Insights_Recommendations' ) ) {
+			return is_array( $insights ) ? array_values( $insights ) : array();
+		}
+
+		$insights = array_values( $insights );
+		$open     = array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS );
+		$actions  = array();
+		$hosts    = array();
+		foreach ( $insights as $index => $insight ) {
+			if ( ! is_array( $insight ) ) {
+				continue;
+			}
+			$kind = Opti_Behavior_Smart_Insights_Recommendations::action_signal_kind( $insight['signal_id'] ?? '' );
+			$key  = $this->action_entity_key( $insight );
+			if ( '' !== $kind ) {
+				$actions[ $index ] = array( $kind, $key );
+				continue;
+			}
+			$status = isset( $insight['status'] ) ? sanitize_key( $insight['status'] ) : '';
+			if ( '' === $key || ! in_array( $status, $open, true ) ) {
+				continue;
+			}
+			$best = isset( $hosts[ $key ] ) ? $insights[ $hosts[ $key ] ] : null;
+			if ( null === $best || $this->action_host_rank( $insight ) > $this->action_host_rank( $best ) ) {
+				$hosts[ $key ] = $index;
+			}
+		}
+
+		if ( ! $actions ) {
+			return $insights;
+		}
+
+		foreach ( $actions as $index => $action ) {
+			list( $kind, $key ) = $action;
+			$row    = $insights[ $index ];
+			$status = isset( $row['status'] ) ? sanitize_key( $row['status'] ) : '';
+			if ( '' === $key || ! isset( $hosts[ $key ] ) || ! in_array( $status, $open, true ) ) {
+				continue;
+			}
+			$host_index = $hosts[ $key ];
+			if ( 'recording' === $kind ) {
+				$count = isset( $row['metrics']['recordings'] ) && is_numeric( $row['metrics']['recordings'] ) ? (int) $row['metrics']['recordings'] : 0;
+				if ( $count > 0 ) {
+					$insights[ $host_index ]['recording_action'] = array(
+						'id'         => isset( $row['id'] ) ? (int) $row['id'] : 0,
+						'recordings' => $count,
+					);
+				}
+			} elseif ( 'ab_test' === $kind ) {
+				$days = self::ab_test_days( $row );
+				if ( null !== $days && $days <= 90 ) {
+					$insights[ $host_index ]['ab_action'] = array(
+						'id'   => isset( $row['id'] ) ? (int) $row['id'] : 0,
+						'days' => $days,
+					);
+				}
+			}
+		}
+
+		return array_values( array_diff_key( $insights, $actions ) );
+	}
+
+	/**
+	 * Same entity, same period, same spam scope (the action ↔ host key).
+	 *
+	 * @param array $insight Insight row.
+	 * @return string '' without an entity.
+	 */
+	private function action_entity_key( $insight ) {
+		$entity = isset( $insight['entity_id'] ) ? (string) $insight['entity_id'] : '';
+		if ( '' === $entity ) {
+			return '';
+		}
+		$group_key = (string) ( $insight['group_key'] ?? '' );
+		$scope     = false !== strpos( $group_key, '|si_spam_scope:' ) ? substr( $group_key, strpos( $group_key, '|si_spam_scope:' ) ) : '';
+
+		return implode( '|', array( (string) ( $insight['entity_type'] ?? '' ), $entity, (string) ( $insight['date_from'] ?? '' ), (string) ( $insight['date_to'] ?? '' ), $scope ) );
+	}
+
+	/**
+	 * Host choice: priority score first, visits lost second.
+	 *
+	 * @param array $insight Insight row.
+	 * @return float
+	 */
+	private function action_host_rank( $insight ) {
+		$priority = isset( $insight['scores']['priority_score'] ) && is_numeric( $insight['scores']['priority_score'] ) ? (float) $insight['scores']['priority_score'] : 0.0;
+
+		return $priority * 1000000 + self::merge_users_lost( $insight );
+	}
+
+	/**
+	 * Days an A/B test needs at the current traffic, from the stored row, or
+	 * null when nothing measured it. Same rule as the screen
+	 * (smart-insights.js getHypothesisFeasibility()).
+	 *
+	 * @param array $row ab_test_opportunity row.
+	 * @return int|null
+	 */
+	public static function ab_test_days( $row ) {
+		$sample = isset( $row['hypothesis']['sample_size'] ) && is_array( $row['hypothesis']['sample_size'] ) ? $row['hypothesis']['sample_size'] : array();
+		if ( isset( $sample['available'] ) && false === $sample['available'] ) {
+			return null;
+		}
+		$per_variant = isset( $sample['per_variant'] ) ? (int) $sample['per_variant'] : 0;
+		$daily       = isset( $sample['daily_sessions'] ) && is_numeric( $sample['daily_sessions'] ) ? (float) $sample['daily_sessions'] : 0.0;
+		if ( $per_variant > 0 && $daily > 0 ) {
+			return (int) ceil( ( $per_variant * 2 ) / $daily );
+		}
+		if ( isset( $row['detection']['test_days_needed'] ) && is_numeric( $row['detection']['test_days_needed'] ) && (int) $row['detection']['test_days_needed'] > 0 ) {
+			return (int) $row['detection']['test_days_needed'];
+		}
+
+		return null;
+	}
+
+	/**
+	 * Visits lost of a card for the family merge (scores.impact.users_lost, 0 when unknown).
+	 *
+	 * @param array $insight Insight row.
+	 * @return int
+	 */
+	private static function merge_users_lost( $insight ) {
+		return isset( $insight['scores']['impact']['users_lost'] ) && is_numeric( $insight['scores']['impact']['users_lost'] ) ? max( 0, (int) round( (float) $insight['scores']['impact']['users_lost'] ) ) : 0;
 	}
 
 	/**
@@ -940,19 +1176,27 @@ class Opti_Behavior_Smart_Insights_Repository {
 			return is_array( $insights ) ? array_values( $insights ) : array();
 		}
 
+		// id => parent id of every present card.
 		$present = array();
 		foreach ( $insights as $insight ) {
 			$id = isset( $insight['id'] ) ? (int) $insight['id'] : 0;
 			if ( $id > 0 ) {
-				$present[ $id ] = true;
+				$present[ $id ] = isset( $insight['parent_insight_id'] ) ? (int) $insight['parent_insight_id'] : 0;
 			}
 		}
 
 		$output = array();
 		foreach ( $insights as $insight ) {
+			$id        = isset( $insight['id'] ) ? (int) $insight['id'] : 0;
 			$parent_id = isset( $insight['parent_insight_id'] ) ? (int) $insight['parent_insight_id'] : 0;
-			if ( $parent_id > 0 && isset( $present[ $parent_id ] ) ) {
-				continue;
+			// Only a parent that stays top-level itself hides its child: a
+			// self-parent or an A <-> B loop never hides both cards (OPT-298).
+			// Same rule as groupCenterItems() in smart-insights.js.
+			if ( $parent_id > 0 && $parent_id !== $id && isset( $present[ $parent_id ] ) ) {
+				$grand_parent_id = $present[ $parent_id ];
+				if ( $grand_parent_id <= 0 || $grand_parent_id === $parent_id || ! isset( $present[ $grand_parent_id ] ) ) {
+					continue;
+				}
 			}
 			$output[] = $insight;
 		}
@@ -2158,13 +2402,28 @@ class Opti_Behavior_Smart_Insights_Repository {
 	 *
 	 * @since 1.3.8
 	 *
-	 * @param array $data     Prepared incoming insight data (by reference).
-	 * @param array $existing Existing database row.
+	 * The parent link is kept only when the caller did not decide the story
+	 * roles itself: once the correlator ran, a card that is now primary or alone
+	 * must lose its old parent (OPT-298: swapped roles made A <-> B loops).
+	 *
+	 * The impact block is not kept when the run priced this card itself: no
+	 * impact then means "no loss now", and an old figure stayed on cards that
+	 * lose nothing (OPT-530: traffic spikes still showing "92 sessions lost").
+	 *
+	 * @param array $data            Prepared incoming insight data (by reference).
+	 * @param array $existing        Existing database row.
+	 * @param bool  $parent_resolved Whether this run decided the parent link.
+	 * @param bool  $impact_resolved Whether this run calculated the impact.
 	 * @return void
 	 */
-	private function preserve_existing_story_blocks( &$data, $existing ) {
+	private function preserve_existing_story_blocks( &$data, $existing, $parent_resolved = false, $impact_resolved = false ) {
 		foreach ( array_keys( self::get_story_block_columns() ) as $column ) {
 			if ( ! empty( $data[ $column ] ) ) {
+				continue;
+			}
+
+			if ( $impact_resolved && 'impact_json' === $column ) {
+				$data[ $column ] = null;
 				continue;
 			}
 
@@ -2173,9 +2432,83 @@ class Opti_Behavior_Smart_Insights_Repository {
 			}
 		}
 
-		if ( empty( $data['parent_insight_id'] ) && ! empty( $existing['parent_insight_id'] ) ) {
+		if ( ! $parent_resolved && empty( $data['parent_insight_id'] ) && ! empty( $existing['parent_insight_id'] ) ) {
 			$data['parent_insight_id'] = (int) $existing['parent_insight_id'];
 		}
+	}
+
+	/**
+	 * Never store a self-parent or a two-card parent loop.
+	 *
+	 * When the designated parent already points back at this card, the incoming
+	 * link is dropped so the pair keeps one top-level card (OPT-298).
+	 *
+	 * @param array $data    Prepared insight data (by reference).
+	 * @param int   $self_id Id of the row being updated.
+	 * @return void
+	 */
+	private function guard_story_parent( &$data, $self_id ) {
+		global $wpdb;
+
+		$parent_id = isset( $data['parent_insight_id'] ) ? (int) $data['parent_insight_id'] : 0;
+		if ( $parent_id <= 0 || $self_id <= 0 ) {
+			return;
+		}
+
+		if ( $parent_id === $self_id ) {
+			$data['parent_insight_id'] = null;
+			return;
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Plugin-owned table name; the id is prepared.
+		$grand_parent = (int) $wpdb->get_var( $wpdb->prepare( "SELECT parent_insight_id FROM {$this->table} WHERE id = %d", $parent_id ) );
+		if ( $grand_parent === $self_id ) {
+			$data['parent_insight_id'] = null;
+		}
+	}
+
+	/**
+	 * Clear the parent link of cards caught in a parent loop.
+	 *
+	 * 1.9.2.x stored A -> B and B -> A when two runs swapped story roles; the
+	 * list then drew neither card. Self-parents and two-card loops get a NULL
+	 * parent; every other row is left untouched. One-time repair (OPT-298).
+	 *
+	 * @return int Rows repaired.
+	 */
+	public function repair_story_parent_loops() {
+		global $wpdb;
+
+		if ( ! $this->table_exists() ) {
+			return 0;
+		}
+
+		// Plugin-owned table name, no user input (sniffs are disabled for the whole file, see the header).
+		// Only story children carry a parent: a small set, matched in PHP (a
+		// self-join cannot run on the TEMPORARY shadow tables of the tests).
+		$rows = $wpdb->get_results( "SELECT id, parent_insight_id FROM {$this->table} WHERE parent_insight_id > 0", ARRAY_A );
+
+		$parent_of = array();
+		foreach ( (array) $rows as $row ) {
+			$parent_of[ (int) $row['id'] ] = (int) $row['parent_insight_id'];
+		}
+
+		$ids = array();
+		foreach ( $parent_of as $id => $parent_id ) {
+			if ( $parent_id === $id || ( isset( $parent_of[ $parent_id ] ) && $parent_of[ $parent_id ] === $id ) ) {
+				$ids[] = $id;
+			}
+		}
+
+		if ( empty( $ids ) ) {
+			return 0;
+		}
+
+		$updated = $wpdb->query( "UPDATE {$this->table} SET parent_insight_id = NULL WHERE id IN (" . implode( ',', $ids ) . ')' );
+
+		self::flush_menu_severity();
+
+		return false === $updated ? 0 : (int) $updated;
 	}
 
 	/**

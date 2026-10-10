@@ -371,7 +371,7 @@
 
 							$('#spam-recalc-progress-bar').css('width', progress + '%');
 							$('#spam-recalc-percent').text(progress + '%');
-							$('#spam-recalc-status').text('Processing ' + processed.toLocaleString() + ' of ' + totalSessions.toLocaleString() + ' sessions...');
+							$('#spam-recalc-status').text('Processing ' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(processed) : String(processed)) + ' of ' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalSessions) : String(totalSessions)) + ' sessions...');
 
 							// Process next batch
 							processSpamBatch(response.data.next_offset, totalSessions);
@@ -1530,7 +1530,7 @@
 		function formatDate(dateStr) {
 			var date = new Date(dateStr);
 			var options = { year: 'numeric', month: 'short', day: 'numeric' };
-			return date.toLocaleDateString(undefined, options);
+			return (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.date(date, options) : new Date(date).toDateString());
 		}
 
 		/**
@@ -1750,7 +1750,7 @@
 			if (isNaN(number)) {
 				number = 0;
 			}
-			return number.toLocaleString();
+			return (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(number) : String(number));
 		}
 
 		/**
@@ -2447,7 +2447,7 @@
 					allExact = false;
 				}
 			});
-			var fmt = total.toLocaleString();
+			var fmt = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(total) : String(total));
 			setStat('records', allExact ? fmt : (S.storageApprox || '≈') + ' ' + fmt);
 		}
 
@@ -2503,7 +2503,7 @@
 					var totals = response.data.totals || {};
 
 					setStat('db_size', totals.db_size_fmt || '');
-					setStat('tables', (totals.table_count || 0).toLocaleString());
+					setStat('tables', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totals.table_count || 0) : String(totals.table_count || 0)));
 
 					estimateRows = {};
 					exactRows = {};

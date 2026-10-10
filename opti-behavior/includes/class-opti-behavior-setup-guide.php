@@ -182,7 +182,7 @@ class Opti_Behavior_Setup_Guide {
 		if ( '' === $screen ) {
 			return;
 		}
-		if ( class_exists( 'Opti_Behavior_Welcome' ) && ! Opti_Behavior_Welcome::has_consent() ) {
+		if ( class_exists( 'Opti_Behavior_Welcome' ) && ! Opti_Behavior_Welcome::has_made_choice() ) {
 			return;
 		}
 
@@ -413,7 +413,10 @@ class Opti_Behavior_Setup_Guide {
 		// 1. Visits received.
 		$last       = self::last_visit();
 		$mismatches = class_exists( 'Opti_Behavior_Tracker_Heartbeat' ) ? Opti_Behavior_Tracker_Heartbeat::instance()->get_cached_mismatches() : array();
-		$doc_url    = class_exists( 'Opti_Behavior_Tracker_Heartbeat' ) ? Opti_Behavior_Tracker_Heartbeat::DOC_URL : 'https://optiuser.com/support/';
+		if ( ! class_exists( 'Opti_Behavior_Tracker_Heartbeat' ) ) {
+			require_once __DIR__ . '/class-opti-behavior-tracker-heartbeat.php';
+		}
+		$doc_url = Opti_Behavior_Tracker_Heartbeat::DOC_URL;
 		if ( '' === $last ) {
 			$rows['tracker'] = array( 'info', __( 'Waiting for your first visit', 'opti-behavior' ), __( 'Open your site in a private window: your visit shows up here within a minute.', 'opti-behavior' ), home_url( '/' ), __( 'Open your site', 'opti-behavior' ) );
 		} elseif ( ! empty( $mismatches ) ) {
@@ -480,6 +483,13 @@ class Opti_Behavior_Setup_Guide {
 			);
 		} else {
 			$rows['cron'] = array( 'ok', __( 'Background tasks run on time', 'opti-behavior' ), __( 'Smart Insights and reports are up to date.', 'opti-behavior' ), '', '' );
+		}
+
+		// 4. Data folder: listed only while files cannot be written, so the
+		// all-OK line above stays true.
+		$storage = class_exists( 'Opti_Behavior_Storage_Health' ) ? Opti_Behavior_Storage_Health::setup_check_row() : null;
+		if ( null !== $storage ) {
+			$rows['storage'] = $storage;
 		}
 
 		return $rows;

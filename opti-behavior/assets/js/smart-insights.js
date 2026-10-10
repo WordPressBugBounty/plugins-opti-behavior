@@ -13,10 +13,12 @@
 	var i18n = config.i18n || {};
 	var ajaxUrl = config.ajaxUrl || window.ajaxurl || '/wp-admin/admin-ajax.php';
 	var nonce = config.nonce || (window.opti_behaviorData && window.opti_behaviorData.nonce) || '';
-	var upgradeUrl = config.upgradeUrl || config.upgrade_url || 'https://optiuser.com/opti-behavior/ob-download-pro/';
+	// OPT-764: the Pro trial page comes from PHP (Trial_Invite::link_url), no URL here.
+	var upgradeUrl = config.upgradeUrl || config.upgrade_url || '';
 	var hasProAccess = !!config.hasProAccess;
 	var excludeSpamDefault = config.excludeSpamDefault === '1';
 	var activeModal = null;
+	var modalReturnFocus = null;
 	var activeModalSection = null;
 	var activeSegmentScope = null;
 	// Incremented per rendered collapsed block so each toggle owns a unique id
@@ -47,10 +49,14 @@
 		callback();
 	}
 
+	// Safe for HTML text AND quoted attributes: escapes & < > " '.
 	function escapeHtml(value) {
-		var div = document.createElement('div');
-		div.textContent = value === null || value === undefined ? '' : String(value);
-		return div.innerHTML;
+		return (value === null || value === undefined ? '' : String(value))
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#039;');
 	}
 
 	// --- Help tooltips -------------------------------------------------------
@@ -192,6 +198,7 @@
 		var startEl = section.querySelector('.ob-smart-insights-start-date');
 		var endEl = section.querySelector('.ob-smart-insights-end-date');
 		var statusEl = section.querySelector('.ob-smart-insights-status');
+		data.hasStatusControl = !!statusEl;
 		var severityEl = section.querySelector('.ob-smart-insights-severity');
 		var categoryEl = section.querySelector('.ob-smart-insights-category');
 		var entityTypeEl = section.querySelector('.ob-smart-insights-entity-type');
@@ -503,7 +510,7 @@
 
 	function formatNumber(value) {
 		var number = parseFloat(value);
-		return isNaN(number) ? '-' : number.toLocaleString();
+		return isNaN(number) ? '-' : (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(number) : String(number));
 	}
 
 	function formatPercent(value) {
@@ -651,7 +658,9 @@
 		var excludeSpam = normalizeExcludeSpam(firstContextValue([report.exclude_spam, insight.exclude_spam, metrics.exclude_spam, metrics.spam_scope, insight.detection && insight.detection.spam_scope]));
 		var cohortStartAt = normalizeDateTime(firstContextValue([report.cohort_start_at, insight.cohort_start_at, metrics.cohort_start_at, startDate]), 'start');
 		var cohortEndAt = normalizeDateTime(firstContextValue([report.cohort_end_at, insight.cohort_end_at, metrics.cohort_end_at, insight.last_seen_at, metrics.last_seen_at, endDate]), 'end');
-		var insightId = firstContextValue([report.insight_id, insight.id]);
+		// OPT-516 D8: stored reports carry insight_id 0 (built before the row
+		// had an id): that never wins over the card's own id.
+		var insightId = firstContextValue([parseInt(report.insight_id, 10) > 0 ? report.insight_id : '', insight.id]);
 		if (pageId === '0') {
 			pageId = '';
 		}
@@ -1240,6 +1249,90 @@
 		return '<span class="ob-si-provisional" title="' + escapeHtml(i18n.provisionalHint || 'Too few visits for a firm verdict: read it as an observation to confirm.') + '">' + escapeHtml(fillToken(i18n.provisionalVisits || 'Provisional · %s visits', '%s', formatNumber(n))) + '</span>';
 	}
 
+	// OPT-378 A: one card per problem and entity. The list payload carries the
+	// merged signals (`also_seen_here`); the detail endpoint reads one row, so
+	// the lines are kept by card id and put back when the detail opens. Same
+	// for the actions of the page (B: `recording_action`, `ab_action`) and the
+	// card title (D2: the weekly brief names cards by their title).
+	// Older renderers reach the new helpers through `typeof` guards: the unit
+	// harnesses lift those renderers one by one, without these helpers.
+	var alsoSeenById = {};
+
+	function rememberAlsoSeen(insight) {
+		if (!insight || !insight.id) {
+			return;
+		}
+		var entry = {
+			items: Array.isArray(insight.also_seen_here) ? insight.also_seen_here : [],
+			label: insight.also_seen_label || '',
+			recording: insight.recording_action && typeof insight.recording_action === 'object' ? insight.recording_action : null,
+			ab: insight.ab_action && typeof insight.ab_action === 'object' ? insight.ab_action : null,
+			title: String(insight.card_title || '').trim()
+		};
+		if (entry.items.length || entry.recording || entry.ab || entry.title) {
+			alsoSeenById[String(insight.id)] = entry;
+		}
+	}
+
+	// `recording_action` / `ab_action` of a card, from its payload or from the list.
+	function getAttachedAction(insight, key, cacheKey) {
+		if (insight && insight[key] && typeof insight[key] === 'object') {
+			return insight[key];
+		}
+		var entry = insight && insight.id ? alsoSeenById[String(insight.id)] : null;
+		return entry && entry[cacheKey] ? entry[cacheKey] : null;
+	}
+
+	// OPT-378 B: "Watch N recordings of this page" = the proof button of the
+	// card (session_recording_opportunity of the same page); locked for Free.
+	function renderRecordingProof(insight) {
+		var action = getAttachedAction(insight, 'recording_action', 'recording');
+		var label = action ? String(action.label || '').trim() : '';
+		if (!label) {
+			return '';
+		}
+		if (action.locked) {
+			return '<span class="button button-secondary ob-si-proof-locked" aria-disabled="true" title="' + escapeHtml(i18n.proRelatedLocked || 'Requires Pro data.') + '"><i data-lucide="lock"></i>' + escapeHtml(label) + ' <span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLockedShort || 'Pro') + '</span></span>';
+		}
+		var resolved = resolveRelatedReportLink({ type: 'session_recordings' }, insight);
+		if (!resolved.url) {
+			return '';
+		}
+		return '<a class="button button-primary ob-smart-insights-report-cta ob-si-proof-recordings" href="' + escapeHtml(resolved.url) + '" target="_blank" rel="noopener noreferrer"><i data-lucide="video"></i>' + escapeHtml(label) + '</a>';
+	}
+
+	// OPT-378 B: "Start an A/B test" from the stored A/B opportunity of the
+	// page. The server sends it only when the test can run (<= 90 days).
+	function renderAbAction(insight) {
+		var action = getAttachedAction(insight, 'ab_action', 'ab');
+		var id = action ? parseInt(action.insight_id, 10) || 0 : 0;
+		var label = action ? String(action.label || '').trim() : '';
+		var url = id && label ? buildInsightAbBuilderUrl({ id: id }) : '';
+		if (!url) {
+			return '';
+		}
+		return '<a class="button button-secondary ob-si-ab-action" href="' + escapeHtml(url) + '"><i data-lucide="flask-conical"></i>' + escapeHtml(label) + '</a>';
+	}
+
+	function renderAlsoSeenLine(insight) {
+		var items = insight && Array.isArray(insight.also_seen_here) ? insight.also_seen_here : [];
+		var label = insight ? insight.also_seen_label : '';
+		if (!items.length && insight && insight.id && alsoSeenById[String(insight.id)]) {
+			items = alsoSeenById[String(insight.id)].items || [];
+			label = alsoSeenById[String(insight.id)].label;
+		}
+		if (!items.length) {
+			return '';
+		}
+		var lines = items.map(function(item) {
+			var lost = parseInt(item && item.users_lost, 10) || 0;
+			var figure = lost > 0 ? ' <span class="ob-si-also-seen__figure">' + escapeHtml(formatNumber(lost) + ' ' + (i18n.figureVisitsLost || 'visits lost')) + '</span>' : '';
+			return '<li>' + escapeHtml(item && item.title ? item.title : '') + figure + '</li>';
+		}).join('');
+
+		return '<div class="ob-si-also-seen">' + (label ? '<span class="ob-si-also-seen__label">' + escapeHtml(label) + '</span>' : '') + '<ul>' + lines + '</ul></div>';
+	}
+
 	function renderDuplicatesLine(insight) {
 		var dups = insight && insight.detection && Array.isArray(insight.detection.duplicates) ? insight.detection.duplicates : [];
 		if (!dups.length) {
@@ -1259,26 +1352,6 @@
 		}).join('');
 
 		return '<details class="ob-smart-insights-duplicates"><summary>' + escapeHtml(summary) + '</summary><ul>' + items + '</ul></details>';
-	}
-
-	function renderEntityReference(insight, options) {
-		options = options || {};
-		var context = getEntityContext(insight);
-		var links = context.links;
-		if (options.includeReportLinks === false) {
-			links = links.filter(function(link) {
-				return link.kind !== 'report';
-			});
-		}
-		var identifierHtml = context.identifier ? '<small class="ob-smart-insights-entity-url" title="' + escapeHtml(context.identifier) + '">' + escapeHtml(context.identifier) + '</small>' : '';
-		var linksHtml = links.length
-			? '<span class="ob-smart-insights-entity-links">' + links.slice(0, 3).map(function(link) {
-				return '<a class="ob-smart-insights-entity-link-pill" href="' + escapeHtml(link.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(link.label) + '</a>';
-			}).join('') + '</span>'
-			: '';
-		var label = context.label || getPageLabel(insight);
-
-		return '<span class="ob-smart-insights-entity-ref" title="' + escapeHtml(label) + '"><span class="ob-smart-insights-entity-copy"><strong>' + escapeHtml(label) + '</strong>' + identifierHtml + '</span>' + linksHtml + '</span>';
 	}
 
 	function isGenericReportLabel(label) {
@@ -1398,27 +1471,6 @@
 		return labels[status] || status || 'new';
 	}
 
-	function getCategoryLabel(category) {
-		// Server map first: same labels as the filter, Pro categories included.
-		if (category && i18n.categoryLabels && typeof i18n.categoryLabels[category] === 'string' && i18n.categoryLabels[category]) {
-			return i18n.categoryLabels[category];
-		}
-		var labels = {
-			'UX/CRO': i18n.categoryUxCro || 'UX / CRO',
-			'Page Engagement': i18n.categoryEngagement || 'Engagement Issue',
-			'Exit and Abandonment': i18n.categoryExit || 'Exit / Abandonment',
-			'Device Friction': i18n.categoryDevice || 'Mobile Issue',
-			'Trend and Anomaly': i18n.categoryTrend || 'Traffic Quality',
-			'Funnel Drop-off': i18n.categoryFunnel || 'Funnel Drop-off',
-			'Form Friction': i18n.categoryForm || 'Form Friction',
-			'Technical Issue': i18n.categoryTechnical || 'Technical Issue',
-			'Campaign Issue': i18n.categoryCampaign || 'Campaign Issue',
-			'Revenue Opportunity': i18n.categoryRevenue || 'Revenue Opportunity',
-			'Experiment Learning': i18n.categoryLearning || 'Experiment learning'
-		};
-		return labels[category] || category || (i18n.categoryGeneral || 'General');
-	}
-
 	function formatSignedPercent(value) {
 		var number = parseFloat(value);
 		if (isNaN(number)) {
@@ -1438,8 +1490,9 @@
 		var search = String(contextData.search || '').toLowerCase().trim();
 
 		return items.filter(function(insight) {
-			var priorityLabel = String(getPriorityLabel(insight)).toLowerCase();
-			if (severity && priorityLabel !== severity) {
+			// Canonical English key, never the translated label (QA-B-SI-151).
+			var priorityKey = (insight && insight.scores && insight.scores.priority_label_key ? String(insight.scores.priority_label_key) : String((insight && insight.scores && insight.scores.priority_label) || getPriorityLabel(insight) || '')).toLowerCase();
+			if (severity && priorityKey !== severity) {
 				return false;
 			}
 
@@ -1462,7 +1515,8 @@
 	}
 
 	function getSeverityWeight(insight) {
-		var label = String(getPriorityLabel(insight) || '').toLowerCase();
+		// Canonical English key, never the translated label (QA-B-SI-151).
+		var label = (insight && insight.scores && insight.scores.priority_label_key ? String(insight.scores.priority_label_key) : String((insight && insight.scores && insight.scores.priority_label) || getPriorityLabel(insight) || '')).toLowerCase();
 		if (label === 'critical') {
 			return 4;
 		}
@@ -1628,18 +1682,34 @@
 	// the top-level order stays exactly what sortInsightsForCenter() produced.
 	// A child whose parent is missing from the filtered set (resolved, ignored,
 	// other status...) stays a top-level card: no insight is ever dropped.
+	// Neither is a self-parent or an A <-> B parent loop (OPT-298): only a
+	// parent that is itself top-level can adopt a child.
 	function groupCenterItems(items) {
-		var present = {};
+		var parentOf = {};
 		var childrenByParent = {};
 		var topLevel = [];
 
 		items.forEach(function(insight) {
-			present[String(insight.id)] = true;
+			parentOf[String(insight.id)] = parseInt(insight.parent_insight_id, 10) || 0;
 		});
 
+		function adoptingParent(insight) {
+			var id = parseInt(insight.id, 10) || 0;
+			var parentId = parentOf[String(insight.id)] || 0;
+			if (!parentId || parentId === id || !Object.prototype.hasOwnProperty.call(parentOf, String(parentId))) {
+				return 0;
+			}
+			var grandParentId = parentOf[String(parentId)];
+			// The parent must render at top level itself, else neither card shows.
+			if (grandParentId && grandParentId !== parentId && Object.prototype.hasOwnProperty.call(parentOf, String(grandParentId))) {
+				return 0;
+			}
+			return parentId;
+		}
+
 		items.forEach(function(insight) {
-			var parentId = parseInt(insight.parent_insight_id, 10) || 0;
-			if (parentId && present[String(parentId)]) {
+			var parentId = adoptingParent(insight);
+			if (parentId) {
 				if (!childrenByParent[String(parentId)]) {
 					childrenByParent[String(parentId)] = [];
 				}
@@ -1757,31 +1827,25 @@
 			formatNumber(members.length)
 		);
 		var lines = members.map(renderSourceGroupMember).join('');
-		var detectedTime = renderDetectedTime(leader);
+		var period = getInsightPeriodText(leader);
 
-		return '<article class="ob-smart-insights-center-card is-' + escapeHtml(priorityClass) + ' is-source-group" data-source-group="' + escapeHtml(getSignalId(leader)) + '">' +
+		// Same anatomy as a single card (OPT-362): title + priority, sub-line,
+		// the sources as the "figures", the leader's action + proof.
+		return '<article class="ob-smart-insights-center-card ob-si-card is-' + escapeHtml(priorityClass) + ' is-source-group" data-source-group="' + escapeHtml(getSignalId(leader)) + '">' +
 			'<span class="ob-smart-insights-severity-rail" aria-hidden="true"></span>' +
-			'<div class="ob-smart-insights-center-main ob-smart-insights-primary-zone">' +
-				'<div class="ob-smart-insights-title-row">' +
-					'<h3 title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</h3>' +
-					renderSignalTooltip(leader, { position: 'bottom' }) +
-				'</div>' +
-				renderCenterHeaderChips(leader, priorityLabel, priorityClass) +
-				'<p class="ob-smart-insights-explanation">' + escapeHtml(i18n.sourceGroupExplanation || 'The same signal fired on several traffic sources. Open a source to see its own diagnosis.') + '</p>' +
-				'<div class="ob-smart-insights-source-group">' +
-					'<span class="ob-smart-insights-source-group-label">' + escapeHtml(fillToken(i18n.sourceGroupCount || '%s traffic sources', '%s', formatNumber(members.length))) + '</span>' +
-					'<ul>' + lines + '</ul>' +
-				'</div>' +
+			'<div class="ob-si-card__head ob-smart-insights-title-row">' +
+				'<h3 class="ob-si-card__title">' + escapeHtml(title) + '</h3>' +
+				renderSignalTooltip(leader, { position: 'bottom' }) +
+				renderPriorityPill(leader) +
 			'</div>' +
-			'<div class="ob-smart-insights-metric-strip ob-smart-insights-evidence-zone" aria-label="' + escapeHtml(i18n.evidence || 'Evidence') + '">' + renderCenterEvidenceMicroCards(leader, 3) + '</div>' +
-			'<div class="ob-smart-insights-action-zone">' + renderCenterActionPanel(leader, getRecommendedAction(leader)) + '</div>' +
-			'<div class="ob-smart-insights-center-footer">' +
-				'<div class="ob-smart-insights-card-footer-meta">' +
-					(detectedTime ? '<span>' + detectedTime + '</span>' : '') +
-					'<span>' + escapeHtml(i18n.confidence || 'Confidence') + ': <strong>' + escapeHtml(getConfidenceLabel(leader)) + '</strong></span>' +
-					renderCenterPriorityMeter(leader, priorityLabel) +
-				'</div>' +
+			'<div class="ob-si-subline"><span>' + escapeHtml(fillToken(i18n.sourceGroupCount || '%s traffic sources', '%s', formatNumber(members.length))) + '</span>' +
+				(period ? '<span class="ob-si-subline__sep" aria-hidden="true">·</span><span class="ob-si-subline__period">' + escapeHtml(period) + '</span>' : '') +
 			'</div>' +
+			'<div class="ob-smart-insights-source-group">' +
+				'<span class="ob-smart-insights-source-group-label">' + escapeHtml(i18n.sourceGroupExplanation || 'The same signal fired on several traffic sources. Open a source to see its own diagnosis.') + '</span>' +
+				'<ul>' + lines + '</ul>' +
+			'</div>' +
+			renderCardActionZone(leader) +
 		'</article>';
 	}
 
@@ -1796,13 +1860,6 @@
 		return 0;
 	}
 
-	function getInsightTimelineLabel(insight) {
-		if (!insight || typeof insight !== 'object') {
-			return '';
-		}
-		return insight.updated_at || insight.last_seen_at || insight.created_at || insight.date_to || '';
-	}
-
 	function sprintfCount(pattern, count) {
 		return String(pattern).replace('%s', String(count)).replace('%d', String(count));
 	}
@@ -1813,48 +1870,6 @@
 	// so the timezone cancels out.
 	var siteNowAnchor = config.siteNow ? Date.parse(String(config.siteNow).replace(' ', 'T')) : NaN;
 	var siteNowLoadedAt = Date.now();
-
-	function getSiteNow() {
-		if (isNaN(siteNowAnchor)) {
-			return Date.now();
-		}
-		return siteNowAnchor + (Date.now() - siteNowLoadedAt);
-	}
-
-	function formatRelativeTime(insight) {
-		var timestamp = getInsightTimestamp(insight);
-		if (!timestamp) {
-			return '';
-		}
-		var diff = getSiteNow() - timestamp;
-		if (diff < 0) {
-			diff = 0;
-		}
-		var minute = 60000;
-		var hour = 3600000;
-		var day = 86400000;
-		if (diff < minute) {
-			return i18n.justNow || 'Just now';
-		}
-		if (diff < hour) {
-			return sprintfCount(i18n.minutesAgo || '%s min ago', Math.floor(diff / minute));
-		}
-		if (diff < day) {
-			return sprintfCount(i18n.hoursAgo || '%sh ago', Math.floor(diff / hour));
-		}
-		return sprintfCount(i18n.daysAgo || '%sd ago', Math.floor(diff / day));
-	}
-
-	function renderDetectedTime(insight, extraClass) {
-		var relative = formatRelativeTime(insight);
-		var raw = getInsightTimelineLabel(insight);
-		if (!relative && !raw) {
-			return '';
-		}
-		var visible = relative || raw;
-		var title = raw ? ' title="' + escapeHtml((i18n.detected || 'Detected') + ': ' + raw) + '"' : '';
-		return '<time class="ob-smart-insights-detected-time' + (extraClass ? ' ' + extraClass : '') + '"' + title + '>' + escapeHtml(visible) + '</time>';
-	}
 
 
 	function formatMetricByType(value, type) {
@@ -1871,7 +1886,7 @@
 		var signalId = getSignalId(insight);
 		var primary = insight && insight.metrics && insight.metrics.primary_evidence && typeof insight.metrics.primary_evidence === 'object' ? insight.metrics.primary_evidence : null;
 		var defaultDefinitions = [
-			{ label: i18n.sessions || 'Sessions', key: 'page_sessions', fallback: 'sessions', type: 'number', hideZero: true, group: 'traffic' },
+			{ label: i18n.sessions || 'Visits', key: 'page_sessions', fallback: 'sessions', type: 'number', hideZero: true, group: 'traffic' },
 			{ label: i18n.bounceRate || 'Bounce rate', key: 'page_bounce_rate', fallback: 'bounce_rate', baseline: 'site_avg_bounce_rate', type: 'percent', group: 'engagement' },
 			{ label: i18n.exitRate || 'Exit rate', key: 'page_exit_rate', fallback: 'exit_rate', baseline: 'site_avg_exit_rate', type: 'percent', group: 'engagement' },
 			{ label: i18n.scrollDepth || 'Avg. scroll depth', key: 'page_avg_scroll_depth', fallback: 'avg_scroll_depth', baseline: 'site_avg_scroll_depth', type: 'percent', group: 'engagement' },
@@ -1929,10 +1944,40 @@
 			return funnelDefinitions;
 		}
 
+		// OPT-516 D6: an exit card speaks with its exit rate (the bounce rate
+		// of an exit page is often BELOW the site and contradicted the title).
+		if (signalId === 'high_exit_rate_page') {
+			return [
+				{ label: i18n.exitRate || 'Exit rate', key: 'page_exit_rate', fallback: 'exit_rate', baseline: 'site_avg_exit_rate', type: 'percent', group: 'engagement' },
+				{ label: i18n.sessions || 'Visits', key: 'page_sessions', fallback: 'sessions', type: 'number', hideZero: true, group: 'traffic' },
+				{ label: i18n.scrollDepth || 'Avg. scroll depth', key: 'page_avg_scroll_depth', fallback: 'avg_scroll_depth', baseline: 'site_avg_scroll_depth', type: 'percent', group: 'engagement' },
+				{ label: i18n.timeOnPage || 'Avg. time on page', key: 'page_avg_time_on_page', fallback: 'avg_time_on_page', baseline: 'site_avg_time_on_page', type: 'seconds', group: 'engagement' },
+				{ label: i18n.bounceRate || 'Bounce rate', key: 'page_bounce_rate', fallback: 'bounce_rate', baseline: 'site_avg_bounce_rate', type: 'percent', group: 'engagement' }
+			];
+		}
+
+		// OPT-516 D7: a segment card compares the segment with all visitors
+		// (stored segment_* / overall_* rates), never a lone session count.
+		if (signalId === 'segment_anomaly_detection' || signalId === 'returning_visitor_opportunity') {
+			var segmentReason = String((insight.detection && insight.detection.reason) || '');
+			var segmentRates = [
+				{ label: i18n.conversionRate || 'Conversion rate', key: 'segment_conversion_rate', baseline: 'overall_conversion_rate', type: 'percent', group: 'conversion' },
+				{ label: i18n.bounceRate || 'Bounce rate', key: 'segment_bounce_rate', baseline: 'overall_bounce_rate', type: 'percent', group: 'engagement' },
+				{ label: i18n.scrollDepth || 'Avg. scroll depth', key: 'segment_avg_scroll_depth', baseline: 'overall_avg_scroll_depth', type: 'percent', group: 'engagement' }
+			];
+			if (/bounce/.test(segmentReason)) {
+				segmentRates.unshift(segmentRates.splice(1, 1)[0]);
+			} else if (/scroll/.test(segmentReason)) {
+				segmentRates.unshift(segmentRates.splice(2, 1)[0]);
+			}
+			segmentRates.push({ label: i18n.sessions || 'Visits', key: 'segment_sessions', fallback: 'sessions', type: 'number', hideZero: true, group: 'traffic' });
+			return segmentRates;
+		}
+
 		if (signalId === 'low_scroll_depth_important_page') {
 			return [
 				{ label: i18n.scrollDepth || 'Avg. scroll depth', key: 'page_avg_scroll_depth', fallback: 'avg_scroll_depth', baseline: 'site_avg_scroll_depth', type: 'percent', group: 'engagement' },
-				{ label: i18n.sessions || 'Sessions', key: 'page_sessions', fallback: 'sessions', type: 'number', hideZero: true, group: 'traffic' },
+				{ label: i18n.sessions || 'Visits', key: 'page_sessions', fallback: 'sessions', type: 'number', hideZero: true, group: 'traffic' },
 				{ label: i18n.bounceRate || 'Bounce rate', key: 'page_bounce_rate', fallback: 'bounce_rate', baseline: 'site_avg_bounce_rate', type: 'percent', group: 'engagement' },
 				{ label: i18n.exitRate || 'Exit rate', key: 'page_exit_rate', fallback: 'exit_rate', baseline: 'site_avg_exit_rate', type: 'percent', group: 'engagement' }
 			];
@@ -2070,85 +2115,6 @@
 				baselineHtml +
 			'</span>';
 		}).join('');
-	}
-
-	function getMicroCardEvidenceLabel(label) {
-		var text = String(label || '').trim();
-		var normalized = text.toLowerCase();
-		var compactLabels = {
-			'avg. scroll depth': i18n.compactScrollDepth || 'Scroll depth',
-			'average scroll depth': i18n.compactScrollDepth || 'Scroll depth',
-			'bounce rate': i18n.bounceRate || 'Bounce rate',
-			'exit rate': i18n.exitRate || 'Exit rate',
-			'sessions': i18n.sessions || 'Sessions',
-			'pageviews': i18n.pageviews || 'Pageviews'
-		};
-
-		return compactLabels[normalized] || text;
-	}
-
-	function renderCenterEvidenceMicroCards(insight, maxItems) {
-		if (insight.is_locked_preview) {
-			var lockedText = i18n.proEvidenceLocked || 'Detailed evidence is available in Pro.';
-			return '<span class="ob-smart-insights-evidence-microcard is-muted is-locked" aria-label="' + escapeHtml(lockedText) + '" title="' + escapeHtml(lockedText) + '">' +
-				'<span class="ob-smart-insights-evidence-microcard-label">' + escapeHtml(i18n.evidence || 'Evidence') + '</span>' +
-				'<span class="ob-smart-insights-evidence-microcard-value-row"><i data-lucide="lock" aria-hidden="true"></i><strong>' + escapeHtml(lockedText) + '</strong></span>' +
-			'</span>';
-		}
-
-		return collectEvidenceRows(insight, maxItems || 3).map(function(metric, index) {
-			var baselineText = metric.baseline ? (i18n.vsBaseline || 'vs') + ' ' + metric.baseline : '';
-			var baselineHtml = baselineText ? '<small>' + escapeHtml(baselineText) + '</small>' : '';
-			var primaryClass = index === 0 && !metric.isUnavailable ? ' is-primary' : '';
-			var mutedClass = metric.isZero || metric.isUnavailable ? ' is-muted' : '';
-			var unavailableClass = metric.isUnavailable ? ' is-unavailable' : '';
-			var ariaLabel = metric.isUnavailable ? metric.value : metric.label + ': ' + metric.value + (baselineText ? ', ' + baselineText : '');
-			var displayLabel = getMicroCardEvidenceLabel(metric.label);
-
-			return '<span class="ob-smart-insights-evidence-microcard' + primaryClass + mutedClass + unavailableClass + '" aria-label="' + escapeHtml(ariaLabel) + '" title="' + escapeHtml(ariaLabel) + '">' +
-				'<span class="ob-smart-insights-evidence-microcard-label">' + escapeHtml(displayLabel) + '</span>' +
-				'<span class="ob-smart-insights-evidence-microcard-value-row">' +
-					'<strong>' + escapeHtml(metric.value) + '</strong>' +
-					baselineHtml +
-				'</span>' +
-			'</span>';
-		}).join('');
-	}
-
-	function renderEvidenceSection(insight) {
-		var html = renderDetailEvidence(insight, 7);
-		return html ? '<section class="ob-smart-insights-detail-section is-evidence">' + renderSectionHeading(i18n.evidence || 'Evidence', 'evidence') + '<div class="ob-smart-insights-evidence is-detail-evidence">' + html + '</div></section>' : '';
-	}
-
-	function renderDetailEvidence(insight, maxItems) {
-		if (insight.is_locked_preview) {
-			return renderEvidence(insight, maxItems);
-		}
-
-		var rows = collectEvidenceRows(insight, maxItems || 7);
-		// Business impact already prints the measured population: Evidence
-		// keeps the other metrics only.
-		var impact = getImpact(insight);
-		if (impact && impact.population && renderImpactLine(insight)) {
-			var population = parseFloat(impact.population);
-			rows = rows.filter(function(row) {
-				return row.isUnavailable || row.raw !== population;
-			});
-			if (!rows.length) {
-				return '';
-			}
-		}
-		var primary = rows[0];
-		var primaryBaseline = primary && primary.baseline ? '<small>' + escapeHtml((i18n.vsBaseline || 'vs') + ' ' + primary.baseline) + '</small>' : '';
-		var primaryHtml = primary ? '<div class="ob-smart-insights-evidence-item is-primary' + (primary.isUnavailable ? ' is-muted' : '') + '"><span>' + escapeHtml(primary.label) + '</span><strong>' + escapeHtml(primary.value) + '</strong>' + primaryBaseline + '</div>' : '';
-		var secondaryRows = rows.slice(1);
-		var rowsHtml = secondaryRows.map(function(metric) {
-			var baselineHtml = metric.baseline ? '<small>' + escapeHtml((i18n.vsBaseline || 'vs') + ' ' + metric.baseline) + '</small>' : '';
-			var mutedClass = metric.isZero || metric.isUnavailable ? ' is-muted' : '';
-			return '<div class="ob-smart-insights-evidence-item' + mutedClass + '"><span>' + escapeHtml(metric.label) + '</span><strong>' + escapeHtml(metric.value) + '</strong>' + baselineHtml + '</div>';
-		}).join('');
-
-		return primaryHtml + (rowsHtml ? '<div class="ob-smart-insights-evidence-table is-flat">' + rowsHtml + '</div>' : '');
 	}
 
 	function getReportMeta(report) {
@@ -2330,6 +2296,25 @@
 		return score - index;
 	}
 
+	function isAbTestingReport(report, resolved) {
+		var url = resolved && resolved.url ? String(resolved.url) : '';
+		return normalizeReportType(report) === 'ab_testing' || url.indexOf('opti-behavior-ab-testing') !== -1;
+	}
+
+	// True when the insight's own hypothesis says no A/B test can run here
+	// (traffic too low or no baseline): no "Create A/B test" link at all then.
+	function isAbTestBlocked(insight) {
+		var hypothesis = getHypothesis(insight);
+		if (!hypothesis || hypothesis.locked) {
+			return false;
+		}
+		var feasibility = getHypothesisFeasibility(hypothesis);
+		return !!(feasibility.notFeasible || feasibility.noBaseline);
+	}
+
+	// The primary PROOF link of an insight (card Z6, Next steps, header): a
+	// report that shows evidence. Creating an A/B test is not proof, so the
+	// A/B builder is never chosen here (OPT-362 Z6 / T7).
 	function getBestRelatedReport(insight) {
 		var reports = Array.isArray(insight.related_reports) ? insight.related_reports : [];
 		var fallback = null;
@@ -2337,6 +2322,9 @@
 		for (var i = 0; i < reports.length; i++) {
 			var report = reports[i];
 			var resolved = typeof report === 'object' ? resolveRelatedReportLink(report, insight) : { url: '', disabledReason: '' };
+			if (isAbTestingReport(report, resolved)) {
+				continue;
+			}
 			var item = { report: report, resolved: resolved, meta: getContextualReportMeta(report, insight) };
 			if (resolved.url) {
 				item.score = scoreRelatedReportCandidate(item, i, insight);
@@ -2351,22 +2339,6 @@
 		return best || fallback;
 	}
 
-	function renderRelatedReportPreview(insight) {
-		var best = getBestRelatedReport(insight);
-		if (!best) {
-			if (insight.is_locked_preview) {
-				return '<div class="ob-smart-insights-report-callout is-locked"><i data-lucide="lock"></i><span>' + escapeHtml(i18n.proRelatedLocked || 'Related recordings, journeys, and segment reports unlock in Pro.') + '</span></div>';
-			}
-			return '';
-		}
-
-		if (best.resolved.url) {
-			return '<div class="ob-smart-insights-report-callout is-actionable"><span>' + escapeHtml(i18n.whereToInvestigate || 'Where to investigate') + '</span><strong>' + escapeHtml(best.meta.label) + '</strong><small>' + escapeHtml(best.meta.description) + '</small><a class="button button-primary ob-smart-insights-report-cta" href="' + escapeHtml(best.resolved.url) + '" target="_blank" rel="noopener noreferrer"><i data-lucide="' + escapeHtml(best.meta.icon) + '"></i>' + escapeHtml(best.meta.label) + '</a></div>';
-		}
-		var reason = best.resolved.disabledReason || (i18n.relatedUnavailable || 'No deep link available');
-		return '<div class="ob-smart-insights-report-callout is-disabled"><span>' + escapeHtml(i18n.whereToInvestigate || 'Where to investigate') + '</span><strong>' + escapeHtml(best.meta.label) + '</strong><small>' + escapeHtml(reason) + '</small></div>';
-	}
-
 	function getSafePriorityScore(insight) {
 		var score = getPriorityScore(insight);
 		if (score < 0) {
@@ -2376,147 +2348,6 @@
 			return 100;
 		}
 		return score;
-	}
-
-	function renderCenterPriorityMeter(insight, priorityLabel) {
-		var score = getSafePriorityScore(insight);
-		var priorityClass = getSeverityClass(priorityLabel);
-		var label = (i18n.priority || 'Priority') + ' ' + score + '/100';
-		return '<div class="ob-smart-insights-priority-meter is-' + escapeHtml(priorityClass) + '" aria-label="' + escapeHtml(label) + '">' +
-			'<span><small>' + escapeHtml(i18n.priority || 'Priority') + '</small><strong>' + score + '</strong></span>' +
-			'<b aria-hidden="true"><i style="width:' + score + '%"></i></b>' +
-		'</div>';
-	}
-
-	function normalizeComparableText(value) {
-		return String(value || '')
-			.toLowerCase()
-			.replace(/https?:\/\/\S+/g, ' ')
-			.replace(/[_\-\/|:]+/g, ' ')
-			.replace(/[^\p{L}\p{N}\s]/gu, '')
-			.replace(/\b(entity|segment|type|page|form|funnel|source|campaign|device|report|the|a|an)\b/g, ' ')
-			.replace(/\s+/g, ' ')
-			.trim();
-	}
-
-	function textContainsMeaning(parent, child) {
-		var haystack = normalizeComparableText(parent);
-		var needle = normalizeComparableText(child);
-		if (!haystack || !needle || needle.length < 3) {
-			return false;
-		}
-		return haystack === needle || haystack.indexOf(needle) !== -1;
-	}
-
-	function isDuplicateToken(value, renderedText) {
-		return renderedText.some(function(existing) {
-			return textContainsMeaning(existing, value) || textContainsMeaning(value, existing);
-		});
-	}
-
-	function getEntityTypeLabel(insight) {
-		var type = String((insight && insight.entity_type) || '').trim();
-		var labels = {
-			page: i18n.page || 'Page',
-			form: i18n.form || 'Form',
-			funnel: i18n.funnel || 'Funnel',
-			source: i18n.source || 'Source',
-			campaign: i18n.campaign || 'Campaign',
-			device: i18n.segment || 'Segment',
-			cta: i18n.cta || 'CTA',
-			error: i18n.errorType || 'Error'
-		};
-		return labels[type] || (type ? prettifyKey(type) : '');
-	}
-
-	function shouldRenderEntityTypeChip(insight, context) {
-		var typeLabel = getEntityTypeLabel(insight);
-		var title = insight && insight.signal_name ? insight.signal_name : '';
-		var label = context && context.label ? context.label : '';
-		if (!typeLabel || textContainsMeaning(title, typeLabel) || textContainsMeaning(label, typeLabel)) {
-			return false;
-		}
-		if (String((insight && insight.entity_type) || '').toLowerCase() === 'device' && label) {
-			return false;
-		}
-		return true;
-	}
-
-	function getCompactIdentifierLabel(identifier) {
-		var value = String(identifier || '').trim();
-		if (!value) {
-			return '';
-		}
-		if (!isHttpUrl(value)) {
-			return value;
-		}
-		try {
-			var parsed = new URL(value, window.location.origin);
-			var path = parsed.pathname || '/';
-			path = path.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
-			return path.length > 34 ? '…' + path.slice(-33) : path;
-		} catch (e) {
-			return '';
-		}
-	}
-
-	function renderCompactContextLine(insight) {
-		var context = getEntityContext(insight);
-		var label = context.label || getPageLabel(insight);
-		var identifier = context.identifier || '';
-		var title = insight.signal_name || '';
-		var renderedText = [title];
-		var tokens = [];
-		var typeLabel = getEntityTypeLabel(insight);
-		var renderedLabel = false;
-		var entityType = String((insight && insight.entity_type) || '').toLowerCase();
-		var labelIsDuplicate = label && isDuplicateToken(label, renderedText);
-
-		if (label && !labelIsDuplicate) {
-			var prefix = shouldRenderEntityTypeChip(insight, context) ? '<small>' + escapeHtml(typeLabel) + '</small>' : '';
-			var labelTitle = identifier ? label + ' — ' + identifier : label;
-			tokens.push('<span class="ob-smart-insights-entity-summary">' + prefix + '<strong title="' + escapeHtml(labelTitle) + '">' + escapeHtml(label) + '</strong></span>');
-			renderedText.push(label);
-			renderedLabel = true;
-		}
-
-		if (identifier && !(entityType === 'page' && labelIsDuplicate && isHttpUrl(identifier)) && !isDuplicateToken(identifier, renderedText) && (renderedLabel || !/^\d+$/.test(String(identifier).trim()))) {
-			var compactIdentifier = renderedLabel && isHttpUrl(identifier) ? '' : getCompactIdentifierLabel(identifier);
-			if (compactIdentifier) {
-				tokens.push('<em class="ob-smart-insights-context-token" title="' + escapeHtml(identifier) + '">' + escapeHtml(compactIdentifier) + '</em>');
-				renderedText.push(compactIdentifier);
-			}
-		}
-
-		if (!tokens.length && typeLabel && shouldRenderEntityTypeChip(insight, context)) {
-			tokens.push('<span class="ob-smart-insights-context-token">' + escapeHtml(typeLabel) + '</span>');
-		}
-
-		if (!tokens.length) {
-			return '';
-		}
-
-		return '<div class="ob-smart-insights-entity-context">' +
-			tokens.join('') +
-		'</div>';
-	}
-
-	function getCompactCenterExplanation(insight, title) {
-		var text = String((insight && (insight.interpretation || insight.why_it_matters)) || '').trim();
-		if (!text) {
-			return '';
-		}
-
-		var entityType = String((insight && insight.entity_type) || '').toLowerCase();
-		if (entityType === 'page') {
-			var context = getEntityContext(insight);
-			var label = context.label || getPageLabel(insight);
-			if ((label && textContainsMeaning(text, label)) || (title && textContainsMeaning(text, title))) {
-				return '';
-			}
-		}
-
-		return text;
 	}
 
 	// --- Outcome loop: did the fix work? ------------------------------------
@@ -2537,7 +2368,7 @@
 			return raw.slice(0, 10);
 		}
 		try {
-			return new Date(parsed).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+			return (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.date(new Date(parsed), { day: 'numeric', month: 'short' }) : new Date(new Date(parsed)).toDateString());
 		} catch (error) {
 			return raw.slice(0, 10);
 		}
@@ -2661,81 +2492,6 @@
 		'</span>';
 	}
 
-	function renderCenterHeaderChips(insight, priorityLabel, priorityClass) {
-		var title = insight.signal_name || '';
-		var categoryLabel = getCategoryLabel(insight.category);
-		var chips = [];
-
-		if (categoryLabel && !textContainsMeaning(title, categoryLabel)) {
-			chips.push('<span class="ob-smart-insights-category-chip">' + escapeHtml(categoryLabel) + '</span>');
-		}
-
-		chips.push('<span class="ob-smart-insights-status-chip is-' + escapeHtml(getSeverityClass(insight.status || 'new')) + '">' + escapeHtml(getStatusLabel(insight.status)) + '</span>');
-
-		var story = renderStoryChip(insight);
-		if (story) {
-			chips.push(story);
-		}
-
-		var recurrence = renderRecurrenceChip(insight);
-		if (recurrence) {
-			chips.push(recurrence);
-		}
-
-		var outcome = renderOutcomeChip(insight);
-		if (outcome) {
-			chips.push(outcome);
-		}
-
-		if (insight.is_locked_preview) {
-			chips.push('<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>');
-		}
-
-		return chips.length ? '<div class="ob-smart-insights-chip-row">' + chips.join('') + '</div>' : '';
-	}
-
-	function renderCenterActionPanel(insight, action) {
-		var best = getBestRelatedReport(insight);
-		var panelClass = 'is-plain';
-		var reportHtml = '';
-
-		if (best && best.resolved && best.resolved.url) {
-			panelClass = 'is-actionable';
-			reportHtml = '<a class="button button-primary ob-smart-insights-report-cta" href="' + escapeHtml(best.resolved.url) + '" target="_blank" rel="noopener noreferrer"><i data-lucide="' + escapeHtml(best.meta.icon) + '"></i>' + escapeHtml(best.meta.label) + '</a>';
-		} else if (best) {
-			panelClass = 'is-disabled';
-			reportHtml = '<small class="ob-smart-insights-next-report"><span>' + escapeHtml(best.meta.label) + '</span>' + escapeHtml(best.resolved.disabledReason || (i18n.relatedUnavailable || 'No deep link available')) + '</small>';
-		} else if (insight.is_locked_preview) {
-			panelClass = 'is-locked';
-			reportHtml = '<small class="ob-smart-insights-next-report"><span>' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>' + escapeHtml(i18n.proRelatedLocked || 'Related recordings, journeys, and segment reports unlock in Pro.') + '</small>';
-		}
-
-		return '<div class="ob-smart-insights-next-panel ' + panelClass + '">' +
-			'<div class="ob-smart-insights-next-copy"><span>' + escapeHtml(i18n.nextAction || 'Next action') + '</span><strong>' + escapeHtml(insight.next_action_short || action || getRecommendedAction(insight)) + '</strong></div>' +
-			reportHtml +
-		'</div>';
-	}
-
-	function renderCenterFooter(insight, priorityLabel) {
-		var detectedTime = renderDetectedTime(insight);
-		return '<div class="ob-smart-insights-center-footer">' +
-			'<div class="ob-smart-insights-card-footer-meta">' +
-				(detectedTime ? '<span>' + detectedTime + '</span>' : '') +
-				'<span>' + escapeHtml(i18n.confidence || 'Confidence') + ': <strong>' + escapeHtml(getConfidenceLabel(insight)) + '</strong></span>' +
-				renderCenterPriorityMeter(insight, priorityLabel) +
-			'</div>' +
-			renderActions(insight) +
-		'</div>';
-	}
-
-	function renderDetailNextAction(insight, action) {
-		action = String(action || '').trim();
-		if (!action) {
-			return '';
-		}
-		return '<section class="ob-smart-insights-detail-section is-next">' + renderSectionHeading(i18n.nextAction || 'Next action', 'next_action', { position: 'left' }) + '<div class="ob-smart-insights-action-callout"><span class="ob-smart-insights-action-icon" aria-hidden="true"><i data-lucide="arrow-up-right"></i><span class="ob-smart-insights-action-icon-fallback">↗</span></span><strong>' + escapeHtml(action) + '</strong></div></section>';
-	}
-
 	function renderUpgradePreview(insight) {
 		var preview = insight.locked_preview || insight.upgrade_preview || null;
 		if (!preview && !insight.is_locked_preview) {
@@ -2763,7 +2519,7 @@
 		if (isNaN(number)) {
 			value = '-';
 		} else {
-			value = number.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+			value = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(number, { minimumFractionDigits: digits, maximumFractionDigits: digits }) : String(number));
 		}
 		var code = String(currency || '').trim().toUpperCase();
 		if (IMPACT_CURRENCY_SYMBOLS[code]) {
@@ -2785,140 +2541,6 @@
 			'<span class="ob-smart-insights-impact-label">' + escapeHtml(i18n.impactObservationLabel || 'Observation') + '</span>' +
 			'<span class="ob-smart-insights-impact-observation">' + escapeHtml(sentence) + '</span>' +
 		'</div>';
-	}
-
-	// One line, always the same shape: what this problem costs in the analysed
-	// window - in money when a value per conversion is known, in visitors
-	// otherwise - and on which population it was measured.
-	function renderImpactLine(insight) {
-		var impact = getImpact(insight);
-		var observationOnly = isObservationOnly(insight);
-
-		if (!impact) {
-			return observationOnly ? renderObservationImpact(insight) : '';
-		}
-
-		var usersLost = getUsersLost(insight);
-		if (usersLost === null || usersLost <= 0) {
-			return observationOnly ? renderObservationImpact(insight) : '';
-		}
-
-		if (observationOnly) {
-			return renderObservationImpact(insight);
-		}
-
-		var basis = String(impact.basis_label || '').trim();
-		var revenue = getRevenue(insight);
-		var revenueAmount = getRevenueAmount(insight);
-		var headline = String(impact.headline || '').trim();
-		var detailHtml = '';
-
-		if (revenueAmount !== null) {
-			headline = fillToken(i18n.impactRevenueHeadline || '≈ %s at risk this period', '%s', formatImpactCurrency(revenueAmount, revenue.currency));
-
-			var unitValue = parseFloat(revenue.average_order_value);
-			if (!isNaN(unitValue) && unitValue > 0) {
-				// The amount is users_lost x conversion factor x unit value. When the
-				// factor discounts the loss (visitors who were not yet at a checkout
-				// step), the factor must be printed too, or the line reads as a
-				// multiplication that does not produce the headline.
-				var isManual = 'manual_conversion_value' === revenue.source;
-				var factor = parseFloat(revenue.conversion_factor);
-				var factored = !isNaN(factor) && factor > 0 && factor < 0.995;
-				var template;
-				if (factored) {
-					template = isManual
-						? (i18n.impactRevenueManualFactored || '%1$s drop-offs × %2$s conversion rate × %3$s per conversion')
-						: (i18n.impactRevenueOrdersFactored || '%1$s drop-offs × %2$s conversion rate × %3$s avg. order');
-					template = fillToken(template, '%3$s', formatImpactCurrency(unitValue, revenue.currency, 2));
-					template = fillToken(template, '%2$s', formatPercent(factor * 100));
-				} else {
-					template = isManual
-						? (i18n.impactRevenueManual || '%1$s drop-offs × %2$s per conversion')
-						: (i18n.impactRevenueOrders || '%1$s drop-offs × %2$s avg. order');
-					template = fillToken(template, '%2$s', formatImpactCurrency(unitValue, revenue.currency, 2));
-				}
-				template = fillToken(template, '%1$s', formatNumber(usersLost));
-				detailHtml = '<small class="ob-smart-insights-impact-revenue">' + escapeHtml(template) + '</small>';
-			}
-		} else if (revenue && revenue.locked) {
-			detailHtml = '<small class="ob-smart-insights-impact-revenue is-locked">' +
-				escapeHtml(revenue.hint || i18n.revenueLocked || 'Revenue exposure for this leak is available in Pro.') + '</small>';
-		}
-
-		if (!headline) {
-			headline = formatNumber(usersLost);
-		}
-
-		return '<div class="ob-smart-insights-impact-line" data-users-lost="' + escapeHtml(usersLost) + '">' +
-			'<span class="ob-smart-insights-impact-label">' + escapeHtml(i18n.businessImpact || 'Business impact') + '</span>' +
-			'<strong class="ob-smart-insights-impact-headline">' + escapeHtml(headline) + '</strong>' +
-			detailHtml +
-			(basis ? '<small class="ob-smart-insights-impact-basis">' + escapeHtml((i18n.impactBasis || 'Measured on') + ': ' + basis) + '</small>' : '') +
-		'</div>';
-	}
-
-	// Cause chips carry the measured share when the viewer may see it; Free gets
-	// the ranked cause labels plus one locked hint instead of the percentages.
-	function renderCauseChips(insight) {
-		var causes = getStoryCauses(insight);
-		if (!causes.length) {
-			return '';
-		}
-
-		var correlation = getCorrelation(insight);
-		var sharesLocked = !!(correlation && correlation.shares_locked);
-		var chips = causes.slice(0, 4).map(function(cause) {
-			var label = String((cause && cause.label) || '').trim();
-			if (!label) {
-				return '';
-			}
-			var share = '';
-			if (!sharesLocked && cause && cause.share_pct !== undefined && cause.share_pct !== null && cause.share_pct !== '') {
-				share = '<span class="ob-smart-insights-cause-share">' + escapeHtml(formatPercent(cause.share_pct)) + '</span>';
-			}
-			return '<span class="ob-smart-insights-cause-chip' + (sharesLocked ? ' is-locked' : '') + '">' +
-				'<span class="ob-smart-insights-cause-label">' + escapeHtml(label) + '</span>' + share +
-			'</span>';
-		}).filter(Boolean);
-
-		if (!chips.length) {
-			return '';
-		}
-
-		var lockedHint = sharesLocked
-			? '<small class="ob-smart-insights-cause-locked-hint">' + escapeHtml((correlation && correlation.locked_hint) || i18n.causeSharesLocked || 'Upgrade to Pro to see how much of this problem each cause explains.') + '</small>'
-			: '';
-
-		return '<div class="ob-smart-insights-cause-row" aria-label="' + escapeHtml(i18n.measuredCauses || 'Measured causes') + '">' +
-			chips.join('') + lockedHint +
-		'</div>';
-	}
-
-	function renderStoryChip(insight) {
-		if (!isStoryInsight(insight)) {
-			return '';
-		}
-
-		var correlation = getCorrelation(insight);
-		var signalCount = parseInt(correlation.signal_count, 10) || 0;
-		var causeCount = getStoryCauses(insight).length || (parseInt(correlation.cause_count, 10) || 0);
-		var title = signalCount > 1
-			? sprintfCount(i18n.storySignalCount || '%s correlated signals', signalCount)
-			: sprintfCount(i18n.storyCauseCount || '%s measured causes', causeCount);
-
-		return '<span class="ob-smart-insights-story-chip" title="' + escapeHtml(title) + '">' +
-			escapeHtml(i18n.correlatedStory || 'Correlated story') +
-			(signalCount > 1 ? '<span class="ob-smart-insights-story-count">' + escapeHtml(signalCount) + '</span>' : '') +
-		'</span>';
-	}
-
-	function renderRecurrenceChip(insight) {
-		var count = parseInt((insight && (insight.recurrence_count || (insight.detection && insight.detection.recurrence_count))) || 0, 10) || 0;
-		if (count <= 1) {
-			return '';
-		}
-		return '<span class="ob-smart-insights-recurrence-chip" title="' + escapeHtml(i18n.recurrenceHistory || 'Older overlapping detections are grouped into this card.') + '">' + escapeHtml((i18n.recurring || 'Recurring') + ': ' + count) + '</span>';
 	}
 
 
@@ -2943,6 +2565,7 @@
 		}
 
 		releasePortaledTooltips(list);
+		syncCurrentPeriodLabel(section);
 
 		if (!items.length) {
 			list.innerHTML = renderEmptyState(data, getContextData(section));
@@ -2955,37 +2578,447 @@
 		refreshIcons();
 	}
 
-	function renderInsightCard(insight) {
-		var priorityLabel = getPriorityLabel(insight);
-		var priorityClass = getSeverityClass(priorityLabel);
-		var action = getRecommendedAction(insight);
+	// --- Card anatomy (OPT-362) -----------------------------------------------
+	// One card = six zones in a fixed order: Z1 title + priority, Z2 entity /
+	// period sub-line, Z3 key figures, Z4 mini chart, Z5 the first measured
+	// cause, Z6 the action + its proof button. The detail modal reuses the very
+	// same key-figure renderer, so a number and its label read the same in both.
 
-		return '<article class="ob-smart-insights-card' + (isStoryInsight(insight) ? ' is-story' : '') + '" data-insight-id="' + escapeHtml(insight.id) + '">' +
-			'<div class="ob-smart-insights-card-top">' +
-				'<span class="ob-smart-insights-badge is-' + escapeHtml(priorityClass) + '">' + escapeHtml(priorityLabel) + '</span>' +
-				'<span class="ob-smart-insights-score">' + escapeHtml(i18n.priority || 'Priority') + ': <strong>' + getPriorityScore(insight) + '/100</strong></span>' +
-				renderStoryChip(insight) +
-				renderRecurrenceChip(insight) +
-				(insight.is_locked_preview ? '<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>' : '') +
-			'</div>' +
-			'<h3 class="ob-smart-insights-section-heading">' + escapeHtml(insight.signal_name || (i18n.smartInsight || 'Smart Insight')) + renderSignalTooltip(insight, { position: 'bottom' }) + '</h3>' +
-			'<p class="ob-smart-insights-page-label"><span>' + escapeHtml(getCategoryLabel(insight.category)) + '</span> &middot; ' + renderEntityReference(insight) + '</p>' +
-			renderDuplicatesLine(insight) +
-			renderProvisionalBadge(insight) +
-			'<div class="ob-smart-insights-meta">' +
-				'<span>' + escapeHtml(i18n.confidence || 'Confidence') + ': <strong>' + escapeHtml(getConfidenceLabel(insight)) + '</strong></span>' +
-				'<span>' + escapeHtml(getStatusLabel(insight.status)) + '</span>' +
-				renderDetectedTime(insight) +
-			'</div>' +
-			renderImpactLine(insight) +
-			renderCauseChips(insight) +
-			renderStageTracker(insight) +
-			'<div class="ob-smart-insights-evidence">' + renderEvidence(insight, 4) + '</div>' +
-			'<p class="ob-smart-insights-explanation">' + escapeHtml(insight.interpretation || '') + '</p>' +
-			(action ? '<div class="ob-smart-insights-recommendation"><span>' + escapeHtml(i18n.recommendedAction || 'Recommended action') + '</span><strong>' + escapeHtml(action) + '</strong></div>' : '') +
-			renderRelatedReportPreview(insight) +
-			renderUpgradePreview(insight) +
-			renderActions(insight) +
+	// Label of the period the list is filtered on ("Last 30 days"), read from the
+	// period select of the section being rendered; custom ranges and unknown
+	// values fall back to the insight's own dates.
+	var currentPeriodLabel = '';
+
+	function syncCurrentPeriodLabel(section) {
+		currentPeriodLabel = '';
+		var select = section ? section.querySelector('.ob-smart-insights-period') : null;
+		if (!select || select.value === 'custom' || select.selectedIndex < 0 || !select.options || !select.options[select.selectedIndex]) {
+			return;
+		}
+		currentPeriodLabel = String(select.options[select.selectedIndex].text || '').trim();
+	}
+
+	function formatDateSpan(from, to) {
+		var parse = function(value) {
+			var raw = String(value || '').trim();
+			var parsed = raw ? Date.parse(raw.slice(0, 10) + 'T12:00:00') : NaN;
+			return isNaN(parsed) ? null : new Date(parsed);
+		};
+		var start = parse(from);
+		var end = parse(to);
+		var fmt = function(date, withYear) {
+			var opts = withYear ? { day: 'numeric', month: 'short', year: 'numeric' } : { day: 'numeric', month: 'short' };
+			return typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.date(date, opts) : date.toISOString().slice(0, 10);
+		};
+		if (start && end) {
+			return fmt(start, start.getFullYear() !== end.getFullYear()) + ' – ' + fmt(end, true);
+		}
+		if (start || end) {
+			return fmt(start || end, true);
+		}
+		return String(from || to || '').trim();
+	}
+
+	function getInsightPeriodText(insight) {
+		return currentPeriodLabel || formatDateSpan(insight && insight.date_from, insight && insight.date_to);
+	}
+
+	// Precise title from the server (lot 2: card_title) when present; an older
+	// Pro without the field keeps the signal name.
+	function getCardTitle(insight) {
+		return String((insight && (insight.card_title || insight.signal_name)) || i18n.smartInsight || 'Smart Insight').trim();
+	}
+
+	// The single action of the card: the server's complete short sentence when
+	// it exists, else the legacy short form, else the first recommended action.
+	function getCardAction(insight) {
+		return String((insight && (insight.action_short || insight.next_action_short)) || getRecommendedAction(insight) || '').trim();
+	}
+
+	function isInfoSignal(insight) {
+		return getSignalId(insight).indexOf('traffic_spike_observation') !== -1;
+	}
+
+	function getWorstTransition(insight) {
+		var worst = insight && insight.detection && insight.detection.worst_transition && typeof insight.detection.worst_transition === 'object' ? insight.detection.worst_transition : null;
+		return worst && parseInt(worst.lost, 10) > 0 ? worst : null;
+	}
+
+	function getFunnelSteps(insight) {
+		var steps = insight && insight.metrics && Array.isArray(insight.metrics.steps) ? insight.metrics.steps : [];
+		return steps.filter(function(step) {
+			return step && !isNaN(parseInt(step.reached, 10));
+		});
+	}
+
+	var KEY_FIGURE_LABELS = {
+		funnel_dropoff: ['figureFunnelDropoff', 'visits lost at this step'],
+		form_abandonment: ['figureFormAbandonment', 'abandoned forms'],
+		error_impact: ['figureErrorImpact', 'visitors hit this error'],
+		conversion_gap: ['figureConversionGap', 'conversions lost vs. site average'],
+		engagement_gap: ['figureEngagementGap', 'visitors lost vs. site average'],
+		friction: ['figureFriction', 'visits with rage or dead clicks']
+	};
+
+	// THE numbers of a card, as plain text, for the card AND the detail:
+	// { main: { value, label } | null, context: '', observation: bool }.
+	function getKeyFigures(insight) {
+		var impact = getImpact(insight) || {};
+		var observation = isObservationOnly(insight);
+		var worst = getWorstTransition(insight);
+		var usersLost = getUsersLost(insight);
+		var basis = String(impact.basis || '').toLowerCase();
+		var main = null;
+		var context = '';
+
+		if (worst) {
+			// A funnel card always speaks about its worst step: the step loss is
+			// the headline everywhere (never the whole-funnel drop).
+			basis = 'funnel_dropoff';
+			usersLost = parseInt(worst.lost, 10) || 0;
+			context = [['%1$s', formatPercent(worst.drop_rate)], ['%2$s', formatNumber(worst.lost)], ['%3$s', formatNumber(worst.entered)]].reduce(function(text, pair) {
+				return fillToken(text, pair[0], pair[1]);
+			}, i18n.figureStepDropoff || 'Step drop-off %1$s (%2$s of %3$s)');
+		}
+
+		if (!observation && usersLost !== null && usersLost > 0) {
+			var labelPair = KEY_FIGURE_LABELS[basis] || ['figureVisitsLost', 'visits lost'];
+			main = {
+				value: formatNumber(usersLost),
+				label: (i18n[labelPair[0]] || labelPair[1]) + ' · ' + getInsightPeriodText(insight)
+			};
+		}
+
+		// OPT-378 C: a card with a chart speaks with the chart's numbers (card,
+		// chart and detail print the same rate, never two different ones).
+		var chart = !context && typeof getCardChart === 'function' ? getCardChart(insight) : null;
+		if (chart && chart.summary) {
+			context = String(chart.summary);
+		}
+
+		var revenueAmount = getRevenueAmount(insight);
+		if (!context && revenueAmount !== null && main) {
+			context = fillToken(i18n.impactRevenueHeadline || '≈ %s at risk this period', '%s', formatImpactCurrency(revenueAmount, getRevenue(insight).currency));
+		}
+
+		if (!context && !insight.is_locked_preview) {
+			// First evidence metric that has a site reference: "Bounce rate 72.0% · site 45.0%".
+			var rows = collectEvidenceRows(insight, 8).filter(function(row) {
+				return !row.isUnavailable;
+			});
+			var withBaseline = rows.filter(function(row) {
+				return row.baseline;
+			})[0];
+			if (withBaseline) {
+				context = [['%1$s', withBaseline.label], ['%2$s', withBaseline.value], ['%3$s', withBaseline.baseline]].reduce(function(text, pair) {
+					return fillToken(text, pair[0], pair[1]);
+				}, i18n.figureVsSite || '%1$s %2$s · site %3$s');
+			} else if (rows[0] && !(main && rows[0].raw === usersLost)) {
+				context = rows[0].label + ' ' + rows[0].value;
+			}
+		}
+
+		return { main: main, context: context, observation: observation || !main };
+	}
+
+	// Z3 / D1. One renderer for both places (T2: identical text card = detail).
+	function renderKeyFigures(insight) {
+		var figures = getKeyFigures(insight);
+		if (!figures.main && !figures.context) {
+			return '';
+		}
+
+		var mainHtml = figures.main
+			? '<div class="ob-si-figures__main"><strong class="ob-si-figures__value">' + escapeHtml(figures.main.value) + '</strong><span class="ob-si-figures__label">' + escapeHtml(figures.main.label) + '</span></div>'
+			: '<div class="ob-si-figures__main is-observation"><span class="ob-si-figures__tag">' + escapeHtml(i18n.impactObservationLabel || 'Observation') + '</span><strong class="ob-si-figures__value-text">' + escapeHtml(figures.context) + '</strong><span class="ob-si-figures__label">' + escapeHtml(getInsightPeriodText(insight)) + '</span></div>';
+		var contextHtml = figures.main && figures.context
+			? '<div class="ob-si-figures__context">' + escapeHtml(figures.context) + '</div>'
+			: '';
+
+		return '<div class="ob-si-figures' + (figures.main ? '' : ' is-observation') + '" data-ob-si-figures>' + mainHtml + contextHtml + '</div>';
+	}
+
+	// G1: one horizontal bar per funnel step (width = reached / first step),
+	// the gap of the worst transition in red with its step drop-off. Compact =
+	// card (first, from, to, last; "…" for skipped steps), else every step.
+	function renderFunnelChart(insight, compact) {
+		var steps = getFunnelSteps(insight);
+		if (steps.length < 2) {
+			return '';
+		}
+		var worst = getWorstTransition(insight);
+		var first = parseInt(steps[0].reached, 10) || 0;
+		if (first <= 0) {
+			return '';
+		}
+
+		var keep = steps.map(function(step, index) {
+			return index;
+		});
+		if (compact && steps.length > 4) {
+			var wanted = [0, steps.length - 1];
+			steps.forEach(function(step, index) {
+				if (worst && (String(step.step_number) === String(worst.from_step) || String(step.step_number) === String(worst.to_step))) {
+					wanted.push(index);
+				}
+			});
+			keep = wanted.filter(function(value, index, list) {
+				return list.indexOf(value) === index;
+			}).sort(function(a, b) {
+				return a - b;
+			});
+			while (keep.length < 4 && keep.length < steps.length) {
+				for (var k = 1; k < steps.length; k++) {
+					if (keep.indexOf(k) === -1) {
+						keep.push(k);
+						break;
+					}
+				}
+				keep.sort(function(a, b) {
+					return a - b;
+				});
+			}
+		}
+
+		var aria = [];
+		var items = [];
+		keep.forEach(function(stepIndex, position) {
+			var step = steps[stepIndex];
+			var reached = parseInt(step.reached, 10) || 0;
+			if (position > 0) {
+				var prevIndex = keep[position - 1];
+				var prev = steps[prevIndex];
+				var prevReached = parseInt(prev.reached, 10) || 0;
+				var isWorst = !!(worst && String(prev.step_number) === String(worst.from_step) && String(step.step_number) === String(worst.to_step));
+				var skipped = stepIndex - prevIndex > 1;
+				var dropPct = isWorst ? parseFloat(worst.drop_rate) : (prevReached > 0 ? (prevReached - reached) / prevReached * 100 : 0);
+				var gapLabel = skipped ? '…' : '−' + Math.round(Math.max(0, dropPct || 0)) + '%';
+				items.push('<li class="ob-si-g1__gap' + (isWorst ? ' is-worst' : '') + (skipped ? ' is-skipped' : '') + '"><span>' + escapeHtml(gapLabel) + '</span></li>');
+				if (!skipped) {
+					aria.push(gapLabel);
+				}
+			}
+			var pct = Math.max(2, Math.min(100, Math.round(reached / first * 100)));
+			var isLeak = !!(worst && (String(step.step_number) === String(worst.from_step) || String(step.step_number) === String(worst.to_step)));
+			items.push('<li class="ob-si-g1__step' + (isLeak ? ' is-leak' : '') + '">' +
+				'<span class="ob-si-g1__label">' + escapeHtml(step.label || '') + '</span>' +
+				'<span class="ob-si-g1__track"><span class="ob-si-g1__bar" style="width:' + pct + '%"></span></span>' +
+				'<strong class="ob-si-g1__count">' + escapeHtml(formatNumber(reached)) + '</strong>' +
+			'</li>');
+			aria.push((step.label || '') + ': ' + formatNumber(reached));
+		});
+
+		var ariaLabel = fillToken(i18n.chartFunnelAria || 'Funnel steps: %s', '%s', aria.join(', '));
+		return '<ol class="ob-si-g1' + (compact ? ' is-compact' : ' is-full') + '" role="img" aria-label="' + escapeHtml(ariaLabel) + '">' + items.join('') + '</ol>';
+	}
+
+	// The server chart of a card (OPT-378 C, Recommendations::chart_data()):
+	// exactly two real values, else nothing.
+	function getCardChart(insight) {
+		var chart = insight && insight.chart && typeof insight.chart === 'object' ? insight.chart : null;
+		if (!chart || !Array.isArray(chart.bars) || chart.bars.length !== 2) {
+			return null;
+		}
+		var valid = chart.bars.every(function(bar) {
+			var value = bar ? parseFloat(bar.value) : NaN;
+			return !isNaN(value) && value >= 0 && String(bar.text || '') !== '';
+		});
+		return valid ? chart : null;
+	}
+
+	// G2 (previous period vs this period) and G3 (this group vs the others):
+	// two horizontal bars on one scale, the card's own bar in the severity
+	// colour, the real values printed. Compact = card, else detail.
+	function renderBarChart(insight, compact) {
+		var chart = getCardChart(insight);
+		if (!chart) {
+			return '';
+		}
+		var values = chart.bars.map(function(bar) {
+			return parseFloat(bar.value);
+		});
+		var max = Math.max(values[0], values[1]);
+		if (!(max > 0)) {
+			return '';
+		}
+		var rows = chart.bars.map(function(bar, index) {
+			var pct = values[index] > 0 ? Math.max(2, Math.min(100, Math.round(values[index] / max * 100))) : 0;
+			return '<li class="ob-si-gbar__row' + (bar.focus ? ' is-focus' : '') + '">' +
+				'<span class="ob-si-gbar__label">' + escapeHtml(bar.label || '') + '</span>' +
+				'<span class="ob-si-gbar__track"><span class="ob-si-gbar__bar" style="width:' + pct + '%"></span></span>' +
+				'<strong class="ob-si-gbar__value">' + escapeHtml(bar.text) + '</strong>' +
+			'</li>';
+		}).join('');
+		var type = chart.type === 'before_after' ? 'is-before-after' : 'is-compare';
+		return '<div class="ob-si-gbar ' + type + (compact ? ' is-compact' : ' is-full') + '" role="img" aria-label="' + escapeHtml(chart.summary || '') + '">' +
+			'<span class="ob-si-gbar__metric">' + escapeHtml(chart.metric || '') + '</span>' +
+			'<ul>' + rows + '</ul>' +
+		'</div>';
+	}
+
+	// "Whole funnel completion: 20% (177 of 884)" — detail only, never called
+	// a drop-off, so it cannot be mistaken for the step figure.
+	function renderFunnelCompletionLine(insight) {
+		var steps = getFunnelSteps(insight);
+		if (steps.length < 2 || !getWorstTransition(insight)) {
+			return '';
+		}
+		var first = parseInt(steps[0].reached, 10) || 0;
+		var last = parseInt(steps[steps.length - 1].reached, 10) || 0;
+		if (first <= 0) {
+			return '';
+		}
+		var text = [['%1$s', Math.round(last / first * 100) + '%'], ['%2$s', formatNumber(last)], ['%3$s', formatNumber(first)]].reduce(function(acc, pair) {
+			return fillToken(acc, pair[0], pair[1]);
+		}, i18n.funnelCompletion || 'Whole funnel completion: %1$s (%2$s of %3$s)');
+		return '<p class="ob-si-figures__completion">' + escapeHtml(text) + '</p>';
+	}
+
+	// Z5: the first MEASURED cause with its value, or nothing.
+	function renderLikelyCauseLine(insight) {
+		var cause = getStoryCauses(insight)[0];
+		var label = cause ? String(cause.label || '').trim() : '';
+		if (!label) {
+			return '';
+		}
+		var value = '';
+		if (cause.value !== undefined && cause.value !== null && cause.value !== '') {
+			var metricLabel = String(cause.metric_label || '').trim();
+			value = formatNumber(cause.value) + (metricLabel ? ' ' + metricLabel : '');
+		} else if (cause.sample_size) {
+			value = sprintfCount(i18n.causeSessions || '%s sessions', formatNumber(cause.sample_size));
+		}
+		var text = fillToken(i18n.likelyCauseLine || 'Likely cause: %s', '%s', value ? label + ' (' + value + ')' : label);
+		return '<p class="ob-si-cause">' + escapeHtml(text) + '</p>';
+	}
+
+	function renderBasedOnVisits(insight) {
+		var n = getMeasuredPopulation(insight);
+		if (n === null || n <= 0) {
+			return '';
+		}
+		return '<span class="ob-si-based-on">' + escapeHtml(fillToken(i18n.basedOnVisits || 'Based on %s visits', '%s', formatNumber(n))) + '</span>';
+	}
+
+	function renderPriorityPill(insight) {
+		if (isInfoSignal(insight)) {
+			return '<span class="ob-si-pill is-info">' + escapeHtml(i18n.infoBadge || 'Info') + '</span>';
+		}
+		var label = getPriorityLabel(insight);
+		return '<span class="ob-si-pill is-' + escapeHtml(getSeverityClass(label)) + '">' + escapeHtml(label) + '</span>';
+	}
+
+	// Z2: entity (linked) · period · Pro · provisional · status when it is news.
+	function renderCardSubline(insight) {
+		var context = getEntityContext(insight);
+		var parts = [];
+		var label = context.label || getPageLabel(insight);
+		var pageLink = context.links.filter(function(link) {
+			return link.kind === 'page';
+		})[0];
+		if (label) {
+			parts.push(pageLink
+				? '<a class="ob-si-subline__entity" href="' + escapeHtml(pageLink.url) + '" target="_blank" rel="noopener noreferrer" title="' + escapeHtml(context.identifier || label) + '">' + escapeHtml(label) + '</a>'
+				: '<span class="ob-si-subline__entity" title="' + escapeHtml(context.identifier || label) + '">' + escapeHtml(label) + '</span>');
+		}
+		var period = getInsightPeriodText(insight);
+		if (period) {
+			parts.push('<span class="ob-si-subline__period">' + escapeHtml(period) + '</span>');
+		}
+		if (insight.is_locked_preview) {
+			parts.push('<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLockedShort || 'Pro') + '</span>');
+		}
+		var provisional = renderProvisionalBadge(insight);
+		if (provisional) {
+			parts.push(provisional);
+		}
+		var status = String(insight.status || '').toLowerCase();
+		if (status && status !== 'new' && status !== 'active' && status !== 'viewed') {
+			parts.push('<span class="ob-smart-insights-status-chip is-' + escapeHtml(getSeverityClass(status)) + '">' + escapeHtml(getStatusLabel(status)) + '</span>');
+		}
+		var outcome = renderOutcomeChip(insight);
+		if (outcome) {
+			parts.push(outcome);
+		}
+		return '<div class="ob-si-subline">' + parts.join('<span class="ob-si-subline__sep" aria-hidden="true">·</span>') + '</div>';
+	}
+
+	// OPT-374: category + "New" pills under the title (one each, nothing the
+	// sub-line already says). Category label from the server map (Pro included).
+	function renderCardBadges(insight) {
+		var badges = [];
+		var category = String((insight && insight.category) || '').trim();
+		var map = i18n.categoryLabels || {};
+		var label = category && typeof map[category] === 'string' && map[category] ? map[category] : category;
+		if (label) {
+			badges.push('<span class="ob-si-badge is-category">' + escapeHtml(label) + '</span>');
+		}
+		// OPT-588 (C): "New" = the problem appears for the first time, not "not
+		// opened yet". A problem already found in an earlier period (the weekly
+		// brief then says Unchanged / Worse / Better) gets no "New" pill.
+		var badgeDetection = insight && insight.detection && typeof insight.detection === 'object' ? insight.detection : {};
+		var seenBefore = badgeDetection.same_issue_previous_period === true || String(badgeDetection.same_issue_previous_period) === '1'
+			|| Math.max(Number(insight && insight.recurrence_count) || 0, Number(badgeDetection.recurrence_count) || 0) > 1;
+		if (String((insight && insight.status) || '').toLowerCase() === 'new' && !seenBefore) {
+			badges.push('<span class="ob-si-badge is-new">' + escapeHtml(i18n.statusNew || 'New') + '</span>');
+		}
+		return badges.length ? '<div class="ob-si-badges">' + badges.join('') + '</div>' : '';
+	}
+
+	// OPT-374: "Priority 79" + a short bar in the severity colour (card footer).
+	function renderCardPriority(insight) {
+		if (isInfoSignal(insight)) {
+			return '';
+		}
+		var score = Math.max(0, Math.min(100, getPriorityScore(insight)));
+		return '<span class="ob-si-priority is-' + escapeHtml(getSeverityClass(getPriorityLabel(insight))) + '">' +
+			'<span class="ob-si-priority__label">' + escapeHtml(i18n.priority || 'Priority') + ' <strong>' + score + '</strong></span>' +
+			'<span class="ob-si-priority__track" aria-hidden="true"><span class="ob-si-priority__bar" style="width:' + score + '%"></span></span>' +
+		'</span>';
+	}
+
+	// Z6: the action sentence (never cut) + ONE primary proof button, under a
+	// "Next action" eyebrow (OPT-374: the green block on the card's right).
+	function renderCardActionZone(insight) {
+		var action = getCardAction(insight);
+		var best = getBestRelatedReport(insight);
+		// OPT-378 B: the recordings of the same page are THE proof when they exist.
+		var proof = typeof renderRecordingProof === 'function' ? renderRecordingProof(insight) : '';
+		// Never the A/B builder: the card's button is a proof link (OPT-362 T7).
+		if (proof) {
+			// Recordings of the page found above.
+		} else if (best && best.resolved && best.resolved.url && String(best.resolved.url).indexOf('opti-behavior-ab-testing') === -1) {
+			proof = '<a class="button button-primary ob-smart-insights-report-cta" href="' + escapeHtml(best.resolved.url) + '" target="_blank" rel="noopener noreferrer"><i data-lucide="' + escapeHtml(best.meta.icon) + '"></i>' + escapeHtml(best.meta.label) + '</a>';
+		} else if (insight.is_locked_preview) {
+			proof = '<small class="ob-smart-insights-next-report">' + escapeHtml(i18n.proRelatedLocked || 'Related recordings, journeys, and segment reports unlock in Pro.') + '</small>';
+			// OPT-551: discreet trial link (server sends the URL only in the banner "invite" state).
+			if (config.trialLinkUrl && String(config.trialLinkUrl).indexOf('https://optiuser.com/') === 0 && i18n.trialLinkText) {
+				proof += ' <a class="ob-try-pro-link ob-try-pro-link--smart-insights" href="' + escapeHtml(config.trialLinkUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(i18n.trialLinkText) + '</a>';
+			}
+		}
+		// The A/B test is an action, not a proof: a second, lighter button.
+		proof += typeof renderAbAction === 'function' ? renderAbAction(insight) : '';
+		if (!action && !proof) {
+			return '';
+		}
+		return '<div class="ob-si-action">' +
+			'<span class="ob-si-action__eyebrow">' + escapeHtml(i18n.nextAction || 'Next action') + '</span>' +
+			(action ? '<p class="ob-si-action__text">' + escapeHtml(action) + '</p>' : '') +
+			proof +
+		'</div>';
+	}
+
+	function renderInsightCard(insight) {
+		rememberAlsoSeen(insight);
+		var title = getCardTitle(insight);
+		var priorityClass = isInfoSignal(insight) ? 'info' : getSeverityClass(getPriorityLabel(insight));
+
+		return '<article class="ob-smart-insights-card ob-si-card is-' + escapeHtml(priorityClass) + (isStoryInsight(insight) ? ' is-story' : '') + '" data-insight-id="' + escapeHtml(insight.id) + '">' +
+			'<div class="ob-si-card__head"><h3 class="ob-si-card__title">' + escapeHtml(title) + '</h3>' + renderPriorityPill(insight) + '</div>' +
+			renderCardSubline(insight) +
+			renderKeyFigures(insight) +
+			renderCardActionZone(insight) +
+			'<div class="ob-si-card__foot">' + renderBasedOnVisits(insight) + renderActions(insight) + '</div>' +
 		'</article>';
 	}
 
@@ -2996,6 +3029,7 @@
 		}
 
 		releasePortaledTooltips(list);
+		syncCurrentPeriodLabel(section);
 
 		if (!items.length) {
 			list.innerHTML = renderEmptyState(data, getContextData(section));
@@ -3033,6 +3067,9 @@
 
 		list.innerHTML = '<div class="ob-smart-insights-center-list">' + markup + '</div>';
 		refreshIcons();
+		if (typeof refreshBriefTitles === 'function') {
+			refreshBriefTitles();
+		}
 		maybeOpenDeepLinkedInsight(section);
 	}
 
@@ -3157,41 +3194,58 @@
 			'</li>';
 		}).join('');
 
-		return '<div class="ob-smart-insights-center-children">' +
-			'<span class="ob-smart-insights-center-children-label">' + escapeHtml(label) + '</span>' +
+		// Folded to one line ("+ N related signals"): the card stays about its
+		// primary problem, the related ones open on demand.
+		return '<details class="ob-smart-insights-center-children">' +
+			'<summary class="ob-smart-insights-center-children-label" title="' + escapeHtml(label) + '">' + escapeHtml(fillToken(i18n.relatedSignalsLine || '+ %s related signals', '%s', formatNumber(children.length))) + '</summary>' +
 			'<ul>' + lines + '</ul>' +
-		'</div>';
+		'</details>';
 	}
 
-	function renderCenterRow(insight, children) {
-		var priorityLabel = getPriorityLabel(insight);
-		var priorityClass = getSeverityClass(priorityLabel);
-		var action = getRecommendedAction(insight);
-		var title = insight.signal_name || (i18n.smartInsight || 'Smart Insight');
-		var interpretation = getCompactCenterExplanation(insight, title);
-		// Story card = merged, correlated problem. Uncorrelated single signals
-		// keep the exact markup they had before, so nothing regresses.
-		var isStory = isStoryInsight(insight);
+	// HX (OPT-374, no empty space): the figure on the left, its evidence on the
+	// right — the mini funnel, or else the likely cause + related signals.
+	// Under a chart, the cause and related signals run across the full width.
+	function renderCardStory(figures, chart, cause, related) {
+		if (chart) {
+			return '<div class="ob-si-card__story has-side has-chart">' + figures + '<div class="ob-si-card__chart">' + chart + '</div></div>' + cause + related;
+		}
+		if (cause || related) {
+			return '<div class="ob-si-card__story has-side">' + figures + '<div class="ob-si-card__evidence">' + cause + related + '</div></div>';
+		}
+		return '<div class="ob-si-card__story has-side is-solo">' + figures + '</div>';
+	}
 
-		return '<article class="ob-smart-insights-center-card is-' + escapeHtml(priorityClass) + (insight.is_locked_preview ? ' is-locked-preview' : '') + (isStory ? ' is-story' : '') + '" data-insight-id="' + escapeHtml(insight.id) + '">' +
+	// Z1 → Z6 (OPT-362 section 1). Nothing else rides on the card: category,
+	// "New", stage tracker, cause chips, interpretation, evidence micro-cards,
+	// the /100 gauge and "Just now" live in the detail (or nowhere).
+	function renderCenterRow(insight, children) {
+		rememberAlsoSeen(insight);
+		var priorityClass = isInfoSignal(insight) ? 'info' : getSeverityClass(getPriorityLabel(insight));
+		var title = getCardTitle(insight);
+		var isStory = isStoryInsight(insight);
+		var chart = getWorstTransition(insight) ? renderFunnelChart(insight, true) : (typeof renderBarChart === 'function' ? renderBarChart(insight, true) : '');
+		// OPT-374: the story, then the green "Next action" band across the
+		// full width (sentence left, proof button right; stacked on mobile).
+		var actionZone = renderCardActionZone(insight);
+
+		return '<article class="ob-smart-insights-center-card ob-si-card is-' + escapeHtml(priorityClass) + (insight.is_locked_preview ? ' is-locked-preview' : '') + (isStory ? ' is-story' : '') + (actionZone ? ' has-aside' : '') + '" data-insight-id="' + escapeHtml(insight.id) + '">' +
 			'<span class="ob-smart-insights-severity-rail" aria-hidden="true"></span>' +
-			'<div class="ob-smart-insights-center-main ob-smart-insights-primary-zone">' +
-				'<div class="ob-smart-insights-title-row">' +
-					'<h3 title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</h3>' +
+			'<div class="ob-si-card__main">' +
+				'<div class="ob-si-card__head ob-smart-insights-title-row">' +
+					'<h3 class="ob-si-card__title">' + escapeHtml(title) + '</h3>' +
 					renderSignalTooltip(insight, { position: 'bottom' }) +
+					renderPriorityPill(insight) +
 				'</div>' +
-				renderCenterHeaderChips(insight, priorityLabel, priorityClass) +
-				renderCompactContextLine(insight) +
-				renderImpactLine(insight) +
-				renderCauseChips(insight) +
-				renderStageTracker(insight) +
-				(interpretation ? '<p class="ob-smart-insights-explanation">' + escapeHtml(interpretation) + '</p>' : '') +
-				renderCenterChildren(children) +
-				renderUpgradePreview(insight) +
+				// HX (OPT-374, compact): pills and sub-line share one row; figures
+				// and the mini funnel sit side by side (stacked on phones).
+				'<div class="ob-si-card__tags">' + renderCardBadges(insight) +
+				renderCardSubline(insight) + '</div>' +
+				// Part of Z2: "Also matches N other funnels with identical data".
+				renderDuplicatesLine(insight) +
+				renderCardStory(renderKeyFigures(insight), chart, renderLikelyCauseLine(insight), renderCenterChildren(children)) +
 			'</div>' +
-			'<div class="ob-smart-insights-metric-strip ob-smart-insights-evidence-zone" aria-label="' + escapeHtml(i18n.evidence || 'Evidence') + '">' + renderCenterEvidenceMicroCards(insight, 3) + '</div>' +
-			'<div class="ob-smart-insights-action-zone">' + renderCenterActionPanel(insight, action) + '</div>' +
-			renderCenterFooter(insight, priorityLabel) +
+			(actionZone ? '<div class="ob-si-card__aside">' + actionZone + '</div>' : '') +
+			'<div class="ob-si-card__foot ob-smart-insights-center-footer"><div class="ob-si-card__meta">' + renderCardPriority(insight) + renderBasedOnVisits(insight) + '</div>' + renderActions(insight) + '</div>' +
 		'</article>';
 	}
 
@@ -3200,7 +3254,8 @@
 		if (!contextData) {
 			return false;
 		}
-		var nonDefaultStatus = contextData.status && contextData.status !== 'active';
+		// Reset restores "active": "All statuses" ('') is a filter too (QA-B-SI-152).
+		var nonDefaultStatus = contextData.hasStatusControl !== false && typeof contextData.status === 'string' && contextData.status !== 'active';
 		var nonDefaultSort = contextData.sort && contextData.sort !== 'priority';
 		return !!(nonDefaultStatus || nonDefaultSort || contextData.severity || contextData.category || contextData.entityType || contextData.confidence || contextData.search);
 	}
@@ -3266,7 +3321,11 @@
 			auto_refresh_if_stale: (!isDashboard && options && options.autoRefreshIfStale) ? '1' : ''
 		};
 
-		setAlert(section, '', 'info');
+		// keepAlert: the success message of the action that triggered this reload
+		// must stay visible (it used to be wiped at once).
+		if (!(options && options.keepAlert)) {
+			setAlert(section, '', 'info');
+		}
 		setLoading(section, options && options.refreshing ? (i18n.refreshing || 'Refreshing Smart Insights...') : (i18n.loading || 'Loading Smart Insights...'));
 
 		return postAjax('optibehavior_smart_insights_list', payload)
@@ -3316,7 +3375,7 @@
 			.then(function() {
 				setAlert(section, i18n.refreshComplete || 'Smart Insights refreshed.', 'success');
 				loadWeeklySummary(section);
-				return loadSection(section, { refreshing: true });
+				return loadSection(section, { refreshing: true, keepAlert: true });
 			})
 			.catch(function(error) {
 				setAlert(section, error.message || (i18n.error || 'Unable to load Smart Insights.'), 'error');
@@ -3338,7 +3397,7 @@
 		})
 			.then(function() {
 				setAlert(section, i18n.statusUpdated || 'Smart Insight status updated.', 'success');
-				loadSection(section).then(function() {
+				loadSection(section, { keepAlert: true }).then(function() {
 					syncNotificationsScope(section);
 				});
 			})
@@ -3388,6 +3447,15 @@
 			}
 		});
 
+		// OPT-374: instant hover read-out on the daily chart and the sparklines.
+		modal.addEventListener('mouseover', showWhereTip);
+		modal.addEventListener('mouseout', function(event) {
+			var wrap = event.target.closest ? event.target.closest('[data-ob-si-tipwrap]') : null;
+			if (wrap && !(event.relatedTarget && wrap.contains(event.relatedTarget))) {
+				hideWhereTip(wrap);
+			}
+		});
+
 		modal.addEventListener('change', function(event) {
 			var statusSelect = event.target.closest('.ob-smart-insights-status-select');
 			if (statusSelect && activeModalSection) {
@@ -3414,6 +3482,23 @@
 			document.body.classList.remove('ob-smart-insights-modal-open');
 		}
 		activeModalSection = null;
+		// Give keyboard focus back to the control that opened the dialog (QA-B-SI-164).
+		if (modalReturnFocus && typeof modalReturnFocus.focus === 'function' && document.body.contains(modalReturnFocus)) {
+			try { modalReturnFocus.focus(); } catch (e) { /* element gone */ }
+		}
+		modalReturnFocus = null;
+	}
+
+	function focusModalPanel(modal) {
+		var panel = modal.querySelector('.ob-smart-insights-modal-panel') || modal;
+		var target = panel.querySelector('.ob-smart-insights-modal-close, button, [href], [tabindex]:not([tabindex="-1"])');
+		if (!target) {
+			if (!panel.hasAttribute('tabindex')) {
+				panel.setAttribute('tabindex', '-1');
+			}
+			target = panel;
+		}
+		try { target.focus(); } catch (e) { /* not focusable */ }
 	}
 
 	function openDetail(section, insightId) {
@@ -3424,14 +3509,21 @@
 		modal.classList.remove('has-detail');
 		releasePortaledTooltips(content);
 		content.innerHTML ='<div class="ob-smart-insights-loading"><span class="ob-smart-insights-spinner" aria-hidden="true"></span><span>' + escapeHtml(i18n.loading || 'Loading Smart Insights...') + '</span></div>';
+		modalReturnFocus = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
 		modal.hidden = false;
 		document.body.classList.add('ob-smart-insights-modal-open');
+		focusModalPanel(modal);
 
 		postAjax('optibehavior_smart_insights_detail', { insight_id: insightId })
 			.then(function(data) {
 				var insight = data.insight || {};
 				content.innerHTML = renderDetail(insight);
 				modal.classList.add('has-detail');
+				// OPT-374: the sticky sidebar stops just under the sticky header.
+				var detailHeader = content.querySelector('.ob-smart-insights-detail-header');
+				if (detailHeader) {
+					content.style.setProperty('--ob-si-detail-header-h', Math.ceil(detailHeader.getBoundingClientRect().height) + 'px');
+				}
 				refreshIcons();
 				loadWhereSection(content, insight, section);
 			})
@@ -3439,22 +3531,6 @@
 				modal.classList.remove('has-detail');
 				content.innerHTML = '<div class="ob-smart-insights-empty"><h3>' + escapeHtml(error.message || (i18n.error || 'Unable to load Smart Insights.')) + '</h3></div>';
 			});
-	}
-
-	// One collapsed "show the rest" affordance shared by the modal sections that
-	// keep secondary content out of the way (non-applicable reports, generic
-	// causes). The toggle is handled by one delegated listener on the modal.
-	function renderDisclosure(label, body, options) {
-		options = options || {};
-		disclosureSeq += 1;
-		var id = 'ob-si-disclosure-' + disclosureSeq;
-		var open = !!options.open;
-
-		return '<button type="button" class="button-link ob-smart-insights-disclosure-toggle' + (options.className ? ' ' + escapeHtml(options.className) : '') + '" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="' + escapeHtml(id) + '" data-ob-si-disclosure="' + escapeHtml(id) + '">' +
-				'<span class="ob-smart-insights-disclosure-label">' + escapeHtml(label) + '</span>' +
-				'<span class="ob-smart-insights-disclosure-caret" aria-hidden="true">&#9662;</span>' +
-			'</button>' +
-			'<div class="ob-smart-insights-disclosure-body" id="' + escapeHtml(id) + '"' + (open ? '' : ' hidden') + '>' + body + '</div>';
 	}
 
 	function renderList(values, limit) {
@@ -3676,39 +3752,20 @@
 			return (b.score - a.score) || (a.index - b.index);
 		});
 
-		// Only the reports the viewer can actually open (current / open) earn a
-		// full card. Everything that does not apply stays reachable behind one
-		// collapsed line instead of six cards explaining why they are irrelevant.
-		var applicable = [];
-		var other = [];
-		sorted.forEach(function(item) {
-			if (item.resolved.url) {
-				applicable.push(item);
-			} else {
-				other.push(item);
-			}
+		// Only the reports the viewer can actually open earn a card; the ones
+		// that do not apply are not listed at all (OPT-362 S2).
+		// No "Create A/B test" card when the hypothesis says the test cannot
+		// run at this traffic (OPT-362 T7).
+		var abBlocked = isAbTestBlocked(insight || {});
+		var applicable = sorted.filter(function(item) {
+			return !!item.resolved.url && !(abBlocked && isAbTestingReport(item.report, item.resolved));
 		});
 
-		if (!applicable.length && !other.length) {
-			return '<p class="description">' + escapeHtml(i18n.noRelatedReports || 'No related reports are available for this insight yet.') + '</p>';
-		}
-
-		var html = applicable.length
+		return applicable.length
 			? '<div class="ob-smart-insights-report-card-list">' + applicable.map(function(item) {
 				return renderRelatedReportCard(item, insight);
 			}).join('') + '</div>'
 			: '<p class="description">' + escapeHtml(i18n.noApplicableReports || 'No report applies directly to this insight.') + '</p>';
-
-		if (other.length) {
-			var template = other.length === 1
-				? (i18n.relatedOtherReport || '%s other report does not apply to this insight')
-				: (i18n.relatedOtherReports || '%s other reports do not apply to this insight');
-			html += renderDisclosure(sprintfCount(template, other.length), '<div class="ob-smart-insights-report-card-list is-muted-reports">' + other.map(function(item) {
-				return renderRelatedReportCard(item, insight, { compact: true });
-			}).join('') + '</div>', { className: 'ob-smart-insights-report-more-toggle' });
-		}
-
-		return html;
 	}
 
 	function renderSummaryPriority(item) {
@@ -3807,7 +3864,7 @@
 			var outcome = win && win.outcome ? win.outcome : null;
 			var title = getBriefTitle(win);
 			return '<li>' +
-				'<span class="ob-smart-insights-brief-title" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span>' +
+				'<span class="ob-smart-insights-brief-title"' + (typeof renderBriefIdAttr === 'function' ? renderBriefIdAttr(win) : '') + ' title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span>' +
 				'<span class="ob-smart-insights-win-change">' + escapeHtml(getOutcomeChangeLabel(outcome)) + '</span>' +
 				'<span class="ob-smart-insights-win-date">' + escapeHtml(fillToken(i18n.outcomeFixed || 'Fixed %s', '%s', formatShortDate(outcome && outcome.resolved_at))) + '</span>' +
 				renderSummaryInsightLink(win) +
@@ -3902,21 +3959,46 @@
 
 		var usersLost = item && item.users_lost !== undefined && item.users_lost !== null ? parseInt(item.users_lost, 10) : NaN;
 		if (!isNaN(usersLost) && usersLost > 0) {
-			return fillToken(i18n.briefVisitorsAtRisk || '%s visitors at risk', '%s', formatNumber(usersLost));
+			// OPT-588 (B): one unit on the card and in the brief = visits (the
+			// card says "N visits left", its figure "visits lost").
+			return formatNumber(usersLost) + ' ' + (i18n.figureVisitsLost || 'visits lost');
 		}
 
 		return fillToken(i18n.briefSessionsMeasured || 'Measured on %s sessions', '%s', formatNumber(sessions));
 	}
 
-	// Three entities can carry three different problems and still share a label
-	// ("Mobile"), so the brief names the signal as well when it adds something.
-	function getBriefTitle(item) {
-		var label = getSummaryItemTitle(item);
-		var signalName = item && item.signal_name ? String(item.signal_name).trim() : '';
-		if (signalName && label && label !== signalName) {
-			return signalName + ' — ' + label;
+	// OPT-378 D2: a brief line carries the card's own title (the item's
+	// card_title, else the title the list showed for the same card id), never
+	// "Signal name — entity" any more.
+	function getBriefCardTitle(item) {
+		var direct = item && item.card_title ? String(item.card_title).trim() : '';
+		if (direct) {
+			return direct;
 		}
-		return label || signalName || (item && item.summary) || (i18n.smartInsight || 'Smart Insight');
+		var id = item && (item.id || item.insight_id) ? String(item.id || item.insight_id) : '';
+		return id && alsoSeenById[id] && alsoSeenById[id].title ? alsoSeenById[id].title : '';
+	}
+
+	function getBriefTitle(item) {
+		return getBriefCardTitle(item) || getSummaryItemTitle(item) || (item && item.summary) || (i18n.smartInsight || 'Smart Insight');
+	}
+
+	function renderBriefIdAttr(item) {
+		var id = item && (item.id || item.insight_id) ? parseInt(item.id || item.insight_id, 10) || 0 : 0;
+		return id ? ' data-ob-si-brief-id="' + id + '"' : '';
+	}
+
+	// The brief can render before the list: once the cards are known, the
+	// brief lines take their titles.
+	function refreshBriefTitles(root) {
+		var scope = root && root.querySelectorAll ? root : document;
+		Array.prototype.forEach.call(scope.querySelectorAll('[data-ob-si-brief-id]'), function(node) {
+			var title = getBriefCardTitle({ id: node.getAttribute('data-ob-si-brief-id') });
+			if (title && node.textContent !== title) {
+				node.textContent = title;
+				node.setAttribute('title', title);
+			}
+		});
 	}
 
 	// Summary items carry the same outcome block as cards do, so a brief line for
@@ -3941,11 +4023,29 @@
 			return '';
 		}
 
+		// HX (OPT-374): a bar sized by the visitors at risk fills the gap between
+		// the title and the numbers, so the three issues compare at a glance.
+		// Only lines whose label is "N visitors at risk" get one (same units).
+		var weightOf = function(item) {
+			if (!item || item.observation_only || (item.revenue && item.revenue.available)) {
+				return 0;
+			}
+			return Math.max(0, parseInt(item.users_lost, 10) || 0);
+		};
+		var maxWeight = list.reduce(function(max, item) {
+			return Math.max(max, weightOf(item));
+		}, 0);
+
 		return '<ol class="ob-smart-insights-brief-list">' + list.map(function(item) {
 			var title = getBriefTitle(item);
 			var state = getBriefStateKey(item);
-			return '<li>' +
-				'<span class="ob-smart-insights-brief-title" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span>' +
+			var weight = weightOf(item);
+			var meter = weight > 0 && maxWeight > 0
+				? '<span class="ob-smart-insights-brief-meter" aria-hidden="true"><span style="width:' + Math.max(4, Math.round(weight / maxWeight * 100)) + '%"></span></span>'
+				: '';
+			return '<li' + (meter ? ' class="has-meter"' : '') + '>' +
+				'<span class="ob-smart-insights-brief-title"' + (typeof renderBriefIdAttr === 'function' ? renderBriefIdAttr(item) : '') + ' title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</span>' +
+				meter +
 				'<span class="ob-smart-insights-brief-amount">' + escapeHtml(getBriefAmountLabel(item)) + '</span>' +
 				'<span class="ob-smart-insights-brief-state is-' + escapeHtml(state) + '">' + escapeHtml(getBriefStateLabel(state)) + '</span>' +
 				renderBriefOutcomeChip(item) +
@@ -4078,15 +4178,6 @@
 
 
 
-	function getDetailDateRange(insight) {
-		var from = insight && insight.date_from ? String(insight.date_from).trim() : '';
-		var to = insight && insight.date_to ? String(insight.date_to).trim() : '';
-		if (from && to) {
-			return from + ' ' + (i18n.dateRangeTo || 'to') + ' ' + to;
-		}
-		return from || to || '';
-	}
-
 	function getDetailRecurrenceLabel(insight) {
 		var count = parseInt((insight && (insight.recurrence_count || (insight.detection && insight.detection.recurrence_count))) || 0, 10) || 0;
 		if (count <= 1) {
@@ -4095,113 +4186,14 @@
 		return (i18n.recurring || 'Recurring') + ': ' + count;
 	}
 
-	function renderDetailHeaderChips(insight, priorityLabel, priorityClass) {
-		var categoryLabel = getCategoryLabel(insight.category);
-		var entityTypeLabel = getEntityTypeLabel(insight);
-		var recurrenceLabel = getDetailRecurrenceLabel(insight);
-		var chips = [
-			'<span class="ob-smart-insights-badge ob-smart-insights-detail-chip is-priority is-' + escapeHtml(priorityClass) + '">' + escapeHtml(priorityLabel) + '</span>'
-		];
-
-		if (categoryLabel) {
-			chips.push('<span class="ob-smart-insights-detail-chip is-category">' + escapeHtml(categoryLabel) + '</span>');
-		}
-		if (entityTypeLabel) {
-			chips.push('<span class="ob-smart-insights-detail-chip is-entity">' + escapeHtml(entityTypeLabel) + '</span>');
-		}
-		if (recurrenceLabel) {
-			chips.push('<span class="ob-smart-insights-detail-chip ob-smart-insights-recurrence-chip is-recurring" title="' + escapeHtml(i18n.recurrenceHistory || 'Older overlapping detections are grouped into this card.') + '">' + escapeHtml(recurrenceLabel) + '</span>');
-		} else if (insight.status) {
-			chips.push('<span class="ob-smart-insights-detail-chip ob-smart-insights-status-chip is-' + escapeHtml(getSeverityClass(insight.status)) + '">' + escapeHtml(getStatusLabel(insight.status)) + '</span>');
-		}
-		if (insight.is_locked_preview) {
-			chips.push('<span class="ob-smart-insights-badge ob-smart-insights-detail-chip is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>');
-		}
-		chips.push(renderProvisionalBadge(insight));
-
-		// The signal helper rides in the chip row rather than in the <h2>: that
-		// heading is a -webkit-line-clamp box, and turning it into a flex row to
-		// seat the icon would drop the two-line clamp on long signal names.
-		chips.push(renderSignalTooltip(insight, { position: 'bottom' }));
-
-		return '<div class="ob-smart-insights-card-top ob-smart-insights-detail-chip-row">' + chips.join('') + '</div>';
-	}
-
-	function renderDetailPriorityMeter(insight, priorityLabel) {
-		var score = getSafePriorityScore(insight);
-		var priorityClass = getSeverityClass(priorityLabel);
-		var activeSegments = score > 0 ? Math.max(1, Math.ceil(score / 20)) : 0;
-		var segments = [];
-		for (var i = 1; i <= 5; i++) {
-			segments.push('<span class="ob-smart-insights-priority-segment' + (i <= activeSegments ? ' is-active' : '') + '" aria-hidden="true"></span>');
-		}
-		return '<div class="ob-smart-insights-priority-meter ob-smart-insights-detail-priority is-' + escapeHtml(priorityClass) + '" aria-label="' + escapeHtml((i18n.priority || 'Priority') + ' ' + score + '/100') + '">' +
-			'<span class="ob-smart-insights-priority-label">' + escapeHtml(i18n.priority || 'Priority') + '</span>' +
-			'<span class="ob-smart-insights-priority-segments">' + segments.join('') + '</span>' +
-			'<span class="ob-smart-insights-score ob-smart-insights-priority-value"><strong>' + escapeHtml(score) + '/100</strong></span>' +
-		'</div>';
-	}
-
-	function renderDetailSubtitle(insight, dateRange) {
-		var context = getEntityContext(insight);
-		var parts = [];
-		if (dateRange) {
-			parts.push('<span class="ob-smart-insights-detail-date-range">' + escapeHtml(dateRange) + '</span>');
-		}
-		if (context.label) {
-			parts.push('<span class="ob-smart-insights-detail-entity-summary" title="' + escapeHtml(context.identifier || context.label) + '">' + escapeHtml(context.label) + '</span>');
-		}
-		return parts.length ? '<p class="ob-smart-insights-page-label ob-smart-insights-detail-subtitle">' + parts.join('<span class="ob-smart-insights-detail-subtitle-separator" aria-hidden="true">|</span>') + '</p>' : '';
-	}
-
-	function renderDetailContextFacts(insight, dateRange) {
-		var categoryLabel = getCategoryLabel(insight.category);
-		var recurrenceLabel = getDetailRecurrenceLabel(insight);
-		var rows = [];
-
-		function addFact(label, value, className) {
-			if (value === undefined || value === null || value === '') {
-				return;
-			}
-			rows.push('<div class="ob-smart-insights-context-fact' + (className ? ' ' + className : '') + '"><dt>' + escapeHtml(label) + '</dt><dd>' + escapeHtml(value) + '</dd></div>');
-		}
-
-		function addFactHtml(label, valueHtml, className) {
-			if (!valueHtml) {
-				return;
-			}
-			rows.push('<div class="ob-smart-insights-context-fact' + (className ? ' ' + className : '') + '"><dt>' + escapeHtml(label) + '</dt><dd>' + valueHtml + '</dd></div>');
-		}
-
-		addFact(i18n.confidence || 'Confidence', getConfidenceLabel(insight), 'is-confidence');
-		addFact(i18n.status || 'Status', getStatusLabel(insight.status), 'is-status');
-		addFact(i18n.category || 'Category', categoryLabel, 'is-category');
-		addFactHtml(i18n.entity || 'Entity', renderEntityReference(insight, { includeReportLinks: false }), 'is-entity');
-		addFact(i18n.recurrence || 'Recurrence', recurrenceLabel, 'is-recurrence');
-		addFact(i18n.dateRange || 'Date range', dateRange, 'is-date-range');
-
-		return rows.length ? '<dl class="ob-smart-insights-context-facts">' + rows.join('') + '</dl>' : '<p class="description">-</p>';
-	}
-
+	// Footer = the status menu + the page's Page X-Ray. Dates live in Context
+	// and the primary proof button in Next steps (OPT-362: each thing once).
+	// (dateRange is kept in the signature for callers / harnesses; unused.)
 	function renderDetailFooter(insight, dateRange, primaryReport) {
-		var detectedTime = renderDetectedTime(insight);
 		var id = parseInt(insight.id, 10) || 0;
-		var meta = [];
-		if (detectedTime) {
-			meta.push('<span><strong>' + escapeHtml(i18n.lastSeen || 'Last seen') + '</strong> ' + detectedTime + '</span>');
-		}
-		if (dateRange) {
-			meta.push('<span><strong>' + escapeHtml(i18n.analysisWindow || 'Analysis window') + '</strong> ' + escapeHtml(dateRange) + '</span>');
-		}
-		if (!meta.length) {
-			meta.push('<span>' + escapeHtml(i18n.smartInsight || 'Smart Insight') + '</span>');
-		}
-
-		var reportCta = primaryReport && primaryReport.resolved && primaryReport.resolved.url
-			? '<a class="button button-primary ob-smart-insights-report-cta" href="' + escapeHtml(primaryReport.resolved.url) + '" target="_blank" rel="noopener noreferrer"><i data-lucide="' + escapeHtml(primaryReport.meta.icon) + '"></i>' + escapeHtml(primaryReport.meta.label) + '</a>'
-			: '';
+		var reportCta = '';
 		// Page cards, and funnel cards through the page of the step visitors
-		// leave: the page's Page X-Ray, next to the primary action.
+		// leave: the page's Page X-Ray, next to the status menu.
 		var xrayReport = (Array.isArray(insight.related_reports) ? insight.related_reports : []).filter(function(report) {
 			return report && report.type === 'page_xray';
 		})[0];
@@ -4217,7 +4209,7 @@
 			'<option value="ignored">' + escapeHtml(i18n.ignore || 'Ignore') + '</option>' +
 		'</select></label>' : '';
 
-		return '<footer class="ob-smart-insights-detail-footer"><div class="ob-smart-insights-detail-footer-meta">' + meta.join('<span class="ob-smart-insights-detail-footer-separator" aria-hidden="true">|</span>') + '</div><div class="ob-smart-insights-detail-footer-actions">' + statusControl + reportCta + '</div></footer>';
+		return '<footer class="ob-smart-insights-detail-footer"><div class="ob-smart-insights-detail-footer-actions">' + statusControl + reportCta + '</div></footer>';
 	}
 
 	// ---------------------------------------------------------------------
@@ -4394,48 +4386,6 @@
 		'</div>';
 	}
 
-	function renderEvidenceRefsSection(insight, scope) {
-		var body = renderEvidenceRefsBody(insight, scope) || renderEvidenceRefsLocked(insight);
-		if (!body) {
-			return '';
-		}
-
-		return '<section class="ob-smart-insights-detail-section is-evidence-refs" data-ob-si-evidence-refs>' +
-			renderSectionHeading(i18n.evidenceRefsTitle || 'Evidence and proof', 'evidence_refs') +
-			body +
-		'</section>';
-	}
-
-	// Detail counterpart of the story card: the absolute impact plus the ranked
-	// causes that were actually measured for this scope. Rendered only when the
-	// insight carries one of those blocks, so legacy rows are untouched.
-	function renderDetailStorySection(insight) {
-		var impactHtml = renderImpactLine(insight);
-		var causeHtml = renderCauseChips(insight);
-		if (!impactHtml && !causeHtml) {
-			return '';
-		}
-
-		var impact = getImpact(insight);
-		var facts = [];
-		if (impact && impact.population) {
-			facts.push('<li><span>' + escapeHtml(impact.population_label || i18n.sessions || 'Sessions') + '</span><strong>' + escapeHtml(formatNumber(impact.population)) + '</strong></li>');
-		}
-		if (impact && !isObservationOnly(insight) && impact.loss_rate !== undefined && impact.loss_rate !== null && impact.loss_rate !== '') {
-			// A funnel card prices the step it names: say so (the funnel-wide
-			// drop sits in Evidence under its own name).
-			var lossLabel = insight.detection && insight.detection.worst_transition ? (i18n.stepDropOffRate || 'Drop-off at this step') : (i18n.dropOffRate || 'Drop-off rate');
-			facts.push('<li><span>' + escapeHtml(lossLabel) + '</span><strong>' + escapeHtml(formatPercent((parseFloat(impact.loss_rate) || 0) * 100)) + '</strong></li>');
-		}
-
-		return '<section class="ob-smart-insights-detail-section is-impact">' +
-			renderSectionHeading(i18n.businessImpact || 'Business impact', 'impact') +
-			impactHtml +
-			(facts.length ? '<ul class="ob-smart-insights-impact-facts">' + facts.join('') + '</ul>' : '') +
-			(causeHtml ? '<h4 class="ob-smart-insights-impact-causes-title">' + escapeHtml(i18n.measuredCauses || 'Measured causes') + '</h4>' + causeHtml : '') +
-		'</section>';
-	}
-
 	// --- Hypothesis and experiment ------------------------------------------
 	// The story's "what next / how to verify" half. Both blocks are produced by
 	// Pro; Free receives a locked shape from the capabilities layer, so the same
@@ -4552,57 +4502,36 @@
 		'</div>';
 	}
 
-	function renderHypothesisLocked(hypothesis) {
-		var lines = [];
-		if (hypothesis.metric_label) {
-			lines.push((i18n.hypothesisMetric || 'Goal metric') + ': ' + hypothesis.metric_label);
-		}
-
-		return '<div class="ob-smart-insights-upgrade-preview" data-ob-si-hypothesis-locked>' +
-			'<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>' +
-			'<strong>' + escapeHtml(i18n.hypothesisLockedTitle || 'A testable hypothesis is ready for this insight') + '</strong>' +
-			(lines.length ? '<p class="ob-smart-insights-hypothesis-locked-meta">' + escapeHtml(lines.join(' — ')) + '</p>' : '') +
-			'<p>' + escapeHtml(hypothesis.locked_hint || i18n.hypothesisLockedHint || 'Upgrade to Pro to see the suggested hypothesis, the typical industry range, and the sample size this test would need.') + '</p>' +
-			'<a class="button button-secondary" href="' + escapeHtml(upgradeUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(i18n.segmentsUpgradeCta || 'Upgrade to Pro') + '</a>' +
-		'</div>';
-	}
-
 	function renderHypothesisSection(insight) {
 		var hypothesis = getHypothesis(insight);
-		if (!hypothesis) {
+		// D6 "Test this change" (OPT-362): only a runnable Pro test. Locked
+		// (Free), no baseline or not feasible at this traffic = no section at
+		// all; Next steps then carries the before / after advice instead.
+		if (!hypothesis || hypothesis.locked) {
+			return '';
+		}
+		var feasibility = getHypothesisFeasibility(hypothesis);
+		if (feasibility.noBaseline || feasibility.notFeasible) {
+			return '';
+		}
+		var statement = String(hypothesis.statement || '').trim();
+		if (!statement) {
 			return '';
 		}
 
-		var body;
-		if (hypothesis.locked) {
-			body = renderHypothesisLocked(hypothesis);
-		} else {
-			var statement = String(hypothesis.statement || '').trim();
-			if (!statement) {
-				return '';
-			}
-
-			// No "create test" CTA when the test could never finish at this traffic.
-			var builderUrl = getHypothesisFeasibility(hypothesis).notFeasible ? '' : buildInsightAbBuilderUrl(insight);
-			var experimentHtml = renderExperimentLink(insight);
-
-			body = '<p class="ob-smart-insights-hypothesis-statement">' + escapeHtml(statement) + '</p>' +
-				renderHypothesisFacts(hypothesis) +
-				'<p class="description ob-smart-insights-hypothesis-disclaimer">' + escapeHtml(i18n.hypothesisDisclaimer || 'Expected ranges are typical published results for this kind of change, not a prediction for your site.') + '</p>' +
-				(experimentHtml ? experimentHtml : (builderUrl ? '<a class="button button-primary ob-smart-insights-create-ab-test" href="' + escapeHtml(builderUrl) + '" data-ob-si-create-ab-test="' + escapeHtml(insight.id) + '">' + escapeHtml(i18n.hypothesisCreateTest || 'Create A/B test from this insight') + '</a>' : ''));
-		}
-
-		if (!body) {
-			return '';
-		}
+		var builderUrl = buildInsightAbBuilderUrl(insight);
+		var experimentHtml = renderExperimentLink(insight);
+		// OPT-378 D4: no filler disclaimer under the facts (the range row names its source).
 
 		return '<section class="ob-smart-insights-detail-section is-hypothesis" data-ob-si-hypothesis>' +
-			renderSectionHeading(i18n.hypothesisTitle || 'Hypothesis and next experiment', 'hypothesis') +
-			body +
+			renderSectionHeading(i18n.testThisChange || 'Test this change', 'hypothesis') +
+			'<p class="ob-smart-insights-hypothesis-statement">' + escapeHtml(statement) + '</p>' +
+			renderHypothesisFacts(hypothesis) +
+			(experimentHtml ? experimentHtml : (builderUrl ? '<a class="button button-primary ob-smart-insights-create-ab-test" href="' + escapeHtml(builderUrl) + '" data-ob-si-create-ab-test="' + escapeHtml(insight.id) + '">' + escapeHtml(i18n.hypothesisCreateTest || 'Create A/B test from this insight') + '</a>' : '')) +
 		'</section>';
 	}
 
-	// --- Experiment verdict and stage tracker -------------------------------
+	// --- Experiment verdict ------------------------------------------------
 	// The closing half of the loop. Only insights that carry an analyzed
 	// experiment render any of this; a Free viewer never receives the block at
 	// all, and legacy rows render nothing.
@@ -4610,58 +4539,6 @@
 	function getVerdict(insight) {
 		var experiment = getExperiment(insight);
 		return (experiment && typeof experiment.verdict === 'object' && experiment.verdict) ? experiment.verdict : null;
-	}
-
-	// Detected -> Diagnosed -> Hypothesis -> Testing -> Verified, derived from
-	// what is actually stored: no stage column, no guessing forward.
-	function getStoryStages(insight) {
-		var experiment = getExperiment(insight);
-		var hypothesis = getHypothesis(insight);
-		var verdict = getVerdict(insight);
-		var reached = 0;
-
-		if (getStoryCauses(insight).length || isStoryInsight(insight)) {
-			reached = 1;
-		}
-		if (hypothesis) {
-			reached = Math.max(reached, 2);
-		}
-		if (experiment && parseInt(experiment.test_id, 10)) {
-			reached = Math.max(reached, 3);
-		}
-		if (verdict || (experiment && experiment.stage === 'verified')) {
-			reached = Math.max(reached, 4);
-		}
-
-		return {
-			reached: reached,
-			labels: [
-				i18n.stageDetected || 'Detected',
-				i18n.stageDiagnosed || 'Diagnosed',
-				i18n.stageHypothesis || 'Hypothesis',
-				i18n.stageTesting || 'Testing',
-				i18n.stageVerified || 'Verified'
-			]
-		};
-	}
-
-	function renderStageTracker(insight) {
-		// The tracker only earns its space once the story moved past detection.
-		if (!getHypothesis(insight) && !getExperiment(insight)) {
-			return '';
-		}
-
-		var stage = getStoryStages(insight);
-		var steps = stage.labels.map(function(label, index) {
-			var state = index < stage.reached ? ' is-done' : (index === stage.reached ? ' is-current' : '');
-			return '<li class="ob-smart-insights-stage-step' + state + '" data-stage-index="' + index + '">' +
-				'<span class="ob-smart-insights-stage-dot" aria-hidden="true"></span>' +
-				'<span class="ob-smart-insights-stage-label">' + escapeHtml(label) + '</span>' +
-			'</li>';
-		}).join('');
-
-		return '<ol class="ob-smart-insights-stage-tracker" data-ob-si-stage="' + escapeHtml(stage.reached) + '"' +
-			' aria-label="' + escapeHtml(i18n.stageTrackerLabel || 'Experiment progress') + '">' + steps + '</ol>';
 	}
 
 	function renderVerdictFacts(verdict) {
@@ -4713,7 +4590,6 @@
 
 		return '<section class="ob-smart-insights-detail-section is-experiment" data-ob-si-experiment="' + escapeHtml(outcome) + '">' +
 			renderSectionHeading(i18n.experimentResultTitle || 'Experiment result', 'experiment') +
-			renderStageTracker(insight) +
 			'<p class="ob-smart-insights-verdict-outcome is-' + escapeHtml(outcome.replace(/_/g, '-')) + '">' +
 				'<span class="ob-smart-insights-verdict-badge">' + escapeHtml(verdict.outcome_label || '') + '</span>' +
 				escapeHtml(verdict.summary || '') +
@@ -4738,9 +4614,10 @@
 		if (!id) {
 			return '';
 		}
-		// A funnel's "where" is the step visitors leave, not an audience split.
+		// A funnel's "where" is the step visitors leave, not an audience split:
+		// the step chart already sits in "What happened" (OPT-362 D5).
 		if (insight.entity_type === 'funnel') {
-			return renderFunnelStepsSection(insight);
+			return '';
 		}
 
 		return '<section class="ob-smart-insights-detail-section is-where is-affected" data-ob-si-segments="' + id + '">' +
@@ -4752,59 +4629,33 @@
 		'</section>';
 	}
 
-	// Where visitors leave a funnel: one bar per step (reached counts, share of
-	// the first step), the worst transition in red, the sentence that names it
-	// and the funnel report opened on that step.
-	function renderFunnelStepsSection(insight) {
-		var steps = insight.metrics && Array.isArray(insight.metrics.steps) ? insight.metrics.steps : [];
-		var worst = insight.detection && insight.detection.worst_transition ? insight.detection.worst_transition : null;
-		if (steps.length < 2) {
+	// The step a funnel card names, one click away: the funnel report opened on
+	// that step and, when the step is exactly one tracked page, its heatmap and
+	// recordings (same resolver as every other report link). Shown under the
+	// step chart of "What happened"; the chart carries the numbers.
+	function renderFunnelStepLinks(insight) {
+		var worst = getWorstTransition(insight);
+		if (!worst) {
 			return '';
 		}
-		var first = parseInt(steps[0].reached, 10) || 0;
-		var items = steps.map(function(step) {
-			var reached = parseInt(step.reached, 10) || 0;
-			var pct = first > 0 ? Math.round(reached / first * 100) : 0;
-			var cls = '';
-			if (worst && String(worst.from_step) === String(step.step_number)) {
-				cls = ' is-leak-from';
-			} else if (worst && String(worst.to_step) === String(step.step_number)) {
-				cls = ' is-leak-to';
-			}
-			return '<li class="ob-si-step' + cls + '"><span class="ob-si-step__bar" style="width:' + Math.max(2, pct) + '%"></span>' +
-				'<span class="ob-si-step__label">' + escapeHtml(step.label || '') + '</span>' +
-				'<strong>' + escapeHtml(fillToken(i18n.stepReached || '%s reached', '%s', formatNumber(reached))) + '</strong></li>';
-		}).join('');
-		var sentence = '';
-		var link = '';
-		if (worst) {
-			sentence = [['%1$s', worst.from_label], ['%2$s', worst.to_label], ['%3$s', formatNumber(worst.lost)], ['%4$s', formatNumber(worst.entered)], ['%5$s', formatPercent(worst.drop_rate)]].reduce(function(text, pair) {
-				return fillToken(text, pair[0], String(pair[1]));
-			}, i18n.funnelLeakSentence || 'Between “%1$s” and “%2$s”, %3$s of %4$s visitors leave (%5$s).');
-			var links = [];
-			if (insight.entity_id) {
-				links.push('<a class="button" href="' + escapeHtml(buildAdminReportUrl('opti-behavior-funnels', { funnel_id: insight.entity_id, funnel: insight.entity_id, funnel_step: worst.from_step })) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(i18n.openFunnelStep || 'Open the funnel on this step') + '</a>');
-			}
-			// The page of the step (resolved once per run when the step pattern is
-			// exactly one tracked page): its heatmap and its recordings, through
-			// the same resolver as every other report link.
-			if (worst.page_id && !insight.is_locked_preview) {
-				[['heatmap', i18n.stepHeatmap || 'Heatmap of this step'], ['session_recordings', i18n.stepRecordings || 'Recordings of this step']].forEach(function(pair) {
-					var resolved = resolveRelatedReportLink({ type: pair[0], page_id: String(worst.page_id) }, insight) || {};
-					if (resolved.url) {
-						links.push('<a class="button" href="' + escapeHtml(resolved.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(pair[1]) + '</a>');
-					}
-				});
-			}
-			link = links.length ? '<p class="ob-si-steps__links">' + links.join(' ') + '</p>' : '';
+		// OPT-374: one row of compact pill buttons with an icon, the first one
+		// filled (main action), the others light.
+		var links = [];
+		var link = function(url, label, icon) {
+			return '<a class="ob-si-btn' + (links.length ? '' : ' is-primary') + '" href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer"><i data-lucide="' + icon + '" aria-hidden="true"></i>' + escapeHtml(label) + '</a>';
+		};
+		if (insight.entity_id) {
+			links.push(link(buildAdminReportUrl('opti-behavior-funnels', { funnel_id: insight.entity_id, funnel: insight.entity_id, funnel_step: worst.from_step }), i18n.openFunnelStep || 'Open the funnel on this step', 'filter'));
 		}
-
-		return '<section class="ob-smart-insights-detail-section is-where is-funnel-steps">' +
-			renderSectionHeading(i18n.funnelStepsTitle || 'Where visitors leave', 'where') +
-			'<ol class="ob-si-steps">' + items + '</ol>' +
-			(sentence ? '<p class="ob-si-steps__leak">' + escapeHtml(sentence) + '</p>' : '') +
-			link +
-		'</section>';
+		if (worst.page_id && !insight.is_locked_preview) {
+			[['heatmap', i18n.stepHeatmap || 'Heatmap of this step', 'mouse-pointer-click'], ['session_recordings', i18n.stepRecordings || 'Recordings of this step', 'play-circle']].forEach(function(item) {
+				var resolved = resolveRelatedReportLink({ type: item[0], page_id: String(worst.page_id) }, insight) || {};
+				if (resolved.url) {
+					links.push(link(resolved.url, item[1], item[2]));
+				}
+			});
+		}
+		return links.length ? '<p class="ob-si-steps__links">' + links.join('') + '</p>' : '';
 	}
 
 	function renderWhereSkeleton(label) {
@@ -4870,6 +4721,13 @@
 			return '<p class="ob-smart-insights-where-verdict is-muted">' + escapeHtml(getWhereUnavailableText(matrix)) + '</p>';
 		}
 
+		// No audience was measured for this viewer (Free since OPT-403): no verdict
+		// at all — an empty outlier list here is not "spread evenly". The Pro
+		// invitation is drawn by renderWhereBars().
+		if (matrix.segments_included === false) {
+			return '';
+		}
+
 		var outliers = Array.isArray(matrix.outliers) ? matrix.outliers : [];
 		if (matrix.uniform || !outliers.length) {
 			return '<p class="ob-smart-insights-where-verdict is-uniform">' + escapeHtml(i18n.whereUniform || 'Spread evenly across device, source, country and time - this is the page, not an audience.') + '</p>';
@@ -4904,11 +4762,6 @@
 			'<span>' + escapeHtml(template) + '</span>' +
 			note +
 		'</p>';
-	}
-
-	function truncateWhereLabel(label, maxLength) {
-		var text = String(label === null || label === undefined ? '' : label);
-		return text.length > maxLength ? text.slice(0, maxLength - 1) + '…' : text;
 	}
 
 	// ---------------------------------------------------------------------
@@ -5124,13 +4977,17 @@
 		var min = Math.min.apply(null, values);
 		var max = Math.max.apply(null, values);
 
-		var width = 104;
-		var height = 26;
-		var padY = 3;
+		// OPT-374 (HX: "no axis, no value"): drawn at card size, with its high /
+		// low on a small left axis, a dot per measured day and a hover read-out.
+		var width = 320;
+		var height = 60;
+		var padLeft = 40;
+		var padRight = 6;
+		var padY = 8;
 		var plot = height - padY * 2;
 		var lastIndex = Math.max(1, series.length - 1);
 		var xFor = function(index) {
-			return (index * width) / lastIndex;
+			return padLeft + (index * (width - padLeft - padRight)) / lastIndex;
 		};
 		// A segment whose value never moved has no range to scale against, and
 		// drawing it against a synthetic one pins the line to the floor — which
@@ -5144,14 +5001,10 @@
 			};
 
 		var path = buildWhereChartPath(series, xFor, yFor);
-		// Only the days with no drawable neighbour become dots: a run of two or
-		// more consecutive days is already a visible line segment.
-		var dots = points.filter(function(point, position) {
-			var previous = points[position - 1];
-			var next = points[position + 1];
-			return (!previous || previous.index !== point.index - 1) && (!next || next.index !== point.index + 1);
-		}).map(function(point) {
-			return '<circle class="ob-smart-insights-where-sparkline-dot" cx="' + xFor(point.index).toFixed(1) + '" cy="' + yFor(point.value).toFixed(1) + '" r="1.6"></circle>';
+		// Every measured day gets a dot: sparse cohorts (weekends only) read as
+		// points, not as broken dashes.
+		var dots = points.map(function(point) {
+			return '<circle class="ob-smart-insights-where-sparkline-dot" cx="' + xFor(point.index).toFixed(1) + '" cy="' + yFor(point.value).toFixed(1) + '" r="2.4"></circle>';
 		}).join('');
 
 		if (!path && !dots) {
@@ -5168,11 +5021,32 @@
 			? label + ': ' + formatWhereValue(values[0], unit) + ' → ' + formatWhereValue(values[values.length - 1], unit)
 			: label + ': ' + formatWhereValue(values[0], unit);
 
-		return '<svg class="ob-smart-insights-where-sparkline" viewBox="0 0 ' + width + ' ' + height + '" width="' + width + '" height="' + height + '" role="img" aria-label="' + escapeHtml(summary) + '" preserveAspectRatio="none" focusable="false">' +
-			'<title>' + escapeHtml(summary) + '</title>' +
-			(path ? '<path class="ob-smart-insights-where-sparkline-line" d="' + path + '"></path>' : '') +
-			dots +
-		'</svg>';
+		var axis = '<text class="ob-smart-insights-where-sparkline-axis" x="' + (padLeft - 6) + '" y="' + (padY + 4) + '" text-anchor="end">' + escapeHtml(formatWhereValue(max, unit)) + '</text>' +
+			(max > min ? '<text class="ob-smart-insights-where-sparkline-axis" x="' + (padLeft - 6) + '" y="' + (padY + plot + 3) + '" text-anchor="end">' + escapeHtml(formatWhereValue(min, unit)) + '</text>' : '') +
+			'<line class="ob-smart-insights-where-sparkline-grid" x1="' + padLeft + '" y1="' + padY + '" x2="' + (width - padRight) + '" y2="' + padY + '"></line>' +
+			'<line class="ob-smart-insights-where-sparkline-grid" x1="' + padLeft + '" y1="' + (padY + plot) + '" x2="' + (width - padRight) + '" y2="' + (padY + plot) + '"></line>';
+		var step = (width - padLeft - padRight) / Math.max(1, series.length);
+		var tipTemplate = i18n.whereChartTooltip || '%1$s: %2$s (%3$s sessions)';
+		var hits = points.map(function(point) {
+			var day = series[point.index] || {};
+			var tip = day.date ? formatWhereTipDate(day.date) + ': ' + formatWhereValue(point.value, unit) : formatWhereValue(point.value, unit);
+			if (day.date && day.sessions !== undefined && day.sessions !== null) {
+				tip = fillToken(fillToken(fillToken(tipTemplate, '%1$s', formatWhereTipDate(day.date)), '%2$s', formatWhereValue(point.value, unit)), '%3$s', formatNumber(day.sessions));
+			}
+			return '<rect class="ob-smart-insights-where-chart-hit" x="' + (xFor(point.index) - step / 2).toFixed(1) + '" y="0" width="' + step.toFixed(1) + '" height="' + height + '" data-ob-si-tip="' + escapeHtml(tip) + '" data-cx="' + xFor(point.index).toFixed(1) + '" data-cy="' + yFor(point.value).toFixed(1) + '"></rect>';
+		}).join('');
+
+		return '<span class="ob-smart-insights-where-spark-plot" data-ob-si-tipwrap>' +
+				'<svg class="ob-smart-insights-where-sparkline" viewBox="0 0 ' + width + ' ' + height + '" width="100%" height="' + height + '" role="img" aria-label="' + escapeHtml(summary) + '" focusable="false">' +
+					axis +
+					(path ? '<path class="ob-smart-insights-where-sparkline-line" d="' + path + '"></path>' : '') +
+					dots +
+					renderWhereHoverParts(padY, padY + plot) +
+					hits +
+				'</svg>' +
+				'<span class="ob-smart-insights-where-tip" aria-hidden="true" hidden></span>' +
+			'</span>' +
+			'<span class="ob-smart-insights-where-spark-caption">' + escapeHtml(label) + '</span>';
 	}
 
 	// A combined finding only earns its extra row if the reader can see BOTH
@@ -5417,10 +5291,8 @@
 			top = 1;
 		}
 
-		var trackStart = 104;
-		var trackWidth = 168;
-		var segmentWidth = isNaN(value) ? 0 : Math.max(2, (value / top) * trackWidth);
-		var complementWidth = isNaN(complement) ? 0 : Math.max(2, (complement / top) * trackWidth);
+		var segmentPct = isNaN(value) ? 0 : Math.max(1, (value / top) * 100);
+		var complementPct = isNaN(complement) ? 0 : Math.max(1, (complement / top) * 100);
 		var isActive = !!(scope && scope.dimension === outlier.dimension && scope.key === outlier.key);
 		var everyoneElse = i18n.whereEveryoneElse || 'Everyone else';
 		var ariaLabel = (outlier.dimension_label || outlier.dimension || '') + ': ' +
@@ -5450,22 +5322,47 @@
 			'</span>' +
 			renderWhereCardLabel(outlier) +
 			(outlier.insufficient ? '<span class="ob-smart-insights-where-card-note">' + escapeHtml(i18n.whereBucketInsufficient || 'Below the data floor — measured, but not conclusive.') + '</span>' : '') +
-			(sparkline ? '<span class="ob-smart-insights-where-card-spark">' + sparkline + '</span>' : '') +
-			'<svg class="ob-smart-insights-where-bar-svg" viewBox="0 0 292 56" width="100%" height="56" role="img" aria-hidden="true" focusable="false">' +
+			// OPT-374 (HX: "not a clear answer"): the answer first — metric, the
+			// two values and the gap — then both sides as full-width bars on the
+			// same scale, the daily line, and the sample size.
+			renderWhereCardHeadline(outlier, matrix, unit, value, complement) +
+			'<span class="ob-smart-insights-where-bar-rows" aria-hidden="true">' +
 				// The card header already names the segment (with its flag or icon,
 				// and both halves when it is a pair), so the bar row says which SIDE
 				// it is instead of repeating a label that combos would overflow.
-				'<text class="ob-smart-insights-where-bar-name" x="0" y="16">' + escapeHtml(truncateWhereLabel(i18n.whereThisSegment || 'This segment', 16)) + '</text>' +
-				'<rect class="ob-smart-insights-where-bar-track" x="' + trackStart + '" y="4" width="' + trackWidth + '" height="16" rx="3"></rect>' +
-				'<rect class="ob-smart-insights-where-bar-fill is-segment" x="' + trackStart + '" y="4" width="' + segmentWidth.toFixed(1) + '" height="16" rx="3"></rect>' +
-				'<text class="ob-smart-insights-where-bar-value" x="' + (trackStart + segmentWidth + 6).toFixed(1) + '" y="16">' + escapeHtml(formatWhereValue(outlier.value, unit)) + '</text>' +
-				'<text class="ob-smart-insights-where-bar-name" x="0" y="44">' + escapeHtml(truncateWhereLabel(everyoneElse, 16)) + '</text>' +
-				'<rect class="ob-smart-insights-where-bar-track" x="' + trackStart + '" y="32" width="' + trackWidth + '" height="16" rx="3"></rect>' +
-				'<rect class="ob-smart-insights-where-bar-fill is-complement" x="' + trackStart + '" y="32" width="' + complementWidth.toFixed(1) + '" height="16" rx="3"></rect>' +
-				'<text class="ob-smart-insights-where-bar-value" x="' + (trackStart + complementWidth + 6).toFixed(1) + '" y="44">' + escapeHtml(formatWhereValue(outlier.complement_value, unit)) + '</text>' +
-			'</svg>' +
+				renderWhereBarRow(i18n.whereThisSegment || 'This segment', 'is-segment', segmentPct, formatWhereValue(outlier.value, unit)) +
+				renderWhereBarRow(everyoneElse, 'is-complement', complementPct, formatWhereValue(outlier.complement_value, unit)) +
+			'</span>' +
+			(sparkline ? '<span class="ob-smart-insights-where-card-spark">' + sparkline + '</span>' : '') +
 			'<span class="ob-smart-insights-where-bar-meta">' + escapeHtml(fillToken(fillToken(i18n.whereBarSessions || '%1$s of %2$s sessions', '%1$s', formatNumber(outlier.sessions)), '%2$s', formatNumber(matrix.scope_sessions))) + '</span>' +
 		'</button>';
+	}
+
+	function renderWhereBarRow(name, side, pct, valueText) {
+		return '<span class="ob-smart-insights-where-bar-row ' + side + '">' +
+			'<span class="ob-smart-insights-where-bar-name">' + escapeHtml(name) + '</span>' +
+			'<span class="ob-smart-insights-where-bar-track"><span class="ob-smart-insights-where-bar-fill ' + side + '" style="width:' + pct.toFixed(1) + '%"></span></span>' +
+			'<span class="ob-smart-insights-where-bar-value">' + escapeHtml(valueText) + '</span>' +
+		'</span>';
+	}
+
+	// "Bounce rate 100.0% vs 79.1%" + the gap as a chip ("+20.9 pts" for a
+	// rate, the unit's own format otherwise), red on the worse side.
+	function renderWhereCardHeadline(outlier, matrix, unit, value, complement) {
+		if (isNaN(value) || isNaN(complement)) {
+			return '';
+		}
+		var metric = matrix.metric_label || matrix.primary_metric || '';
+		var text = fillToken(fillToken(fillToken(i18n.whereCardHeadline || '%1$s %2$s vs %3$s', '%1$s', metric), '%2$s', formatWhereValue(value, unit)), '%3$s', formatWhereValue(complement, unit));
+		var diff = value - complement;
+		var sign = diff > 0 ? '+' : (diff < 0 ? '−' : '');
+		var gap = unit === 'percent'
+			? fillToken(i18n.wherePointsGap || '%s pts', '%s', sign + Math.abs(diff).toFixed(1))
+			: sign + formatWhereValue(Math.abs(diff), unit);
+		return '<span class="ob-smart-insights-where-card-headline">' +
+			'<span class="ob-smart-insights-where-card-gap">' + escapeHtml(gap) + '</span>' +
+			'<span class="ob-smart-insights-where-card-compare">' + escapeHtml(text) + '</span>' +
+		'</span>';
 	}
 
 	// Free viewers get the verdict and the daily chart; the per-segment bars and
@@ -5490,7 +5387,7 @@
 		// surface beside the singles instead of being ranked out by them.
 		var outliers = Array.isArray(matrix.outliers) ? matrix.outliers.slice(0, 4) : [];
 		if (matrix.locked) {
-			return outliers.length ? renderWhereBarsLocked(matrix) : '';
+			return (outliers.length || matrix.segments_included === false) ? renderWhereBarsLocked(matrix) : '';
 		}
 
 		var bars = outliers.map(function(outlier) {
@@ -5624,6 +5521,98 @@
 		return path.trim();
 	}
 
+	// Hover read-out shared by the daily chart and the sparklines: each day has
+	// a transparent hit rect carrying its text and point (viewBox units); the
+	// wrapper holds one tooltip and the SVG one guide line + one ring.
+	function showWhereTip(event) {
+		var hit = event.target.closest ? event.target.closest('[data-ob-si-tip]') : null;
+		if (!hit) {
+			return;
+		}
+		var wrap = hit.closest('[data-ob-si-tipwrap]');
+		var tip = wrap ? wrap.querySelector('.ob-smart-insights-where-tip') : null;
+		var svg = hit.ownerSVGElement;
+		if (!tip || !svg) {
+			return;
+		}
+		var cx = parseFloat(hit.getAttribute('data-cx'));
+		var cy = parseFloat(hit.getAttribute('data-cy'));
+		var guide = svg.querySelector('.ob-smart-insights-where-hover-line');
+		var ring = svg.querySelector('.ob-smart-insights-where-hover-dot');
+		if (guide) {
+			guide.setAttribute('x1', cx);
+			guide.setAttribute('x2', cx);
+			guide.style.display = '';
+		}
+		if (ring) {
+			ring.setAttribute('cx', cx);
+			ring.setAttribute('cy', cy);
+			ring.style.display = '';
+		}
+		tip.textContent = hit.getAttribute('data-ob-si-tip');
+		tip.hidden = false;
+		var box = wrap.getBoundingClientRect();
+		var view = svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal : null;
+		var svgBox = svg.getBoundingClientRect();
+		var px = view && view.width ? svgBox.left - box.left + (cx / view.width) * svgBox.width : 0;
+		var py = view && view.height ? svgBox.top - box.top + (cy / view.height) * svgBox.height : 0;
+		var half = tip.offsetWidth / 2;
+		tip.style.left = Math.max(half, Math.min(box.width - half, px)) + 'px';
+		tip.style.top = py + 'px';
+	}
+
+	function hideWhereTip(wrap) {
+		var tip = wrap.querySelector('.ob-smart-insights-where-tip');
+		if (tip) {
+			tip.hidden = true;
+		}
+		Array.prototype.forEach.call(wrap.querySelectorAll('.ob-smart-insights-where-hover-line, .ob-smart-insights-where-hover-dot'), function(node) {
+			node.style.display = 'none';
+		});
+	}
+
+	function renderWhereHoverParts(top, bottom) {
+		return '<line class="ob-smart-insights-where-hover-line" x1="0" y1="' + top + '" x2="0" y2="' + bottom + '" style="display:none"></line>' +
+			'<circle class="ob-smart-insights-where-hover-dot" cx="0" cy="0" r="4.5" style="display:none"></circle>';
+	}
+
+	function formatWhereTipDate(date) {
+		var text = String(date || '').slice(0, 10);
+		var parsed = text.length === 10 ? new Date(text + 'T12:00:00') : null;
+		if (parsed && !isNaN(parsed.getTime())) {
+			try {
+				return typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.date(parsed, { month: 'short', day: 'numeric' }) : text;
+			} catch (e) {
+				return text;
+			}
+		}
+		return text;
+	}
+
+	// Same null-gapped runs as the line, each closed down to the baseline.
+	function buildWhereChartArea(series, xFor, yFor, baseY) {
+		var areas = [];
+		var run = [];
+		var flush = function() {
+			if (run.length > 1) {
+				areas.push('M' + run[0].x.toFixed(1) + ' ' + baseY.toFixed(1) + ' ' + run.map(function(point) {
+					return 'L' + point.x.toFixed(1) + ' ' + point.y.toFixed(1);
+				}).join(' ') + ' L' + run[run.length - 1].x.toFixed(1) + ' ' + baseY.toFixed(1) + ' Z');
+			}
+			run = [];
+		};
+		(Array.isArray(series) ? series : []).forEach(function(point, index) {
+			var number = point ? parseFloat(point.value) : NaN;
+			if (isNaN(number) || !isFinite(number)) {
+				flush();
+				return;
+			}
+			run.push({ x: xFor(index), y: yFor(number) });
+		});
+		flush();
+		return areas.join(' ');
+	}
+
 	function formatWhereChartDay(date) {
 		var text = String(date || '');
 		return text.length >= 10 ? text.slice(5) : text;
@@ -5662,12 +5651,14 @@
 			max = 100;
 		}
 
-		var width = 640;
-		var height = 196;
-		var padLeft = 48;
-		var padRight = 14;
-		var padTop = 14;
-		var padBottom = 30;
+		// OPT-374: drawn close to its on-screen size (~460 px) so the axis text
+		// stays readable instead of being scaled down.
+		var width = 480;
+		var height = 200;
+		var padLeft = 46;
+		var padRight = 12;
+		var padTop = 18;
+		var padBottom = 28;
 		var plotWidth = width - padLeft - padRight;
 		var plotHeight = height - padTop - padBottom;
 		var lastIndex = Math.max(1, current.length - 1);
@@ -5693,45 +5684,121 @@
 			for (var day = 0; day < current.length; day++) {
 				if (String(current[day].date || '').slice(0, 10) === firstDetected) {
 					var markerX = xFor(day);
-					marker = '<line class="ob-smart-insights-where-chart-marker" x1="' + markerX.toFixed(1) + '" y1="' + padTop + '" x2="' + markerX.toFixed(1) + '" y2="' + (padTop + plotHeight) + '"></line>' +
-						'<text class="ob-smart-insights-where-chart-marker-label" x="' + Math.min(markerX + 4, width - padRight - 60).toFixed(1) + '" y="' + (padTop + 10) + '">' + escapeHtml(i18n.whereFirstDetected || 'First detected') + '</text>';
+					// Label on the side with room: left of the line near the right edge.
+					var markerOnLeft = markerX > padLeft + plotWidth * 0.6;
+					// OPT-374: the detection day can fall after the last measured
+					// day, so the label carries its date ("First detected · 10-02").
+					marker = '<line class="ob-smart-insights-where-chart-marker" x1="' + markerX.toFixed(1) + '" y1="' + (padTop - 6) + '" x2="' + markerX.toFixed(1) + '" y2="' + (padTop + plotHeight) + '"></line>' +
+						'<text class="ob-smart-insights-where-chart-marker-label" x="' + (markerOnLeft ? markerX - 5 : markerX + 5).toFixed(1) + '" y="' + (padTop - 6) + '"' + (markerOnLeft ? ' text-anchor="end"' : '') + '>' + escapeHtml((i18n.whereFirstDetected || 'First detected') + ' · ' + formatWhereTipDate(firstDetected)) + '</text>';
 					break;
 				}
 			}
 		}
 
+		// OPT-374: days before the first / after the last measured day are
+		// shaded and labelled, so an empty edge reads as "no data", not as a gap.
+		var measured = [];
+		current.forEach(function(point, index) {
+			var number = point ? parseFloat(point.value) : NaN;
+			if (!isNaN(number) && isFinite(number)) {
+				measured.push(index);
+			}
+		});
+		var step = current.length > 1 ? plotWidth / lastIndex : plotWidth;
+		var noDataZone = function(x1, x2) {
+			if (x2 - x1 < 4) {
+				return '';
+			}
+			return '<rect class="ob-smart-insights-where-chart-nodata" x="' + x1.toFixed(1) + '" y="' + padTop + '" width="' + (x2 - x1).toFixed(1) + '" height="' + plotHeight + '"></rect>' +
+				(x2 - x1 >= 64 ? '<text class="ob-smart-insights-where-chart-nodata-label" x="' + ((x1 + x2) / 2).toFixed(1) + '" y="' + (padTop + plotHeight - 8) + '" text-anchor="middle">' + escapeHtml(i18n.whereChartNoData || 'No data') + '</text>' : '');
+		};
+		var noData = measured.length
+			? noDataZone(padLeft, Math.max(padLeft, xFor(measured[0]) - step / 2)) + noDataZone(Math.min(width - padRight, xFor(measured[measured.length - 1]) + step / 2), width - padRight)
+			: '';
+
 		var tooltipTemplate = i18n.whereChartTooltip || '%1$s: %2$s (%3$s sessions)';
 		var hitWidth = plotWidth / Math.max(1, current.length);
 		var hits = current.map(function(point, index) {
-			var tooltip = fillToken(tooltipTemplate, '%1$s', String(point.date || ''));
+			var number = point ? parseFloat(point.value) : NaN;
+			if (isNaN(number) || !isFinite(number)) {
+				return '';
+			}
+			var tooltip = fillToken(tooltipTemplate, '%1$s', formatWhereTipDate(point.date));
 			tooltip = fillToken(tooltip, '%2$s', formatWhereValue(point.value, unit));
 			tooltip = fillToken(tooltip, '%3$s', formatNumber(point.sessions));
-			return '<rect class="ob-smart-insights-where-chart-hit" x="' + Math.max(padLeft, xFor(index) - hitWidth / 2).toFixed(1) + '" y="' + padTop + '" width="' + hitWidth.toFixed(1) + '" height="' + plotHeight + '"><title>' + escapeHtml(tooltip) + '</title></rect>';
+			var segmentPoint = scope && segmentSeries[index] ? parseFloat(segmentSeries[index].value) : NaN;
+			if (!isNaN(segmentPoint) && isFinite(segmentPoint)) {
+				tooltip += ' · ' + scope.label + ' ' + formatWhereValue(segmentPoint, unit);
+			}
+			return '<rect class="ob-smart-insights-where-chart-hit" x="' + Math.max(padLeft, xFor(index) - hitWidth / 2).toFixed(1) + '" y="' + padTop + '" width="' + hitWidth.toFixed(1) + '" height="' + plotHeight + '" data-ob-si-tip="' + escapeHtml(tooltip) + '" data-cx="' + xFor(index).toFixed(1) + '" data-cy="' + yFor(number).toFixed(1) + '"></rect>';
 		}).join('');
 
 		var previousPath = buildWhereChartPath(previous.slice(0, current.length), xFor, yFor);
 		var currentPath = buildWhereChartPath(current, xFor, yFor);
 		var segmentPath = buildWhereChartPath(segmentSeries.slice(0, current.length), xFor, yFor);
 
-		var legend = '<p class="ob-smart-insights-where-chart-legend">' +
-			'<span class="is-current">' + escapeHtml(i18n.whereChartCurrent || 'This period') + '</span>' +
-			(previousPath ? '<span class="is-previous">' + escapeHtml(i18n.whereChartPrevious || 'Previous period') + '</span>' : '') +
-			(segmentPath && scope ? '<span class="is-segment">' + escapeHtml(scope.label) + '</span>' : '') +
-		'</p>';
+		// OPT-374: a legend only when there is something to tell apart.
+		var legend = previousPath || (segmentPath && scope)
+			? '<p class="ob-smart-insights-where-chart-legend">' +
+				'<span class="is-current">' + escapeHtml(i18n.whereChartCurrent || 'This period') + '</span>' +
+				(previousPath ? '<span class="is-previous">' + escapeHtml(i18n.whereChartPrevious || 'Previous period') + '</span>' : '') +
+				(segmentPath && scope ? '<span class="is-segment">' + escapeHtml(scope.label) + '</span>' : '') +
+			'</p>'
+			: '';
 
 		var chartTitle = fillToken(i18n.whereChartTitle || 'Daily %s', '%s', series.metric_label || series.metric || '');
 
-		return '<h4 class="ob-smart-insights-where-chart-title">' + escapeHtml(chartTitle) + '</h4>' +
+		// OPT-374: the answer above the line — average, high and low of the
+		// period (read off the same daily values the line draws).
+		var currentValues = [];
+		collectWhereSeriesValues(current, currentValues);
+		var stats = '';
+		if (currentValues.length) {
+			var sum = currentValues.reduce(function(total, number) {
+				return total + number;
+			}, 0);
+			var stat = function(key, fallback, number) {
+				return '<span><small>' + escapeHtml(i18n[key] || fallback) + '</small><strong>' + escapeHtml(formatWhereValue(number, unit)) + '</strong></span>';
+			};
+			stats = '<span class="ob-smart-insights-where-chart-stats">' +
+				stat('whereChartAverage', 'Average', sum / currentValues.length) +
+				stat('whereChartHigh', 'High', Math.max.apply(null, currentValues)) +
+				stat('whereChartLow', 'Low', Math.min.apply(null, currentValues)) +
+			'</span>';
+		}
+
+		// Soft area under the current line + one dot per measured day.
+		var baseY = padTop + plotHeight;
+		var currentArea = buildWhereChartArea(current, xFor, yFor, baseY);
+		var dots = current.map(function(point, index) {
+			var number = point ? parseFloat(point.value) : NaN;
+			return isNaN(number) || !isFinite(number) ? '' : '<circle class="ob-smart-insights-where-chart-dot" cx="' + xFor(index).toFixed(1) + '" cy="' + yFor(number).toFixed(1) + '" r="2.5"></circle>';
+		}).join('');
+		var midIndex = Math.floor((current.length - 1) / 2);
+		var midLabel = current.length > 2
+			? '<text class="ob-smart-insights-where-chart-axis" x="' + xFor(midIndex).toFixed(1) + '" y="' + (height - 8) + '" text-anchor="middle">' + escapeHtml(formatWhereChartDay(current[midIndex].date)) + '</text>'
+			: '';
+
+		return '<div class="ob-smart-insights-where-chart-head"><h4 class="ob-smart-insights-where-chart-title">' + escapeHtml(chartTitle) + '</h4>' + stats + '</div>' +
+			'<div class="ob-smart-insights-where-chart-wrap" data-ob-si-tipwrap>' +
 			'<svg class="ob-smart-insights-where-chart" viewBox="0 0 ' + width + ' ' + height + '" width="100%" height="' + height + '" role="img" aria-label="' + escapeHtml(chartTitle) + '" preserveAspectRatio="xMidYMid meet">' +
+				'<defs><linearGradient id="ob-si-where-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity="0.18"></stop><stop offset="1" stop-color="currentColor" stop-opacity="0"></stop></linearGradient></defs>' +
+				noData +
 				grid +
+				(currentArea ? '<path class="ob-smart-insights-where-chart-area" d="' + currentArea + '" fill="url(#ob-si-where-area)"></path>' : '') +
 				marker +
 				(previousPath ? '<path class="ob-smart-insights-where-chart-line is-previous" d="' + previousPath + '"></path>' : '') +
 				(segmentPath ? '<path class="ob-smart-insights-where-chart-line is-segment" d="' + segmentPath + '"></path>' : '') +
 				'<path class="ob-smart-insights-where-chart-line is-current" d="' + currentPath + '"></path>' +
-				'<text class="ob-smart-insights-where-chart-axis" x="' + padLeft + '" y="' + (height - 10) + '">' + escapeHtml(formatWhereChartDay(current[0].date)) + '</text>' +
-				'<text class="ob-smart-insights-where-chart-axis" x="' + (width - padRight) + '" y="' + (height - 10) + '" text-anchor="end">' + escapeHtml(formatWhereChartDay(current[current.length - 1].date)) + '</text>' +
+				dots +
+				'<text class="ob-smart-insights-where-chart-axis" x="' + padLeft + '" y="' + (height - 8) + '">' + escapeHtml(formatWhereChartDay(current[0].date)) + '</text>' +
+				midLabel +
+				'<text class="ob-smart-insights-where-chart-axis" x="' + (width - padRight) + '" y="' + (height - 8) + '" text-anchor="end">' + escapeHtml(formatWhereChartDay(current[current.length - 1].date)) + '</text>' +
+				renderWhereHoverParts(padTop, padTop + plotHeight) +
 				hits +
 			'</svg>' +
+			'<span class="ob-smart-insights-where-tip" aria-hidden="true" hidden></span>' +
+			'</div>' +
 			legend;
 	}
 
@@ -5763,7 +5830,17 @@
 			return;
 		}
 
-		target.innerHTML = renderWhereChart(state.series, activeSegmentScope);
+		// OPT-516 D11: when the split above already printed the same "not
+		// available" sentence, the chart slot stays empty (no repeated line).
+		var series = state.series;
+		var unavailable = function(data) {
+			return !data || typeof data !== 'object' || !data.available;
+		};
+		if (unavailable(series) && state.matrix && unavailable(state.matrix) && getWhereUnavailableText(series) === getWhereUnavailableText(state.matrix)) {
+			target.innerHTML = '';
+			return;
+		}
+		target.innerHTML = renderWhereChart(series, activeSegmentScope);
 	}
 
 	function loadWhereSeries(content, insight, section, scope) {
@@ -5866,6 +5943,11 @@
 					return;
 				}
 				renderWhereSegmentsInto(content, insight);
+				// OPT-516 D11: the trend may have answered first with the same sentence.
+				if (state.series) {
+					renderWhereSeriesInto(content);
+				}
+				renderMostlyOneSourceLine(content, insight, state.matrix);
 			})
 			.catch(function(error) {
 				var target = content.querySelector('[data-ob-si-where-segments]');
@@ -5934,8 +6016,9 @@
 		var evidenceSection = content.querySelector('[data-ob-si-evidence-refs]');
 		if (evidenceSection) {
 			releasePortaledTooltips(evidenceSection);
-			var evidenceBody = renderEvidenceRefsBody(insight, scope) || renderEvidenceRefsLocked(insight);
-			evidenceSection.innerHTML = renderSectionHeading(i18n.evidenceRefsTitle || 'Evidence and proof', 'evidence_refs') + evidenceBody;
+			// The proof links sit in their own box inside the merged Evidence
+			// section (OPT-362 D3): only that box is re-rendered.
+			evidenceSection.innerHTML = renderEvidenceRefsBody(insight, scope) || renderEvidenceRefsLocked(insight);
 		}
 
 		var status = content.querySelector('.ob-smart-insights-segment-scope-status');
@@ -5955,29 +6038,6 @@
 		refreshIcons();
 	}
 
-
-	// The sidebar is capped at three actions. Which bullets survive (and whether
-	// the Pro-context bullet is present at all) is decided server-side by the
-	// capabilities layer, so this renderer never inspects the viewer's tier.
-	function renderRecommendationsSection(insight) {
-		// "Next action" says the first one: the list holds the others only.
-		var norm = function(value) {
-			var text = typeof value === 'string' ? value : (value && (value.title || value.label || value.action || value.description)) || '';
-			return String(text).toLowerCase().replace(/\s+/g, ' ').trim();
-		};
-		var next = norm(getRecommendedAction(insight));
-		var actions = (Array.isArray(insight.recommended_actions) ? insight.recommended_actions : []).filter(function(action) {
-			return norm(action) !== next;
-		});
-		if (!actions.length) {
-			return '';
-		}
-
-		return '<section class="ob-smart-insights-detail-section is-recommendations">' +
-			renderSectionHeading(i18n.recommendedActions || i18n.recommendedAction || 'Recommended actions', 'recommendations', { position: 'left' }) +
-			'<div class="ob-smart-insights-action-checklist">' + renderList(actions, MAX_RECOMMENDED_ACTIONS) + '</div>' +
-		'</section>';
-	}
 
 	// Measured causes come from the correlation probes and carry a value the
 	// viewer can check ("Rage clicks on this page: 41 sessions"). Only when there
@@ -6015,45 +6075,425 @@
 		return items.length ? '<ul class="ob-smart-insights-measured-causes">' + items.join('') + '</ul>' : '';
 	}
 
+	// Measured checks (correlation.checks, OPT-408, every B lot uses the same
+	// format). OPT-417 design: ✓ likely first, then ? not measured, then ✗
+	// ruled out folded under "Show ruled out (n)". Each verdict reads without
+	// colour (mark + word); the measured sentence and its sample sizes sit
+	// small under the label, the report link is a pill button. Action rows
+	// (recordings) are links, never a verdict. Labels and sentences come
+	// translated from the payload.
+	var CHECK_MARKS = { likely: '✓', ruled_out: '✗', not_measured: '?' };
+	var CHECK_ORDER = ['likely', 'not_measured', 'ruled_out'];
+
+	function getStoryChecks(insight) {
+		var correlation = getCorrelation(insight);
+		return correlation && Array.isArray(correlation.checks) ? correlation.checks : [];
+	}
+
+	function getCheckAction(check) {
+		var action = check.action && typeof check.action === 'object' ? check.action : null;
+		var url = action ? String(action.url || '') : '';
+		var label = action ? String(action.label || '').trim() : '';
+		return label && /^https?:\/\//i.test(url) ? { url: url, label: label } : null;
+	}
+
+	function renderCheckButton(action, icon) {
+		return action
+			? '<a class="ob-si-btn ob-si-check__action" href="' + escapeHtml(action.url) + '" target="_blank" rel="noopener noreferrer"><i data-lucide="' + icon + '" aria-hidden="true"></i>' + escapeHtml(action.label) + '</a>'
+			: '';
+	}
+
+	// "Measured on 140 lost and 118 continued sessions": the sample sizes
+	// behind a verdict, shown only when both sides were counted.
+	function renderCheckSample(check) {
+		var evidence = check.evidence && typeof check.evidence === 'object' ? check.evidence : {};
+		var base = parseFloat(evidence.base);
+		var compareBase = parseFloat(evidence.compare_base);
+		if (!isFinite(base) || !isFinite(compareBase)) {
+			return '';
+		}
+		var text = String(i18n.checkSample || 'Measured on %1$s lost and %2$s continued sessions')
+			.replace('%1$s', formatNumber(base))
+			.replace('%2$s', formatNumber(compareBase));
+		return '<span class="ob-si-check__sample">' + escapeHtml(text) + '</span>';
+	}
+
+	function renderCheckRow(check, verdict) {
+		var label = String(check.label || '').trim();
+		var verdictLabel = String(check.verdict_label || '').trim() || {
+			likely: i18n.checkLikely || 'Likely',
+			ruled_out: i18n.checkRuledOut || 'Ruled out',
+			not_measured: i18n.checkNotMeasured || 'Not measured'
+		}[verdict];
+		var summary = String(check.summary || '').trim();
+
+		return '<li class="ob-si-check is-' + verdict.replace(/_/g, '-') + '" data-check-id="' + escapeHtml(check.id || '') + '" data-check-verdict="' + verdict + '">' +
+			'<span class="ob-si-check__verdict"><span class="ob-si-check__mark" aria-hidden="true">' + CHECK_MARKS[verdict] + '</span>' + escapeHtml(verdictLabel) + '</span>' +
+			'<span class="ob-si-check__body">' +
+				'<strong class="ob-si-check__label">' + escapeHtml(label) + '</strong>' +
+				(summary ? '<span class="ob-si-check__evidence">' + escapeHtml(summary) + '</span>' : '') +
+				(verdict !== 'not_measured' ? renderCheckSample(check) : '') +
+			'</span>' +
+			renderCheckButton(getCheckAction(check), verdict === 'likely' ? 'arrow-right' : 'external-link') +
+		'</li>';
+	}
+
+	// Groups the checks by verdict ({ likely: [], not_measured: [], ruled_out: [] })
+	// and keeps the action rows apart.
+	function groupStoryChecks(insight) {
+		var groups = { likely: [], not_measured: [], ruled_out: [], actions: [] };
+		getStoryChecks(insight).forEach(function(check) {
+			if (!check || !String(check.label || '').trim()) {
+				return;
+			}
+			if (check.kind === 'action') {
+				groups.actions.push(check);
+				return;
+			}
+			var verdict = Object.prototype.hasOwnProperty.call(CHECK_MARKS, check.verdict) ? check.verdict : 'not_measured';
+			groups[verdict].push(check);
+		});
+		return groups;
+	}
+
+	// Action rows (e.g. the recordings of lost sessions): a pill button and
+	// the sentence that says what is behind it.
+	function renderCheckActions(actions) {
+		var items = actions.map(function(check) {
+			var action = getCheckAction(check);
+			if (!action) {
+				return '';
+			}
+			var summary = String(check.summary || '').trim();
+			return '<li class="ob-si-checks__link" data-check-id="' + escapeHtml(check.id || '') + '">' +
+				renderCheckButton(action, 'play-circle') +
+				(summary ? '<span class="ob-si-check__evidence">' + escapeHtml(summary) + '</span>' : '') +
+			'</li>';
+		}).filter(Boolean);
+		return items.length ? '<ul class="ob-si-checks__links">' + items.join('') + '</ul>' : '';
+	}
+
+	function renderCheckList(groups) {
+		var rows = function(verdict) {
+			return groups[verdict].map(function(check) {
+				return renderCheckRow(check, verdict);
+			}).join('');
+		};
+		var open = rows(CHECK_ORDER[0]) + rows(CHECK_ORDER[1]);
+		var ruledOut = rows(CHECK_ORDER[2]);
+		var html = open ? '<ul class="ob-smart-insights-measured-causes ob-si-checks">' + open + '</ul>' : '';
+		if (ruledOut) {
+			html += '<details class="ob-si-checks__ruled-out">' +
+				'<summary>' + escapeHtml(fillToken(i18n.checkShowRuledOut || 'Show ruled out (%s)', '%s', formatNumber(groups.ruled_out.length))) + '</summary>' +
+				'<ul class="ob-smart-insights-measured-causes ob-si-checks">' + ruledOut + '</ul>' +
+			'</details>';
+		}
+		return html;
+	}
+
+	// Free without Pro: one fixed line, no number, no blurred or fake result
+	// (wordpress.org rule). The tier comes from the server (hasProAccess).
+	function renderChecksProLine() {
+		if (hasProAccess) {
+			return '';
+		}
+		return '<p class="ob-si-checks__pro">' +
+			'<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLockedShort || 'Pro') + '</span>' +
+			'<span>' + escapeHtml(i18n.checkMoreWithPro || 'More checks with Pro: errors, form abandonment, rage clicks, mobile share and load time, compared between lost visitors and those who continued.') + '</span>' +
+		'</p>';
+	}
+
 	function renderCausesSection(insight) {
 		var title = renderSectionHeading(i18n.likelyCauses || 'Likely causes', 'causes', { position: 'left' });
+		var generic = Array.isArray(insight.likely_causes) ? insight.likely_causes : [];
+		var groups = groupStoryChecks(insight);
+		var hasVerdict = groups.likely.length > 0 || groups.ruled_out.length > 0;
+		var links = renderCheckActions(groups.actions);
+		// OPT-516 D10: checks that apply to this scope but lack data yet
+		// (sample_too_small) are shown as "Not measured" rows. Checks that cannot
+		// run here (scope_not_addressable, feature off, not tracked: OPT-466)
+		// keep the generic list.
+		var measurableLater = groups.not_measured.some(function(check) {
+			return String(check.reason || '') === 'sample_too_small';
+		});
+
+		if (hasVerdict || measurableLater || ((groups.not_measured.length || links) && !generic.length)) {
+			return '<section class="ob-smart-insights-detail-section is-causes is-checks">' +
+				renderSectionHeading(i18n.thingsToCheck || 'Things to check', 'causes', { position: 'left' }) +
+				renderCheckList(groups) +
+				links +
+			'</section>';
+		}
 		var measured = renderMeasuredCauseList(insight);
 		if (measured) {
-			return '<section class="ob-smart-insights-detail-section is-causes">' + title + measured + '</section>';
+			return '<section class="ob-smart-insights-detail-section is-causes">' + title + measured + links + renderChecksProLine() + '</section>';
 		}
 
-		var generic = Array.isArray(insight.likely_causes) ? insight.likely_causes : [];
 		if (!generic.length) {
 			return '';
 		}
 
-		// Nothing was measured: these are things to check, not causes.
-		return '<section class="ob-smart-insights-detail-section is-causes">' +
-			renderSectionHeading(i18n.thingsToCheck || 'Things to check', 'causes', { position: 'left' }) +
+		// Nothing was measured: these are things to check, not causes. When
+		// every check came back "?", the catalogue says so in its title.
+		var allUnmeasured = groups.not_measured.length > 0;
+		return '<section class="ob-smart-insights-detail-section is-causes' + (allUnmeasured ? ' is-general' : '') + '">' +
+			renderSectionHeading(allUnmeasured ? (i18n.generalThingsToCheck || 'General things to check') : (i18n.thingsToCheck || 'Things to check'), 'causes', { position: 'left' }) +
 			renderList(generic) +
+			links +
+			renderChecksProLine() +
+		'</section>';
+	}
+
+	// D1 "What happened": the card's key figures (same renderer, same text),
+	// the funnel completion line, the full-size chart and, for an observation,
+	// the honest "too little traffic" sentence.
+	function renderWhatHappenedSection(insight) {
+		var figures = renderKeyFigures(insight);
+		var chart = getWorstTransition(insight) ? renderFunnelChart(insight, false) : (typeof renderBarChart === 'function' ? renderBarChart(insight, false) : '');
+		var observation = isObservationOnly(insight) ? renderObservationImpact(insight) : '';
+		if (!figures && !chart && !observation) {
+			return '';
+		}
+		return '<section class="ob-smart-insights-detail-section is-what-happened">' +
+			renderSectionHeading(i18n.whatHappened || 'What happened', 'impact') +
+			figures +
+			renderFunnelCompletionLine(insight) +
+			(chart ? '<div class="ob-si-detail-chart">' + chart + '</div>' + renderFunnelStepLinks(insight) : '') +
+			observation +
+		'</section>';
+	}
+
+	// Every number printed by D1, as digit strings, so the rest of the detail
+	// can drop a sentence or an evidence row that only repeats one of them.
+	function getKeyFigureNumbers(insight) {
+		var figures = getKeyFigures(insight);
+		var text = [figures.main ? figures.main.value : '', figures.context].join(' ');
+		return (text.match(/\d[\d.,\s  ]*\d|\d/g) || []).map(function(token) {
+			return token.replace(/[^\d]/g, '');
+		}).filter(function(token) {
+			return token.length > 1;
+		});
+	}
+
+	function textRepeatsKeyFigures(text, numbers) {
+		var digits = (String(text || '').match(/\d[\d.,\s  ]*\d|\d/g) || []).map(function(token) {
+			return token.replace(/[^\d]/g, '');
+		});
+		return numbers.some(function(number) {
+			return digits.indexOf(number) !== -1;
+		});
+	}
+
+	// D2: the interpretation (the only place it appears) + why it matters when
+	// that sentence brings no figure D1 already shows.
+	function renderDiagnosisSection(insight) {
+		var interpretation = String(insight.interpretation || '').trim();
+		var why = String(insight.why_it_matters || '').trim();
+		if (why && (why === interpretation || textRepeatsKeyFigures(why, getKeyFigureNumbers(insight)))) {
+			why = '';
+		}
+		if (!interpretation && !why) {
+			return '';
+		}
+		return '<section class="ob-smart-insights-detail-section is-diagnosis">' + renderSectionHeading(i18n.diagnosis || 'Diagnosis', 'diagnosis') +
+			'<div class="ob-smart-insights-detail-diagnosis-copy">' +
+				(interpretation ? '<p>' + escapeHtml(interpretation) + '</p>' : '') +
+				(why ? '<p class="ob-smart-insights-detail-why">' + escapeHtml(why) + '</p>' : '') +
+			'</div></section>';
+	}
+
+	// D3: ONE evidence section — up to 5 metric rows (none repeating a D1
+	// figure) then the typed proof links.
+	function renderMergedEvidenceSection(insight) {
+		var rowsHtml = '';
+		if (insight.is_locked_preview) {
+			rowsHtml = renderEvidence(insight, 5);
+		} else {
+			var numbers = getKeyFigureNumbers(insight);
+			var population = getImpact(insight) ? parseFloat(getImpact(insight).population) : NaN;
+			// A funnel card speaks about its worst step: the whole-funnel
+			// completion is the D1 line and the first-to-last drop is never shown.
+			var funnelStepCard = !!getWorstTransition(insight);
+			var rows = collectEvidenceRows(insight, 8).filter(function(row) {
+				if (row.isUnavailable) {
+					return false;
+				}
+				if (funnelStepCard && (row.key === 'dropoff_rate' || row.key === 'completion_rate')) {
+					return false;
+				}
+				if (!isNaN(population) && row.raw === population) {
+					return false;
+				}
+				return !textRepeatsKeyFigures(row.value, numbers);
+			}).slice(0, 5);
+			rowsHtml = rows.length ? renderEvidenceRows(rows) : '';
+		}
+		var refs = renderEvidenceRefsBody(insight, activeSegmentScope) || renderEvidenceRefsLocked(insight);
+		if (!rowsHtml && !refs) {
+			return '';
+		}
+		return '<section class="ob-smart-insights-detail-section is-evidence is-evidence-refs">' +
+			renderSectionHeading(i18n.evidence || 'Evidence', 'evidence') +
+			(rowsHtml ? '<div class="ob-smart-insights-evidence is-detail-evidence">' + rowsHtml + '</div>' : '') +
+			'<div class="ob-si-evidence-refs" data-ob-si-evidence-refs>' + (refs || '') + '</div>' +
+		'</section>';
+	}
+
+	// "Page or traffic?" (OPT-362 lot 2, variant 2: the landing page of a
+	// source card is not stored, so the rule reads the segment matrix of the
+	// detail). On a page card of F1 / F2 / F3 / P8 / P9, when the strongest
+	// worse-side outlier is a traffic source, Next steps opens with "Mostly one
+	// source". Pro only: a Free viewer gets a locked matrix.
+	var PAGE_OR_TRAFFIC_SIGNALS = ['basic_bounce_alert', 'high_exit_rate_page', 'high_traffic_low_engagement', 'low_scroll_depth_important_page', 'poor_conversion_rate', 'mobile_friction_detected', 'mobile_cta_click_rate_lower_than_desktop'];
+
+	function getMostlyOneSourceOutlier(insight, matrix) {
+		if (!insight || PAGE_OR_TRAFFIC_SIGNALS.indexOf(getSignalId(insight)) === -1) {
+			return null;
+		}
+		if (!matrix || typeof matrix !== 'object' || !matrix.available || matrix.locked || matrix.uniform) {
+			return null;
+		}
+		var outliers = Array.isArray(matrix.outliers) ? matrix.outliers : [];
+		var first = outliers[0];
+		if (!first || !first.is_outlier || !first.is_worse_side || first.insufficient) {
+			return null;
+		}
+		return /^(source|traffic_source|referrer|referrer_url)$/.test(String(first.dimension || '')) ? first : null;
+	}
+
+	function renderMostlyOneSourceLine(content, insight, matrix) {
+		var outlier = getMostlyOneSourceOutlier(insight, matrix);
+		var list = content && content.querySelector('.ob-si-next-steps');
+		if (!outlier || !list || content.querySelector('.ob-si-next-source')) {
+			return;
+		}
+		var unit = matrix.metric_unit || 'percent';
+		var text = i18n.mostlyOneSource || 'Mostly one source: %1$s (%2$s %3$s vs. %4$s for other visitors). Check that traffic before changing the page.';
+		text = fillToken(text, '%1$s', outlier.label || outlier.key || '');
+		text = fillToken(text, '%2$s', matrix.metric_label || matrix.primary_metric || '');
+		text = fillToken(text, '%3$s', formatWhereValue(outlier.value, unit));
+		text = fillToken(text, '%4$s', formatWhereValue(outlier.complement_value, unit));
+		var line = document.createElement('p');
+		line.className = 'ob-si-next-source';
+		line.textContent = text;
+		list.parentNode.insertBefore(line, list);
+	}
+
+	// S1 "Next steps": 1. the card's action in full + its proof button, 2. and
+	// 3. the other actions, then — when an A/B test cannot run at this traffic —
+	// the before / after advice that replaces the hidden "Test this change".
+	function renderNextStepsSection(insight) {
+		var main = getCardAction(insight);
+		var norm = function(value) {
+			var text = typeof value === 'string' ? value : (value && (value.title || value.label || value.action || value.description)) || '';
+			return String(text).toLowerCase().replace(/\s+/g, ' ').trim();
+		};
+		var seen = [norm(main), norm(getRecommendedAction(insight)), norm(insight.next_action_short)];
+		var others = (Array.isArray(insight.recommended_actions) ? insight.recommended_actions : []).filter(function(action) {
+			var key = norm(action);
+			if (!key || seen.indexOf(key) !== -1) {
+				return false;
+			}
+			seen.push(key);
+			return true;
+		}).slice(0, 2);
+
+		var best = getBestRelatedReport(insight);
+		// OPT-378 B: the recordings of the same page first, then the best report.
+		var proof = (typeof renderRecordingProof === 'function' ? renderRecordingProof(insight) : '') || (best && best.resolved && best.resolved.url && String(best.resolved.url).indexOf('opti-behavior-ab-testing') === -1
+			? '<a class="button button-primary ob-smart-insights-report-cta" href="' + escapeHtml(best.resolved.url) + '" target="_blank" rel="noopener noreferrer"><i data-lucide="' + escapeHtml(best.meta.icon) + '"></i>' + escapeHtml(best.meta.label) + '</a>'
+			: '');
+		var abAction = typeof renderAbAction === 'function' ? renderAbAction(insight) : '';
+
+		var items = [];
+		if (main) {
+			items.push('<li class="is-main"><strong>' + escapeHtml(main) + '</strong>' + proof + abAction + '</li>');
+		} else if (abAction) {
+			items.push('<li class="is-main">' + abAction + '</li>');
+		}
+		others.forEach(function(action) {
+			var text = typeof action === 'string' ? action : (action.title || action.label || action.action || action.description || '');
+			items.push('<li>' + escapeHtml(String(text).trim()) + '</li>');
+		});
+
+		var hypothesis = getHypothesis(insight);
+		if (hypothesis && !hypothesis.locked) {
+			var feasibility = getHypothesisFeasibility(hypothesis);
+			if ((feasibility.notFeasible || feasibility.noBaseline) && feasibility.dailySessions > 0) {
+				items.push('<li class="is-ab-advice">' + escapeHtml(fillToken(i18n.abTooLowTraffic || 'Traffic is too low for a reliable A/B test (~%s visits/day). Make the change, then mark this card “Resolved”: Smart Insights compares the next 14 days with the period before.', '%s', formatNumber(Math.round(feasibility.dailySessions)))) + '</li>');
+			}
+		}
+
+		if (!items.length) {
+			return '';
+		}
+		return '<section class="ob-smart-insights-detail-section is-next is-recommendations">' +
+			renderSectionHeading(i18n.nextSteps || 'Next steps', 'next_action', { position: 'left' }) +
+			'<ol class="ob-si-next-steps">' + items.join('') + '</ol>' +
+		'</section>';
+	}
+
+	// S3 "Context": every fact that is not a finding, once.
+	function renderContextSection(insight) {
+		var rows = [];
+		var add = function(label, value, className) {
+			if (value === undefined || value === null || value === '') {
+				return;
+			}
+			rows.push('<div class="ob-smart-insights-context-fact' + (className ? ' ' + className : '') + '"><dt>' + escapeHtml(label) + '</dt><dd>' + escapeHtml(value) + '</dd></div>');
+		};
+		var n = getMeasuredPopulation(insight);
+		add(i18n.visitsMeasured || 'Visits measured', n !== null && n > 0 ? formatNumber(n) : '', 'is-sample');
+		add(i18n.confidence || 'Confidence', getConfidenceLabel(insight), 'is-confidence');
+		add(i18n.status || 'Status', getStatusLabel(insight.status), 'is-status');
+		add(i18n.detected || 'Detected', formatShortDate(insight.created_at), 'is-detected');
+		add(i18n.lastSeen || 'Last seen', formatShortDate(insight.last_seen_at || insight.updated_at), 'is-last-seen');
+		add(i18n.priority || 'Priority', isInfoSignal(insight) ? '' : getSafePriorityScore(insight) + '/100', 'is-priority');
+		add(i18n.recurrence || 'Recurrence', getDetailRecurrenceLabel(insight), 'is-recurrence');
+		var correlation = getCorrelation(insight);
+		var signalCount = correlation ? (parseInt(correlation.signal_count, 10) || 0) : 0;
+		if (signalCount > 1) {
+			add(i18n.correlatedStory || 'Correlated story', sprintfCount(i18n.storySignalCount || '%s correlated signals', signalCount), 'is-story');
+		}
+		return '<section class="ob-smart-insights-detail-section is-context">' + renderSectionHeading(i18n.context || 'Context', 'context', { position: 'left' }) +
+			(rows.length ? '<dl class="ob-smart-insights-context-facts">' + rows.join('') + '</dl>' : '') +
 		'</section>';
 	}
 
 	function renderDetail(insight) {
-		var priorityLabel = getPriorityLabel(insight);
-		var priorityClass = getSeverityClass(priorityLabel);
-		var action = getRecommendedAction(insight);
-		var title = insight.signal_name || (i18n.smartInsight || 'Smart Insight');
-		var dateRange = getDetailDateRange(insight);
+		var priorityClass = isInfoSignal(insight) ? 'info' : getSeverityClass(getPriorityLabel(insight));
+		var title = getCardTitle(insight);
+		var dates = formatDateSpan(insight.date_from, insight.date_to);
+		var context = getEntityContext(insight);
+		var subline = [];
+		if (context.label) {
+			subline.push('<span class="ob-smart-insights-detail-entity-summary" title="' + escapeHtml(context.identifier || context.label) + '">' + escapeHtml(context.label) + '</span>');
+		}
+		if (dates) {
+			subline.push('<span class="ob-smart-insights-detail-date-range">' + escapeHtml(dates) + '</span>');
+		}
+		var provisional = renderProvisionalBadge(insight);
+		if (provisional) {
+			subline.push(provisional);
+		}
+		if (insight.is_locked_preview) {
+			subline.push('<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLocked || 'Pro preview') + '</span>');
+		}
 		var primaryReport = getBestRelatedReport(insight);
 		var primaryReportUrl = primaryReport && primaryReport.resolved ? primaryReport.resolved.url : '';
 
-		return '<div class="ob-smart-insights-detail">' +
+		// data-ob-si-severity: the key-figure tile takes the card's colour (OPT-374).
+		return '<div class="ob-smart-insights-detail ob-si-detail" data-ob-si-severity="' + escapeHtml(priorityClass) + '">' +
 			'<div class="ob-smart-insights-detail-topbar is-' + escapeHtml(priorityClass) + '" aria-hidden="true"></div>' +
 			'<header class="ob-smart-insights-detail-header is-' + escapeHtml(priorityClass) + '">' +
 				'<div class="ob-smart-insights-detail-header-copy">' +
-					renderDetailHeaderChips(insight, priorityLabel, priorityClass) +
-					'<h2 id="ob-smart-insights-modal-title" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</h2>' +
-					renderDetailSubtitle(insight, dateRange) +
+					'<h2 id="ob-smart-insights-modal-title">' + escapeHtml(title) + '</h2>' +
+					'<p class="ob-smart-insights-page-label ob-smart-insights-detail-subtitle">' + subline.join('<span class="ob-smart-insights-detail-subtitle-separator" aria-hidden="true">·</span>') + renderSignalTooltip(insight, { position: 'bottom' }) + '</p>' +
 					renderDuplicatesLine(insight) +
+					renderAlsoSeenLine(insight) +
 				'</div>' +
 				'<div class="ob-smart-insights-detail-header-actions">' +
-					renderDetailPriorityMeter(insight, priorityLabel) +
+					renderPriorityPill(insight) +
 					'<button type="button" class="button-link ob-smart-insights-modal-header-close" data-ob-smart-insights-close aria-label="' + escapeHtml(i18n.close || 'Close') + '">&times;</button>' +
 				'</div>' +
 			'</header>' +
@@ -6061,23 +6501,21 @@
 				'<main class="ob-smart-insights-detail-main">' +
 					renderUpgradePreview(insight) +
 					renderOutcomeResultSection(insight) +
-					renderDetailStorySection(insight) +
-					'<section class="ob-smart-insights-detail-section is-diagnosis">' + renderSectionHeading(i18n.diagnosis || 'Diagnosis', 'diagnosis') + '<div class="ob-smart-insights-detail-diagnosis-copy"><p>' + escapeHtml(insight.interpretation || '') + '</p>' + (insight.why_it_matters ? '<p class="ob-smart-insights-detail-why">' + escapeHtml(insight.why_it_matters) + '</p>' : '') + '</div></section>' +
-					renderEvidenceSection(insight) +
-					renderEvidenceRefsSection(insight, activeSegmentScope) +
+					renderWhatHappenedSection(insight) +
+					renderDiagnosisSection(insight) +
+					renderMergedEvidenceSection(insight) +
+					renderCausesSection(insight) +
+					renderWhereSection(insight) +
 					renderHypothesisSection(insight) +
 					renderExperimentSection(insight) +
-					renderWhereSection(insight) +
 				'</main>' +
 				'<aside class="ob-smart-insights-detail-side">' +
-					'<section class="ob-smart-insights-detail-section is-context">' + renderSectionHeading(i18n.context || 'Context', 'context', { position: 'left' }) + renderDetailContextFacts(insight, dateRange) + '</section>' +
-					renderDetailNextAction(insight, action) +
+					renderNextStepsSection(insight) +
 					'<section class="ob-smart-insights-detail-section is-related">' + renderSectionHeading(i18n.relatedReports || 'Where to investigate', 'related_reports', { position: 'left' }) + renderRelatedReports(insight.related_reports, insight, { primaryReportUrl: primaryReportUrl }) + '</section>' +
-					renderRecommendationsSection(insight) +
-					renderCausesSection(insight) +
+					renderContextSection(insight) +
 				'</aside>' +
 			'</div>' +
-			renderDetailFooter(insight, dateRange, primaryReport) +
+			renderDetailFooter(insight, dates, primaryReport) +
 		'</div>';
 	}
 

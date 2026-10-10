@@ -52,6 +52,382 @@ class Opti_Behavior_Smart_Insights_Recommendations {
 		return $action;
 	}
 
+	/**
+	 * A next action up to this length is shown whole on the card (OPT-362: the
+	 * part after ": " names the step or the entity, cutting it lost both).
+	 */
+	const SHORT_ACTION_KEEP_WHOLE = 140;
+
+	/**
+	 * Card families shown as ONE card per entity and period (OPT-378 A):
+	 * family => signal ids. The signal with the most visits lost carries the
+	 * card, the others become "Also seen here" lines of its detail. Pro
+	 * signal ids are plain strings here (no Pro code in Free).
+	 */
+	const MERGE_FAMILIES = array(
+		'bounce'   => array( 'basic_bounce_alert', 'basic_mobile_bounce_warning' ),
+		'scroll'   => array( 'low_scroll_depth_important_page', 'low_scroll_depth_page', 'high_traffic_low_engagement' ),
+		'checkout' => array( 'checkout_to_purchase_dropoff', 'checkout_friction_detected' ),
+		'form'     => array( 'form_abandonment_detected', 'field_level_friction', 'form_error_friction' ),
+	);
+
+	/**
+	 * Merge family of a signal ('' = the card stays on its own). Pure.
+	 * Filter `opti_behavior_smart_insights_merge_families` (family => ids).
+	 *
+	 * @param string $signal_id Signal id.
+	 * @return string
+	 */
+	public static function merge_family( $signal_id ) {
+		static $map = null;
+		if ( null === $map ) {
+			$families = function_exists( 'apply_filters' ) ? apply_filters( 'opti_behavior_smart_insights_merge_families', self::MERGE_FAMILIES ) : self::MERGE_FAMILIES;
+			$map      = array();
+			foreach ( is_array( $families ) ? $families : array() as $family => $ids ) {
+				foreach ( is_array( $ids ) ? $ids : array() as $id ) {
+					$map[ sanitize_key( (string) $id ) ] = sanitize_key( (string) $family );
+				}
+			}
+		}
+		$signal_id = sanitize_key( (string) $signal_id );
+
+		return isset( $map[ $signal_id ] ) ? $map[ $signal_id ] : '';
+	}
+
+	/**
+	 * Signals that are actions, not problems (OPT-378 B): never a card of
+	 * their own. They ride on the card of the same page as its proof button
+	 * (recordings) or its "Start an A/B test" action (repository
+	 * attach_action_signals()); without such a card they are not shown.
+	 */
+	const ACTION_SIGNALS = array(
+		'session_recording_opportunity' => 'recording',
+		'ab_test_opportunity'           => 'ab_test',
+	);
+
+	/**
+	 * Action kind of a signal: 'recording', 'ab_test' or '' (a problem). Pure.
+	 *
+	 * @param string $signal_id Signal id.
+	 * @return string
+	 */
+	public static function action_signal_kind( $signal_id ) {
+		$signal_id = sanitize_key( (string) $signal_id );
+
+		return isset( self::ACTION_SIGNALS[ $signal_id ] ) ? self::ACTION_SIGNALS[ $signal_id ] : '';
+	}
+
+	/**
+	 * Page title without the " – Site name" suffix themes add (OPT-378 D1):
+	 * "Contact – My Site" → "Contact". Separators: - – — | · :. The label is
+	 * kept whole when nothing would be left. Pure apart from the site name.
+	 *
+	 * @param string      $label     Page title.
+	 * @param string|null $site_name Site name (null = the blog name).
+	 * @return string
+	 */
+	public static function strip_site_suffix( $label, $site_name = null ) {
+		$label = trim( html_entity_decode( (string) $label, ENT_QUOTES, 'UTF-8' ) );
+		if ( null === $site_name ) {
+			$site_name = function_exists( 'get_bloginfo' ) ? (string) get_bloginfo( 'name' ) : '';
+		}
+		$site_name = trim( html_entity_decode( (string) $site_name, ENT_QUOTES, 'UTF-8' ) );
+		if ( '' === $label || '' === $site_name ) {
+			return $label;
+		}
+
+		$stripped = trim( (string) preg_replace( '/\s*[\-\x{2013}\x{2014}|\x{00B7}:]\s*' . preg_quote( $site_name, '/' ) . '\s*$/iu', '', $label ) );
+
+		return '' !== $stripped ? $stripped : $label;
+	}
+
+	/**
+	 * The one chart of a card (OPT-378 C), from the stored figures only:
+	 * G2 = previous period vs this period, G3 = this group vs the others.
+	 * Empty array = no chart (a figure is missing: never an invented value).
+	 * `summary` is the card's key comparison, so the card, the chart and the
+	 * detail print the same numbers. Locked previews get none.
+	 *
+	 * @param array $insight Insight payload.
+	 * @return array { type, unit, metric, bars: [ { label, value, text, focus } x2 ], summary }
+	 */
+	public static function chart_data( $insight ) {
+		if ( ! is_array( $insight ) || ! empty( $insight['is_locked_preview'] ) ) {
+			return array();
+		}
+
+		$signal    = isset( $insight['signal_id'] ) ? sanitize_key( $insight['signal_id'] ) : '';
+		$metrics   = isset( $insight['metrics'] ) && is_array( $insight['metrics'] ) ? $insight['metrics'] : array();
+		$detection = isset( $insight['detection'] ) && is_array( $insight['detection'] ) ? $insight['detection'] : array();
+		$reason    = isset( $detection['reason'] ) ? (string) $detection['reason'] : '';
+		$before    = __( 'Previous period', 'opti-behavior' );
+		$now       = __( 'This period', 'opti-behavior' );
+		$bounce    = __( 'Bounce rate', 'opti-behavior' );
+		$mobile    = __( 'Mobile', 'opti-behavior' );
+
+		switch ( $signal ) {
+			case 'traffic_spike_observation':
+				return self::chart_pair( 'before_after', 'count', __( 'Visits', 'opti-behavior' ), array( $before, $detection['previous_sessions'] ?? null ), array( $now, $metrics['sessions'] ?? null ) );
+			case 'traffic_spike_without_conversion':
+				$rate = self::chart_trend( $metrics, 'conversion_rate' );
+				return self::chart_pair( 'before_after', 'percent', __( 'Conversion rate', 'opti-behavior' ), array( $before, $rate['previous'] ), array( $now, $rate['current'] ) );
+			case 'conversion_drop_alert':
+				return self::chart_pair( 'before_after', 'percent', __( 'Conversion rate', 'opti-behavior' ), array( $before, $detection['previous_conversion_rate'] ?? null ), array( $now, $detection['current_conversion_rate'] ?? null ) );
+			case 'engagement_decay':
+				$rate = self::chart_trend( $metrics, 'bounce_rate' );
+				return self::chart_pair( 'before_after', 'percent', $bounce, array( $before, $rate['previous'] ), array( $now, $rate['current'] ) );
+			case 'basic_mobile_bounce_warning':
+			case 'mobile_friction_detected':
+				// The conversion-gap rule of mobile friction stores no desktop rate.
+				if ( 'mobile_conversion_gap' === $reason ) {
+					return array();
+				}
+				$other = isset( $detection['comparison_device'] ) && 'desktop' === $detection['comparison_device'] ? __( 'Desktop', 'opti-behavior' ) : __( 'Site average', 'opti-behavior' );
+				return self::chart_pair( 'compare', 'percent', $bounce, array( $mobile, $metrics['bounce_rate'] ?? null ), array( $other, $detection['comparison_bounce_rate'] ?? null ) );
+			case 'mobile_cta_click_rate_lower_than_desktop':
+				return self::chart_pair( 'compare', 'percent', __( 'Button click rate', 'opti-behavior' ), array( $mobile, $detection['mobile_cta_click_rate'] ?? null ), array( __( 'Desktop', 'opti-behavior' ), $detection['desktop_cta_click_rate'] ?? null ) );
+			case 'low_quality_traffic_source':
+				$rate = isset( $metrics['bounce_rate'] ) && is_numeric( $metrics['bounce_rate'] ) ? (float) $metrics['bounce_rate'] : null;
+				$gap  = isset( $detection['bounce_gap'] ) && is_numeric( $detection['bounce_gap'] ) ? (float) $detection['bounce_gap'] : null;
+				$site = null !== $rate && null !== $gap ? $rate - $gap : null;
+				return self::chart_pair( 'compare', 'percent', $bounce, array( __( 'This source', 'opti-behavior' ), $rate ), array( __( 'Site average', 'opti-behavior' ), $site ) );
+			case 'segment_anomaly_detection':
+			case 'returning_visitor_opportunity':
+				// OPT-516 D7: returning visitors = one segment too (stored segment_* /
+				// overall_* rates), so the card gets the same "this segment vs all" chart.
+				if ( 'segment_bounce_anomaly' === $reason || 'returning_bounce_above_new' === $reason ) {
+					$keys = array( $bounce, 'segment_bounce_rate', 'overall_bounce_rate' );
+				} elseif ( 'segment_scroll_anomaly' === $reason ) {
+					$keys = array( __( 'Scroll depth', 'opti-behavior' ), 'segment_avg_scroll_depth', 'overall_avg_scroll_depth' );
+				} else {
+					$keys = array( __( 'Conversion rate', 'opti-behavior' ), 'segment_conversion_rate', 'overall_conversion_rate' );
+				}
+				return self::chart_pair( 'compare', 'percent', $keys[0], array( __( 'This segment', 'opti-behavior' ), $metrics[ $keys[1] ] ?? null ), array( __( 'All visitors', 'opti-behavior' ), $metrics[ $keys[2] ] ?? null ) );
+		}
+
+		return array();
+	}
+
+	/**
+	 * Current / previous value of a metric (same lookup as the Pro signals:
+	 * metrics.trend.<key>, else metrics.<key> + previous_period_metrics.<key>).
+	 *
+	 * @param array  $metrics Metrics.
+	 * @param string $key     Metric key.
+	 * @return array { current, previous } floats or null.
+	 */
+	private static function chart_trend( $metrics, $key ) {
+		$num = function( $value ) {
+			return is_numeric( $value ) ? (float) $value : null;
+		};
+		if ( isset( $metrics['trend'][ $key ] ) && is_array( $metrics['trend'][ $key ] ) ) {
+			return array(
+				'current'  => $num( $metrics['trend'][ $key ]['current'] ?? null ),
+				'previous' => $num( $metrics['trend'][ $key ]['previous'] ?? null ),
+			);
+		}
+
+		return array(
+			'current'  => $num( $metrics[ $key ] ?? null ),
+			'previous' => $num( $metrics['previous_period_metrics'][ $key ] ?? null ),
+		);
+	}
+
+	/**
+	 * Two-bar chart payload, or array() when a value is missing, negative,
+	 * both are 0, or a percentage is above 100.
+	 *
+	 * @param string $type   before_after | compare.
+	 * @param string $unit   percent | count.
+	 * @param string $metric Metric label.
+	 * @param array  $first  { label, value }.
+	 * @param array  $second { label, value }.
+	 * @return array
+	 */
+	private static function chart_pair( $type, $unit, $metric, $first, $second ) {
+		$bars = array();
+		foreach ( array( $first, $second ) as $pair ) {
+			$value = isset( $pair[1] ) && is_numeric( $pair[1] ) ? (float) $pair[1] : null;
+			if ( null === $value || $value < 0 || ( 'percent' === $unit && $value > 100 ) ) {
+				return array();
+			}
+			$value  = 'count' === $unit ? (float) round( $value ) : round( $value, 1 );
+			$bars[] = array(
+				'label' => (string) $pair[0],
+				'value' => $value,
+				'text'  => self::chart_value_text( $value, $unit ),
+				'focus' => false,
+			);
+		}
+		if ( $bars[0]['value'] <= 0 && $bars[1]['value'] <= 0 ) {
+			return array();
+		}
+		// The bar the card is about: this period, or this group.
+		$bars[ 'before_after' === $type ? 1 : 0 ]['focus'] = true;
+
+		return array(
+			'type'    => $type,
+			'unit'    => $unit,
+			'metric'  => (string) $metric,
+			'bars'    => $bars,
+			/* translators: 1: metric, e.g. Bounce rate, 2: first group, 3: its value, 4: second group, 5: its value. */
+			'summary' => sprintf( __( '%1$s: %2$s %3$s · %4$s %5$s', 'opti-behavior' ), $metric, $bars[0]['label'], $bars[0]['text'], $bars[1]['label'], $bars[1]['text'] ),
+		);
+	}
+
+	/**
+	 * Chart value in the site language: "1,234" or "57%" / "57.5%".
+	 *
+	 * @param float  $value Value.
+	 * @param string $unit  percent | count.
+	 * @return string
+	 */
+	private static function chart_value_text( $value, $unit ) {
+		$format = function( $number, $decimals ) {
+			return function_exists( 'number_format_i18n' ) ? number_format_i18n( $number, $decimals ) : number_format( $number, $decimals );
+		};
+		if ( 'count' === $unit ) {
+			return $format( $value, 0 );
+		}
+
+		return $format( $value, floor( $value ) === $value ? 0 : 1 ) . '%';
+	}
+
+	/**
+	 * The card form of a next action: the whole sentence up to
+	 * SHORT_ACTION_KEEP_WHOLE characters, else short_action(). Pure.
+	 *
+	 * @param string $action Full action.
+	 * @return string
+	 */
+	public static function card_action( $action ) {
+		$whole = trim( preg_replace( '/\s+/u', ' ', (string) $action ) );
+
+		return mb_strlen( $whole ) <= self::SHORT_ACTION_KEEP_WHOLE ? $whole : self::short_action( $whole );
+	}
+
+	/**
+	 * Precise card title + the one complete action of a Free card (OPT-362
+	 * lot 2), computed when the payload is shaped, so stored rows get them
+	 * too. Pure: reads the payload only. Pro adds its families through the
+	 * `opti_behavior_smart_insights_card_copy` filter (capabilities).
+	 *
+	 * @param array $insight Insight payload.
+	 * @return array { card_title, action_short } — '' when the family is not a Free one.
+	 */
+	public static function card_copy( $insight ) {
+		$copy = array(
+			'card_title'   => '',
+			'action_short' => '',
+		);
+		if ( ! is_array( $insight ) ) {
+			return $copy;
+		}
+
+		$signal    = isset( $insight['signal_id'] ) ? sanitize_key( $insight['signal_id'] ) : '';
+		$metrics   = isset( $insight['metrics'] ) && is_array( $insight['metrics'] ) ? $insight['metrics'] : array();
+		$detection = isset( $insight['detection'] ) && is_array( $insight['detection'] ) ? $insight['detection'] : array();
+		$page      = self::copy_page_label( $insight );
+
+		switch ( $signal ) {
+			case 'basic_bounce_alert':
+				/* translators: %s: page title. */
+				$copy['card_title'] = sprintf( __( 'Visitors leave %s without a second click', 'opti-behavior' ), $page );
+				/* translators: %s: page title. */
+				$copy['action_short'] = sprintf( __( 'Open the heatmap of %s and check the first screen: offer, next step, nothing covering it.', 'opti-behavior' ), $page );
+				break;
+			case 'basic_mobile_bounce_warning':
+				if ( self::copy_is_page( $insight ) ) {
+					/* translators: %s: page title. */
+					$copy['card_title'] = sprintf( __( 'Mobile visitors leave %s right away', 'opti-behavior' ), $page );
+					/* translators: %s: page title. */
+					$copy['action_short'] = sprintf( __( 'Open the mobile heatmap of %s and check the first screen: offer, next step, nothing covering it.', 'opti-behavior' ), $page );
+				} else {
+					$copy['card_title']   = __( 'Mobile visitors leave your site right away', 'opti-behavior' );
+					$copy['action_short'] = __( 'Open the mobile heatmap of your busiest page and check the first screen: offer, next step, nothing covering it.', 'opti-behavior' );
+				}
+				break;
+			case 'high_exit_rate_page':
+				/* translators: %s: page title. */
+				$copy['card_title'] = sprintf( __( 'Visits often end on %s', 'opti-behavior' ), $page );
+				/* translators: %s: page title. */
+				$copy['action_short'] = sprintf( __( 'Add a clear link to the next step on %s where visitors stop reading.', 'opti-behavior' ), $page );
+				break;
+			case 'high_traffic_low_engagement':
+			case 'low_scroll_depth_important_page':
+				/* translators: %s: page title. */
+				$copy['card_title'] = sprintf( __( 'Most visitors never reach the middle of %s', 'opti-behavior' ), $page );
+				$scroll             = isset( $metrics['avg_scroll_depth'] ) && is_numeric( $metrics['avg_scroll_depth'] ) && $metrics['avg_scroll_depth'] > 0 ? self::copy_percent( $metrics['avg_scroll_depth'] ) : '';
+				$copy['action_short'] = '' !== $scroll
+					/* translators: 1: page title, 2: average scroll depth, e.g. 34%. */
+					? sprintf( __( 'Move the main button or key message of %1$s above %2$s of the page, where most visitors stop.', 'opti-behavior' ), $page, $scroll )
+					/* translators: %s: page title. */
+					: sprintf( __( 'Move the main button or key message of %s higher, where most visitors still read.', 'opti-behavior' ), $page );
+				break;
+			case 'traffic_spike_observation':
+				$delta = isset( $detection['sessions_relative_delta_pct'] ) && is_numeric( $detection['sessions_relative_delta_pct'] ) && $detection['sessions_relative_delta_pct'] > 0 ? self::copy_percent( $detection['sessions_relative_delta_pct'] ) : '';
+				if ( self::copy_is_page( $insight ) ) {
+					$copy['card_title'] = '' !== $delta
+						/* translators: 1: page title, 2: visit increase, e.g. 85%. */
+						? sprintf( __( 'Traffic spike on %1$s: +%2$s visits', 'opti-behavior' ), $page, $delta )
+						/* translators: %s: page title. */
+						: sprintf( __( 'Traffic spike on %s', 'opti-behavior' ), $page );
+					/* translators: %s: page title. */
+					$copy['action_short'] = sprintf( __( 'Check where the extra visits to %s come from before changing anything.', 'opti-behavior' ), $page );
+				} else {
+					$copy['card_title'] = '' !== $delta
+						/* translators: %s: visit increase, e.g. 85%. */
+						? sprintf( __( 'Traffic spike on your site: +%s visits', 'opti-behavior' ), $delta )
+						: __( 'Traffic spike on your site', 'opti-behavior' );
+					$copy['action_short'] = __( 'Check where the extra visits to your site come from before changing anything.', 'opti-behavior' );
+				}
+				break;
+		}
+
+		// OPT-378 D3: the card action is one complete sentence of at most
+		// SHORT_ACTION_KEEP_WHOLE characters; a long page title gives way to
+		// "this page" rather than a cut sentence.
+		if ( mb_strlen( $copy['action_short'] ) > self::SHORT_ACTION_KEEP_WHOLE && '' !== trim( (string) ( $insight['entity_label'] ?? '' ) ) ) {
+			$generic              = self::card_copy( array_merge( $insight, array( 'entity_label' => '' ) ) );
+			$copy['action_short'] = $generic['action_short'];
+		}
+
+		return $copy;
+	}
+
+	/**
+	 * Whether the card is about one page.
+	 *
+	 * @param array $insight Insight payload.
+	 * @return bool
+	 */
+	private static function copy_is_page( $insight ) {
+		return isset( $insight['entity_type'] ) && 'page' === $insight['entity_type'];
+	}
+
+	/**
+	 * Page label for card copy: the stored entity label (the page title,
+	 * without the " – Site name" suffix), else "this page".
+	 *
+	 * @param array $insight Insight payload.
+	 * @return string
+	 */
+	private static function copy_page_label( $insight ) {
+		$label = isset( $insight['entity_label'] ) ? self::strip_site_suffix( wp_strip_all_tags( (string) $insight['entity_label'] ) ) : '';
+
+		return '' !== $label ? $label : __( 'this page', 'opti-behavior' );
+	}
+
+	/**
+	 * Whole percent in the site language, e.g. "34%".
+	 *
+	 * @param float $value Percent value.
+	 * @return string
+	 */
+	private static function copy_percent( $value ) {
+		return number_format_i18n( round( (float) $value ) ) . '%';
+	}
+
 	const TEMPLATE_PAGE_LOW_ENGAGEMENT = 'page_low_engagement_v1';
 	const TEMPLATE_PAGE_HIGH_EXIT_RATE = 'page_high_exit_rate_v1';
 	const TEMPLATE_PAGE_LOW_SCROLL_DEPTH = 'page_low_scroll_depth_v1';

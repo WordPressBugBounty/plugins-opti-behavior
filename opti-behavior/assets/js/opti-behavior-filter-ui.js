@@ -18,6 +18,13 @@
 (function() {
 	'use strict';
 
+	// Translated label (OptiBehaviorProfilesConfig.i18n, localized on every screen
+	// that loads the filter panel), English fallback (QA-B-HEAT-087).
+	function i18nLabel(key, fallback) {
+		var cfg = window.OptiBehaviorProfilesConfig;
+		return (cfg && cfg.i18n && cfg.i18n[key]) || fallback;
+	}
+
 	// Double-load guard: Free and Pro may both enqueue their own copy on the
 	// same screen; the first one wins and the second is a no-op.
 	if (window.OptiBehaviorFilterUI) {
@@ -369,8 +376,8 @@ window.optiBehaviorBrowserIconSVG = window.optiBehaviorBrowserIconSVG || functio
 					searchInput = document.createElement('input');
 					searchInput.type = 'text';
 					searchInput.className = 'ob-icon-select-search-input';
-					searchInput.setAttribute('placeholder', 'Search pages\u2026');
-					searchInput.setAttribute('aria-label', 'Search pages');
+					searchInput.setAttribute('placeholder', i18nLabel('searchPages', 'Search pages') + '\u2026');
+					searchInput.setAttribute('aria-label', i18nLabel('searchPages', 'Search pages'));
 					searchWrap.appendChild(searchInput);
 					menu.appendChild(searchWrap);
 					listEl = document.createElement('div');
@@ -457,7 +464,7 @@ window.optiBehaviorBrowserIconSVG = window.optiBehaviorBrowserIconSVG || functio
 						synth.setAttribute('role', 'option');
 						const synthLabel = document.createElement('span');
 						synthLabel.className = 'ob-icon-select-label';
-						synthLabel.textContent = 'Match pages containing "' + kw + '"';
+						synthLabel.textContent = i18nLabel('matchPagesContaining', 'Match pages containing "%s"').replace('%s', kw);
 						synthLabel.title = synthLabel.textContent;
 						synth.appendChild(synthLabel);
 						const synthCnt = document.createElement('span');

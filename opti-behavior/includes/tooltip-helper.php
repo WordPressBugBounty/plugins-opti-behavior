@@ -349,7 +349,7 @@ function opti_behavior_get_settings_tooltips() {
 		),
 		'spam_duration' => array(
 			'title'   => __( 'Spam Duration Threshold', 'opti-behavior' ),
-			'content' => __( 'Sessions shorter than this time may be flagged as spam. Real visitors typically stay at least a few seconds to read content.', 'opti-behavior' ),
+			'content' => __( 'Sessions shorter than this time may be flagged as spam. Real visitors typically stay at least a few seconds to read content.', 'opti-behavior' ) . ' ' . __( 'Visits that arrive from another site (search engine, social network, link) are not judged by this threshold.', 'opti-behavior' ),
 			'simple'  => __( 'Minimum time a real visitor would spend on your site.', 'opti-behavior' ),
 			'example' => __( '10 seconds means visits under 10 seconds might be spam.', 'opti-behavior' ),
 		),
@@ -583,14 +583,14 @@ function opti_behavior_get_settings_tooltips() {
 		// Privacy & GDPR Settings
 		'privacy_mode' => array(
 			'title'   => __( 'Privacy Mode', 'opti-behavior' ),
-			'content' => __( 'Privacy Mode controls how visitor data is collected, stored, and processed. Anonymous Mode is fully GDPR-compliant by default and requires no cookie consent banner. Full Tracking offers more detailed analytics but requires visitor consent under GDPR.', 'opti-behavior' ),
+			'content' => __( 'Privacy Mode controls how visitor data is collected, stored, and processed. Anonymous Mode sets no cookies and stores no IP addresses. Full Tracking offers more detailed analytics and waits for visitor consent before setting cookies.', 'opti-behavior' ),
 			'simple'  => __( 'Choose between privacy-first (no cookies, no client-side storage) or full tracking (cookies + consent required).', 'opti-behavior' ),
 		),
 		'anonymous_mode' => array(
 			'title'   => __( 'Anonymous Mode', 'opti-behavior' ),
-			'content' => __( 'In Anonymous Mode, no cookies are set and no client-side storage is used, and no IP addresses are stored. Visitors are identified using a daily rotating hash that cannot be linked back to an individual. No geolocation API calls are made. This mode is GDPR-compliant by default and does not require a cookie consent banner.', 'opti-behavior' ),
-			'simple'  => __( 'Tracks visitors without cookies, client-side storage, or personal data. Safe by default — no consent popup needed.', 'opti-behavior' ),
-			'example' => __( 'Great for blogs, news sites, or any site that wants simple analytics without legal complexity.', 'opti-behavior' ),
+			'content' => __( 'In Anonymous Mode, no cookies are set and no client-side storage is used, and no IP addresses are stored. Visitors are identified using a daily rotating hash that cannot be linked back to an individual. No geolocation API calls are made. Visitor data stays on your own server.', 'opti-behavior' ),
+			'simple'  => __( 'Tracks visitors without cookies, client-side storage, or IP addresses. Check your own legal requirements.', 'opti-behavior' ),
+			'example' => __( 'Great for blogs, news sites, or any site that wants simple, privacy-first analytics.', 'opti-behavior' ),
 		),
 		'full_tracking' => array(
 			'title'   => __( 'Full Tracking Mode', 'opti-behavior' ),
@@ -827,7 +827,7 @@ function opti_behavior_get_heatmaps_tooltips() {
 			'simple'  => __( 'A list of all pages with click tracking. Click one to see its heatmap!', 'opti-behavior' ),
 		),
 		'interactions' => array(
-			'title'   => __( 'Interactions', 'opti-behavior' ),
+			'title'   => __( 'Clicks', 'opti-behavior' ),
 			'content' => __( 'The total number of clicks recorded on this page. This includes all clicks on links, buttons, images, and any other elements visitors interacted with.', 'opti-behavior' ),
 			'simple'  => __( 'How many times people clicked on things on this page.', 'opti-behavior' ),
 		),

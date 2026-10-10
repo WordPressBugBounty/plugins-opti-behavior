@@ -60,6 +60,68 @@ class Opti_Behavior_Ingest_Gate {
 	);
 
 	/**
+	 * Substrings of automation / headless tools and HTTP libraries (taken from
+	 * the Pro friction filter). Applied only while "Enable automated traffic
+	 * detection" is on (OPT-562).
+	 *
+	 * @var string[]
+	 */
+	private static $automation_patterns = array(
+		'headless', 'phantom', 'puppeteer', 'playwright', 'selenium', 'webdriver',
+		'lighthouse', 'pagespeed', 'curl', 'wget', 'libwww', 'python-requests',
+		'python-urllib', 'aiohttp', 'httpx', 'axios', 'go-http-client', 'java/',
+		'okhttp', 'apache-httpclient', 'scrapy',
+	);
+
+	/**
+	 * Per-request cache of automation verdicts, keyed by user agent.
+	 *
+	 * @var array<string,bool>
+	 */
+	private static $automation_cache = array();
+
+	/**
+	 * Is "Enable automated traffic detection" on? (default on)
+	 *
+	 * @return bool
+	 */
+	public static function automated_detection_enabled() {
+		$settings = get_option( 'opti_behavior_traffic_settings', array() );
+
+		return ! is_array( $settings ) || ! array_key_exists( 'automated_detection_enabled', $settings ) || ! empty( $settings['automated_detection_enabled'] );
+	}
+
+	/**
+	 * Whether a user agent belongs to an automation / headless tool.
+	 *
+	 * @param string|null $ua User agent to test; null = current request's UA.
+	 * @return bool
+	 */
+	public static function is_automation_user_agent( $ua = null ) {
+		if ( null === $ua ) {
+			$ua = isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '';
+		}
+		$ua = (string) $ua;
+
+		if ( '' === $ua ) {
+			return false;
+		}
+
+		if ( ! isset( self::$automation_cache[ $ua ] ) ) {
+			$hit = false;
+			foreach ( self::$automation_patterns as $pattern ) {
+				if ( false !== stripos( $ua, $pattern ) ) {
+					$hit = true;
+					break;
+				}
+			}
+			self::$automation_cache[ $ua ] = $hit;
+		}
+
+		return self::$automation_cache[ $ua ];
+	}
+
+	/**
 	 * Get the full list of bot UA substring patterns.
 	 *
 	 * Union of the legacy frontend list, the bot-tracker named patterns, and
@@ -159,6 +221,8 @@ class Opti_Behavior_Ingest_Gate {
 
 		if ( self::is_bot_user_agent() ) {
 			$reason = 'bot_user_agent';
+		} elseif ( self::automated_detection_enabled() && self::is_automation_user_agent() ) {
+			$reason = 'automation_user_agent';
 		} elseif ( class_exists( 'Opti_Behavior_IP_Exclusion' ) && Opti_Behavior_IP_Exclusion::is_excluded() ) {
 			$reason = 'excluded_ip';
 		}
@@ -225,6 +289,7 @@ class Opti_Behavior_Ingest_Gate {
 	 * @since 1.6.1
 	 */
 	public static function flush_cache() {
-		self::$ua_cache = array();
+		self::$ua_cache         = array();
+		self::$automation_cache = array();
 	}
 }

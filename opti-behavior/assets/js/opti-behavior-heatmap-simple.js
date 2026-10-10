@@ -32,6 +32,93 @@
     }
 
     // -------------------------------------------------------------------------
+    // URL privacy (OPT-574) — personal data (email, access_code, token…) never
+    // leaves the browser. Same rule as PHP opti_behavior_strip_sensitive_query_args():
+    // drop query / fragment pairs whose name is in the list (case-insensitive,
+    // `name[...]` = name) or whose value holds an e-mail address; every other
+    // pair is kept as it was. The list comes from the server (filter
+    // `opti_behavior_sensitive_query_params`), defaults below for cached pages.
+    // -------------------------------------------------------------------------
+    var OB_SENSITIVE_PARAMS_DEFAULT = [ 'email', 'e-mail', 'e_mail', 'mail', 'user_email', 'username', 'user', 'login', 'log', 'pwd', 'pass', 'password', 'access_code', 'code', 'token', 'access_token', 'refresh_token', 'id_token', 'auth', 'authorization', 'key', 'api_key', 'apikey', 'license', 'license_key', 'licence', 'secret', 'session', 'sessionid', 'sid', 'nonce', '_wpnonce', 'hash', 'signature', 'sig', 'otp', 'phone', 'tel', 'site_url', 'siteurl', 'home_url', 'website', 'domain' ];
+    var OB_EMAIL_RE = /[^@\s]+@[^@\s]+\.[a-z]{2,}/i;
+
+    function obSensitiveParams() {
+        var cfg = window.optiBehaviorHeatmapConfig;
+        var list = cfg && cfg.url_privacy && cfg.url_privacy.params;
+        var names = Array.isArray( list ) && list.length ? list : OB_SENSITIVE_PARAMS_DEFAULT;
+        var set = {};
+        for ( var i = 0; i < names.length; i++ ) {
+            set[ String( names[ i ] ).toLowerCase() ] = true;
+        }
+        return set;
+    }
+
+    function obDecode( value ) {
+        try {
+            return decodeURIComponent( String( value ).replace( /\+/g, ' ' ) );
+        } catch ( e ) {
+            return String( value );
+        }
+    }
+
+    function obStripPairs( query, set ) {
+        var kept = [];
+        var pairs = query.split( '&' );
+        for ( var i = 0; i < pairs.length; i++ ) {
+            var pair = pairs[ i ];
+            if ( '' === pair ) {
+                continue;
+            }
+            var eq = pair.indexOf( '=' );
+            var name = eq === -1 ? pair : pair.slice( 0, eq );
+            var value = eq === -1 ? '' : pair.slice( eq + 1 );
+            var base = obDecode( name ).trim().toLowerCase().replace( /\[.*$/, '' );
+            if ( set[ base ] || OB_EMAIL_RE.test( obDecode( value ) ) ) {
+                continue;
+            }
+            kept.push( pair );
+        }
+        return kept.join( '&' );
+    }
+
+    function obStripSensitiveUrl( url ) {
+        if ( typeof url !== 'string' || '' === url || ( url.indexOf( '?' ) === -1 && url.indexOf( '#' ) === -1 ) ) {
+            return url;
+        }
+        var set = obSensitiveParams();
+        var fragment = null;
+        var hashPos = url.indexOf( '#' );
+        if ( hashPos !== -1 ) {
+            fragment = url.slice( hashPos + 1 );
+            url = url.slice( 0, hashPos );
+        }
+        var qPos = url.indexOf( '?' );
+        if ( qPos !== -1 ) {
+            var query = obStripPairs( url.slice( qPos + 1 ), set );
+            url = url.slice( 0, qPos ) + ( query ? '?' + query : '' );
+        }
+        if ( fragment !== null ) {
+            var fq = fragment.indexOf( '?' );
+            if ( fq !== -1 ) {
+                var fQuery = obStripPairs( fragment.slice( fq + 1 ), set );
+                fragment = fragment.slice( 0, fq ) + ( fQuery ? '?' + fQuery : '' );
+            } else if ( fragment.indexOf( '=' ) !== -1 ) {
+                fragment = obStripPairs( fragment, set );
+            } else if ( OB_EMAIL_RE.test( obDecode( fragment ) ) ) {
+                fragment = '';
+            }
+            if ( fragment ) {
+                url += '#' + fragment;
+            }
+        }
+        return url;
+    }
+
+    function obPageUrl() {
+        return obStripSensitiveUrl( window.location.href );
+    }
+
+    // -------------------------------------------------------------------------
     // Nonce refresh — ONE network refresh per page load to heal cached-page
     // nonce expiry. A full-page-cache TTL can outlive the WordPress nonce
     // lifetime, so cached HTML ships a nonce the ingest endpoints reject with
@@ -972,6 +1059,10 @@
         this.lastActivityTime = Date.now();
         this.inactivityTimeout = 30 * 60 * 1000; // 30 minutes in milliseconds
         this.maxSessionDuration = 60 * 60 * 1000; // Cap session at 1 hour max
+        // Reading time still counted after the last real activity (click,
+        // scroll, mouse move, key, touch, focus). Time beyond it - a tab left
+        // open or hidden - is not part of the visit duration (OPT-590).
+        this.activityGraceMs = 30 * 1000;
         // Heartbeat adaptive backoff (perf fix: a fixed 5s interval hammered
         // admin-ajax.php with up to 720 full-WP-bootstrap requests per session
         // and slowed down whole sites). Start at 15s, double after each send,
@@ -1035,6 +1126,18 @@
 
         // Attach scroll event listener for scroll depth tracking
         window.addEventListener('scroll', this.handleScroll.bind(this), { passive: true });
+
+        // Keys, touches and the tab coming back to the front are activity too
+        // (they extend the visit duration, they record nothing).
+        var markActivity = this.markActivity.bind(this);
+        document.addEventListener('keydown', markActivity, { passive: true });
+        document.addEventListener('touchstart', markActivity, { passive: true });
+        window.addEventListener('focus', markActivity);
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible') {
+                markActivity();
+            }
+        });
 
         // Calculate initial scroll depth
         this.updateScrollDepth();
@@ -1246,7 +1349,7 @@
 
         // Get the target URL
         const targetUrl = link.href;
-        const sourceUrl = window.location.href;
+        const sourceUrl = obPageUrl();
 
         // Get click coordinates, adjusting for admin bar offset
         const x = event.pageX || (event.clientX + (document.documentElement.scrollLeft || document.body.scrollLeft));
@@ -1262,7 +1365,7 @@
         const outboundData = {
             type: 'outbound_click',
             sourceUrl: sourceUrl,
-            targetUrl: targetUrl,
+            targetUrl: obStripSensitiveUrl(targetUrl),
             elementTag: elementTag,
             elementId: elementId,
             elementClass: elementClass,
@@ -1471,6 +1574,20 @@
         }.bind(this), this.heartbeatDelay);
     };
 
+    HeatmapTracker.prototype.markActivity = function() {
+        this.lastActivityTime = Date.now();
+    };
+
+    /**
+     * Visit duration on this page in seconds: up to the last real activity
+     * plus a short reading grace, never the wall-clock time of a tab left
+     * open or hidden (OPT-590). Same field and unit as before.
+     */
+    HeatmapTracker.prototype.activeDurationSeconds = function(now) {
+        var end = Math.min(now, this.lastActivityTime + this.activityGraceMs);
+        return Math.max(0, Math.round((end - this.sessionStartTime) / 1000));
+    };
+
     HeatmapTracker.prototype.sendHeartbeat = function() {
         const now = Date.now();
         const timeSinceLastActivity = now - this.lastActivityTime;
@@ -1490,7 +1607,7 @@
             return;
         }
 
-        const sessionDuration = Math.round(totalSessionTime / 1000);
+        const sessionDuration = this.activeDurationSeconds(now);
 
         // Use stored IDs instead of reading cookies
         if (!this.sessionId || !this.visitorId) {
@@ -1519,7 +1636,7 @@
         formData.append('nonce', this.config.nonce);
         formData.append('session_id', sessionId);
         formData.append('visitor_id', visitorId);
-        formData.append('url', window.location.href);
+        formData.append('url', obPageUrl());
         formData.append('title', document.title);
         formData.append('duration', sessionDuration);
         formData.append('scroll_depth', this.maxScrollDepth);
@@ -1582,7 +1699,7 @@
 
     HeatmapTracker.prototype.sendSessionEnd = function() {
 
-        const sessionDuration = Math.round((Date.now() - this.sessionStartTime) / 1000);
+        const sessionDuration = this.activeDurationSeconds(Date.now());
 
         // Use stored IDs instead of reading cookies
         if (!this.sessionId || !this.visitorId) {
@@ -1597,7 +1714,7 @@
         formData.append('nonce', this.config.nonce);
         formData.append('session_id', sessionId);
         formData.append('visitor_id', visitorId);
-        formData.append('url', window.location.href);
+        formData.append('url', obPageUrl());
         formData.append('title', document.title);
         formData.append('duration', sessionDuration);
         formData.append('scroll_depth', this.maxScrollDepth);
@@ -1664,7 +1781,7 @@
         const formData = new FormData();
         formData.append('action', this.config.action);
         formData.append('nonce', this.config.nonce);
-        formData.append('url', window.location.href);
+        formData.append('url', obPageUrl());
         formData.append('title', document.title);
 
         // Add session and visitor IDs (sendData already returns early in anonymous mode).
@@ -1679,7 +1796,7 @@
             action: this.config.action,
             nonce: this.config.nonce,
             ajax_url: this.config.ajax_url,
-            url: window.location.href,
+            url: obPageUrl(),
             title: document.title
         });
 
@@ -1698,7 +1815,7 @@
         const trackingConfig = window.optiBehaviorHeatmapConfig || this.config;
 
         // Send referrer - filter out internal referrers (same domain = not an external referral)
-        let referrer = document.referrer || trackingConfig.referrer || '';
+        let referrer = obStripSensitiveUrl(document.referrer || trackingConfig.referrer || '');
         if (referrer) {
             try {
                 var referrerHost = new URL(referrer).hostname;
@@ -2191,15 +2308,17 @@
             action: 'session_start',
             sessionId: sessionId,
             visitorId: visitorId,
-            url: window.location.href,
+            url: obPageUrl(),
             title: document.title,
             userAgent: userAgent,
             language: navigator.language || navigator.userLanguage || '',
             timezone: (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || '') : '',
             screen_width: screenWidth,
             screen_height: window.screen.height,
+            // Browser driven by an automation tool (Selenium, Puppeteer, Playwright…).
+            webdriver: navigator.webdriver === true ? 1 : 0,
             referrer: (function() {
-                var ref = document.referrer || trackingConfig.referrer || '';
+                var ref = obStripSensitiveUrl(document.referrer || trackingConfig.referrer || '');
                 if (ref) {
                     try {
                         var refHost = new URL(ref).hostname.replace(/^www\./i, '');
@@ -2214,7 +2333,7 @@
             utm_campaign: trackingConfig.utm_campaign || '',
             utm_term: trackingConfig.utm_term || '',
             utm_content: trackingConfig.utm_content || '',
-            entry_page: window.location.href,
+            entry_page: obPageUrl(),
             device: {
                 browser: browser,
                 os: os,

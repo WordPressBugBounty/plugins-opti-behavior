@@ -56,11 +56,21 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 	const TARGET_PLUGIN_BASENAME = 'opti-behavior/Opti-Behavior.php';
 
 	/**
-	 * AJAX timeout for survey submission (milliseconds).
+	 * How long the modal waits for the survey AJAX before following the
+	 * Deactivate link (milliseconds). The server finishes the relay on its own
+	 * (ignore_user_abort), so a slow or unreachable API never holds the click
+	 * (OPT-643: click -> deactivated < 4 s).
 	 *
 	 * @var int
 	 */
-	const AJAX_TIMEOUT_MS = 6000;
+	const AJAX_TIMEOUT_MS = 800;
+
+	/**
+	 * HTTP timeout of the survey relay to the API (seconds).
+	 *
+	 * @var int
+	 */
+	const RELAY_TIMEOUT = 3;
 
 	/**
 	 * Singleton instance.
@@ -180,6 +190,10 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 				400
 			);
 		}
+
+		// The modal stops waiting after AJAX_TIMEOUT_MS and leaves the page:
+		// keep relaying the answer even once the browser has gone.
+		ignore_user_abort( true );
 
 		$relay_result = $this->relay_payload_to_api( $survey_payload );
 
@@ -342,7 +356,7 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 				'headers'   => array(
 					'Content-Type' => 'application/json',
 				),
-				'timeout'   => 10,
+				'timeout'   => self::RELAY_TIMEOUT,
 				'sslverify' => $this->should_verify_ssl( $api_url ),
 				'blocking'  => true,
 			)

@@ -1727,7 +1727,12 @@ class Opti_Behavior_Dashboard_Exporter {
 		$settings = get_option( 'opti_behavior_traffic_settings', array( 'spam_detection_enabled' => true, 'spam_duration_threshold' => 3 ) );
 		if ( ! empty( $settings['spam_detection_enabled'] ) && $this->column_exists( 'optibehavior_sessions', 'duration' ) ) {
 			$threshold = isset( $settings['spam_duration_threshold'] ) ? absint( $settings['spam_duration_threshold'] ) : 3;
-			return ' AND ((' . $prefix . 'traffic_type IS NULL OR ' . $prefix . "traffic_type = '' OR " . $prefix . "traffic_type NOT IN ('spam', 'bot', 'automated')) AND COALESCE(" . $prefix . 'duration, 0) >= ' . $threshold . ')';
+			// A visit referred by another site passes the duration floor (OPT-562).
+			$duration  = 'COALESCE(' . $prefix . 'duration, 0) >= ' . $threshold;
+			if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ) {
+				$duration = Opti_Behavior_Stats_Spam_Filter::referrer_or_thresholds_sql( $duration, $alias );
+			}
+			return ' AND ((' . $prefix . 'traffic_type IS NULL OR ' . $prefix . "traffic_type = '' OR " . $prefix . "traffic_type NOT IN ('spam', 'bot', 'automated')) AND " . $duration . ')';
 		}
 		return ' AND (' . $prefix . 'traffic_type IS NULL OR ' . $prefix . "traffic_type = '' OR " . $prefix . "traffic_type NOT IN ('spam', 'bot', 'automated'))";
 	}

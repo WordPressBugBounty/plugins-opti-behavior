@@ -79,6 +79,25 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 	const BASIS_FRICTION         = 'friction';
 
 	/**
+	 * Observations: they describe a change, nothing is lost (OPT-515 D2).
+	 */
+	const NO_LOSS_SIGNALS = array( 'traffic_spike_observation' );
+
+	/**
+	 * Page signals priced on the one gap they describe (OPT-530): a bounce card
+	 * counts the bounce gap, never the conversion or scroll gap of the page,
+	 * which gave every card of a page story the same figure. `engagement` =
+	 * widest engagement gap, without the conversion gap. Not measurable = no
+	 * figure.
+	 */
+	const OWN_GAP_SIGNALS = array(
+		'basic_bounce_alert'              => 'bounce',
+		'high_exit_rate_page'             => 'exit',
+		'low_scroll_depth_important_page' => 'scroll',
+		'high_traffic_low_engagement'     => 'engagement',
+	);
+
+	/**
 	 * Metric keys that hold the size of the population an insight was measured
 	 * on, most specific first. Pro site-wide rows carry no `sessions` key of
 	 * their own on older builds: their population is the two error cohorts.
@@ -193,7 +212,11 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 			}
 
 			$impacts[ $index ] = $impact;
-			$max_users_lost    = max( $max_users_lost, (float) $impact['users_lost'] );
+		}
+
+		$impacts = self::drop_repeated_child_impacts( $candidates, $impacts );
+		foreach ( $impacts as $impact ) {
+			$max_users_lost = max( $max_users_lost, (float) $impact['users_lost'] );
 		}
 
 		if ( empty( $impacts ) ) {
@@ -257,6 +280,42 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 		}
 
 		return $candidates;
+	}
+
+	/**
+	 * Drop the loss of a story child that only repeats its primary's loss.
+	 *
+	 * Same basis and same figure = the child priced the primary's gap, not its
+	 * own: it gets no figure rather than the parent's (OPT-530).
+	 *
+	 * @param array $candidates Candidate records (`story_role`, `story_scope_key`).
+	 * @param array $impacts    Impact payloads keyed by candidate index.
+	 * @return array Impacts without the repeated child figures.
+	 */
+	public static function drop_repeated_child_impacts( $candidates, $impacts ) {
+		$primaries = array();
+		foreach ( $impacts as $index => $impact ) {
+			$candidate = isset( $candidates[ $index ] ) && is_array( $candidates[ $index ] ) ? $candidates[ $index ] : array();
+			if ( isset( $candidate['story_role'], $candidate['story_scope_key'] ) && 'primary' === $candidate['story_role'] && '' !== (string) $candidate['story_scope_key'] ) {
+				$primaries[ (string) $candidate['story_scope_key'] ] = $impact;
+			}
+		}
+
+		foreach ( $impacts as $index => $impact ) {
+			$candidate = isset( $candidates[ $index ] ) && is_array( $candidates[ $index ] ) ? $candidates[ $index ] : array();
+			if ( ! isset( $candidate['story_role'], $candidate['story_scope_key'] ) || 'child' !== $candidate['story_role'] ) {
+				continue;
+			}
+
+			$key = (string) $candidate['story_scope_key'];
+			if ( isset( $primaries[ $key ] )
+				&& (int) $primaries[ $key ]['users_lost'] === (int) $impact['users_lost']
+				&& (string) $primaries[ $key ]['basis'] === (string) $impact['basis'] ) {
+				unset( $impacts[ $index ] );
+			}
+		}
+
+		return $impacts;
 	}
 
 	/**
@@ -482,9 +541,25 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 		$metrics   = $this->collect_metric_bag( $insight, $context );
 		$detection = isset( $insight['detection'] ) && is_array( $insight['detection'] ) ? $insight['detection'] : array();
 
+		// A traffic spike loses nothing, and a signal that could not measure its
+		// own loss (`impact_none`) gets no figure: pricing either on the page or
+		// funnel row would repeat the number of the card it sits under (OPT-515 D2).
+		$signal_id = isset( $insight['signal_id'] ) ? (string) $insight['signal_id'] : '';
+		if ( ! empty( $detection['impact_none'] ) || in_array( $signal_id, self::NO_LOSS_SIGNALS, true ) ) {
+			return null;
+		}
+
 		$override = $this->resolve_basis_override( $detection, $metrics );
 		if ( null !== $override ) {
 			return $override;
+		}
+
+		$own_gaps = self::OWN_GAP_SIGNALS;
+		if ( isset( $own_gaps[ $signal_id ] ) ) {
+			$sessions = $this->positive_int( $metrics, array( 'sessions', 'pageviews', 'users' ) );
+			$gap      = $sessions > 0 ? $this->resolve_engagement_gap( $metrics, $own_gaps[ $signal_id ] ) : null;
+
+			return null === $gap ? null : $this->build_basis( self::BASIS_ENGAGEMENT_GAP, $sessions, $gap / 100, $metrics );
 		}
 
 		$entries      = $this->positive_int( $metrics, array( 'entries', 'step_entries', 'funnel_entries' ) );
@@ -576,19 +651,25 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 	/**
 	 * Pick the widest engagement deficit available for a page-like entity.
 	 *
-	 * @param array $metrics Flattened metric bag.
+	 * @param array  $metrics Flattened metric bag.
+	 * @param string $only    One gap (`bounce`, `exit`, `scroll`, `cta`), or ''
+	 *                        / `engagement` for the widest one.
 	 * @return float|null Percentage-point gap on the 0-100 scale.
 	 */
-	private function resolve_engagement_gap( $metrics ) {
+	private function resolve_engagement_gap( $metrics, $only = '' ) {
 		// Key order matters: when a signal diagnosed against a peer segment, that
 		// comparison wins over the site average so the priced gap is the gap the
 		// card describes.
 		$candidates = array(
-			$this->positive_gap( $this->percentage( $metrics, array( 'bounce_rate' ) ), $this->percentage( $metrics, array( 'comparison_bounce_rate', 'site_avg_bounce_rate' ) ) ),
-			$this->positive_gap( $this->percentage( $metrics, array( 'exit_rate' ) ), $this->percentage( $metrics, array( 'comparison_exit_rate', 'site_avg_exit_rate' ) ) ),
-			$this->positive_gap( $this->percentage( $metrics, array( 'comparison_scroll_depth', 'site_avg_scroll_depth' ) ), $this->percentage( $metrics, array( 'avg_scroll_depth' ) ) ),
-			$this->positive_gap( $this->percentage( $metrics, array( 'comparison_cta_click_rate', 'site_avg_cta_click_rate' ) ), $this->percentage( $metrics, array( 'cta_click_rate' ) ) ),
+			'bounce' => $this->positive_gap( $this->percentage( $metrics, array( 'bounce_rate' ) ), $this->percentage( $metrics, array( 'comparison_bounce_rate', 'site_avg_bounce_rate' ) ) ),
+			'exit'   => $this->positive_gap( $this->percentage( $metrics, array( 'exit_rate' ) ), $this->percentage( $metrics, array( 'comparison_exit_rate', 'site_avg_exit_rate' ) ) ),
+			'scroll' => $this->positive_gap( $this->percentage( $metrics, array( 'comparison_scroll_depth', 'site_avg_scroll_depth' ) ), $this->percentage( $metrics, array( 'avg_scroll_depth' ) ) ),
+			'cta'    => $this->positive_gap( $this->percentage( $metrics, array( 'comparison_cta_click_rate', 'site_avg_cta_click_rate' ) ), $this->percentage( $metrics, array( 'cta_click_rate' ) ) ),
 		);
+
+		if ( array_key_exists( $only, $candidates ) ) {
+			return $candidates[ $only ];
+		}
 
 		$gap = null;
 		foreach ( $candidates as $candidate ) {

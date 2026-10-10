@@ -90,6 +90,18 @@ class Opti_Behavior_Heatmap_Database {
 	const HEAVY_MIGRATIONS_CRON_HOOK = 'opti_behavior_heavy_migrations';
 
 	/**
+	 * State of the one-time repair that strips personal data from stored URLs
+	 * (OPT-574): { v, table, cursor, scanned, changed{table:n}, merged, done, at }.
+	 */
+	const URL_PRIVACY_REPAIR_OPTION = 'opti_behavior_url_privacy_repair';
+
+	/**
+	 * Bump to run the URL privacy repair again (e.g. new default parameters).
+	 * 2 = OPT-602: site_url / siteurl / home_url / website / domain.
+	 */
+	const URL_PRIVACY_REPAIR_VERSION = 2;
+
+	/**
 	 * Row-count estimate above which a table is considered "large": DDL on it
 	 * (ALTER/CREATE INDEX) or full-table DML must never run inline in a web
 	 * request and is deferred to HEAVY_MIGRATIONS_CRON_HOOK instead.
@@ -375,6 +387,13 @@ class Opti_Behavior_Heatmap_Database {
 			Opti_Behavior_AB_Test_Database::maybe_set_default_options();
 		}
 
+		// Funnel tables: dbDelta only when their schema version changed or a
+		// table is missing (they used to be checked on every request).
+		$debug_manager->log( 'Creating/updating funnel tables', 'debug', 'database' );
+		if ( class_exists( 'Opti_Behavior_Funnel_Database' ) ) {
+			Opti_Behavior_Funnel_Database::maybe_create_tables();
+		}
+
 		// Handle migrations from older versions (must run AFTER all tables are created)
 		$debug_manager->log( 'Checking for database migrations', 'debug', 'database' );
 		$this->handle_migrations( $tables_preexisted );
@@ -499,6 +518,7 @@ class Opti_Behavior_Heatmap_Database {
 		// One-time aggregate resync after the 1.7.5 allow-list page-identity fix
 		// (checks internally if needed).
 		$this->migrate_resync_heatmap_aggregates_for_allowlist();
+		$this->migrate_resync_heatmap_aggregates_for_click_dedupe(); // OPT-589.
 
 		// One-time data repair: re-classify recently-flagged spam sessions so the
 		// permanent-stick case (last heartbeat preceded final click flush) recovers
@@ -1536,10 +1556,31 @@ class Opti_Behavior_Heatmap_Database {
 	 * admin loads. No data is changed here, only the "is exact" marker.
 	 */
 	public function migrate_resync_heatmap_aggregates_for_allowlist() {
+		$this->resync_heatmap_aggregates_once( 'opti_behavior_hm_agg_allowlist_url_resynced', 'allow-list', false );
+	}
+
+	/**
+	 * One-time resync after OPT-589: the list aggregates now count clicks
+	 * deduped like the heatmap detail's Clicks KPI (Pro recording "twins"
+	 * dropped), so stored agg_* / daily rows computed from the filename token
+	 * are marked stale and recomputed lazily in capped batches.
+	 */
+	public function migrate_resync_heatmap_aggregates_for_click_dedupe() {
+		$this->resync_heatmap_aggregates_once( 'opti_behavior_hm_agg_click_dedupe_resynced', 'click dedupe (OPT-589)', true );
+	}
+
+	/**
+	 * Mark every synced heatmap aggregate row stale once per install.
+	 *
+	 * @param string $flag_option Option set when done.
+	 * @param string $label       Debug-log label.
+	 * @param bool   $with_daily  Also mark the per-day index stale.
+	 */
+	private function resync_heatmap_aggregates_once( $flag_option, $label, $with_daily ) {
 		global $wpdb;
 
 		// One-time flag so we only invalidate once per install.
-		if ( get_option( 'opti_behavior_hm_agg_allowlist_url_resynced' ) ) {
+		if ( get_option( $flag_option ) ) {
 			return;
 		}
 
@@ -1568,15 +1609,31 @@ class Opti_Behavior_Heatmap_Database {
 			return;
 		}
 
+		$set = 'agg_synced_at = NULL';
+		if ( $with_daily ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Schema capability probe
+			$has_daily = (int) $wpdb->get_var(
+				$wpdb->prepare(
+					'SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s',
+					DB_NAME,
+					$table,
+					'daily_synced_at'
+				)
+			);
+			if ( $has_daily ) {
+				$set .= ', daily_synced_at = NULL';
+			}
+		}
+
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- One-time staleness marker; identifier hard-coded from $wpdb->prefix.
-		$marked = $wpdb->query( "UPDATE {$table} SET agg_synced_at = NULL WHERE agg_synced_at IS NOT NULL" );
+		$marked = $wpdb->query( "UPDATE {$table} SET {$set} WHERE agg_synced_at IS NOT NULL" );
 
 		$debug_manager = $this->core->get_debug_manager();
 		if ( $debug_manager ) {
-			$debug_manager->log( 'Heatmap aggregate allow-list resync: marked ' . (int) $marked . ' row(s) stale for recompute', 'info', 'database' );
+			$debug_manager->log( 'Heatmap aggregate ' . $label . ' resync: marked ' . (int) $marked . ' row(s) stale for recompute', 'info', 'database' );
 		}
 
-		update_option( 'opti_behavior_hm_agg_allowlist_url_resynced', '1', false );
+		update_option( $flag_option, '1', false );
 	}
 
 	/**
@@ -2814,12 +2871,300 @@ class Opti_Behavior_Heatmap_Database {
 				$debug_manager->log( 'Background invalid-data cleanup completed', 'info', 'database' );
 			}
 
+			// Step 3: personal data out of the URLs already stored (OPT-574).
+			if ( ! $this->is_url_privacy_repair_done() ) {
+				if ( ! $this->run_url_privacy_repair_tick( 15 ) ) {
+					$this->schedule_heavy_migrations();
+					return;
+				}
+				$debug_manager->log( 'Background URL privacy repair completed', 'info', 'database' );
+			}
+
 			// All work done: remove any pre-armed successor tick so the hook
 			// stops firing.
 			wp_clear_scheduled_hook( self::HEAVY_MIGRATIONS_CRON_HOOK );
 		} finally {
 			Opti_Behavior_Heatmap_DB_Lock::release( 'opti_behavior_heavy_migrations', $lock_state );
 		}
+	}
+
+	/**
+	 * Tables and columns whose stored URLs the OPT-574 repair cleans. Pro
+	 * tables are listed too: a missing table / column is skipped.
+	 *
+	 * @return array<string,string[]> Table suffix => URL columns.
+	 */
+	public static function url_privacy_repair_targets() {
+		return array(
+			'optibehavior_pages'             => array( 'url', 'url2' ),
+			'optibehavior_sessions'          => array( 'entry_page', 'exit_page', 'referrer' ),
+			'optibehavior_pageviews'         => array( 'url' ),
+			'optibehavior_session_pages'     => array( 'url', 'referrer' ),
+			'optibehavior_referrers'         => array( 'referrer_url', 'entry_url' ),
+			'optibehavior_outbound_clicks'   => array( 'source_url', 'target_url' ),
+			'optibehavior_bot_visits'        => array( 'visited_url', 'referrer' ),
+			'optibehavior_heatmap_pages'     => array( 'url' ),
+			'optibehavior_errors'            => array( 'url', 'error_source' ),
+			'optibehavior_error_types'       => array( 'error_source' ),
+			'optibehavior_friction'          => array( 'url' ),
+			'optibehavior_performance'       => array( 'url' ),
+			'optibehavior_broken_links'      => array( 'url', 'source_url' ),
+			'optibehavior_form_interactions' => array( 'url' ),
+			'optibehavior_form_submissions'  => array( 'url' ),
+		);
+	}
+
+	/**
+	 * Whether the OPT-574 URL privacy repair has finished on this site.
+	 *
+	 * @return bool
+	 */
+	public function is_url_privacy_repair_done() {
+		$state = get_option( self::URL_PRIVACY_REPAIR_OPTION, array() );
+
+		return is_array( $state ) && ! empty( $state['done'] ) && isset( $state['v'] ) && self::URL_PRIVACY_REPAIR_VERSION === (int) $state['v'];
+	}
+
+	/**
+	 * admin_init: queue the background repair while it is not done (one option
+	 * read per admin request once finished).
+	 *
+	 * @return void
+	 */
+	public function maybe_schedule_url_privacy_repair() {
+		if ( ! $this->is_url_privacy_repair_done() && function_exists( 'opti_behavior_strip_sensitive_query_args' ) ) {
+			$this->schedule_heavy_migrations( 30 );
+		}
+	}
+
+	/**
+	 * One time-boxed pass of the URL privacy repair (OPT-574): applies
+	 * opti_behavior_strip_sensitive_query_args() to every column of
+	 * url_privacy_repair_targets(), table by table, in primary-key batches
+	 * (cursor kept in URL_PRIVACY_REPAIR_OPTION, so a killed tick resumes).
+	 * No row is deleted, except a broken link whose cleaned URL already has its
+	 * own row: it is merged into that row (counts added, dates widened).
+	 * Running it again changes nothing (the cleaner is idempotent).
+	 *
+	 * @param int $budget_seconds Max wall time for this call.
+	 * @param int $batch          Rows read per query.
+	 * @return bool True when every table is done.
+	 */
+	public function run_url_privacy_repair_tick( $budget_seconds = 15, $batch = 1000 ) {
+		global $wpdb;
+
+		if ( ! function_exists( 'opti_behavior_strip_sensitive_query_args' ) ) {
+			return true;
+		}
+
+		$state = get_option( self::URL_PRIVACY_REPAIR_OPTION, array() );
+		if ( ! is_array( $state ) || ! isset( $state['v'] ) || self::URL_PRIVACY_REPAIR_VERSION !== (int) $state['v'] ) {
+			$state = array(
+				'v'       => self::URL_PRIVACY_REPAIR_VERSION,
+				'table'   => 0,
+				'cursor'  => null,
+				'scanned' => 0,
+				'changed' => array(),
+				'merged'  => 0,
+				'done'    => 0,
+			);
+		}
+		if ( ! empty( $state['done'] ) ) {
+			return true;
+		}
+
+		$targets  = self::url_privacy_repair_targets();
+		$suffixes = array_keys( $targets );
+		$deadline = microtime( true ) + max( 1, (int) $budget_seconds );
+		$batch    = max( 50, (int) $batch );
+
+		$query_filter    = null;
+		$fragment_filter = false;
+
+		while ( $state['table'] < count( $suffixes ) ) {
+			$suffix = $suffixes[ $state['table'] ];
+			$table  = $wpdb->prefix . $suffix;
+			$cols   = $this->url_privacy_existing_columns( $table, $targets[ $suffix ] );
+			$pk     = empty( $cols ) ? '' : $this->url_privacy_primary_key( $table );
+
+			if ( '' === $pk ) {
+				$state['table']++;
+				$state['cursor'] = null;
+				continue;
+			}
+
+			$select = '`' . $pk . '`, `' . implode( '`, `', $cols ) . '`';
+			if ( 'optibehavior_broken_links' === $suffix && $this->url_privacy_column_exists( $table, 'url_hash' ) ) {
+				$select .= ', `url_hash`';
+			}
+
+			// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table / column names from the fixed target list (checked against INFORMATION_SCHEMA); values bound via prepare(); one-time background repair.
+			if ( null === $state['cursor'] ) {
+				$rows = $wpdb->get_results( $wpdb->prepare( "SELECT {$select} FROM `{$table}` ORDER BY `{$pk}` ASC LIMIT %d", $batch ), ARRAY_A );
+			} else {
+				$rows = $wpdb->get_results( $wpdb->prepare( "SELECT {$select} FROM `{$table}` WHERE `{$pk}` > %s ORDER BY `{$pk}` ASC LIMIT %d", (string) $state['cursor'], $batch ), ARRAY_A );
+			}
+			// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+			if ( empty( $rows ) ) {
+				$state['table']++;
+				$state['cursor'] = null;
+				continue;
+			}
+
+			foreach ( $rows as $row ) {
+				$state['cursor'] = $row[ $pk ];
+				$state['scanned']++;
+
+				$update = array();
+				foreach ( $cols as $col ) {
+					if ( 'url2' === $col || ! is_string( $row[ $col ] ) || '' === $row[ $col ] ) {
+						continue;
+					}
+					$clean = opti_behavior_strip_sensitive_query_args( $row[ $col ] );
+					if ( $clean !== $row[ $col ] ) {
+						$update[ $col ] = $clean;
+					}
+				}
+
+				// url2 = the page grouping key: rebuilt from the clean url, so the
+				// page lands on the same url2 a new clean visit gets.
+				if ( 'optibehavior_pages' === $suffix && in_array( 'url2', $cols, true ) && is_string( $row['url2'] ) ) {
+					$url2_dirty = opti_behavior_strip_sensitive_query_args( $row['url2'] ) !== $row['url2'];
+					if ( isset( $update['url'] ) || $url2_dirty ) {
+						if ( null === $query_filter ) {
+							$options         = $this->core->get_options();
+							$query_filter    = $this->make_url_filter( true );
+							$fragment_filter = ! empty( $options['keep_url_hash'] );
+						}
+						$url        = isset( $update['url'] ) ? $update['url'] : $row['url'];
+						$update['url2'] = $this->rebuild_url( $url, $query_filter, $fragment_filter );
+					}
+				}
+
+				if ( empty( $update ) ) {
+					continue;
+				}
+
+				if ( 'optibehavior_broken_links' === $suffix && isset( $update['url'], $row['url_hash'] ) ) {
+					$new_hash = md5( $update['url'] );
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed table name from $wpdb->prefix.
+					$twin = $wpdb->get_row( $wpdb->prepare( "SELECT id FROM `{$table}` WHERE url_hash = %s AND id <> %d LIMIT 1", $new_hash, (int) $row[ $pk ] ) );
+					if ( $twin ) {
+						$this->merge_broken_link_rows( $table, (int) $row[ $pk ], (int) $twin->id );
+						$state['merged']++;
+						$state['changed'][ $suffix ] = ( isset( $state['changed'][ $suffix ] ) ? (int) $state['changed'][ $suffix ] : 0 ) + 1;
+						continue;
+					}
+					$update['url_hash'] = $new_hash;
+				}
+
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- One-time background repair of a custom table.
+				$wpdb->update( $table, $update, array( $pk => $row[ $pk ] ) );
+				$state['changed'][ $suffix ] = ( isset( $state['changed'][ $suffix ] ) ? (int) $state['changed'][ $suffix ] : 0 ) + 1;
+			}
+
+			update_option( self::URL_PRIVACY_REPAIR_OPTION, $state, false );
+
+			if ( microtime( true ) >= $deadline ) {
+				return false;
+			}
+		}
+
+		$state['done'] = 1;
+		$state['at']   = time();
+		update_option( self::URL_PRIVACY_REPAIR_OPTION, $state, false );
+		if ( ! empty( $state['changed']['optibehavior_pages'] ) && function_exists( 'opti_behavior_flush_heatmap_caches' ) ) {
+			opti_behavior_flush_heatmap_caches();
+		}
+
+		return true;
+	}
+
+	/**
+	 * Merge a broken-link row into the row that already holds its clean URL.
+	 *
+	 * @param string $table   Broken links table.
+	 * @param int    $from_id Row whose URL carried personal data.
+	 * @param int    $into_id Row of the clean URL (kept).
+	 * @return void
+	 */
+	private function merge_broken_link_rows( $table, $from_id, $into_id ) {
+		global $wpdb;
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed table name from $wpdb->prefix; values bound via prepare().
+		$wpdb->query(
+			$wpdb->prepare(
+				"UPDATE `{$table}` k JOIN `{$table}` f ON f.id = %d
+				SET k.occurrence_count = k.occurrence_count + f.occurrence_count,
+					k.affected_sessions = k.affected_sessions + f.affected_sessions,
+					k.first_detected = LEAST( k.first_detected, f.first_detected ),
+					k.last_detected = GREATEST( k.last_detected, f.last_detected )
+				WHERE k.id = %d",
+				$from_id,
+				$into_id
+			)
+		);
+		$wpdb->delete( $table, array( 'id' => $from_id ), array( '%d' ) );
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
+	}
+
+	/**
+	 * Columns of $wanted that exist in $table ([] when the table is missing).
+	 *
+	 * @param string   $table  Full table name.
+	 * @param string[] $wanted Column names.
+	 * @return string[]
+	 */
+	private function url_privacy_existing_columns( $table, $wanted ) {
+		$present = array();
+		foreach ( $wanted as $col ) {
+			if ( $this->url_privacy_column_exists( $table, $col ) ) {
+				$present[] = $col;
+			}
+		}
+
+		return $present;
+	}
+
+	/**
+	 * Whether a column exists (INFORMATION_SCHEMA, current database).
+	 *
+	 * @param string $table  Full table name.
+	 * @param string $column Column name.
+	 * @return bool
+	 */
+	private function url_privacy_column_exists( $table, $column ) {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Schema probe of the one-time repair.
+		return (bool) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s LIMIT 1',
+				$table,
+				$column
+			)
+		);
+	}
+
+	/**
+	 * Single-column primary key of a table ('' when none / composite).
+	 *
+	 * @param string $table Full table name.
+	 * @return string
+	 */
+	private function url_privacy_primary_key( $table ) {
+		global $wpdb;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Schema probe of the one-time repair.
+		$cols = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND CONSTRAINT_NAME = 'PRIMARY'",
+				$table
+			)
+		);
+
+		return ( is_array( $cols ) && 1 === count( $cols ) && preg_match( '/^[A-Za-z0-9_]+$/', $cols[0] ) ) ? (string) $cols[0] : '';
 	}
 
 	/**
@@ -4936,6 +5281,10 @@ class Opti_Behavior_Heatmap_Database {
 	 * @return string
 	 */
 	public function rebuild_url( $url, $query_filter = null, $fragment_filter = null ) {
+		// url2 never keeps personal data (email, access_code, token…), OPT-574.
+		if ( function_exists( 'opti_behavior_strip_sensitive_query_args' ) ) {
+			$url = opti_behavior_strip_sensitive_query_args( $url );
+		}
 		$parsed = wp_parse_url( $url );
 
 		if ( ! $parsed ) {

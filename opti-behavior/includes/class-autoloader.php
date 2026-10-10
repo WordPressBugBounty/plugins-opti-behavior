@@ -76,6 +76,7 @@ class Opti_Behavior_Heatmap_Autoloader {
 		// Smart Insights classes.
 		'Opti_Behavior_Smart_Insights_Repository' => 'includes/class-opti-behavior-smart-insights-repository.php',
 		'Opti_Behavior_Smart_Insights_Sensors'  => 'includes/class-opti-behavior-smart-insights-sensors.php',
+		'Opti_Behavior_Trial_Invite'            => 'includes/class-opti-behavior-trial-invite.php',
 		'Opti_Behavior_Smart_Insights_Page_Rules' => 'includes/class-opti-behavior-smart-insights-page-rules.php',
 		'Opti_Behavior_Smart_Insights_Metric_Aggregator' => 'includes/class-opti-behavior-smart-insights-metric-aggregator.php',
 		'Opti_Behavior_Smart_Insights_Source_Aggregator' => 'includes/class-opti-behavior-smart-insights-source-aggregator.php',
@@ -152,6 +153,7 @@ class Opti_Behavior_Heatmap_Autoloader {
 			&& strpos( $class_name, 'Opti_Behavior_Retention_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_Dimension_' ) !== 0
 			&& strpos( $class_name, 'Opti_Behavior_DB_' ) !== 0
+			&& strpos( $class_name, 'Opti_Behavior_Trial_' ) !== 0
 		) {
 			return;
 		}

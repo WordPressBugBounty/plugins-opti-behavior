@@ -1,20 +1,22 @@
-=== Opti-Behavior – Self-Hosted Heatmaps, Session Recordings, Funnels & A/B Testing ===
+=== Opti-Behavior – Self-Hosted Heatmaps, Funnels, A/B Testing & Smart Insights ===
 Contributors: optiuser
 Donate link: https://optiuser.com/
-Tags: heatmap, session recording, session replay, click tracking, ab testing
+Tags: heatmap, click tracking, funnel, ab testing, user behavior
 
 Requires at least: 5.8
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.9.2.1
+Stable tag: 1.10.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Self-hosted heatmaps, click tracking, funnels and A/B tests for WordPress and WooCommerce. Visitor data stays on your server. Session replay in Pro.
+Self-hosted click heatmaps, click tracking and funnels for WordPress and WooCommerce. Visitor data stays on your server. Session replay in Pro.
 
 == Description ==
 
 **See why visitors leave. Fix it. Prove it. On your own WordPress server.**
+
+Opti-Behavior adds click heatmaps, click tracking, conversion funnels and A/B testing to WordPress for free, and stores visitor data in your own WordPress database and files. Session recordings, scroll heatmaps and rage-click detection are in Pro.
 
 https://www.youtube.com/watch?v=2wlJ6ok5-Wk
 
@@ -34,34 +36,6 @@ No external analytics cloud: visitor behavior stays in your own WordPress databa
 
 Inside the plugin, the **How it works** page shows this loop with your own numbers, a first-days checklist and a **Setup check**: are visits received, is a caching or optimization plugin blocking a tracker, are your own visits counted? Each item has a button to fix it.
 
-= 💡 Smart Insights: honest by design =
-
-Most "insight" tools raise alarms. Smart Insights counts.
-
-* **Ranked by visitors lost**, not by alarming words. "Critical" must be earned: enough visits measured, high confidence, and a loss that matters on your site.
-* **Confidence comes from the visits measured.** A card built on few visits says "Provisional · N visits" instead of pretending.
-* **Money only when it is real.** An amount "at risk" is shown for a funnel that ends at the checkout (with at least 20 orders over the period) or for a form priced with your own value of a conversion. Every other card shows the visitors it loses.
-* **Funnel cards name the step** visitors leave: "between Product and Cart, 60 of 90 visitors leave".
-* **One card per problem.** Cards with identical data are merged, and a card the rules no longer confirm is closed, never counted as a win.
-* **No lift promises** without a published source.
-* **Results you can check.** A resolved card shows before, after and the verdict. The admin menu light shows where you stand at a glance: red = a Critical problem, yellow = High or Medium, green = nothing to fix.
-
-The first cards usually come after about 100 visits on a page. Nothing to set up.
-
-= 🔬 Page X-Ray (Pro): why doesn't this page convert? =
-
-Pick a page and get one report built from every module:
-
-* **Health score** with the share of each module, and a page list ranked from the one to fix first.
-* **What the page is** – its type (sales page, product, article, lead page…), its goal and how often visitors reach its main button. Choose the buttons that matter by clicking them on the page.
-* **Behavior map** – the page in ten parts: viewing time, visitors still there, clicks, and where to move or repeat the main button.
-* **Page audit** – the conversion checklist of its type: clarity, buttons, trust (reviews, guarantee, payment signs, contact), content and sharing. Each check says what was found on the page and what to do.
-* **What changed** – plugin, theme and core updates and page edits are marked on every chart; a problem that starts right after a change names it: "started 1 day after Plugin X was updated".
-* **Evolution** – 14 days before against 14 days after each change, with a noise test so a random swing is never reported as a result.
-* **Action plan** – in order: check the measurement, fix the defects, then test each change with an A/B test only when the page has the traffic to conclude.
-
-In the free plugin, the Page X-Ray tab shows what it does and an example report.
-
 = Opti-Behavior Suite for WordPress Optimization =
 
 Opti-Behavior is built around one simple psychology principle: users reveal intent through behavior before they explain it with words.
@@ -77,21 +51,6 @@ Opti-Behavior is built around one simple psychology principle: users reveal inte
 * 🛤️ [User Journey Analytics](https://optiuser.com/opti-behavior/ob-feature-journeys/) - Visualize the paths visitors naturally take through your site and turn high-value journeys into funnels. Pro feature.
 * ⚠️ [Errors & Performance Tracking](https://optiuser.com/opti-behavior/ob-feature-errors/) - Detect JavaScript errors, broken links, rage clicks, dead clicks, and performance issues that silently reduce trust. Pro feature.
 * 🔒 [Settings & Privacy Controls](https://optiuser.com/opti-behavior/ob-feature-settings/) - Control consent, storage, reports, cleanup, languages, debugging, and privacy options from one place.
-
-= 🎯 Why Opti-Behavior Works =
-
-Most site owners already have traffic numbers. The hard part is understanding the human reason behind the numbers.
-
-Opti-Behavior helps answer practical conversion questions:
-
-* Which parts of the page attract attention?
-* Where do visitors hesitate or lose confidence?
-* Which funnel step causes the biggest drop-off?
-* Which form field creates too much effort?
-* Which CTA, layout, product page, or message should be tested next?
-* Are bots, spam, errors, or slow pages distorting your decisions?
-
-The goal is not more dashboards. The goal is better decisions.
 
 = ✅ Core Features Included Free =
 
@@ -173,9 +132,29 @@ That's it! Opti-Behavior works out of the box with smart defaults.
 
 Yes! You can explore the full Opti-Behavior dashboard instantly at [demo.optiuser.com](https://demo.optiuser.com/?demo_login=go) – no installation, no account, no credit card required. Browse real heatmaps, funnels, A/B tests, and Smart Insights before installing.
 
+= What does click tracking record in the free plugin? =
+
+Each click on your tracked pages: where it happened and which element was clicked, shown on the click heatmap for desktop and mobile. Clicks on links to other sites are recorded too. The data is stored in your own WordPress database and files.
+
+= Does the free plugin record sessions? =
+
+No. The free plugin records clicks, traffic and funnels. Session recordings (session replay), scroll heatmaps and rage-click detection are in Opti-Behavior Pro, a separate plugin.
+
 = How does Smart Insights decide what to fix first? =
 
 By the visitors each problem costs. Every card counts the visits it touches and the visitors it loses, compares the page with your site average, and gets a confidence level from the number of visits measured. A card is "Critical" only with enough visits, high confidence and a loss that matters on your site; cards built on few visits are marked "Provisional". Money is shown only for a checkout funnel with at least 20 orders or a form with your own value of a conversion. When you fix a problem, mark the card as resolved: Opti-Behavior measures the period after your change and shows the result.
+
+Most "insight" tools raise alarms. Smart Insights counts.
+
+* **Ranked by visitors lost**, not by alarming words. "Critical" must be earned: enough visits measured, high confidence, and a loss that matters on your site.
+* **Confidence comes from the visits measured.** A card built on few visits says "Provisional · N visits" instead of pretending.
+* **Money only when it is real.** An amount "at risk" is shown for a funnel that ends at the checkout (with at least 20 orders over the period) or for a form priced with your own value of a conversion. Every other card shows the visitors it loses.
+* **Funnel cards name the step** visitors leave: "between Product and Cart, 60 of 90 visitors leave".
+* **One card per problem.** Cards with identical data are merged, and a card the rules no longer confirm is closed, never counted as a win.
+* **No lift promises** without a published source.
+* **Results you can check.** A resolved card shows before, after and the verdict. The admin menu light shows where you stand at a glance: red = a Critical problem, yellow = High or Medium, green = nothing to fix.
+
+The first cards usually come after about 100 visits on a page. Nothing to set up.
 
 = Why don't I see any insights yet? =
 
@@ -184,6 +163,18 @@ Smart Insights needs data first: the first cards usually come after about 100 vi
 = What is Page X-Ray? =
 
 Page X-Ray is the per-page report of Smart Insights, in Opti-Behavior Pro. It answers "why doesn't this page convert?" with a health score, what the page is for and whether visitors reach its main button, a behavior map, a page audit (clarity, buttons, trust, content, sharing), the WordPress changes that came before a problem, a before / after comparison and an action plan. The free plugin shows the tab with an example report.
+
+Pick a page and get one report built from every module:
+
+* **Health score** with the share of each module, and a page list ranked from the one to fix first.
+* **What the page is** – its type (sales page, product, article, lead page…), its goal and how often visitors reach its main button. Choose the buttons that matter by clicking them on the page.
+* **Behavior map** – the page in ten parts: viewing time, visitors still there, clicks, and where to move or repeat the main button.
+* **Page audit** – the conversion checklist of its type: clarity, buttons, trust (reviews, guarantee, payment signs, contact), content and sharing. Each check says what was found on the page and what to do.
+* **What changed** – plugin, theme and core updates and page edits are marked on every chart; a problem that starts right after a change names it: "started 1 day after Plugin X was updated".
+* **Evolution** – 14 days before against 14 days after each change, with a noise test so a random swing is never reported as a result.
+* **Action plan** – in order: check the measurement, fix the defects, then test each change with an A/B test only when the page has the traffic to conclude.
+
+In the free plugin, the Page X-Ray tab shows what it does and an example report.
 
 = Does this plugin slow down my website? =
 
@@ -227,7 +218,7 @@ Opti-Behavior works on multisite: each site keeps its own tables and data folder
 
 = Does this plugin call any external services? =
 
-Yes, only for specific supporting features such as geolocation, admin map tiles, anonymous install tracking after consent, Pro trial/license management, and user-initiated OptiUser website links. See the **External Services** section below for details.
+Yes, only for specific supporting features such as geolocation, admin map tiles, an optional daily status message (site URL, versions, one admin email) after you accept it on the welcome screen, optional announcements (licence type only, same condition), and user-initiated OptiUser website links (the Pro trial page included). See the **External Services** section below for details.
 
 = What data does this plugin collect? =
 
@@ -253,9 +244,26 @@ Yes. Opti-Behavior works with Gutenberg, Elementor, Divi, Beaver Builder, WPBake
 
 Hybrid Storage is Opti-Behavior's performance-focused storage approach. Instead of pushing every click, scroll, and pageview directly into MySQL, high-volume events can be stored in optimized files and aggregated for faster reporting. This helps reduce database bloat on busy sites.
 
+= Which questions does Opti-Behavior help answer? =
+
+Most site owners already have traffic numbers. The hard part is understanding the human reason behind the numbers.
+
+Opti-Behavior helps answer practical conversion questions:
+
+* Which parts of the page attract attention?
+* Where do visitors hesitate or lose confidence?
+* Which funnel step causes the biggest drop-off?
+* Which form field creates too much effort?
+* Which CTA, layout, product page, or message should be tested next?
+* Are bots, spam, errors, or slow pages distorting your decisions?
+
+The goal is not more dashboards. The goal is better decisions.
+
 = How do I get support? =
 
 Free users can use the WordPress.org support forum. Pro users get priority support through OptiUser.
+
+Hotjar is a trademark of Hotjar Ltd. Microsoft and Clarity are trademarks of Microsoft Corporation. Opti-Behavior is not affiliated with or endorsed by them.
 
 == External Services ==
 
@@ -304,34 +312,35 @@ This plugin may connect to external services in limited circumstances:
 
 = OptiUser API (api.optiuser.com) =
 
-**Purpose:** Handles anonymous install tracking, plugin deactivation notifications, Pro trial license generation, license validation, update checks, and download access code generation for the Pro plugin.
+**Purpose:** Handles the optional daily status message (site URL, versions, one admin email; only after you accept it on the welcome screen), and plugin deactivation notifications. Licence validation and update checks are made by the Pro plugin itself, only after you install and activate it.
 
 **When Used:**
 * **Install tracker:** Sends a heartbeat once every 24 hours after activation, containing only: site URL, WordPress version, PHP version, plugin version, plugin type (free/pro), and one best available administrator contact email when a valid contact exists. No visitor data is sent.
 * **Deactivation:** Notifies the API when the plugin is deactivated so installation records stay up to date.
-* **Pro upgrade pages:** When an admin views a Pro feature upgrade page (Session Recordings, Error Tracking, User Journeys, Form Analytics), the plugin requests a one-time download access code from the API. This code is used to securely access the Pro download page on optiuser.com.
+* **Announcements:** Optional short news banners on the plugin's own screens. Only after you accept the daily status message on the welcome screen, or while Pro is active, the plugin asks api.optiuser.com for current announcements at most once every 6 hours. Data sent: only the licence type (free, pro, trial or expired); no site URL, domain or email. Closing a banner is stored on your site only, nothing is sent. Terms of Service: https://optiuser.com/terms-of-service/ - Privacy Policy: https://optiuser.com/privacy-policy/
 
-**Data Sent:** Site URL, WordPress admin username when applicable, and one best available administrator contact email for install tracking, Pro trial/license management, and Pro download access code requests. The plugin selects a single valid contact email and does not send a list of administrator emails. No visitor analytics data is ever sent to the API.
+**Data Sent:** Site URL, WordPress admin username when applicable, and one best available administrator contact email for install tracking. The plugin selects a single valid contact email and does not send a list of administrator emails. No visitor analytics data is ever sent to the API.
 
 **Privacy:**
 * Service: https://api.optiuser.com/
 * Website: https://optiuser.com/
+* Terms of Service: https://optiuser.com/terms-of-service/
 * Privacy Policy: https://optiuser.com/privacy-policy/
 * The API stores installation metadata (site URL, plugin version) for license management. No visitor data is collected or stored by the API.
 
 = OptiUser Website (optiuser.com) =
 
-**Purpose:** Hosts the Opti-Behavior Pro download page and sales/feature pages. When an admin clicks "Download Pro — Free for 6 Months" on a Pro upgrade page, they are redirected to optiuser.com to register and download the Pro plugin.
+**Purpose:** Hosts the Opti-Behavior Pro trial page and sales/feature pages. Every "Upgrade to Pro" / "Try Pro" link of the plugin (welcome screen, trial notice, Pro feature pages, heatmap, Smart Insights, A/B tests, Settings) opens the same Pro trial page on optiuser.com in a new tab.
 
-**When Used:** Only when an admin chooses to download Opti-Behavior Pro from a Pro upgrade page within the WordPress admin. This is an optional, user-initiated action.
+**When Used:** Only when an admin clicks one of these links. The plugin itself sends nothing: the browser opens the page.
 
-**Data Sent:** Site URL,  username, and  email address are passed as URL parameters to pre-fill the registration form. No visitor analytics data is sent.
+**Data Sent:** Only your site address and the place of the link (utm parameters) travel in the link. No username, email or visitor analytics data is sent.
 
 **Privacy:**
 * Service: https://optiuser.com/
 * Privacy Policy: https://optiuser.com/privacy-policy/
 
-**Important Note:** All analytics data is stored locally on your WordPress server. The external services listed above are used only for optional geographic features (ip-api.com, ipwho.is, OpenStreetMap), anonymous install tracking, and Pro license management (api.optiuser.com). No visitor analytics data ever leaves your server.
+**Important Note:** All analytics data is stored locally on your WordPress server. The external services listed above are used only for optional geographic features (ip-api.com, ipwho.is, OpenStreetMap), the optional daily status message (only after you accept it), optional announcements (only after you accept the daily status message, or with Pro active), and Pro license management (api.optiuser.com). No visitor analytics data ever leaves your server.
 
 == Screenshots ==
 
@@ -370,6 +379,29 @@ This plugin may connect to external services in limited circumstances:
 33. Pro: Page X-Ray report with health score, behavior map, page audit, WordPress changes and action plan.
 
 == Changelog ==
+
+= 1.10.0 - 2026-10-10 =
+* **New:** Smart Insights "Things to check": page, funnel, engagement, scroll, mobile bounce and traffic spike cards now list the checks behind the problem, each one measured on your own data and shown as a compact card ("Not measured" when there is not enough traffic yet).
+* **New:** Smart Insights cards have a clearer design: severity colour, key figures in tiles, a short story per signal family and a detail panel. Free users see every result Free computes.
+* **New:** Spam filter: automated visits (headless browsers, scripts) are refused at collection and filtered from every report, even when they arrive with a referrer.
+* **New:** Heatmap detail: hovering a click area shows "N clicks in this area" in the free plugin too, following the Count Bar Display setting. On small sites the Heatmaps list is up to date right away.
+* **New:** The Pro feature pages (Recordings, User Journeys, Errors, Forms) explain what each feature does, with the trial button first. The Pro trial notice has a new design and can be closed for good.
+* **Changed:** The per-audience segment breakdown and the Weekly CRO Summary are now part of Opti-Behavior Pro.
+* **Changed:** "How it works": the lines from the active modules to Smart Insights are animated. A/B tests: a click goal that is not a CSS selector (an XPath, for example) is refused with a clear message.
+* **Security:** Admin screens (Traffic browsers / referrers / top pages, Smart Insights, A/B test builder) now escape quotes in every value they display, so a crafted browser name, referrer or page title sent by a visitor can no longer run script in the admin. A leftover debug branch of the heatmap data endpoint was removed.
+* **Performance:** wp-admin no longer waits when api.optiuser.com cannot be reached: the daily status message is sent in the background and the deactivation survey never holds the Deactivate click. Dashboard widget caches are cleared without heavy database queries.
+* **Fix:** Same numbers everywhere: Traffic visitors, new / returning and Top Pages use one set of visits; Smart Insights, funnels and Page X-Ray count the same visits; Top Pages shows one row per page; the Heatmaps list and detail show the same click count.
+* **Fix:** Smart Insights figures: each card shows the loss of its own gap (exit rate, scroll, segment vs all visitors), related cards never repeat the main card's figure, traffic spikes show no loss figure, and old figures are cleared on recalculation. A story card is never hidden as noise.
+* **Fix:** Smart Insights: cards are regenerated once after each plugin update, the briefing stacks on phones, the Severity filter and severity sort work in every admin language, the Reset button appears with "All statuses", success messages stay visible, and the detail window moves keyboard focus.
+* **Fix:** Traffic: "% vs last period" shows "—" when there is no previous period, an idle tab no longer inflates the visit duration, the Traffic Channel filter classifies visits exactly like the dashboard, and the review reminder only appears on the plugin's own screens.
+* **Fix:** Heatmaps: Refresh now really clears the cached heatmap; deleting heatmap data keeps the device and type you were looking at; Reset puts the header period back to All time; switching views quickly never shows the previous view's numbers. Heatmaps taken over by URL query variants (?utm=…) are repaired and grouped like the list.
+* **Fix:** Heatmaps list: a page number past the last page shows the last page; searching keeps your sort; the first click on a column sorts high to low.
+* **Fix:** Funnels: editing a paused funnel keeps it paused, a deleted funnel cannot be saved back, a step without a URL is refused, the report of a paused funnel opens, a failed Re-scan no longer locks the button, and changing period quickly never shows the old numbers.
+* **Fix:** A/B tests: "Declare Best Performer" no longer crowns a variant on a tie or without data. Numbers and dates follow your admin language. Filter profile labels are translatable. The onboarding popup sends its answer once.
+* **Fix:** Heatmap image download — on long pages the downloaded PNG showed the clicks shifted and paler than the heatmap on screen. The image now shows every click exactly where the screen does, and very long pages no longer produce an empty image.
+* **Fix:** With Opti-Behavior Pro on a renewed trial (or a licence bought after the trial), the red "Your Pro Trial Has Ended" banner could appear while Pro was working. It is no longer shown when the licence server confirms the licence is active.
+* **Fix:** Smart Insights — "Visitor Confusion Pattern" now compares a page's button clicks with a site average in the same unit, and "quick visit" signals respect the minimum session duration of your spam filter.
+* **Fix:** The code passes the WordPress.org Plugin Check without errors, and the plugin name is the same in the plugin list and on its WordPress.org page.
 
 = 1.9.2.1 - 2026-09-25 =
 * **Security:** Hardening from the WordPress.org security review. Funnel events are tied to the visitor's own session cookie, so a public request can no longer report made-up sessions, and new funnel entries are limited per visitor IP. Forwarding headers (X-Forwarded-For, Client-IP, CF-Connecting-IP) are only trusted from Cloudflare or from a reverse proxy on your own network. Visitor IP addresses are never sent to a geolocation service before the visitor accepts the consent banner, and outbound geolocation lookups are limited per minute.
@@ -485,14 +517,17 @@ The complete changelog for all versions is available at [optiuser.com/opti-behav
 
 == Upgrade Notice ==
 
+= 1.10.0 =
+Smart Insights "Things to check" and clearer cards, Pro trial now starts on optiuser.com (nothing installed from the plugin), personal data removed from tracked URLs, same visit counts on every screen, admin security escaping and many fixes. Pair with Opti-Behavior Pro 1.10.0.
+
 = 1.9.2.1 =
 Security hardening from the WordPress.org review: funnel events tied to the visitor session, trusted-proxy IP detection, no geolocation before consent, clean translation files. Includes everything in 1.9.2. Update recommended.
 
 = 1.9.2 =
-Security release: fixes an unauthenticated stored cross-site scripting issue (CVE-2026-95686, CVE-2026-95809) and a spam recalculation that could hide every session. Also a new "How it works" page with a setup check, a clearer admin menu, a cookie preferences shortcode and more reliable Smart Insights cards. Update as soon as possible. Pair with Opti-Behavior Pro 1.9.2.
+Security release: fixes an unauthenticated stored cross-site scripting issue (CVE-2026-95686, CVE-2026-95809) and a spam recalculation that could hide every session. Update as soon as possible. Pair with Opti-Behavior Pro 1.9.2.
 
 = 1.9.1 =
-Performance and storage release: deferred, minified trackers (Core Web Vitals), heatmaps only on pages that matter, a much smaller events table, database size caps and InnoDB upkeep, server-stability fixes for busy sites (lock wait timeouts, realtime widget), and cleanup that now respects every retention window. Pair with Opti-Behavior Pro 1.9.1.
+Performance and storage release: deferred, minified trackers, heatmaps only on pages that matter, a much smaller events table, database size caps and server-stability fixes for busy sites. Pair with Opti-Behavior Pro 1.9.1.
 
 = 1.9.0 =
 Major release: Smart Insights v2 analyst briefing (cost-ranked insights, money impact, evidence), automatic funnel creation from site detection, cleanup safety-limit rework with a 50000 per-run default, and a fix for an HTTP 500 on concurrent first-visit tracking. Pair with Opti-Behavior Pro 1.9.0.

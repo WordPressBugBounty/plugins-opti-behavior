@@ -2543,6 +2543,15 @@
 	.opti-funnel-search-wrapper .opti-funnel-input {
 		width: 100%;
 	}
+
+	/* Badges take their own line and wrap: in one row they overflowed
+	   a 375px screen by 56px (OPT-335). */
+	.opti-funnel-row__badges {
+		flex: 1 1 100%;
+		flex-wrap: wrap;
+		min-width: 0;
+		gap: 12px 18px;
+	}
 }
 
 /* Suspended funnel status pill (shown next to the funnel name). */

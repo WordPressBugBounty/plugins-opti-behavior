@@ -491,7 +491,7 @@
 	// `retriesLeft` is only armed by the initial page-load call. User-initiated
 	// reloads (create, re-scan) pass nothing: they are explicit actions whose
 	// failure the user is watching for and can repeat themselves.
-	function load(force, after, retriesLeft) {
+	function load(force, after, retriesLeft, onFail) {
 		var $wrap = $panel();
 		if ($wrap.length === 0) {
 			return;
@@ -506,12 +506,15 @@
 		}, function (message, isTransportError) {
 			if (isTransportError && retriesLeft > 0) {
 				window.setTimeout(function () {
-					load(force, after, retriesLeft - 1);
+					load(force, after, retriesLeft - 1, onFail);
 				}, LOAD_RETRY_DELAY_MS);
 				return;
 			}
 			setStatus(t('loadError', 'Could not load funnel suggestions.') + ' ' + message, 'error');
 			$wrap.show();
+			if (typeof onFail === 'function') {
+				onFail(message);
+			}
 		});
 	}
 
@@ -690,6 +693,9 @@
 		load(true, function () {
 			$button.prop('disabled', false);
 			setStatus(t('rescanned', 'Site re-scanned. Dismissed suggestions are back.'), 'success');
+		}, 0, function () {
+			// A failed scan must not leave the button disabled forever (QA-B-FUNNEL-079).
+			$button.prop('disabled', false);
 		});
 	}
 

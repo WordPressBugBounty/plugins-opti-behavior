@@ -273,6 +273,28 @@
 	stroke-dasharray: 4 6;
 }
 
+/* Module on, no data for the period yet: dashes in the module colour flow
+   towards Smart Insights ("listening"). A locked Pro module stays .is-off
+   (grey, still): nothing is sent, so nothing moves. */
+.ob-hiw-wire.is-listening {
+	stroke: var(--c, #7c3aed);
+	stroke-opacity: 0.75;
+	stroke-width: 2;
+	stroke-dasharray: 5 7;
+	stroke-linecap: round;
+	animation: ob-hiw-wire-flow 1.4s linear infinite;
+}
+
+.ob-hiw-hub.is-paused .ob-hiw-wire.is-listening {
+	animation-play-state: paused;
+}
+
+@keyframes ob-hiw-wire-flow {
+	to {
+		stroke-dashoffset: -12;
+	}
+}
+
 .ob-hiw-orbit {
 	fill: none;
 	stroke: rgba(99, 102, 241, 0.22);

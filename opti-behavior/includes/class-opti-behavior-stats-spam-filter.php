@@ -160,7 +160,153 @@ class Opti_Behavior_Stats_Spam_Filter {
 			return 'spam_filter_disabled_include_all';
 		}
 
-		return 'spam_filter_enabled_' . self::duration_threshold() . '_' . self::min_scrolls_threshold() . '_' . self::min_clicks_threshold() . '_' . implode( '_', self::excluded_traffic_types() );
+		// `ref1`: since OPT-562 a visit with an external referrer passes the
+		// thresholds (see has_external_referrer()); older cached figures are stale.
+		return 'spam_filter_enabled_' . self::duration_threshold() . '_' . self::min_scrolls_threshold() . '_' . self::min_clicks_threshold() . '_' . implode( '_', self::excluded_traffic_types() ) . '_ref1';
+	}
+
+	/**
+	 * Normalize a host name the way the referrer rule compares hosts.
+	 *
+	 * Lowercase, one leading `www.` removed, and only plain DNS labels
+	 * (a-z, 0-9, hyphen, dots between labels). Anything else returns ''.
+	 * The SQL twin in external_referrer_sql() applies the same steps.
+	 *
+	 * @param string $host Host name.
+	 * @return string Normalized host, or '' when it is not a valid host.
+	 */
+	public static function normalize_host( $host ) {
+		$host = strtolower( (string) $host );
+		if ( 0 === strpos( $host, 'www.' ) ) {
+			$host = (string) substr( $host, 4 );
+		}
+
+		return 1 === preg_match( '/^[a-z0-9-]+([.][a-z0-9-]+)*$/', $host ) ? $host : '';
+	}
+
+	/**
+	 * Hosts that belong to this site (home_url() and site_url(), no `www.`).
+	 *
+	 * Their sub-domains are internal too (see has_external_referrer()).
+	 *
+	 * @return string[]
+	 */
+	public static function site_hosts() {
+		$hosts = array();
+		foreach ( array( home_url(), site_url() ) as $url ) {
+			$host = self::normalize_host( (string) wp_parse_url( (string) $url, PHP_URL_HOST ) );
+			if ( '' !== $host ) {
+				$hosts[ $host ] = $host;
+			}
+		}
+
+		/**
+		 * Filter the hosts treated as this site by the referrer spam rule.
+		 *
+		 * @param string[] $hosts Normalized hosts (lowercase, no `www.`).
+		 */
+		$hosts = (array) apply_filters( 'opti_behavior_spam_site_hosts', array_values( $hosts ) );
+
+		return array_values( array_filter( array_unique( array_map( array( __CLASS__, 'normalize_host' ), $hosts ) ), 'strlen' ) );
+	}
+
+	/**
+	 * Host of a stored referrer, read exactly like the SQL twin.
+	 *
+	 * Only http / https. Authority = text after the first `://`, cut at the
+	 * first `/`, `?` or `#`; user info (`…@`) and port dropped. So
+	 * `https://evil.com/?u=mysite.com` is `evil.com`.
+	 *
+	 * @param string $referrer Stored referrer URL.
+	 * @return string Normalized host, or ''.
+	 */
+	public static function referrer_host( $referrer ) {
+		$referrer = strtolower( trim( (string) $referrer, ' ' ) );
+		if ( 0 !== strpos( $referrer, 'http://' ) && 0 !== strpos( $referrer, 'https://' ) ) {
+			return '';
+		}
+
+		$rest      = (string) substr( $referrer, strpos( $referrer, '://' ) + 3 );
+		$parts     = preg_split( '/[\/?#]/', $rest, 2 );
+		$authority = (string) $parts[0];
+		$at        = strrpos( $authority, '@' );
+		if ( false !== $at ) {
+			$authority = (string) substr( $authority, $at + 1 );
+		}
+		$host = explode( ':', $authority, 2 );
+
+		return self::normalize_host( $host[0] );
+	}
+
+	/**
+	 * Does a session come from another site (search engine, social network, link)?
+	 *
+	 * True when the referrer is an http(s) URL with a valid host that is not
+	 * this site nor one of its sub-domains. Such a visit is never spam: the
+	 * duration / scroll / click thresholds only judge visits without a
+	 * referring site (direct, unknown or internal). Bot / automated sessions
+	 * keep their own type (callers check that first).
+	 *
+	 * @param string|null $referrer Stored `sessions.referrer`.
+	 * @return bool
+	 */
+	public static function has_external_referrer( $referrer ) {
+		$host = self::referrer_host( $referrer );
+		if ( '' === $host ) {
+			return false;
+		}
+
+		foreach ( self::site_hosts() as $site_host ) {
+			if ( $host === $site_host || substr( $host, -( strlen( $site_host ) + 1 ) ) === '.' . $site_host ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * SQL twin of has_external_referrer() for a sessions-table alias.
+	 *
+	 * Boolean expression, never NULL (a missing session row = false). Uses no
+	 * `%` so it can sit inside a $wpdb->prepare() query. Compares the parsed
+	 * host, never a sub-string of the URL.
+	 *
+	 * @param string $alias Sessions table alias ('' = bare column).
+	 * @return string SQL condition in parentheses.
+	 */
+	public static function external_referrer_sql( $alias = 's' ) {
+		$alias  = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $alias );
+		$prefix = $alias ? $alias . '.' : '';
+
+		$ref  = "LOWER(TRIM(COALESCE({$prefix}referrer, '')))";
+		$rest = "SUBSTRING({$ref}, LOCATE('://', {$ref}) + 3)";
+		$auth = "SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX({$rest}, '/', 1), '?', 1), '#', 1)";
+		$raw  = "SUBSTRING_INDEX(SUBSTRING_INDEX({$auth}, '@', -1), ':', 1)";
+		$host = "(CASE WHEN LEFT({$raw}, 4) = 'www.' THEN SUBSTRING({$raw}, 5) ELSE {$raw} END)";
+
+		$conditions = array(
+			"(LEFT({$ref}, 7) = 'http://' OR LEFT({$ref}, 8) = 'https://')",
+			"{$host} REGEXP '^[a-z0-9-]+([.][a-z0-9-]+)*$'",
+		);
+		// Site hosts passed normalize_host(): [a-z0-9.-] only, safe as literals.
+		foreach ( self::site_hosts() as $site_host ) {
+			$conditions[] = "{$host} <> '{$site_host}'";
+			$conditions[] = "RIGHT({$host}, " . ( strlen( $site_host ) + 1 ) . ") <> '.{$site_host}'";
+		}
+
+		return '(' . implode( ' AND ', $conditions ) . ')';
+	}
+
+	/**
+	 * Wrap a threshold condition so referred visits always pass it.
+	 *
+	 * @param string $threshold_sql Condition "duration >= … AND …" (no leading AND).
+	 * @param string $alias         Sessions table alias.
+	 * @return string SQL condition in parentheses.
+	 */
+	public static function referrer_or_thresholds_sql( $threshold_sql, $alias = 's' ) {
+		return '(' . self::external_referrer_sql( $alias ) . ' OR (' . $threshold_sql . '))';
 	}
 
 	/**
@@ -365,9 +511,9 @@ class Opti_Behavior_Stats_Spam_Filter {
 				) {$event_alias} ON {$recording_session} = {$event_alias}.session_id",
 			'where'     => "(1=1
 				{$traffic_where}
-				AND {$duration_sql} >= %d
+				AND " . self::referrer_or_thresholds_sql( "{$duration_sql} >= %d
 				AND {$scroll_sql} >= %d
-				AND {$click_sql} >= %d)",
+				AND {$click_sql} >= %d", $session_alias ) . ')',
 			'values'    => array( $spam_duration, $spam_scrolls, $spam_clicks ),
 			'cache_key' => self::cache_key( true ),
 		);
@@ -385,7 +531,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 	 * largest reliable duration source (recording, session, wall-clock, page).
 	 *
 	 * @param string $session_id Session ID.
-	 * @return array|null Normalized metrics { traffic_type, spam_reason, duration, scrolls, clicks }, or null when the session row is missing.
+	 * @return array|null Normalized metrics { traffic_type, spam_reason, referrer, duration, scrolls, clicks }, or null when the session row is missing.
 	 */
 	public static function get_session_classification_metrics( $session_id ) {
 		global $wpdb;
@@ -406,6 +552,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 					s.id,
 					COALESCE(s.traffic_type, '') AS traffic_type,
 					s.spam_reason,
+					COALESCE(s.referrer, '') AS referrer,
 					GREATEST(
 						COALESCE(r.recording_duration, 0),
 						COALESCE(s.duration, 0),
@@ -497,6 +644,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 		return array(
 			'traffic_type' => (string) $row->traffic_type,
 			'spam_reason'  => $row->spam_reason,
+			'referrer'     => (string) $row->referrer,
 			'duration'     => $duration,
 			'scrolls'      => $scroll_count,
 			'clicks'       => $click_count,
@@ -510,12 +658,27 @@ class Opti_Behavior_Stats_Spam_Filter {
 	 * ALL configured duration, scroll, and click thresholds; otherwise it is spam
 	 * and the failing criteria form the spam reason.
 	 *
-	 * @param int $duration     Duration in seconds.
-	 * @param int $scroll_count Scroll count.
-	 * @param int $click_count  Click count.
-	 * @return array { type: 'human'|'spam', reason: string|null, reasons: string[] }
+	 * A visit that arrived from another site (has_external_referrer()) is
+	 * always human: the thresholds only judge direct / unknown / internal
+	 * visits (OPT-562). A null referrer keeps the threshold-only behaviour for
+	 * callers that do not pass it.
+	 *
+	 * @param int         $duration     Duration in seconds.
+	 * @param int         $scroll_count Scroll count.
+	 * @param int         $click_count  Click count.
+	 * @param string|null $referrer     Optional stored session referrer.
+	 * @return array { type: 'human'|'spam', reason: string|null, reasons: string[], referred: bool }
 	 */
-	public static function evaluate_classification( $duration, $scroll_count, $click_count ) {
+	public static function evaluate_classification( $duration, $scroll_count, $click_count, $referrer = null ) {
+		if ( null !== $referrer && self::has_external_referrer( $referrer ) ) {
+			return array(
+				'type'     => 'human',
+				'reason'   => null,
+				'reasons'  => array(),
+				'referred' => true,
+			);
+		}
+
 		$reasons = array();
 
 		if ( (int) $duration < self::duration_threshold() ) {
@@ -529,9 +692,10 @@ class Opti_Behavior_Stats_Spam_Filter {
 		}
 
 		return array(
-			'type'    => empty( $reasons ) ? 'human' : 'spam',
-			'reason'  => empty( $reasons ) ? null : implode( ',', $reasons ),
-			'reasons' => $reasons,
+			'type'     => empty( $reasons ) ? 'human' : 'spam',
+			'reason'   => empty( $reasons ) ? null : implode( ',', $reasons ),
+			'reasons'  => $reasons,
+			'referred' => false,
 		);
 	}
 
@@ -544,7 +708,15 @@ class Opti_Behavior_Stats_Spam_Filter {
 	const FEW_SCROLLS_REPAIR_OPTION = 'opti_behavior_spam_few_scrolls_repair';
 
 	/**
-	 * Wire the one-time `few_scrolls` repair (called once from the core bootstrap).
+	 * One-time repair of stored spam sessions that came from another site
+	 * (OPT-562: a referred visit is never spam). The daily spam purge deletes
+	 * spam rows, so this runs on its own instead of waiting for a Recalculate.
+	 */
+	const REFERRER_REPAIR_HOOK   = 'opti_behavior_spam_referrer_repair';
+	const REFERRER_REPAIR_OPTION = 'opti_behavior_spam_referrer_repair';
+
+	/**
+	 * Wire the one-time repairs (called once from the core bootstrap).
 	 *
 	 * @since 1.9.1.1
 	 * @return void
@@ -552,6 +724,33 @@ class Opti_Behavior_Stats_Spam_Filter {
 	public static function register_repair_hooks() {
 		add_action( self::FEW_SCROLLS_REPAIR_HOOK, array( __CLASS__, 'run_few_scrolls_repair_tick' ) );
 		add_action( 'init', array( __CLASS__, 'maybe_start_few_scrolls_repair' ), 31 );
+		add_action( self::REFERRER_REPAIR_HOOK, array( __CLASS__, 'run_referrer_repair_tick' ) );
+		add_action( 'init', array( __CLASS__, 'maybe_start_referrer_repair' ), 31 );
+	}
+
+	/**
+	 * Queue the referrer repair once per site (same rules as the few_scrolls one).
+	 *
+	 * @return void
+	 */
+	public static function maybe_start_referrer_repair() {
+		self::maybe_start_repair( self::REFERRER_REPAIR_HOOK, self::REFERRER_REPAIR_OPTION );
+	}
+
+	/**
+	 * Run one time-boxed pass of the referrer repair: spam rows with an
+	 * external referrer go back through classify_session() (→ human).
+	 *
+	 * @param float|null $budget_seconds Optional time budget (tests); default 15 s.
+	 * @return array Final state for this pass.
+	 */
+	public static function run_referrer_repair_tick( $budget_seconds = null ) {
+		return self::run_repair_tick(
+			self::REFERRER_REPAIR_HOOK,
+			self::REFERRER_REPAIR_OPTION,
+			array( 'external_referrer_only' => true ),
+			$budget_seconds
+		);
 	}
 
 	/**
@@ -569,11 +768,23 @@ class Opti_Behavior_Stats_Spam_Filter {
 	 * @return void
 	 */
 	public static function maybe_start_few_scrolls_repair() {
+		self::maybe_start_repair( self::FEW_SCROLLS_REPAIR_HOOK, self::FEW_SCROLLS_REPAIR_OPTION );
+	}
+
+	/**
+	 * Queue a one-time repair once per site; re-queue it if its event was lost.
+	 * Admin / cron / CLI requests only — never a visitor page view.
+	 *
+	 * @param string $hook   Cron hook.
+	 * @param string $option State option.
+	 * @return void
+	 */
+	private static function maybe_start_repair( $hook, $option ) {
 		if ( wp_doing_ajax() || ! ( is_admin() || wp_doing_cron() || ( defined( 'WP_CLI' ) && WP_CLI ) ) ) {
 			return;
 		}
 
-		$state = get_option( self::FEW_SCROLLS_REPAIR_OPTION );
+		$state = get_option( $option );
 		if ( is_array( $state ) && ! empty( $state['done'] ) ) {
 			return;
 		}
@@ -586,13 +797,13 @@ class Opti_Behavior_Stats_Spam_Filter {
 				'processed' => 0,
 				'changed'   => 0,
 			);
-			if ( ! add_option( self::FEW_SCROLLS_REPAIR_OPTION, $state, '', 'yes' ) ) {
+			if ( ! add_option( $option, $state, '', 'yes' ) ) {
 				return; // Another request won the race and owns the schedule.
 			}
 		}
 
-		if ( ! wp_next_scheduled( self::FEW_SCROLLS_REPAIR_HOOK ) ) {
-			wp_schedule_single_event( time() + 30, self::FEW_SCROLLS_REPAIR_HOOK );
+		if ( ! wp_next_scheduled( $hook ) ) {
+			wp_schedule_single_event( time() + 30, $hook );
 		}
 	}
 
@@ -604,7 +815,25 @@ class Opti_Behavior_Stats_Spam_Filter {
 	 * @return array Final state for this pass.
 	 */
 	public static function run_few_scrolls_repair_tick( $budget_seconds = null ) {
-		$state = get_option( self::FEW_SCROLLS_REPAIR_OPTION );
+		return self::run_repair_tick(
+			self::FEW_SCROLLS_REPAIR_HOOK,
+			self::FEW_SCROLLS_REPAIR_OPTION,
+			array( 'reason_like' => 'few_scrolls' ),
+			$budget_seconds
+		);
+	}
+
+	/**
+	 * One time-boxed pass of a one-time repair over stored spam rows.
+	 *
+	 * @param string     $hook           Cron hook (re-queued while not done).
+	 * @param string     $option         State option.
+	 * @param array      $scope          Extra reclassify_flagged_sessions_batch() args.
+	 * @param float|null $budget_seconds Optional time budget; default 15 s.
+	 * @return array Final state for this pass.
+	 */
+	private static function run_repair_tick( $hook, $option, $scope, $budget_seconds = null ) {
+		$state = get_option( $option );
 		if ( ! is_array( $state ) ) {
 			$state = array( 'started' => time(), 'done' => 0, 'cursor' => null, 'processed' => 0, 'changed' => 0 );
 		}
@@ -616,8 +845,8 @@ class Opti_Behavior_Stats_Spam_Filter {
 		// verdicts hide nothing in that mode either. Check again tomorrow instead of
 		// marking the repair done against rows it could not evaluate.
 		if ( ! self::is_enabled() ) {
-			if ( ! wp_next_scheduled( self::FEW_SCROLLS_REPAIR_HOOK ) ) {
-				wp_schedule_single_event( time() + DAY_IN_SECONDS, self::FEW_SCROLLS_REPAIR_HOOK );
+			if ( ! wp_next_scheduled( $hook ) ) {
+				wp_schedule_single_event( time() + DAY_IN_SECONDS, $hook );
 			}
 			return $state;
 		}
@@ -627,11 +856,13 @@ class Opti_Behavior_Stats_Spam_Filter {
 
 		do {
 			$batch = self::reclassify_flagged_sessions_batch(
-				array(
-					'limit'       => 200,
-					'window_days' => 0,
-					'cursor'      => isset( $state['cursor'] ) ? $state['cursor'] : null,
-					'reason_like' => 'few_scrolls',
+				array_merge(
+					(array) $scope,
+					array(
+						'limit'       => 200,
+						'window_days' => 0,
+						'cursor'      => isset( $state['cursor'] ) ? $state['cursor'] : null,
+					)
 				)
 			);
 
@@ -647,11 +878,11 @@ class Opti_Behavior_Stats_Spam_Filter {
 			}
 		} while ( microtime( true ) < $deadline );
 
-		update_option( self::FEW_SCROLLS_REPAIR_OPTION, $state, 'yes' );
+		update_option( $option, $state, 'yes' );
 
 		if ( empty( $state['done'] ) ) {
-			if ( ! wp_next_scheduled( self::FEW_SCROLLS_REPAIR_HOOK ) ) {
-				wp_schedule_single_event( time() + 60, self::FEW_SCROLLS_REPAIR_HOOK );
+			if ( ! wp_next_scheduled( $hook ) ) {
+				wp_schedule_single_event( time() + 60, $hook );
 			}
 		} elseif ( (int) $state['changed'] > 0 ) {
 			self::clear_traffic_classification_caches();
@@ -772,6 +1003,9 @@ class Opti_Behavior_Stats_Spam_Filter {
 			$target_where = "s.id IN ({$in_sql}) AND ";
 		}
 
+		// A visit referred by another site is never marked spam (OPT-562).
+		$referred_sql = self::external_referrer_sql( 's' );
+
 		// Placeholder order follows the SQL text: the three derived tables (bound
 		// above), the spam_reason CASEs, the id scope, then the verdict.
 		$values = array_merge( $values, array( $duration, $scrolls, $clicks ) );
@@ -794,6 +1028,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 				         CASE WHEN {$click_sql} < %d THEN 'few_clicks' ELSE NULL END
 				     )
 				 WHERE {$target_where}(s.traffic_type IS NULL OR s.traffic_type = '' OR s.traffic_type = 'human')
+				   AND NOT {$referred_sql}
 				   AND (
 				       {$duration_sql} < %d
 				       OR {$scroll_sql} < %d
@@ -852,7 +1087,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 			return array( 'changed' => false, 'reason' => 'protected_traffic_type' );
 		}
 
-		$verdict    = self::evaluate_classification( $metrics['duration'], $metrics['scrolls'], $metrics['clicks'] );
+		$verdict    = self::evaluate_classification( $metrics['duration'], $metrics['scrolls'], $metrics['clicks'], $metrics['referrer'] );
 		$new_type   = $verdict['type'];
 		$new_reason = $verdict['reason'];
 		$old_type   = '' === $metrics['traffic_type'] ? 'human' : $metrics['traffic_type'];
@@ -970,7 +1205,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 			return array( 'changed' => false, 'reason' => 'protected_traffic_type' );
 		}
 
-		$verdict = self::evaluate_classification( $metrics['duration'], $metrics['scrolls'], $metrics['clicks'] );
+		$verdict = self::evaluate_classification( $metrics['duration'], $metrics['scrolls'], $metrics['clicks'], $metrics['referrer'] );
 
 		if ( 'spam' === $verdict['type'] ) {
 			$poll_interval_us = max( 1000, (int) round( $poll_interval_seconds * 1000000 ) );
@@ -984,7 +1219,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 					break;
 				}
 
-				$verdict = self::evaluate_classification( $metrics['duration'], $metrics['scrolls'], $metrics['clicks'] );
+				$verdict = self::evaluate_classification( $metrics['duration'], $metrics['scrolls'], $metrics['clicks'], $metrics['referrer'] );
 				if ( 'human' === $verdict['type'] ) {
 					break;
 				}
@@ -1025,6 +1260,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 	 *     @type int        $window_days Only sessions started within N days (0 = no window). Default 30.
 	 *     @type array|null $cursor      { time, id } lower bound from a prior batch.
 	 *     @type string     $reason_like Only spam rows whose spam_reason contains this token ('' = all). Default ''.
+	 *     @type bool       $external_referrer_only Only spam rows referred by another site. Default false.
 	 * }
 	 * @return array {
 	 *     @type int         $processed Sessions scanned this batch.
@@ -1043,6 +1279,8 @@ class Opti_Behavior_Stats_Spam_Filter {
 				'window_days' => 30,
 				'cursor'      => null,
 				'reason_like' => '',
+				// Only spam rows that came from another site (referrer repair).
+				'external_referrer_only' => false,
 			)
 		);
 
@@ -1065,6 +1303,10 @@ class Opti_Behavior_Stats_Spam_Filter {
 		if ( '' !== $reason_like ) {
 			$where   .= ' AND spam_reason LIKE %s';
 			$params[] = '%' . $wpdb->esc_like( $reason_like ) . '%';
+		}
+
+		if ( ! empty( $args['external_referrer_only'] ) ) {
+			$where .= ' AND ' . self::external_referrer_sql( '' );
 		}
 
 		if ( $window > 0 ) {
@@ -1293,25 +1535,11 @@ class Opti_Behavior_Stats_Spam_Filter {
 			delete_transient( $transient );
 		}
 
-		// Hashed traffic_class_* keys. 1.9.0.6: the former
-		// `DELETE … LIKE '_transient_opti_behavior_traffic_class_%'` started with
-		// an unescaped `_` wildcard, defeated the option_name index and locked
-		// wp_options under load (customer crash report). Use the shared
-		// index-friendly SELECT-then-DELETE-by-name helper; fall back to an
-		// escaped LIKE only if the helper file is not loaded.
-		if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
-			opti_behavior_delete_transients_by_prefix( array( 'opti_behavior_traffic_class_' ) );
-		} else {
-			$like = $wpdb->esc_like( 'opti_behavior_traffic_class_' ) . '%';
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Bulk transient invalidation by fixed option-name prefix cannot be expressed via the transient API; pattern bound through prepare().
-			$wpdb->query(
-				$wpdb->prepare(
-					"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s",
-					$wpdb->esc_like( '_transient_' ) . $like,
-					$wpdb->esc_like( '_transient_timeout_' ) . $like
-				)
-			);
-		}
+		// Hashed traffic_class_* keys are dashboard widget caches: they embed
+		// the dashboard cache generation, so the flush below reaches them
+		// without any `LIKE` query on wp_options (2026-10-08: the former
+		// prefix sweep ran on the visitor tracking path and shared hosts
+		// reported it as MySQL abuse).
 
 		// Bug #3 (Part B) fix: the dashboard's Sessions/Visitors/Page Views KPI
 		// cards read from a SEPARATE 900s-TTL transient family
@@ -1326,9 +1554,11 @@ class Opti_Behavior_Stats_Spam_Filter {
 		// dashboard. Every actual classification change reaches this method, so
 		// clearing the dashboard caches here closes the gap for all callers
 		// (ajax_heartbeat finalize, handle_heatmap_event self-heal downgrade,
-		// reclassify_flagged_sessions_batch()) in one place.
-		if ( function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
-			opti_behavior_invalidate_dashboard_caches();
+		// reclassify_flagged_sessions_batch()) in one place. Throttled: these
+		// callers run on tracking requests; a skipped flush is replayed by the
+		// next admin request before any dashboard read.
+		if ( function_exists( 'opti_behavior_invalidate_dashboard_caches_throttled' ) ) {
+			opti_behavior_invalidate_dashboard_caches_throttled();
 		}
 	}
 }

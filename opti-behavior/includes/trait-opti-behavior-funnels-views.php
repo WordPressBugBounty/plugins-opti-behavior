@@ -442,9 +442,11 @@ trait Opti_Behavior_Funnels_Views_Trait {
 		);
 		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
-		// Graceful not-found: unknown, deleted, or inactive funnel → message + back
-		// link, never a fatal or an empty analytics shell (spec.md §4.1).
-		if ( ! $funnel || 'active' !== $funnel->status ) {
+		// Graceful not-found: unknown or deleted funnel → message + back link, never
+		// a fatal or an empty analytics shell (spec.md §4.1). A SUSPENDED funnel keeps
+		// its report (its data is still there; suggestion "View" links point to it,
+		// QA-B-FUNNEL-067).
+		if ( ! $funnel || ! in_array( $funnel->status, array( 'active', 'suspended' ), true ) ) {
 			?>
 			<div class="wrap opti-behavior-funnels-page opti-behavior-funnel-detail-page">
 				<div class="opti-funnel-detail-back">
@@ -470,7 +472,7 @@ trait Opti_Behavior_Funnels_Views_Trait {
 		$exclude_spam = method_exists( $this, 'resolve_spam_exclusion_from_request' )
 			? $this->resolve_spam_exclusion_from_request( $_GET ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter state.
 			: true;
-		$upgrade_url  = admin_url( 'admin.php?page=opti-behavior-recordings' );
+		$upgrade_url  = class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::link_url( 'funnel-filters' ) : ''; // OPT-764: the single Pro trial page.
 		?>
 		<div class="wrap opti-behavior-funnels-page opti-behavior-funnel-detail-page" data-exclude-spam="<?php echo esc_attr( $exclude_spam ? '1' : '0' ); ?>">
 			<div class="heatmaps-header">

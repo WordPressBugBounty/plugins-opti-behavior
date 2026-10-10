@@ -34,6 +34,15 @@
 		config.settings.hide_in_builders === undefined ||
 		!!config.settings.hide_in_builders;
 
+	/* Counts in the WordPress language (OPT-348). The bar runs on the public
+	   site, where an optimizer may reorder scripts: without the locale helper
+	   the raw number is shown, never an error. */
+	function formatCount(n) {
+		return (window.OptiBehaviorLocale && typeof window.OptiBehaviorLocale.number === 'function')
+			? window.OptiBehaviorLocale.number(n)
+			: String(n);
+	}
+
 	function isJsBuilderActive() {
 		if (window.PBSEditor) { // Page Builder Sandwich editor booted.
 			return true;
@@ -353,6 +362,63 @@
 	}
 
 	/* ------------------------------------------------------------------
+	   Errors link — Pro Errors screen scoped to this page + bar period
+	   (same page_url / start_date / end_date deep link Page X-Ray uses).
+	   ------------------------------------------------------------------ */
+	function formatYmd(d) {
+		var m = d.getMonth() + 1;
+		var day = d.getDate();
+		return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (day < 10 ? '0' : '') + day;
+	}
+
+	function getErrorsUrl(base) {
+		if (!base) {
+			return '';
+		}
+
+		// Page URL without query / fragment: the Errors screen matches the exact page.
+		var url = appendQueryParam(base, 'page_url', window.location.origin + window.location.pathname);
+
+		var end = new Date();
+		var start = new Date();
+		var period = getStatsPeriod();
+		if (period === 'today') {
+			// start = today.
+		} else if (period === 'last7days') {
+			start.setDate(start.getDate() - 6);
+		} else if (period === 'last30days') {
+			start.setDate(start.getDate() - 29);
+		} else {
+			start = new Date(2000, 0, 1); // All time.
+		}
+
+		url = appendQueryParam(url, 'start_date', formatYmd(start));
+		return appendQueryParam(url, 'end_date', formatYmd(end));
+	}
+
+	// Errors + Friction pills: same deep link, own tab, own "has" class.
+	function updateIssueLinks(selector, base, count, hasClass) {
+		var links = bar.querySelectorAll(selector);
+		if (!links.length) {
+			return;
+		}
+
+		var url = getErrorsUrl(base);
+		for (var i = 0; i < links.length; i++) {
+			if (url) {
+				links[i].setAttribute('href', url);
+			}
+			links[i].classList.toggle(hasClass, count > 0);
+		}
+	}
+
+	function updateErrorsLinks(data) {
+		var pro = data && data.pro ? data.pro : {};
+		updateIssueLinks('.opti-stats-bar__item--errors-link', config.errors_url || '', parseInt(pro.errors, 10) || 0, 'opti-stats-bar__item--has-errors');
+		updateIssueLinks('.opti-stats-bar__item--friction-link', config.friction_url || '', parseInt(pro.friction, 10) || 0, 'opti-stats-bar__item--has-friction');
+	}
+
+	/* ------------------------------------------------------------------
 	   Responsive layout — fit enabled Free/Pro stats to the admin viewport
 	   ------------------------------------------------------------------ */
 	function layoutOverflows(inner, stats) {
@@ -507,11 +573,12 @@
 			var key = values[i].getAttribute('data-key');
 			if (key) {
 				var val = resolveKey(data, key);
-				values[i].textContent = (typeof val === 'number') ? val.toLocaleString() : val;
+				values[i].textContent = (typeof val === 'number') ? formatCount(val) : val;
 			}
 		}
 		updateHeatmapsLinks(data && data.page_id ? parseInt(data.page_id, 10) : 0, data && data.page_ids ? data.page_ids : []);
 		updateRecordingsLinks(data && data.page_ids ? data.page_ids : [], data);
+		updateErrorsLinks(data);
 		scheduleResponsiveLayout();
 	}
 

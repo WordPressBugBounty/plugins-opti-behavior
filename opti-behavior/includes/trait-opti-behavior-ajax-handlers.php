@@ -659,7 +659,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 
             // Transient cache for Top Users per date-range (include spam filter and visitor cap basis in key).
             // Default TTL: 30s (filterable) - was 15 min before 1.2.9, which hid new visitor activity.
-            $cache_key = 'optibehavior_top_users_' . md5( 'v4|' . $start_date . '|' . $end_date . '|' . ( $exclude_spam ? '1' : '0' ) . '|' . $visitor_total . '|' . $row_limit );
+            $cache_key = opti_behavior_dashboard_cache_key( 'optibehavior_top_users_' . md5( 'v4|' . $start_date . '|' . $end_date . '|' . ( $exclude_spam ? '1' : '0' ) . '|' . $visitor_total . '|' . $row_limit ) );
             $default_ttl = function_exists( 'opti_behavior_dashboard_cache_ttl' ) ? opti_behavior_dashboard_cache_ttl() : 30;
             $cache_ttl = apply_filters('opti_behavior_top_users_cache_ttl', $default_ttl);
 
@@ -3844,57 +3844,10 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
         }
 
 		/**
-		 * AJAX handler: Start Pro free trial.
-		 *
-		 * Saves trial start timestamp to WP options and attempts to notify the API.
-		 * Trial activates locally even if API is unreachable (graceful degradation).
-		 *
-		 * @since 1.1.3
-		 */
-		private function ajax_start_pro_trial_impl() {
-			// Verify nonce
-			check_ajax_referer( 'opti_behavior_start_trial', 'nonce' );
-
-			// Verify capabilities
-			if ( ! current_user_can( 'manage_options' ) ) {
-				wp_send_json_error( array( 'message' => __( 'Insufficient permissions.', 'opti-behavior' ) ) );
-			}
-
-			// Check if trial already started
-			$trial_started = get_option( 'opti_behavior_pro_trial_started', 0 );
-			if ( $trial_started > 0 ) {
-				$expires   = $trial_started + ( 180 * DAY_IN_SECONDS );
-				$days_left = max( 0, (int) ceil( ( $expires - time() ) / DAY_IN_SECONDS ) );
-				wp_send_json_success( array(
-					'message'      => __( 'Your Pro trial is already active!', 'opti-behavior' ),
-					'days_left'    => $days_left,
-					'download_url' => $this->get_pro_download_url(),
-				) );
-			}
-
-			// Activate trial locally
-			$now = time();
-			update_option( 'opti_behavior_pro_trial_started', $now );
-			delete_option( 'opti_behavior_pro_trial_banner_dismissed' );
-
-			// Calculate expiry
-			$expires   = $now + ( 180 * DAY_IN_SECONDS );
-			$days_left = 180;
-
-			// Attempt to notify the API (non-blocking, informational)
-			$this->notify_api_trial_started();
-
-			wp_send_json_success( array(
-				'message'      => __( 'Pro trial activated! You have 6 months of free access to all Pro features.', 'opti-behavior' ),
-				'days_left'    => $days_left,
-				'download_url' => $this->get_pro_download_url(),
-			) );
-		}
-
-		/**
 		 * AJAX handler: Dismiss trial banner.
 		 *
-		 * Stores a dismiss timestamp. Banner will re-appear after 30 days.
+		 * Stores a dismiss timestamp on this site only (no external call). Since
+		 * OPT-763 a dismissed notice never comes back.
 		 *
 		 * @since 1.1.3
 		 */
@@ -3908,54 +3861,6 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			update_option( 'opti_behavior_pro_trial_banner_dismissed', time() );
 			wp_send_json_success( array( 'message' => 'Banner dismissed' ) );
 		}
-
-		/**
-		 * Get Pro download URL with access code.
-		 *
-		 * Mirrors the logic in recordings-upgrade-page.php — requests a one-time
-		 * access code from the API so the download page can verify the visitor.
-		 *
-		 * @since 1.1.3
-		 * @return string Download URL.
-		 */
-		private function get_pro_download_url() {
-			$current_user = wp_get_current_user();
-			$cache_key    = 'ob_dl_access_' . md5( $current_user->user_login . site_url() );
-			$access_code  = get_transient( $cache_key );
-
-			if ( ! $access_code ) {
-				$api_response = wp_remote_post(
-					'https://api.optiuser.com/request-download-access',
-					array(
-						'body'    => wp_json_encode( array(
-							'site_url' => site_url(),
-							'username' => $current_user->user_login,
-							'email'    => $current_user->user_email,
-						) ),
-						'headers' => array( 'Content-Type' => 'application/json' ),
-						'timeout' => 10,
-					)
-				);
-				if ( ! is_wp_error( $api_response ) ) {
-					$api_body = json_decode( wp_remote_retrieve_body( $api_response ), true );
-					if ( ! empty( $api_body['data']['access_code'] ) ) {
-						$access_code = $api_body['data']['access_code'];
-						set_transient( $cache_key, $access_code, 10 * MINUTE_IN_SECONDS );
-					}
-				}
-			}
-
-			return add_query_arg(
-				array(
-					'site_url'    => rawurlencode( site_url() ),
-					'username'    => rawurlencode( $current_user->user_login ),
-					'email'       => rawurlencode( $current_user->user_email ),
-					'access_code' => rawurlencode( $access_code ? $access_code : '' ),
-				),
-				'https://optiuser.com/opti-behavior/ob-download-pro/'
-			);
-		}
-
 
 		/**
 		 * Get Smart Insights notification settings with safe defaults.
@@ -5358,41 +5263,52 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			$capabilities     = $this->get_smart_insights_capabilities_impl();
 			$matching_args    = $query_args;
 			$matching_args['offset'] = 0;
-			$matching_items   = $top_only ? $repository->get_top_insights( $matching_args ) : $repository->get_insights( $matching_args );
+			// The list scans every row of the period (in pages), not the first 500:
+			// search / confidence run on decoded payloads, so a row cut by the SQL
+			// limit could never be found (OPT-268).
+			$list_truncated   = false;
+			$list_rows        = $top_only ? $repository->get_top_insights( $matching_args ) : $this->get_smart_insights_all_rows_impl( $repository, $matching_args, $list_truncated );
 			if ( method_exists( $repository, 'collapse_open_insights_by_group' ) ) {
-				$matching_items = $repository->collapse_open_insights_by_group( $matching_items );
+				$list_rows = $repository->collapse_open_insights_by_group( $list_rows );
 			}
-			$matching_items = $capabilities->filter_insights_for_viewer( $matching_items, $top_only ? 'dashboard' : 'list' );
-			$matching_items = array_map( array( $this, 'sanitize_smart_insights_entity_links_impl' ), $matching_items );
-			$matching_items = array_map( array( $this, 'localize_smart_insights_insight_impl' ), $matching_items );
 
-			if ( ! $top_only ) {
-				$matching_items = $this->filter_smart_insights_list_items_impl(
-					$matching_items,
+			if ( $top_only ) {
+				$items           = $this->shape_smart_insights_list_rows_impl( $capabilities, $list_rows, 'dashboard' );
+				$matching_count  = count( $items );
+				$matching_counts = $this->get_smart_insights_counts_impl( $items );
+				$filter_items    = $items;
+			} else {
+				// Shaping costs ~40 KB / several ms per row (Pro adapter, locale
+				// rebuild): only the shown page is shaped and kept, never the
+				// whole period (QA OPT-268: 2 500 rows = 272 MB peak, 42 s).
+				$scan            = $this->scan_smart_insights_list_rows_impl(
+					$capabilities,
+					$list_rows,
 					array(
 						'confidence' => $confidence,
 						'search'     => $search,
-					)
+					),
+					$requested_offset,
+					$requested_limit
 				);
-			}
+				$items           = $scan['items'];
+				$matching_count  = $scan['count'];
+				$matching_counts = $scan['counts'];
 
-			$items = $top_only ? $matching_items : array_slice( $matching_items, $requested_offset, $requested_limit );
-
-			$filter_items = $items;
-			if ( ! $top_only ) {
-				$filter_query_args            = $query_args;
-				$filter_query_args['limit']   = 500;
-				$filter_query_args['offset']  = 0;
-				$filter_query_args['category'] = '';
-				$filter_query_args['entity_type'] = '';
-				$filter_items                 = $repository->get_insights( $filter_query_args );
-				if ( method_exists( $repository, 'collapse_open_insights_by_group' ) ) {
-					$filter_items = $repository->collapse_open_insights_by_group( $filter_items );
+				// Filter options read only category / entity_type, which shaping
+				// never changes: raw rows, and the same rows when neither is filtered.
+				if ( '' === $category && '' === $entity_type ) {
+					$filter_items = $list_rows;
+				} else {
+					unset( $list_rows );
+					$filter_query_args                = $query_args;
+					$filter_query_args['offset']      = 0;
+					$filter_query_args['category']    = '';
+					$filter_query_args['entity_type'] = '';
+					$filter_items                     = $this->get_smart_insights_all_rows_impl( $repository, $filter_query_args );
 				}
-				$filter_items                 = $capabilities->filter_insights_for_viewer( $filter_items, 'list' );
-				$filter_items                 = array_map( array( $this, 'sanitize_smart_insights_entity_links_impl' ), $filter_items );
-				$filter_items                 = array_map( array( $this, 'localize_smart_insights_insight_impl' ), $filter_items );
 			}
+			unset( $list_rows );
 
 			$total_query_args = array(
 				'limit'      => 500,
@@ -5404,16 +5320,10 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				'order'      => 'DESC',
 			);
 			$total_count      = $this->get_smart_insights_scoped_count_impl( $repository, $total_query_args, false );
-			$matching_count   = $this->get_smart_insights_scoped_count_impl(
-				$repository,
-				$query_args,
-				! $top_only && ( '' !== $confidence || '' !== $search ),
-				$matching_items
-			);
-			if ( $top_only ) {
-				$matching_count = count( $matching_items );
-			}
-			$matching_counts = $this->get_smart_insights_counts_impl( $matching_items );
+			// One rule, filters or not: matching_count = the cards the viewer can
+			// page through (collapsed, search / confidence applied; see
+			// scan_smart_insights_list_rows_impl). It used to switch between a SQL
+			// count (no post-filter) and the 500-row slice (post-filter active).
 
 			wp_send_json_success(
 				array(
@@ -5427,7 +5337,12 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 					'date_range'     => $range,
 					'exclude_spam'   => $exclude_spam,
 					'generation'     => is_wp_error( $generation ) ? array( 'error' => $generation->get_error_message() ) : $generation,
-					'state'          => $this->get_smart_insights_response_state_impl( $items, $generation ),
+					// `state.truncated` (inside state: the top-level keys are a
+					// tested contract, QA-B-SI-040) = rows past the scan cap unread.
+					'state'          => array_merge(
+						$this->get_smart_insights_response_state_impl( $items, $generation ),
+						array( 'truncated' => $list_truncated )
+					),
 				)
 			);
 		}
@@ -5489,10 +5404,11 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			$exclude_spam = $this->set_smart_insights_spam_exclusion_context_impl( $_POST );
 			// phpcs:enable WordPress.Security.NonceVerification.Missing
 
-			$builder = new Opti_Behavior_Smart_Insights_Segment_Matrix();
-			$matrix  = $builder->get_matrix( $insight, array( 'exclude_spam' => $exclude_spam ) );
-			$cached  = $builder->was_served_from_cache();
-			$matrix  = $this->get_smart_insights_segment_matrix_capabilities_impl()->filter_segment_matrix_for_viewer( $matrix );
+			$capabilities = $this->get_smart_insights_segment_matrix_capabilities_impl();
+			$builder      = $this->get_smart_insights_segment_matrix_builder_impl( $capabilities );
+			$matrix       = $builder->get_matrix( $insight, array( 'exclude_spam' => $exclude_spam ) );
+			$cached       = $builder->was_served_from_cache();
+			$matrix       = $capabilities->filter_segment_matrix_for_viewer( $matrix );
 
 			wp_send_json_success(
 				array(
@@ -5540,7 +5456,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			$exclude_spam = $this->set_smart_insights_spam_exclusion_context_impl( $_POST );
 			// phpcs:enable WordPress.Security.NonceVerification.Missing
 
-			$builder = new Opti_Behavior_Smart_Insights_Segment_Matrix();
+			$builder = $this->get_smart_insights_segment_matrix_builder_impl( $this->get_smart_insights_segment_matrix_capabilities_impl() );
 			$series  = $builder->get_timeseries(
 				$insight,
 				array(
@@ -5558,6 +5474,38 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 					'cached'       => $builder->was_served_from_cache(),
 				)
 			);
+		}
+
+		/**
+		 * Segment matrix builder for the current viewer.
+		 *
+		 * Free builds the traffic mix and the daily curve. The per-audience
+		 * breakdown ("where is the problem?") is Pro since OPT-403: Pro hands its
+		 * subclass through the filter below, which is only applied for a viewer
+		 * with Pro access, and must extend the Free builder.
+		 *
+		 * @since 1.10.0
+		 * @param object $capabilities Capability shaper.
+		 * @return Opti_Behavior_Smart_Insights_Segment_Matrix
+		 */
+		private function get_smart_insights_segment_matrix_builder_impl( $capabilities ) {
+			$class = 'Opti_Behavior_Smart_Insights_Segment_Matrix';
+
+			if ( is_object( $capabilities ) && method_exists( $capabilities, 'has_pro_access' ) && $capabilities->has_pro_access() ) {
+				/**
+				 * Filter the segment matrix builder class (Pro access only).
+				 *
+				 * @since 1.10.0
+				 *
+				 * @param string $class Builder class; must extend the Free builder.
+				 */
+				$candidate = apply_filters( 'opti_behavior_smart_insights_segment_matrix_class', $class );
+				if ( is_string( $candidate ) && class_exists( $candidate ) && is_subclass_of( $candidate, $class ) ) {
+					$class = $candidate;
+				}
+			}
+
+			return new $class();
 		}
 
 		/**
@@ -5750,7 +5698,9 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			}
 
 			$generation      = $this->get_smart_insights_read_only_generation_state_impl( $generator, $period, $range, 'ajax_summary', $exclude_spam );
-			$summary_builder = new Opti_Behavior_Smart_Insights_Weekly_Summary( $generator->get_repository(), $this->get_smart_insights_capabilities_impl() );
+			// The brief itself is Pro since OPT-404: create() hands back the Pro
+			// builder for a viewer with Pro access, the locked invitation otherwise.
+			$summary_builder = Opti_Behavior_Smart_Insights_Weekly_Summary::create( $generator->get_repository(), $this->get_smart_insights_capabilities_impl() );
 			$summary         = $summary_builder->get_summary(
 				$range['from'],
 				$range['to'],
@@ -5865,6 +5815,159 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			}
 
 			return is_array( $items ) ? count( $items ) : 0;
+		}
+
+		/**
+		 * Read every Smart Insights row matching the query, page by page.
+		 *
+		 * The repository caps one call at 500 rows. The center list filters
+		 * search / confidence on decoded payloads afterwards, so it needs the
+		 * whole period, not its 500 most recent rows (OPT-268). A safety cap
+		 * (filter `opti_behavior_smart_insights_list_scan_limit`, default 5000,
+		 * never below one page) bounds memory; $truncated says it was reached
+		 * with rows left.
+		 *
+		 * @since 1.9.2
+		 * @param Opti_Behavior_Smart_Insights_Repository $repository Repository instance.
+		 * @param array                                   $query_args get_insights() args (limit / offset ignored).
+		 * @param bool                                    $truncated  Set to true when rows were left unread.
+		 * @return array Decoded rows, repository order, each id once.
+		 */
+		private function get_smart_insights_all_rows_impl( $repository, $query_args, &$truncated = false ) {
+			$truncated = false;
+			if ( ! is_object( $repository ) || ! method_exists( $repository, 'get_insights' ) ) {
+				return array();
+			}
+
+			$page_size = 500;
+			$max_rows  = max( $page_size, absint( apply_filters( 'opti_behavior_smart_insights_list_scan_limit', 5000 ) ) );
+			$args      = is_array( $query_args ) ? $query_args : array();
+			$rows      = array();
+			$seen      = array();
+			$offset    = 0;
+
+			while ( $offset < $max_rows ) {
+				$args['limit']  = min( $page_size, $max_rows - $offset );
+				$args['offset'] = $offset;
+				$batch          = $repository->get_insights( $args );
+				if ( ! is_array( $batch ) || ! $batch ) {
+					return $rows;
+				}
+
+				foreach ( $batch as $row ) {
+					$id = is_array( $row ) && isset( $row['id'] ) ? (int) $row['id'] : 0;
+					if ( $id && isset( $seen[ $id ] ) ) {
+						continue;
+					}
+					if ( $id ) {
+						$seen[ $id ] = true;
+					}
+					$rows[] = $row;
+				}
+
+				if ( count( $batch ) < $args['limit'] ) {
+					return $rows;
+				}
+				$offset += $args['limit'];
+			}
+
+			$args['limit']  = 1;
+			$args['offset'] = $offset;
+			$truncated      = (bool) $repository->get_insights( $args );
+
+			return $rows;
+		}
+
+		/**
+		 * Shape raw insight rows for the viewer (capabilities, entity links, locale).
+		 *
+		 * @since 1.9.2
+		 * @param object $capabilities Smart Insights capabilities.
+		 * @param array  $rows         Decoded rows.
+		 * @param string $context      View context: list, dashboard.
+		 * @return array
+		 */
+		private function shape_smart_insights_list_rows_impl( $capabilities, $rows, $context ) {
+			$rows = $capabilities->filter_insights_for_viewer( is_array( $rows ) ? $rows : array(), $context );
+			$rows = array_map( array( $this, 'sanitize_smart_insights_entity_links_impl' ), $rows );
+
+			return array_map( array( $this, 'localize_smart_insights_insight_impl' ), $rows );
+		}
+
+		/**
+		 * Count the matching cards of the center list and shape only the shown page.
+		 *
+		 * Without search / confidence the whole period matches: rows are counted
+		 * raw and only the page is shaped. With one of them each row is tested on
+		 * its viewer + locale shaping (localized names, viewer-shaped labels),
+		 * one at a time, and only the page rows are kept and fully shaped. Same
+		 * results as shaping everything, at the memory of one page (OPT-268).
+		 *
+		 * @since 1.9.2
+		 * @param object $capabilities Smart Insights capabilities.
+		 * @param array  $rows         Collapsed decoded rows, list order.
+		 * @param array  $filters      confidence / search.
+		 * @param int    $offset       First matching card to return.
+		 * @param int    $limit        Cards to return.
+		 * @return array { items: shaped page, count: matching cards, counts: get_smart_insights_counts_impl() of every matching card }
+		 */
+		private function scan_smart_insights_list_rows_impl( $capabilities, $rows, $filters, $offset, $limit ) {
+			$rows   = is_array( $rows ) ? array_values( array_filter( $rows, 'is_array' ) ) : array();
+			$counts = array(
+				'active'        => 0,
+				'high_priority' => 0,
+				'recurring'     => 0,
+			);
+
+			$post_filter = ! empty( $filters['confidence'] ) || '' !== trim( (string) ( isset( $filters['search'] ) ? $filters['search'] : '' ) );
+			if ( ! $post_filter ) {
+				$can_tell_locked = method_exists( $capabilities, 'is_locked_for_viewer' );
+				foreach ( $rows as $row ) {
+					// A locked preview has no detection once shaped: count it that way.
+					if ( $can_tell_locked && $capabilities->is_locked_for_viewer( $row ) ) {
+						$row['detection'] = array();
+					}
+					foreach ( $this->get_smart_insights_counts_impl( array( $row ) ) as $key => $value ) {
+						$counts[ $key ] += $value;
+					}
+				}
+
+				return array(
+					'items'  => $this->shape_smart_insights_list_rows_impl( $capabilities, array_slice( $rows, $offset, $limit ), 'list' ),
+					'count'  => count( $rows ),
+					'counts' => $counts,
+				);
+			}
+
+			// Matching runs on the Free shaping + locale only. The payload filter
+			// (Pro related-report links: one availability query per report) never
+			// touches a searched field, status or score, and costs ~7 ms a row; it
+			// runs on the shown page only.
+			$page    = array();
+			$matched = 0;
+			foreach ( $rows as $row ) {
+				$probe = $this->filter_smart_insights_list_items_impl(
+					array( $this->localize_smart_insights_insight_impl( $capabilities->filter_insight_for_viewer( $row, 'list', false ) ) ),
+					$filters
+				);
+				if ( ! $probe ) {
+					continue;
+				}
+
+				foreach ( $this->get_smart_insights_counts_impl( $probe ) as $key => $value ) {
+					$counts[ $key ] += $value;
+				}
+				if ( $matched >= $offset && count( $page ) < $limit ) {
+					$page[] = $row;
+				}
+				++$matched;
+			}
+
+			return array(
+				'items'  => $this->shape_smart_insights_list_rows_impl( $capabilities, $page, 'list' ),
+				'count'  => $matched,
+				'counts' => $counts,
+			);
 		}
 
 		/**
@@ -6444,32 +6547,6 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 					return is_array( $insight ) ? $insight : array();
 				}
 			};
-		}
-
-		/**
-		 * Notify the API that a trial was started (non-blocking, informational).
-		 *
-		 * @since 1.1.3
-		 */
-		private function notify_api_trial_started() {
-			$current_user = wp_get_current_user();
-
-			wp_remote_post(
-				'https://api.optiuser.com/trial-started',
-				array(
-					'body'     => wp_json_encode( array(
-						'site_url' => site_url(),
-						'domain'   => wp_parse_url( home_url(), PHP_URL_HOST ),
-						'email'    => get_option( 'admin_email' ),
-						'username' => $current_user->user_login,
-						'plugin'   => 'opti-behavior',
-						'version'  => OPTI_BEHAVIOR_HEATMAP_VERSION,
-					) ),
-					'headers'  => array( 'Content-Type' => 'application/json' ),
-					'timeout'  => 5,
-					'blocking' => false,
-				)
-			);
 		}
 
     }

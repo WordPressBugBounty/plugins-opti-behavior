@@ -74,6 +74,12 @@ class Opti_Behavior_Smart_Insights_Baseline_Calculator {
 			$baseline = $this->enrich_daily_stats_baseline_with_raw_metrics( $baseline, $start_date, $end_date, $args );
 		}
 
+		// Own key on purpose: `site_avg_cta_click_rate` is the CTA-row share the
+		// impact calculator prices as an engagement gap.
+		if ( is_array( $baseline ) ) {
+			$baseline['site_avg_page_cta_click_rate'] = $this->calculate_page_cta_click_rate( $start_date, $end_date, $args );
+		}
+
 		$baseline = $this->normalize_baseline( $baseline, $start_date, $end_date );
 
 		/**
@@ -533,6 +539,65 @@ class Opti_Behavior_Smart_Insights_Baseline_Calculator {
 	}
 
 	/**
+	 * Site CTA clicks per 100 page visits.
+	 *
+	 * Same unit as a page row's `cta_click_rate` (the metric aggregator divides the
+	 * page's CTA clicks by its visits), so page signals can compare a page with the
+	 * site (`site_avg_page_cta_click_rate`). Without it the main rule of
+	 * "Visitor Confusion Pattern" could never fire.
+	 *
+	 * @param string $start_date Start datetime.
+	 * @param string $end_date   End datetime.
+	 * @param array  $args       Calculation args (spam scope).
+	 * @return float|null Null when there is no click data.
+	 */
+	private function calculate_page_cta_click_rate( $start_date, $end_date, $args ) {
+		global $wpdb;
+
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Heatmap_Aggregator' ) ) {
+			return null;
+		}
+
+		$rows = ( new Opti_Behavior_Smart_Insights_Heatmap_Aggregator() )->get_heatmap_metrics(
+			$start_date,
+			$end_date,
+			array(
+				'limit'        => 500,
+				'exclude_spam' => ! empty( $args['exclude_spam'] ),
+			)
+		);
+		if ( empty( $rows ) ) {
+			return null;
+		}
+
+		$cta_clicks = 0;
+		foreach ( $rows as $row ) {
+			$cta_clicks += isset( $row['cta_click_count'] ) ? (int) $row['cta_click_count'] : 0;
+		}
+
+		$sessions_table  = $wpdb->prefix . 'optibehavior_sessions';
+		$pageviews_table = $wpdb->prefix . 'optibehavior_pageviews';
+		if ( ! $this->table_exists( $pageviews_table ) || ! $this->table_exists( $sessions_table ) ) {
+			return null;
+		}
+
+		$spam_clause = ! empty( $args['exclude_spam'] ) ? $this->get_spam_exclusion_clause( 's' ) : '';
+		// Table names from $wpdb->prefix; analytics query (sniffs are disabled for the whole file, see the header).
+		$page_visits = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(DISTINCT pv.session_id, pv.page_id)
+				FROM {$pageviews_table} pv
+				INNER JOIN {$sessions_table} s ON pv.session_id = s.id
+				WHERE pv.view_time BETWEEN %s AND %s{$spam_clause}",
+				$start_date,
+				$end_date
+			)
+		);
+
+		return $page_visits > 0 ? round( ( $cta_clicks / $page_visits ) * 100, 2 ) : null;
+	}
+
+	/**
 	 * Fill daily_stats baseline gaps from raw tables when needed.
 	 *
 	 * Daily stats does not currently expose every Smart Insights baseline metric
@@ -683,6 +748,11 @@ class Opti_Behavior_Smart_Insights_Baseline_Calculator {
 	private function get_spam_exclusion_clause( $table_alias = 's' ) {
 		global $wpdb;
 
+		if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ) {
+			// One counting universe with Traffic (OPT-588): stored verdict only.
+			return Opti_Behavior_Stats_Spam_Filter::session_sql( $table_alias, 'AND', true );
+		}
+
 		$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
 		$prefix         = $table_alias ? $table_alias . '.' : '';
 		$conditions     = array();
@@ -701,7 +771,12 @@ class Opti_Behavior_Smart_Insights_Baseline_Calculator {
 			) : array();
 			if ( ! array_key_exists( 'spam_detection_enabled', $traffic_settings ) || ! empty( $traffic_settings['spam_detection_enabled'] ) ) {
 				$spam_duration = isset( $traffic_settings['spam_duration_threshold'] ) ? absint( $traffic_settings['spam_duration_threshold'] ) : 3;
-				$conditions[]  = $prefix . 'duration >= ' . max( 0, $spam_duration );
+				$duration_condition = $prefix . 'duration >= ' . max( 0, $spam_duration );
+				if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) && $this->column_exists( $sessions_table, 'referrer' ) ) {
+					// A visit referred by another site passes the duration floor (OPT-562).
+					$duration_condition = Opti_Behavior_Stats_Spam_Filter::referrer_or_thresholds_sql( $duration_condition, $table_alias );
+				}
+				$conditions[] = $duration_condition;
 			}
 		}
 

@@ -45,6 +45,21 @@ class Opti_Behavior_Smart_Insights_Correlator {
 	const MAX_SAMPLE_REFS = 25;
 
 	/**
+	 * Maximum checks persisted per story (`correlation.checks`).
+	 */
+	const MAX_CHECKS = 10;
+
+	/**
+	 * Check verdicts. A provider answering anything else gets `not_measured`.
+	 */
+	const CHECK_VERDICTS = array( 'likely', 'ruled_out', 'not_measured' );
+
+	/**
+	 * Why a check is `not_measured`.
+	 */
+	const CHECK_REASONS = array( 'feature_off', 'no_table', 'not_tracked', 'sample_too_small', 'scope_not_addressable' );
+
+	/**
 	 * Correlate a candidate insight list into stories.
 	 *
 	 * Returns the same candidate records, reordered so every story primary is
@@ -107,9 +122,10 @@ class Opti_Behavior_Smart_Insights_Correlator {
 			);
 
 			$causes = $this->rank_causes( $probe_results );
+			$checks = $this->run_checks( $playbook_key, $scope_context, $candidates, $members, $primary_index, $date_range, $args );
 
-			// Fallback: a lone signal with no measured cause stays a classic card.
-			if ( count( $members ) < 2 && empty( $causes ) ) {
+			// Fallback: a lone signal with no measured cause and no check stays a classic card.
+			if ( count( $members ) < 2 && empty( $causes ) && empty( $checks ) ) {
 				continue;
 			}
 
@@ -134,6 +150,10 @@ class Opti_Behavior_Smart_Insights_Correlator {
 				'generated_at'     => $this->now(),
 			);
 
+			if ( ! empty( $checks ) ) {
+				$correlation['checks'] = $checks;
+			}
+
 			/**
 			 * Filter a completed correlation story before it is attached.
 			 *
@@ -148,7 +168,8 @@ class Opti_Behavior_Smart_Insights_Correlator {
 				continue;
 			}
 
-			$candidates = $this->attach_correlation_to_candidates( $candidates, $members, $primary_index, $scope_key, $correlation );
+			$child_checks = $this->build_child_checks( $scope_key, $scope, $candidates, $primary_index, $playbooks, $date_range, $args );
+			$candidates   = $this->attach_correlation_to_candidates( $candidates, $members, $primary_index, $scope_key, $correlation, $child_checks );
 		}
 
 		return $this->order_primaries_before_children( $candidates );
@@ -501,6 +522,12 @@ class Opti_Behavior_Smart_Insights_Correlator {
 				continue;
 			}
 
+			// An action signal (A/B or recording opportunity) is a button of
+			// its page card, never a card: it cannot lead a story (OPT-514 D1).
+			if ( self::is_action_signal( $candidates[ $index ]['insight'] ) ) {
+				continue;
+			}
+
 			$priority = $this->get_priority_score( $candidates[ $index ]['insight'] );
 			if ( $priority > $best_priority ) {
 				$best_priority = $priority;
@@ -509,6 +536,60 @@ class Opti_Behavior_Smart_Insights_Correlator {
 		}
 
 		return $primary_index;
+	}
+
+	/**
+	 * Action signals (Recommendations::ACTION_SIGNALS) become buttons of the
+	 * same-page card, never cards.
+	 *
+	 * @param array $insight Insight payload.
+	 * @return bool
+	 */
+	private static function is_action_signal( $insight ) {
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Recommendations' ) ) {
+			return false;
+		}
+
+		return '' !== Opti_Behavior_Smart_Insights_Recommendations::action_signal_kind( isset( $insight['signal_id'] ) ? $insight['signal_id'] : '' );
+	}
+
+	/**
+	 * Measured checks of every child signal of a story, keyed by candidate
+	 * index (OPT-514 D4). Each child is measured as its own scope, exactly as
+	 * it would be when shown alone; action signals are skipped.
+	 *
+	 * @param string $scope_key     Story scope key.
+	 * @param array  $scope         Story scope (page identity).
+	 * @param array  $candidates    Candidate records.
+	 * @param int    $primary_index Primary index.
+	 * @param array  $playbooks     Playbook registry.
+	 * @param array  $date_range    Date range.
+	 * @param array  $args          Generation args.
+	 * @return array
+	 */
+	private function build_child_checks( $scope_key, $scope, $candidates, $primary_index, $playbooks, $date_range, $args ) {
+		$child_checks = array();
+
+		foreach ( $scope['members'] as $index ) {
+			if ( (int) $index === (int) $primary_index || empty( $candidates[ $index ]['insight'] ) || ! is_array( $candidates[ $index ]['insight'] ) ) {
+				continue;
+			}
+			if ( self::is_action_signal( $candidates[ $index ]['insight'] ) ) {
+				continue;
+			}
+
+			$child_scope            = $scope;
+			$child_scope['members'] = array( (int) $index );
+			$child_context          = $this->build_scope_context( $scope_key, $child_scope, $candidates, (int) $index, $date_range, $args );
+			$child_play    = $this->match_playbook( $candidates[ $index ]['insight'], $playbooks );
+
+			$child_checks[ (int) $index ] = array(
+				'scope'  => $child_context,
+				'checks' => $this->run_checks( $child_play, $child_context, $candidates, array( (int) $index ), (int) $index, $date_range, $args ),
+			);
+		}
+
+		return $child_checks;
 	}
 
 	/**
@@ -671,7 +752,193 @@ class Opti_Behavior_Smart_Insights_Correlator {
 			'date_from'     => isset( $date_range['from'] ) ? (string) $date_range['from'] : '',
 			'date_to'       => isset( $date_range['to'] ) ? (string) $date_range['to'] : '',
 			'exclude_spam'  => array_key_exists( 'exclude_spam', $args ) ? $args['exclude_spam'] : null,
+			'funnel_step'   => $this->build_funnel_step_scope( $primary_insight, $primary_metrics ),
 		);
+	}
+
+	/**
+	 * The page of the funnel step visitors leave, for the checks only.
+	 *
+	 * Kept apart from `page_id` / `page_url`: the cause probes, the scope
+	 * aliases (card merges) and every score built on the causes stay exactly
+	 * as before. Data only, read from `detection.worst_transition` (the
+	 * generator's attach_step_pages() resolved its page_id), else from the
+	 * funnel metrics row (checkout / cart cards do not copy it to detection).
+	 *
+	 * @param array $insight Primary insight.
+	 * @param array $metrics Raw candidate metric row.
+	 * @return array Empty when the card is not a funnel or has no worst step.
+	 */
+	private function build_funnel_step_scope( $insight, $metrics = array() ) {
+		$insight = is_array( $insight ) ? $insight : array();
+		if ( ! isset( $insight['entity_type'] ) || 'funnel' !== $insight['entity_type'] ) {
+			return array();
+		}
+
+		$worst = isset( $insight['detection']['worst_transition'] ) && is_array( $insight['detection']['worst_transition'] ) ? $insight['detection']['worst_transition'] : array();
+		if ( empty( $worst['from_step'] ) && isset( $metrics['worst_transition'] ) && is_array( $metrics['worst_transition'] ) ) {
+			$worst = $metrics['worst_transition'];
+		}
+		if ( empty( $worst['from_step'] ) ) {
+			return array();
+		}
+
+		$from_url = isset( $worst['from_url'] ) && is_scalar( $worst['from_url'] ) ? trim( (string) $worst['from_url'] ) : '';
+
+		return array(
+			'funnel_id'     => isset( $insight['entity_id'] ) && is_numeric( $insight['entity_id'] ) ? absint( $insight['entity_id'] ) : 0,
+			'from_step'     => absint( $worst['from_step'] ),
+			'to_step'       => isset( $worst['to_step'] ) ? absint( $worst['to_step'] ) : absint( $worst['from_step'] ) + 1,
+			'from_label'    => isset( $worst['from_label'] ) ? sanitize_text_field( (string) $worst['from_label'] ) : '',
+			'from_match'    => isset( $worst['from_match'] ) ? sanitize_key( (string) $worst['from_match'] ) : '',
+			'page_id'       => isset( $worst['page_id'] ) ? absint( $worst['page_id'] ) : 0,
+			'page_url'      => $this->normalize_url( $from_url ),
+			'page_url_full' => $from_url,
+			'entered'       => isset( $worst['entered'] ) ? absint( $worst['entered'] ) : 0,
+			'continued'     => isset( $worst['continued'] ) ? absint( $worst['continued'] ) : 0,
+			'lost'          => isset( $worst['lost'] ) ? absint( $worst['lost'] ) : 0,
+		);
+	}
+
+	/**
+	 * Ask the probe providers for the story's checks (`correlation.checks`).
+	 *
+	 * Fires the probe filter with the id `checks` and keeps only well-formed
+	 * rows. The Free page cards (bounce, exit, scroll, engagement, traffic
+	 * spike) and the mobile bounce card always get the checks
+	 * measured by `Opti_Behavior_Smart_Insights_Page_Checks`, followed by any
+	 * row a provider adds for them; other cards get the provider rows only.
+	 *
+	 * @param string $playbook_key  Playbook key.
+	 * @param array  $scope_context Scope context.
+	 * @param array  $candidates    Candidate records.
+	 * @param array  $members       Member indexes.
+	 * @param int    $primary_index Primary index.
+	 * @param array  $date_range    Date range.
+	 * @param array  $args          Generation args.
+	 * @return array Normalized checks.
+	 */
+	private function run_checks( $playbook_key, $scope_context, $candidates, $members, $primary_index, $date_range, $args ) {
+		$context = array(
+			'probe_id'   => 'checks',
+			'playbook'   => $playbook_key,
+			'scope'      => $scope_context,
+			'primary'    => $candidates[ $primary_index ]['insight'],
+			'signals'    => $this->build_signal_summaries( $candidates, $members, $primary_index ),
+			'date_range' => $date_range,
+			'args'       => $args,
+		);
+
+		$default = array(
+			'probe'     => 'checks',
+			'available' => false,
+			'checks'    => array(),
+		);
+
+		$signal      = isset( $context['primary']['signal_id'] ) ? sanitize_key( $context['primary']['signal_id'] ) : '';
+		$page_signal = class_exists( 'Opti_Behavior_Smart_Insights_Page_Checks' ) && Opti_Behavior_Smart_Insights_Page_Checks::supports( $signal );
+
+		try {
+			/** This filter is documented in run_probe(). */
+			$result = apply_filters( 'opti_behavior_smart_insights_correlation_probe_result', $default, 'checks', $context );
+		} catch ( Exception $e ) {
+			if ( ! $page_signal ) {
+				return array();
+			}
+			$result = $default;
+		}
+
+		$checks = is_array( $result ) && isset( $result['checks'] ) ? self::normalize_checks( $result['checks'] ) : array();
+		if ( ! $page_signal ) {
+			return $checks;
+		}
+
+		// The Free page cards (bounce, exit, scroll) always measure their own
+		// checks with Free data (OPT-412 A); rows a provider adds for the same
+		// card (Pro: device, source, errors, clicks, load time) come after them.
+		try {
+			$page_checks = new Opti_Behavior_Smart_Insights_Page_Checks();
+			$metrics     = isset( $candidates[ $primary_index ]['metrics'] ) && is_array( $candidates[ $primary_index ]['metrics'] ) ? $candidates[ $primary_index ]['metrics'] : array();
+			$free_checks = self::normalize_checks( $page_checks->build( $signal, $metrics, $date_range, $args, $context['primary'] ) );
+		} catch ( Exception $e ) {
+			$free_checks = array();
+		}
+
+		return self::normalize_checks( array_merge( $free_checks, $checks ) );
+	}
+
+	/**
+	 * Normalize provider checks to the shared format. Pure, data only:
+	 * `{ id, kind check|action, label, verdict likely|ruled_out|not_measured,
+	 * verdict_label, summary, evidence { value, base, compare_value,
+	 * compare_base }, reason (not_measured only), action { label, url } }`.
+	 * A likely / ruled_out row without its two numbers is downgraded to
+	 * not_measured: no verdict without the measurement behind it.
+	 *
+	 * @param mixed $checks Raw checks.
+	 * @return array
+	 */
+	public static function normalize_checks( $checks ) {
+		if ( ! is_array( $checks ) ) {
+			return array();
+		}
+
+		$normalized = array();
+		foreach ( $checks as $check ) {
+			if ( ! is_array( $check ) || empty( $check['id'] ) || ! is_scalar( $check['id'] ) ) {
+				continue;
+			}
+
+			$id    = sanitize_key( (string) $check['id'] );
+			$label = isset( $check['label'] ) && is_scalar( $check['label'] ) ? sanitize_text_field( (string) $check['label'] ) : '';
+			if ( '' === $id || '' === $label || isset( $normalized[ $id ] ) ) {
+				continue;
+			}
+
+			$evidence = array();
+			foreach ( array( 'value', 'base', 'compare_value', 'compare_base' ) as $key ) {
+				$raw              = isset( $check['evidence'][ $key ] ) ? $check['evidence'][ $key ] : null;
+				$evidence[ $key ] = is_numeric( $raw ) ? round( (float) $raw, 4 ) + 0 : null;
+			}
+
+			// An action row (e.g. "watch the recordings") is never a verdict.
+			$kind    = isset( $check['kind'] ) && 'action' === $check['kind'] ? 'action' : 'check';
+			$verdict = 'check' === $kind && isset( $check['verdict'] ) && in_array( $check['verdict'], self::CHECK_VERDICTS, true ) ? $check['verdict'] : 'not_measured';
+			$reason  = isset( $check['reason'] ) && in_array( $check['reason'], self::CHECK_REASONS, true ) ? $check['reason'] : 'not_tracked';
+			if ( 'not_measured' !== $verdict && ( null === $evidence['value'] || null === $evidence['base'] ) ) {
+				$verdict = 'not_measured';
+				$reason  = 'not_tracked';
+			}
+
+			$row = array(
+				'id'            => $id,
+				'kind'          => $kind,
+				'label'         => $label,
+				'verdict'       => $verdict,
+				'verdict_label' => isset( $check['verdict_label'] ) && is_scalar( $check['verdict_label'] ) ? sanitize_text_field( (string) $check['verdict_label'] ) : '',
+				'summary'       => isset( $check['summary'] ) && is_scalar( $check['summary'] ) ? sanitize_text_field( (string) $check['summary'] ) : '',
+				'evidence'      => $evidence,
+			);
+			if ( 'not_measured' === $verdict && 'check' === $kind ) {
+				$row['reason'] = $reason;
+			}
+
+			$action_label = isset( $check['action']['label'] ) && is_scalar( $check['action']['label'] ) ? sanitize_text_field( (string) $check['action']['label'] ) : '';
+			$action_url   = isset( $check['action']['url'] ) && is_scalar( $check['action']['url'] ) ? esc_url_raw( (string) $check['action']['url'] ) : '';
+			if ( '' !== $action_label && '' !== $action_url ) {
+				$row['action'] = array(
+					'label' => $action_label,
+					'url'   => $action_url,
+				);
+			}
+
+			$normalized[ $id ] = $row;
+			if ( count( $normalized ) >= self::MAX_CHECKS ) {
+				break;
+			}
+		}
+
+		return array_values( $normalized );
 	}
 
 	/**
@@ -847,9 +1114,10 @@ class Opti_Behavior_Smart_Insights_Correlator {
 	 * @param int    $primary_index Primary index.
 	 * @param string $scope_key     Scope key.
 	 * @param array  $correlation   Correlation payload.
+	 * @param array  $child_checks  Child checks by index (build_child_checks()).
 	 * @return array
 	 */
-	private function attach_correlation_to_candidates( $candidates, $members, $primary_index, $scope_key, $correlation ) {
+	private function attach_correlation_to_candidates( $candidates, $members, $primary_index, $scope_key, $correlation, $child_checks = array() ) {
 		foreach ( $members as $index ) {
 			if ( empty( $candidates[ $index ]['insight'] ) || ! is_array( $candidates[ $index ]['insight'] ) ) {
 				continue;
@@ -872,6 +1140,23 @@ class Opti_Behavior_Smart_Insights_Correlator {
 				$insight['detection']['correlated_cause_count']  = isset( $correlation['cause_count'] ) ? (int) $correlation['cause_count'] : 0;
 			} else {
 				$insight['detection']['correlation_primary_signal'] = isset( $correlation['primary_signal'] ) ? $correlation['primary_signal'] : '';
+				if ( ! empty( $child_checks[ $index ]['checks'] ) ) {
+					// A child's own block: its measured checks only, never a
+					// story (correlated false, one signal, no cause, no probe).
+					$insight['correlation'] = array(
+						'version'        => self::SCHEMA_VERSION,
+						'scope_key'      => $scope_key,
+						'scope'          => $child_checks[ $index ]['scope'],
+						'role'           => 'child',
+						'primary_signal' => isset( $correlation['primary_signal'] ) ? $correlation['primary_signal'] : '',
+						'signal_count'   => 1,
+						'causes'         => array(),
+						'cause_count'    => 0,
+						'correlated'     => false,
+						'checks'         => $child_checks[ $index ]['checks'],
+						'generated_at'   => $this->now(),
+					);
+				}
 			}
 
 			$candidates[ $index ]['insight'] = $insight;

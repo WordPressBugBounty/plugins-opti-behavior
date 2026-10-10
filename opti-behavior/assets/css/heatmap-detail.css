@@ -2572,8 +2572,8 @@ iframe.opti-interactive-preview {
 
 /* ==========================================================================
    Click-count hover bubble ("Count Bar Display" setting, Click heatmap)
-   Pro-only: PHP sends count_bar = 0 when Pro is inactive, so JS never
-   shows the layer without Pro.
+   PHP sends count_bar = 0 when the setting is off, so JS never shows the
+   layer then.
    ========================================================================== */
 
 /* Legacy hover-capture layer for the Click tab. The current JS no longer
@@ -3186,3 +3186,4 @@ iframe.opti-interactive-preview {
 		font-variant-numeric: tabular-nums;
 	}
 }
+

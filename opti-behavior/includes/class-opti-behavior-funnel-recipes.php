@@ -239,6 +239,13 @@ class Opti_Behavior_Funnel_Recipes {
 				continue;
 			}
 
+			// OPT-588 (D): the description names the full journey; when this
+			// site could not resolve some of its pages, the funnel really has
+			// fewer steps — describe the steps it has instead.
+			if ( null !== $recipe['build_steps'] && $this->dropped_steps( $recipe, $context, $steps ) ) {
+				$recipe['description'] = self::describe_steps( $steps );
+			}
+
 			$recipe['steps'] = $steps;
 			$available[]     = $recipe;
 		}
@@ -280,6 +287,41 @@ class Opti_Behavior_Funnel_Recipes {
 		}
 
 		return $this->validate_steps( $steps );
+	}
+
+	/**
+	 * Whether the builder of a recipe planned more steps than the funnel this
+	 * site gets (unresolved pages come back as null and are dropped).
+	 *
+	 * @param array $recipe  Normalized recipe.
+	 * @param array $context Site context.
+	 * @param array $steps   Validated steps.
+	 * @return bool
+	 */
+	protected function dropped_steps( array $recipe, array $context, array $steps ) {
+		if ( ! is_callable( $recipe['build_steps'] ) ) {
+			return false;
+		}
+		$planned = call_user_func( $recipe['build_steps'], $context );
+
+		return is_array( $planned ) && count( $planned ) > count( $steps );
+	}
+
+	/**
+	 * "Home → Blog index" — the step names of a funnel, in order. Pure.
+	 *
+	 * @param array $steps Validated steps.
+	 * @return string
+	 */
+	public static function describe_steps( array $steps ) {
+		$names = array();
+		foreach ( $steps as $step ) {
+			if ( is_array( $step ) && isset( $step['name'] ) && '' !== trim( (string) $step['name'] ) ) {
+				$names[] = trim( (string) $step['name'] );
+			}
+		}
+
+		return implode( ' → ', $names );
 	}
 
 	/**

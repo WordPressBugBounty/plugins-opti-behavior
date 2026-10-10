@@ -415,8 +415,8 @@ class Opti_Behavior_Heatmap_Session {
 				array( '%s' )
 			);
 			// Invalidate dashboard caches so activity shows up on the next load.
-			if ( function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
-				opti_behavior_invalidate_dashboard_caches();
+			if ( function_exists( 'opti_behavior_invalidate_dashboard_caches_throttled' ) ) {
+				opti_behavior_invalidate_dashboard_caches_throttled();
 			}
 			return false; // Session already existed — not a new session.
 		}
@@ -460,8 +460,8 @@ class Opti_Behavior_Heatmap_Session {
 					array( '%s' ),
 					array( '%s' )
 				);
-				if ( function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
-					opti_behavior_invalidate_dashboard_caches();
+				if ( function_exists( 'opti_behavior_invalidate_dashboard_caches_throttled' ) ) {
+					opti_behavior_invalidate_dashboard_caches_throttled();
 				}
 				return false; // Merged into the visitor's active session — not a new session.
 			}
@@ -513,8 +513,8 @@ class Opti_Behavior_Heatmap_Session {
 
 			// New session: invalidate dashboard caches so the stat cards reflect
 			// the new visitor within the next 1-second AJAX tick instead of 15 min.
-			if ( function_exists( 'opti_behavior_invalidate_dashboard_caches' ) ) {
-				opti_behavior_invalidate_dashboard_caches();
+			if ( function_exists( 'opti_behavior_invalidate_dashboard_caches_throttled' ) ) {
+				opti_behavior_invalidate_dashboard_caches_throttled();
 			}
 			return true; // Brand-new session row was inserted.
 		}

@@ -270,6 +270,7 @@ class Opti_Behavior_Smart_Insights_Source_Aggregator {
 				'bounce_sessions'        => max( 0, (int) $row['bounce_sessions'] ),
 				'bounce_rate'            => $sessions > 0 ? round( ( (int) $row['bounce_sessions'] / $sessions ) * 100, 2 ) : null,
 				'avg_session_duration'   => ! empty( $row['avg_session_duration'] ) ? round( (float) $row['avg_session_duration'], 2 ) : null,
+				'min_counted_duration'   => ! empty( $args['exclude_spam'] ) ? (int) $this->get_spam_duration_floor() : 0,
 				'conversion_rate'        => null,
 				'tracking_data_complete' => $sessions > 0,
 				'last_seen_at'           => isset( $row['last_seen_at'] ) ? (string) $row['last_seen_at'] : '',
@@ -368,6 +369,12 @@ class Opti_Behavior_Smart_Insights_Source_Aggregator {
 	/** Spam exclusion SQL matching dashboard behavior. */
 	private function get_spam_exclusion_clause( $table_alias = 's' ) {
 		global $wpdb;
+		if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ) {
+			// One counting universe with Traffic (OPT-588): stored verdict only.
+			// get_spam_duration_floor() still tells the campaign signal how short
+			// a counted visit can be.
+			return Opti_Behavior_Stats_Spam_Filter::session_sql( $table_alias, 'AND', true );
+		}
 		$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
 		$prefix         = $table_alias ? $table_alias . '.' : '';
 		$conditions     = array();
@@ -377,13 +384,35 @@ class Opti_Behavior_Smart_Insights_Source_Aggregator {
 		}
 
 		if ( $this->column_exists( $sessions_table, 'duration' ) ) {
-			$settings = function_exists( 'get_option' ) ? get_option( 'opti_behavior_traffic_settings', array( 'spam_detection_enabled' => true, 'spam_duration_threshold' => 3 ) ) : array();
-			if ( ! array_key_exists( 'spam_detection_enabled', $settings ) || ! empty( $settings['spam_detection_enabled'] ) ) {
-				$conditions[] = $prefix . 'duration >= ' . max( 0, isset( $settings['spam_duration_threshold'] ) ? absint( $settings['spam_duration_threshold'] ) : 3 );
+			$floor = $this->get_spam_duration_floor();
+			if ( null !== $floor ) {
+				$duration_condition = $prefix . 'duration >= ' . $floor;
+				if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) && $this->column_exists( $sessions_table, 'referrer' ) ) {
+					// A visit referred by another site passes the duration floor (OPT-562);
+					// the floor stays the shortest DIRECT visit the filter keeps.
+					$duration_condition = Opti_Behavior_Stats_Spam_Filter::referrer_or_thresholds_sql( $duration_condition, $table_alias );
+				}
+				$conditions[] = $duration_condition;
 			}
 		}
 
 		return $conditions ? ' AND (' . implode( ' AND ', $conditions ) . ')' : '';
+	}
+
+	/**
+	 * Shortest session duration (seconds) the spam filter keeps, or null when the
+	 * duration rule is off. Signals that call a visit "quick" need it: under a
+	 * 20 s filter, no counted visit can average under 20 s.
+	 *
+	 * @return int|null
+	 */
+	private function get_spam_duration_floor() {
+		$settings = function_exists( 'get_option' ) ? get_option( 'opti_behavior_traffic_settings', array( 'spam_detection_enabled' => true, 'spam_duration_threshold' => 3 ) ) : array();
+		$settings = is_array( $settings ) ? $settings : array();
+		if ( array_key_exists( 'spam_detection_enabled', $settings ) && empty( $settings['spam_detection_enabled'] ) ) {
+			return null;
+		}
+		return max( 0, isset( $settings['spam_duration_threshold'] ) ? absint( $settings['spam_duration_threshold'] ) : 3 );
 	}
 
 	/** Whether admin metrics currently exclude spam. */

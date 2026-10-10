@@ -334,6 +334,11 @@ class Opti_Behavior_Heatmap_Analytics {
 		$options = $this->core->get_options();
 		$database = $this->core->get_database();
 
+		// Personal data (email, access_code, token…) never stored (OPT-574).
+		if ( function_exists( 'opti_behavior_strip_sensitive_query_args' ) ) {
+			$url = opti_behavior_strip_sensitive_query_args( $url );
+		}
+
 		// Build URL2 for comparison
 		$database = $this->core->get_database();
 		$query_filter = $database->make_url_filter( true );

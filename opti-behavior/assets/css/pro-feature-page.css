@@ -1,0 +1,504 @@
+/*
+ * Pro feature page seen in Free (Recordings, User Journeys, Errors
+ * Tracking, Forms). One template for the 4 pages (admin/partials/pro-feature-page.php).
+ * Loaded AFTER recordings-upgrade.css (header .recordings-header* and CTA
+ * .upgrade-cta*, .button-hero, .ob-trial-info are reused as they are).
+ * No remote resource.
+ */
+
+.ob-pro-page {
+	--ob-pp-ink: #111827;
+	--ob-pp-text: #374151;
+	--ob-pp-muted: #50575e;
+	--ob-pp-line: #e5e7eb;
+	--ob-pp-surface: #ffffff;
+	--ob-pp-soft: #f8fafc;
+	--ob-pp-accent: #4f46e5;
+	--ob-pp-accent-soft: #eef2ff;
+	--ob-pp-accent-ink: #3730a3;
+	--ob-pp-yes: #047857;
+	--ob-pp-yes-soft: #ecfdf5;
+	--ob-pp-radius: 14px;
+	--ob-pp-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.06);
+}
+
+/*
+ * The .wrap has no right margin (recordings-upgrade.css), so the header's
+ * -20px right margin went past the screen: 20 px horizontal scroll on
+ * desktop, 395 px wide page on a 375 px phone. Keep the header inside.
+ */
+.ob-pro-page .recordings-header {
+	margin-left: -20px;
+	margin-right: 0;
+}
+
+/* WP mobile admin: #wpcontent has 10 px left padding instead of 20. */
+@media (max-width: 782px) {
+	.ob-pro-page .recordings-header {
+		margin-left: -10px;
+	}
+}
+
+/* Content column: wider than the old 1000 px card, sections stacked as full-width bands. */
+.ob-pro-page .ob-pro-page__body {
+	max-width: 1120px;
+	margin: 0 auto;
+	padding: 0 20px 48px;
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+}
+
+.ob-pro-page__section {
+	background: var(--ob-pp-surface);
+	border: 1px solid var(--ob-pp-line);
+	border-radius: var(--ob-pp-radius);
+	box-shadow: var(--ob-pp-shadow);
+	padding: 28px 32px;
+}
+
+.ob-pro-page__section-title {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 0 0 18px;
+	font-size: 18px;
+	line-height: 1.3;
+	font-weight: 700;
+	color: var(--ob-pp-ink);
+}
+
+.ob-pro-page__section-title svg,
+.ob-pro-page__section-title i {
+	width: 20px;
+	height: 20px;
+	color: var(--ob-pp-accent);
+	flex-shrink: 0;
+}
+
+/* ---------- 2. Preview ---------- */
+.ob-pro-preview {
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+}
+
+.ob-pro-preview__frame {
+	position: relative;
+	margin: 0;
+	background: linear-gradient(180deg, #f5f3ff 0%, #f8fafc 100%);
+	padding: 52px 24px 0;
+}
+
+.ob-pro-preview__img {
+	display: block;
+	width: 100%;
+	height: auto;
+	border-radius: 10px 10px 0 0;
+	box-shadow: 0 -1px 0 var(--ob-pp-line), 0 10px 30px rgba(79, 70, 229, 0.14);
+	background: #fff;
+}
+
+/* « Example data » — mandatory on every preview (legal), always visible. */
+.ob-pro-preview__chip {
+	position: absolute;
+	top: 14px;
+	right: 24px;
+	z-index: 1;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	border-radius: 999px;
+	background: #1f2937;
+	color: #ffffff;
+	font-size: 12px;
+	line-height: 1.5;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	box-shadow: 0 2px 8px rgba(15, 23, 42, 0.25);
+}
+
+.ob-pro-preview__chip svg {
+	width: 14px;
+	height: 14px;
+}
+
+.ob-pro-preview__caption {
+	margin: 0;
+	padding: 14px 32px;
+	border-top: 1px solid var(--ob-pp-line);
+	font-size: 14px;
+	line-height: 1.5;
+	color: var(--ob-pp-muted);
+	background: var(--ob-pp-surface);
+}
+
+/* ---------- 3. What you'll find out ---------- */
+.ob-pro-cases {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 16px;
+	counter-reset: ob-pro-case;
+}
+
+.ob-pro-case {
+	position: relative;
+	margin: 0;
+	padding: 18px 18px 18px 60px;
+	border-radius: 12px;
+	border: 1px solid var(--ob-pp-line);
+	background: var(--ob-pp-soft);
+	font-size: 14px;
+	line-height: 1.6;
+	color: var(--ob-pp-text);
+	counter-increment: ob-pro-case;
+}
+
+.ob-pro-case::before {
+	content: counter(ob-pro-case);
+	position: absolute;
+	left: 18px;
+	top: 18px;
+	width: 28px;
+	height: 28px;
+	border-radius: 8px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--ob-pp-accent-soft);
+	color: var(--ob-pp-accent-ink);
+	font-size: 14px;
+	font-weight: 700;
+}
+
+/* ---------- 4. Free / Pro table ---------- */
+.ob-pro-compare {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	font-size: 14px;
+	line-height: 1.5;
+	color: var(--ob-pp-text);
+	table-layout: fixed;
+}
+
+.ob-pro-compare th,
+.ob-pro-compare td {
+	padding: 12px 16px;
+	border-bottom: 1px solid var(--ob-pp-line);
+	text-align: left;
+	vertical-align: middle;
+}
+
+.ob-pro-compare thead th {
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--ob-pp-muted);
+	background: var(--ob-pp-soft);
+}
+
+.ob-pro-compare thead th:first-child { border-top-left-radius: 10px; }
+.ob-pro-compare thead th:last-child { border-top-right-radius: 10px; }
+
+.ob-pro-compare .ob-pro-compare__plan {
+	width: 96px;
+	text-align: center;
+}
+
+.ob-pro-compare thead .ob-pro-compare__plan.is-pro {
+	color: var(--ob-pp-accent-ink);
+	background: var(--ob-pp-accent-soft);
+}
+
+.ob-pro-compare tbody th {
+	font-weight: 500;
+	color: var(--ob-pp-ink);
+}
+
+.ob-pro-compare tbody tr:last-child th,
+.ob-pro-compare tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.ob-pro-compare tbody td.is-pro {
+	background: #fafaff;
+}
+
+/* ✓ / – carry text for screen readers (.screen-reader-text), not colour only. */
+.ob-pro-compare__yes,
+.ob-pro-compare__no {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border-radius: 999px;
+	font-size: 15px;
+	font-weight: 700;
+	line-height: 1;
+}
+
+.ob-pro-compare__yes {
+	background: var(--ob-pp-yes-soft);
+	color: var(--ob-pp-yes);
+}
+
+.ob-pro-compare__no {
+	color: #6b7280;
+}
+
+/* ---------- 5. FAQ ---------- */
+.ob-pro-faq {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 10px;
+}
+
+.ob-pro-faq__item {
+	border: 1px solid var(--ob-pp-line);
+	border-radius: 12px;
+	background: var(--ob-pp-surface);
+}
+
+.ob-pro-faq__item[open] {
+	border-color: #c7d2fe;
+	background: #fcfcff;
+}
+
+.ob-pro-faq__item summary {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 44px;
+	padding: 10px 16px;
+	box-sizing: border-box;
+	cursor: pointer;
+	list-style: none;
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--ob-pp-ink);
+	border-radius: 12px;
+}
+
+.ob-pro-faq__item summary::-webkit-details-marker {
+	display: none;
+}
+
+.ob-pro-faq__item summary::after {
+	content: '';
+	flex-shrink: 0;
+	width: 8px;
+	height: 8px;
+	border-right: 2px solid #6b7280;
+	border-bottom: 2px solid #6b7280;
+	transform: rotate(45deg) translate(-2px, -2px);
+	transition: transform 0.2s ease;
+}
+
+.ob-pro-faq__item[open] summary::after {
+	transform: rotate(-135deg) translate(-2px, -2px);
+}
+
+.ob-pro-faq__item summary:focus-visible,
+.ob-pro-demo-btn:focus-visible {
+	outline: 2px solid var(--ob-pp-accent);
+	outline-offset: 2px;
+	box-shadow: none;
+}
+
+.ob-pro-faq__item p {
+	margin: 0;
+	padding: 0 16px 14px;
+	font-size: 14px;
+	line-height: 1.6;
+	color: var(--ob-pp-text);
+}
+
+/* ---------- 6. CTA (existing .upgrade-cta content kept as it is) ---------- */
+.ob-pro-page .upgrade-card.ob-pro-cta {
+	box-sizing: border-box;
+	padding: 32px;
+}
+
+.ob-pro-page .upgrade-card.ob-pro-cta:hover {
+	transform: none;
+}
+
+.ob-pro-page .ob-pro-cta .upgrade-title {
+	font-size: 26px;
+	margin-bottom: 0;
+}
+
+.ob-pro-page .ob-pro-cta .upgrade-cta {
+	margin-top: 20px;
+	background: linear-gradient(135deg, #f5f3ff 0%, #eef2ff 100%);
+	border: 1px solid #c7d2fe;
+}
+
+/* The old gift badge and the old sparkles icon pulsed forever: static here,
+   the only moving element of the page is the demo button (3 cycles). */
+.ob-pro-page .free-badge,
+.ob-pro-page .upgrade-icon i,
+.ob-pro-page .upgrade-icon svg {
+	animation: none;
+}
+
+.ob-pro-cta__actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+}
+
+/* Download button: same .button-hero, only centred inside the action row. */
+.ob-pro-cta__actions .button-hero {
+	margin: 0;
+}
+
+/* « See it live in the demo » — secondary button, soft violet halo. */
+.ob-pro-demo-btn {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	min-height: 44px;
+	padding: 12px 24px;
+	box-sizing: border-box;
+	border: 2px solid var(--ob-pp-accent);
+	border-radius: 8px;
+	background: #ffffff;
+	color: var(--ob-pp-accent-ink);
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1.4;
+	text-decoration: none;
+	transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.ob-pro-demo-btn svg,
+.ob-pro-demo-btn i {
+	width: 18px;
+	height: 18px;
+	flex-shrink: 0;
+}
+
+.ob-pro-demo-btn:hover,
+.ob-pro-demo-btn:focus {
+	background: var(--ob-pp-accent-soft);
+	color: var(--ob-pp-accent-ink);
+}
+
+/* Halo on a pseudo-element: no change of size, no layout shift, no blinking. */
+.ob-pro-demo-btn.is-pulse::after {
+	content: '';
+	position: absolute;
+	inset: -2px;
+	border-radius: 10px;
+	pointer-events: none;
+	box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.45);
+	animation: ob-pro-demo-halo 2.4s ease-out 0.8s 3;
+}
+
+.ob-pro-demo-btn.is-pulse:hover::after,
+.ob-pro-demo-btn.is-pulse:focus::after,
+.ob-pro-demo-btn.is-pulse:focus-visible::after {
+	animation: none;
+}
+
+@keyframes ob-pro-demo-halo {
+	0% {
+		box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.45);
+	}
+	70% {
+		box-shadow: 0 0 0 10px rgba(99, 102, 241, 0);
+	}
+	100% {
+		box-shadow: 0 0 0 10px rgba(99, 102, 241, 0);
+	}
+}
+
+.ob-pro-cta__demo-note {
+	margin: 10px 0 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--ob-pp-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-pro-demo-btn.is-pulse::after {
+		animation: none;
+	}
+	.ob-pro-faq__item summary::after {
+		transition: none;
+	}
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 960px) {
+	.ob-pro-cases {
+		grid-template-columns: 1fr;
+	}
+	.ob-pro-faq {
+		grid-template-columns: 1fr;
+	}
+}
+
+@media (max-width: 600px) {
+	/* WP mobile admin gives 10 px on the left only: mirror it on the right. */
+	.ob-pro-page .ob-pro-page__body {
+		padding: 0 10px 32px 0;
+		gap: 16px;
+	}
+	.ob-pro-page__section {
+		padding: 20px 16px;
+		border-radius: 12px;
+	}
+	.ob-pro-preview {
+		padding: 0;
+	}
+	.ob-pro-preview__frame {
+		padding: 42px 12px 0;
+	}
+	.ob-pro-preview__chip {
+		top: 10px;
+		right: 12px;
+		font-size: 11px;
+		padding: 3px 8px;
+	}
+	.ob-pro-preview__caption {
+		padding: 12px 16px;
+		font-size: 13px;
+	}
+	.ob-pro-compare th,
+	.ob-pro-compare td {
+		padding: 10px 8px;
+	}
+	.ob-pro-compare .ob-pro-compare__plan {
+		width: 52px;
+	}
+	.ob-pro-compare tbody th {
+		font-size: 13px;
+	}
+	.ob-pro-page .upgrade-card.ob-pro-cta {
+		padding: 24px 16px;
+	}
+	.ob-pro-page .ob-pro-cta .upgrade-title {
+		font-size: 22px;
+	}
+	.ob-pro-cta__actions {
+		flex-direction: column;
+		align-items: stretch;
+	}
+	.ob-pro-demo-btn {
+		width: 100%;
+	}
+}

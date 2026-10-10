@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+<style>
+.cur{animation:mv 7s ease-in-out infinite}
+.rip{transform-origin:612px 300px;animation:rp 7s ease-out infinite;opacity:0}
+.prog{animation:pg 7s linear infinite;transform-origin:170px 0}
+@keyframes mv{0%{transform:translate(180px,120px)}30%{transform:translate(420px,200px)}55%{transform:translate(600px,288px)}62%{transform:translate(600px,288px)}100%{transform:translate(720px,150px)}}
+@keyframes rp{0%,55%{opacity:0;transform:scale(.2)}58%{opacity:.8;transform:scale(.4)}70%{opacity:0;transform:scale(1.4)}100%{opacity:0}}
+@keyframes pg{0%{transform:scaleX(.18)}100%{transform:scaleX(.82)}}
+@media (prefers-reduced-motion:reduce){.cur,.rip,.prog{animation:none}.cur{transform:translate(672px,298px)}.prog{transform:scaleX(.55)}}
+</style>
+<rect width="960" height="440" fill="#fff"/>
+<!-- player top bar -->
+<rect width="960" height="44" fill="#f8fafc"/>
+<rect y="43" width="960" height="1" fill="#e5e7eb"/>
+<circle cx="22" cy="22" r="5" fill="#f87171"/><circle cx="40" cy="22" r="5" fill="#fbbf24"/><circle cx="58" cy="22" r="5" fill="#34d399"/>
+<rect x="84" y="12" width="300" height="20" rx="10" fill="#fff" stroke="#e5e7eb"/>
+<text x="98" y="26" font-size="12" fill="#6b7280">example-shop.com/checkout</text>
+<rect x="400" y="12" width="88" height="20" rx="10" fill="#eef2ff"/><text x="444" y="26" font-size="11" fill="#3730a3" text-anchor="middle" font-weight="600">Page 2 of 3</text>
+<rect x="496" y="12" width="88" height="20" rx="10" fill="#f1f5f9"/><text x="540" y="26" font-size="11" fill="#475569" text-anchor="middle">Mobile · FR</text>
+<!-- replayed page wireframe -->
+<rect x="60" y="64" width="560" height="22" rx="4" fill="#e5e7eb"/>
+<rect x="60" y="98" width="380" height="12" rx="3" fill="#f1f5f9"/>
+<rect x="60" y="118" width="420" height="12" rx="3" fill="#f1f5f9"/>
+<rect x="60" y="150" width="400" height="36" rx="6" fill="#fff" stroke="#d1d5db"/><text x="74" y="173" font-size="12" fill="#9ca3af">Email</text>
+<rect x="60" y="198" width="400" height="36" rx="6" fill="#fff" stroke="#d1d5db"/><text x="74" y="221" font-size="12" fill="#9ca3af">Address</text>
+<rect x="60" y="246" width="190" height="36" rx="6" fill="#fff" stroke="#d1d5db"/><rect x="270" y="246" width="190" height="36" rx="6" fill="#fff" stroke="#d1d5db"/>
+<rect x="520" y="282" width="180" height="40" rx="8" fill="#4f46e5"/><text x="610" y="307" font-size="13" fill="#fff" text-anchor="middle" font-weight="600">Pay now</text>
+<rect x="520" y="150" width="380" height="110" rx="10" fill="#f8fafc" stroke="#e5e7eb"/>
+<rect x="540" y="170" width="160" height="12" rx="3" fill="#e5e7eb"/><rect x="540" y="194" width="300" height="10" rx="3" fill="#f1f5f9"/><rect x="540" y="214" width="260" height="10" rx="3" fill="#f1f5f9"/><rect x="540" y="236" width="120" height="12" rx="3" fill="#c7d2fe"/>
+<!-- mouse trail -->
+<path d="M180 120 C 300 140, 360 190, 420 200 S 560 270, 600 288" fill="none" stroke="#a5b4fc" stroke-width="2" stroke-dasharray="4 6"/>
+<circle class="rip" cx="612" cy="300" r="22" fill="none" stroke="#6366f1" stroke-width="3"/>
+<g class="cur"><path d="M0 0 L0 20 L5 15 L9 24 L13 22 L9 13 L16 13 Z" fill="#111827" stroke="#fff" stroke-width="1.5"/></g>
+<!-- timeline -->
+<rect y="352" width="960" height="88" fill="#111827"/>
+<circle cx="40" cy="384" r="14" fill="#fff"/><path d="M35 376 L35 392 L48 384 Z" fill="#111827"/>
+<text x="68" y="389" font-size="12" fill="#cbd5e1">01:12 / 02:40</text>
+<rect x="170" y="380" width="680" height="8" rx="4" fill="#374151"/>
+<rect class="prog" x="170" y="380" width="680" height="8" rx="4" fill="#818cf8"/>
+<g fill="#fbbf24"><circle cx="300" cy="384" r="5"/><circle cx="452" cy="384" r="5"/></g>
+<circle cx="560" cy="384" r="5" fill="#f87171"/>
+<text x="870" y="389" font-size="12" fill="#cbd5e1">1x</text>
+<g font-size="11" fill="#94a3b8"><text x="170" y="418">● Click</text><text x="236" y="418" fill="#fbbf24">● Scroll back up</text><text x="352" y="418" fill="#f87171">● Pause 14 s</text></g>
+</svg>

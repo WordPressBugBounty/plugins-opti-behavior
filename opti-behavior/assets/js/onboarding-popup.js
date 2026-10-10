@@ -206,6 +206,10 @@
     function dismiss(opts) {
         var overlay = document.querySelector('.ob-setup-overlay');
         if (!overlay) { return; }
+        // One dismissal only: Escape / X during the closing screen must not send
+        // a second request that saves create_funnels=0 over the 1 (QA-B-ONB-016).
+        if (overlay.getAttribute('data-ob-closing') === '1') { return; }
+        overlay.setAttribute('data-ob-closing', '1');
 
         var isFinish = !!(opts && opts.finish);
 

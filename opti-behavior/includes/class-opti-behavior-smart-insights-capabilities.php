@@ -76,11 +76,14 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 	/**
 	 * Shape one insight payload for the current viewer.
 	 *
-	 * @param array  $insight Insight payload.
-	 * @param string $context View context: list, detail, dashboard.
+	 * @param array  $insight       Insight payload.
+	 * @param string $context       View context: list, detail, dashboard.
+	 * @param bool   $apply_filters False = skip `opti_behavior_smart_insights_shape_payload`
+	 *                              (Pro related-report links, one query each): the list
+	 *                              matches search / confidence on the rest (OPT-268).
 	 * @return array
 	 */
-	public function filter_insight_for_viewer( $insight, $context = 'list' ) {
+	public function filter_insight_for_viewer( $insight, $context = 'list', $apply_filters = true ) {
 		if ( ! is_array( $insight ) ) {
 			return array();
 		}
@@ -118,9 +121,195 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 		if ( is_array( $first ) ) {
 			$first = isset( $first['title'] ) ? $first['title'] : ( isset( $first['label'] ) ? $first['label'] : ( isset( $first['action'] ) ? $first['action'] : '' ) );
 		}
-		$insight['next_action_short'] = class_exists( 'Opti_Behavior_Smart_Insights_Recommendations' ) && is_string( $first ) ? Opti_Behavior_Smart_Insights_Recommendations::short_action( $first ) : '';
+		$insight['next_action_short'] = class_exists( 'Opti_Behavior_Smart_Insights_Recommendations' ) && is_string( $first ) ? Opti_Behavior_Smart_Insights_Recommendations::card_action( $first ) : '';
+
+		$insight = $this->apply_card_copy( $insight );
+		$insight = $this->shape_also_seen_here( $insight );
+		$insight = $this->shape_attached_actions( $insight );
+		$insight = $this->shape_chart( $insight );
+
+		if ( ! $apply_filters ) {
+			return $insight;
+		}
 
 		return apply_filters( 'opti_behavior_smart_insights_shape_payload', $insight, $context, $this->has_pro_access );
+	}
+
+	/**
+	 * Card title + the card's one complete action (OPT-362 lot 2): Free
+	 * families from Recommendations::card_copy(), Pro families through the
+	 * `opti_behavior_smart_insights_card_copy` filter. Both fields are optional:
+	 * empty = the screen keeps signal_name / next_action_short. Locked previews
+	 * keep their teaser copy. A filter may also replace `recommended_actions`
+	 * (the Next steps 2 and 3), never with an empty list.
+	 *
+	 * @param array $insight Shaped insight payload.
+	 * @return array
+	 */
+	private function apply_card_copy( $insight ) {
+		if ( ! empty( $insight['is_locked_preview'] ) || ! class_exists( 'Opti_Behavior_Smart_Insights_Recommendations' ) ) {
+			return $insight;
+		}
+
+		$copy = Opti_Behavior_Smart_Insights_Recommendations::card_copy( $insight );
+		try {
+			$copy = apply_filters( 'opti_behavior_smart_insights_card_copy', $copy, $insight, $this->has_pro_access );
+		} catch ( Throwable $e ) {
+			// A faulty provider never costs the card its Free copy.
+			$copy = Opti_Behavior_Smart_Insights_Recommendations::card_copy( $insight );
+		}
+		if ( ! is_array( $copy ) ) {
+			return $insight;
+		}
+
+		foreach ( array( 'card_title', 'action_short' ) as $key ) {
+			$value = isset( $copy[ $key ] ) && is_scalar( $copy[ $key ] ) ? trim( sanitize_text_field( (string) $copy[ $key ] ) ) : '';
+			if ( '' !== $value ) {
+				$insight[ $key ] = $value;
+			}
+		}
+		if ( ! empty( $insight['action_short'] ) ) {
+			$insight['next_action_short'] = $insight['action_short'];
+		}
+		if ( ! empty( $copy['recommended_actions'] ) && is_array( $copy['recommended_actions'] ) ) {
+			$actions = array_values( array_filter( array_map( 'sanitize_text_field', array_filter( $copy['recommended_actions'], 'is_scalar' ) ) ) );
+			if ( ! empty( $actions ) ) {
+				$insight['recommended_actions'] = $actions;
+			}
+		}
+
+		return $insight;
+	}
+
+	/**
+	 * "Also seen here" lines of a merged card (OPT-378 A, repository
+	 * merge_entity_families()): each merged signal = its card title (same copy
+	 * as its own card would get) + one figure, visits lost. Raw metrics and
+	 * detection never leave the server; a locked preview shows none.
+	 *
+	 * @param array $insight Shaped insight payload.
+	 * @return array
+	 */
+	private function shape_also_seen_here( $insight ) {
+		if ( empty( $insight['also_seen_here'] ) || ! is_array( $insight['also_seen_here'] ) ) {
+			unset( $insight['also_seen_here'] );
+			return $insight;
+		}
+		if ( ! empty( $insight['is_locked_preview'] ) ) {
+			unset( $insight['also_seen_here'], $insight['merged_ids'] );
+			return $insight;
+		}
+
+		$lines = array();
+		foreach ( $insight['also_seen_here'] as $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+			$copy  = $this->apply_card_copy( $item + array( 'is_locked_preview' => false ) );
+			$title = ! empty( $copy['card_title'] ) ? $copy['card_title'] : sanitize_text_field( (string) ( $item['signal_name'] ?? '' ) );
+			if ( '' === $title ) {
+				$title = ucfirst( str_replace( '_', ' ', sanitize_key( (string) ( $item['signal_id'] ?? '' ) ) ) );
+			}
+			$lines[] = array(
+				'id'         => isset( $item['id'] ) ? absint( $item['id'] ) : 0,
+				'signal_id'  => sanitize_key( (string) ( $item['signal_id'] ?? '' ) ),
+				'title'      => $title,
+				'users_lost' => isset( $item['users_lost'] ) ? absint( $item['users_lost'] ) : 0,
+			);
+		}
+
+		$insight['also_seen_here'] = $lines;
+		if ( $lines ) {
+			$insight['also_seen_label'] = __( 'Also seen here:', 'opti-behavior' );
+		}
+
+		return $insight;
+	}
+
+	/**
+	 * Actions carried by the card of the same page (OPT-378 B, repository
+	 * attach_action_signals()): `recording_action` = the card's proof button
+	 * "Watch N recordings of this page" (locked for a viewer without Pro, like
+	 * the other Pro previews), `ab_action` = "Start an A/B test" from the
+	 * stored A/B opportunity (Pro viewers only: the experiment it suggests is
+	 * Pro data). Nothing on a locked preview card.
+	 *
+	 * @param array $insight Shaped insight payload.
+	 * @return array
+	 */
+	private function shape_attached_actions( $insight ) {
+		$recording = isset( $insight['recording_action'] ) && is_array( $insight['recording_action'] ) ? $insight['recording_action'] : array();
+		$ab        = isset( $insight['ab_action'] ) && is_array( $insight['ab_action'] ) ? $insight['ab_action'] : array();
+		unset( $insight['recording_action'], $insight['ab_action'] );
+		if ( ! empty( $insight['is_locked_preview'] ) ) {
+			return $insight;
+		}
+
+		// No count in the label: the stored `recordings` metric of the
+		// opportunity is not scoped to the page (Pro provider, recordings table
+		// without a url column), the recordings list it opens is. A Pro viewer
+		// gets the button only when Pro finds recordings of THIS page in the
+		// card's period (else the list it opens is empty); the locked preview
+		// opens no list.
+		$count = isset( $recording['recordings'] ) ? absint( $recording['recordings'] ) : 0;
+		if ( $count > 0 && $this->has_pro_access ) {
+			$count = self::page_recordings_count( $insight );
+		}
+		if ( $count > 0 ) {
+			$insight['recording_action'] = array(
+				'locked' => ! $this->has_pro_access,
+				'label'  => __( 'Watch the recordings of this page', 'opti-behavior' ),
+			);
+		}
+
+		$ab_id = isset( $ab['id'] ) ? absint( $ab['id'] ) : 0;
+		if ( $ab_id > 0 && $this->has_pro_access ) {
+			$insight['ab_action'] = array(
+				'insight_id' => $ab_id,
+				'days'       => isset( $ab['days'] ) ? absint( $ab['days'] ) : 0,
+				'label'      => __( 'Start an A/B test', 'opti-behavior' ),
+			);
+		}
+
+		return $insight;
+	}
+
+	/**
+	 * Recorded visits of the card's page, period and spam scope, answered by
+	 * Pro through `opti_behavior_smart_insights_page_recordings` (OPT-378 B).
+	 * No answer (older Pro, feature off, page not addressable) = 0.
+	 *
+	 * @param array $insight Shaped insight payload.
+	 * @return int
+	 */
+	private static function page_recordings_count( $insight ) {
+		try {
+			$count = apply_filters( 'opti_behavior_smart_insights_page_recordings', null, $insight );
+		} catch ( Throwable $e ) {
+			$count = null;
+		}
+
+		return is_numeric( $count ) ? max( 0, (int) $count ) : 0;
+	}
+
+	/**
+	 * The card chart (OPT-378 C): Recommendations::chart_data() from the
+	 * stored figures, none when a figure is missing or the card is locked.
+	 *
+	 * @param array $insight Shaped insight payload.
+	 * @return array
+	 */
+	private function shape_chart( $insight ) {
+		unset( $insight['chart'] );
+		if ( ! empty( $insight['is_locked_preview'] ) || ! class_exists( 'Opti_Behavior_Smart_Insights_Recommendations' ) ) {
+			return $insight;
+		}
+		$chart = Opti_Behavior_Smart_Insights_Recommendations::chart_data( $insight );
+		if ( ! empty( $chart ) ) {
+			$insight['chart'] = $chart;
+		}
+
+		return $insight;
 	}
 
 	/**
@@ -159,13 +348,34 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 	}
 
 	/**
+	 * Whether filter_insight_for_viewer() would turn this row into a locked preview.
+	 *
+	 * Lets the list count rows it does not shape (OPT-268): a locked preview
+	 * loses its `detection`, which the "Recurring" count reads.
+	 *
+	 * @since 1.9.2
+	 * @param array $insight Insight payload.
+	 * @return bool
+	 */
+	public function is_locked_for_viewer( $insight ) {
+		if ( ! is_array( $insight ) ) {
+			return false;
+		}
+
+		$tier = $this->normalize_visibility_tier( $insight );
+
+		return self::TIER_PRO_LOCKED === $tier || ( self::TIER_PRO === $tier && ! $this->has_pro_access );
+	}
+
+	/**
 	 * Shape a computed "Who is affected?" segment matrix for the current viewer.
 	 *
-	 * Pro receives the full matrix and can re-scope the insight's evidence links
-	 * by segment. Free receives a teaser: the single most concentrated segment
-	 * (so the value of the panel is visible and comparable) plus the number of
-	 * dimensions that stay locked. Per-dimension distributions, the remaining
-	 * segments, and the per-segment report context never reach a Free viewer.
+	 * Pro receives the full matrix (built by the Pro builder) and can re-scope
+	 * the insight's evidence links by segment. Since OPT-403 (WordPress.org
+	 * guideline 5) the per-audience breakdown is not computed for a Free viewer
+	 * at all: Free gets everything the Free builder computed (scope numbers,
+	 * metric, the whole traffic mix) plus the upgrade line, and no teaser built
+	 * from Pro-only results.
 	 *
 	 * @since 1.3.9
 	 *
@@ -183,52 +393,35 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 			$matrix['tier']   = self::TIER_PRO;
 			$matrix['locked'] = false;
 		} else {
-			$dimensions = isset( $matrix['dimensions'] ) && is_array( $matrix['dimensions'] ) ? $matrix['dimensions'] : array();
-			$top        = isset( $matrix['top_segment'] ) && is_array( $matrix['top_segment'] ) ? $matrix['top_segment'] : null;
-			$outliers   = isset( $matrix['outliers'] ) && is_array( $matrix['outliers'] ) ? $matrix['outliers'] : array();
-
-			$combo_outliers = $this->filter_combo_outliers( $outliers, true );
-
+			// Breakdown fields are always emptied, also when a Pro builder ran for a
+			// viewer whose access closed in between: the Free payload only carries
+			// what the Free builder computes.
 			$matrix = array(
 				'version'         => isset( $matrix['version'] ) ? (int) $matrix['version'] : 1,
 				'available'       => ! empty( $matrix['available'] ),
 				'reason'          => isset( $matrix['reason'] ) ? sanitize_key( $matrix['reason'] ) : '',
 				'total_sessions'  => isset( $matrix['total_sessions'] ) ? (int) $matrix['total_sessions'] : 0,
 				'scope_sessions'  => isset( $matrix['scope_sessions'] ) ? (int) $matrix['scope_sessions'] : 0,
-				// Free keeps the honest arithmetic behind an unavailable panel:
 				// "12 of the 30 sessions needed" is not a paid answer.
 				'min_scope_sessions' => isset( $matrix['min_scope_sessions'] ) ? (int) $matrix['min_scope_sessions'] : 0,
 				'exclude_spam'    => ! empty( $matrix['exclude_spam'] ),
-				// The verdict sentence is the honest part of the answer and stays
-				// free: Free viewers learn WHICH audience carries the problem, Pro
-				// viewers additionally get every bucket and the segment-scoped
-				// evidence links.
 				'primary_metric'  => isset( $matrix['primary_metric'] ) ? sanitize_key( $matrix['primary_metric'] ) : '',
 				'metric_label'    => isset( $matrix['metric_label'] ) ? (string) $matrix['metric_label'] : '',
 				'metric_unit'     => isset( $matrix['metric_unit'] ) ? sanitize_key( $matrix['metric_unit'] ) : '',
 				'metric_type'     => isset( $matrix['metric_type'] ) ? sanitize_key( $matrix['metric_type'] ) : '',
-				'uniform'         => ! empty( $matrix['uniform'] ),
-				'outliers'        => $this->shape_locked_outliers( $outliers ),
-				'locked_outlier_count' => count( $outliers ),
-				'dimension_count' => count( $dimensions ),
-				// The pulse strip is the free half of the answer: WHICH dimensions
-				// carry a problem, how many segments were measurable, and which ones
-				// fell under the data floor. WHERE exactly inside them stays Pro.
-				'dimension_pulses' => $this->shape_dimension_pulses( $dimensions ),
-				// Combination findings are Pro: Free learns one exists and half of
-				// its identity, which is the upgrade reason, not the answer.
+				'segments_included' => false,
+				// Not measured is not "the same everywhere".
+				'uniform'         => false,
+				'outliers'        => array(),
+				'locked_outlier_count' => 0,
+				'dimension_count' => 0,
+				'dimension_pulses' => array(),
 				'combo_dimension_count' => 0,
-				'locked_combo_count'    => count( $combo_outliers ),
-				'locked_combo_teaser'   => $this->shape_combo_teaser( $combo_outliers ),
-				'traffic_mix'     => $this->shape_locked_traffic_mix( isset( $matrix['traffic_mix'] ) ? $matrix['traffic_mix'] : null ),
+				'locked_combo_count'    => 0,
+				'locked_combo_teaser'   => null,
+				'traffic_mix'     => $this->shape_free_traffic_mix( isset( $matrix['traffic_mix'] ) ? $matrix['traffic_mix'] : null ),
 				'dimensions'      => array(),
-				'top_segment'     => null === $top ? null : array(
-					'dimension'       => isset( $top['dimension'] ) ? sanitize_key( $top['dimension'] ) : '',
-					'dimension_label' => isset( $top['dimension_label'] ) ? (string) $top['dimension_label'] : '',
-					'label'           => isset( $top['label'] ) ? (string) $top['label'] : '',
-					'sessions'        => isset( $top['sessions'] ) ? (int) $top['sessions'] : 0,
-					'share'           => isset( $top['share'] ) ? (float) $top['share'] : 0,
-				),
+				'top_segment'     => null,
 				'tier'            => self::TIER_PRO_LOCKED,
 				'locked'          => true,
 				'locked_hint'     => __( 'Upgrade to Pro to break this insight down by device, source, campaign, and visitor type — and to re-scope the evidence links to one segment.', 'opti-behavior' ),
@@ -248,208 +441,25 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 	}
 
 	/**
-	 * Reduce outliers to the single verdict-bearing entry a Free viewer sees.
+	 * Free-tier shape of the traffic-mix block: the whole block.
 	 *
-	 * Only the fields the verdict sentence needs survive: no per-bucket metric
-	 * table, no complement breakdown, no report context, and no sparkline — the
-	 * day-by-day shape of one segment is the drill-down Pro pays for.
-	 *
-	 * Combination outliers are excluded on purpose: with pairs in the ranking
-	 * pool the top entry can be a combined pattern, which decision D1 keeps Pro.
-	 * Free gets the best SINGLE-dimension finding plus a combo teaser beside it.
-	 *
-	 * @since 1.4.0
-	 *
-	 * @param array $outliers Full outlier list.
-	 * @return array
-	 */
-	private function shape_locked_outliers( $outliers ) {
-		$singles = $this->filter_combo_outliers( $outliers, false );
-		$first   = isset( $singles[0] ) && is_array( $singles[0] ) ? $singles[0] : null;
-		if ( null === $first ) {
-			return array();
-		}
-
-		return array(
-			array(
-				'dimension'        => isset( $first['dimension'] ) ? sanitize_key( $first['dimension'] ) : '',
-				'dimension_label'  => isset( $first['dimension_label'] ) ? (string) $first['dimension_label'] : '',
-				'key'              => isset( $first['key'] ) ? (string) $first['key'] : '',
-				'label'            => isset( $first['label'] ) ? (string) $first['label'] : '',
-				'sessions'         => isset( $first['sessions'] ) ? (int) $first['sessions'] : 0,
-				'share'            => isset( $first['share'] ) ? (float) $first['share'] : 0,
-				'value'            => isset( $first['value'] ) ? $first['value'] : null,
-				'complement_value' => isset( $first['complement_value'] ) ? $first['complement_value'] : null,
-				'delta'            => isset( $first['delta'] ) ? $first['delta'] : null,
-				'is_outlier'       => ! empty( $first['is_outlier'] ),
-				'is_worse_side'    => ! empty( $first['is_worse_side'] ),
-				// Pulse inputs are Free (D1): the direction word only, never the
-				// early/late values behind it.
-				'insufficient'     => ! empty( $first['insufficient'] ),
-				'trend'            => array(
-					'direction' => isset( $first['trend']['direction'] ) ? sanitize_key( $first['trend']['direction'] ) : 'insufficient',
-				),
-			),
-		);
-	}
-
-	/**
-	 * Split an outlier list into combination and single-dimension findings.
-	 *
-	 * A combination bucket is the only one that carries `parts`, so the split
-	 * needs no dimension-registry lookup and cannot drift from the builder.
-	 *
-	 * @since 1.4.1
-	 *
-	 * @param array $outliers Full outlier list.
-	 * @param bool  $combos   True to keep combinations, false to keep singles.
-	 * @return array
-	 */
-	private function filter_combo_outliers( $outliers, $combos ) {
-		$kept = array();
-
-		foreach ( $outliers as $outlier ) {
-			if ( ! is_array( $outlier ) ) {
-				continue;
-			}
-
-			$is_combo = ! empty( $outlier['parts'] ) && is_array( $outlier['parts'] );
-			if ( $is_combo === (bool) $combos ) {
-				$kept[] = $outlier;
-			}
-		}
-
-		return array_values( $kept );
-	}
-
-	/**
-	 * Free-tier teaser for the best combination finding.
-	 *
-	 * Names the dimension pair and the FIRST half of the audience, then stops:
-	 * enough to prove the analysis found something a single dimension missed,
-	 * not enough to act on it without Pro.
-	 *
-	 * @since 1.4.1
-	 *
-	 * @param array $combo_outliers Combination outliers.
-	 * @return array|null
-	 */
-	private function shape_combo_teaser( $combo_outliers ) {
-		$first = isset( $combo_outliers[0] ) && is_array( $combo_outliers[0] ) ? $combo_outliers[0] : null;
-		if ( null === $first ) {
-			return null;
-		}
-
-		$parts       = isset( $first['parts'] ) && is_array( $first['parts'] ) ? array_values( $first['parts'] ) : array();
-		$first_label = isset( $parts[0]['label'] ) ? (string) $parts[0]['label'] : '';
-
-		return array(
-			'dimension_label' => isset( $first['dimension_label'] ) ? (string) $first['dimension_label'] : '',
-			'label_hint'      => '' === $first_label
-				? ''
-				/* translators: %s: the visible half of a locked combined segment, e.g. "Mobile". */
-				: sprintf( __( '%s × …', 'opti-behavior' ), $first_label ),
-			'is_worse_side'   => ! empty( $first['is_worse_side'] ),
-		);
-	}
-
-	/**
-	 * Per-dimension pulse verdicts a Free viewer is allowed to see.
-	 *
-	 * The strip answers "which dimensions carry a problem and which ones could
-	 * not even be measured" without naming a single bucket, so it is the free
-	 * half of the panel. Combination dimensions are dropped entirely (D1).
-	 *
-	 * @since 1.4.1
-	 *
-	 * @param array $dimensions Full dimension list.
-	 * @return array
-	 */
-	private function shape_dimension_pulses( $dimensions ) {
-		$pulses = array();
-
-		foreach ( $dimensions as $entry ) {
-			if ( ! is_array( $entry ) || ! empty( $entry['is_combo'] ) ) {
-				continue;
-			}
-
-			$pulses[] = array(
-				'dimension'           => isset( $entry['dimension'] ) ? sanitize_key( $entry['dimension'] ) : '',
-				'dimension_label'     => isset( $entry['dimension_label'] ) ? (string) $entry['dimension_label'] : '',
-				'pulse'               => isset( $entry['pulse'] ) ? sanitize_key( $entry['pulse'] ) : 'insufficient',
-				'bucket_count'        => isset( $entry['bucket_count'] ) ? (int) $entry['bucket_count'] : 0,
-				'tested_bucket_count' => isset( $entry['tested_bucket_count'] ) ? (int) $entry['tested_bucket_count'] : 0,
-			);
-		}
-
-		return $pulses;
-	}
-
-	/**
-	 * Free-tier shape of the traffic-mix block: the verdict, not the table.
-	 *
-	 * "Your audience changed and the change explains the metric" is the finding
-	 * and stays free, because a Free viewer acting on a page regression that is
-	 * really a traffic-mix effect would be acting on a false premise. Which
-	 * buckets moved, by how much, and against which previous shares is the
-	 * drill-down Pro pays for.
+	 * The Free code computes the table, so a Free viewer sees all of it
+	 * (WordPress.org guideline 5: no computed result is held back until the
+	 * user pays). A quiet or unavailable mix stays null, like before.
 	 *
 	 * @since 1.4.1
 	 *
 	 * @param array|null $traffic_mix Computed traffic-mix block.
 	 * @return array|null
 	 */
-	private function shape_locked_traffic_mix( $traffic_mix ) {
+	private function shape_free_traffic_mix( $traffic_mix ) {
 		if ( ! is_array( $traffic_mix ) || empty( $traffic_mix['available'] ) ) {
 			return null;
 		}
 
-		$dimensions = isset( $traffic_mix['dimensions'] ) && is_array( $traffic_mix['dimensions'] ) ? $traffic_mix['dimensions'] : array();
-		$headline   = null;
+		$traffic_mix['locked'] = false;
 
-		foreach ( $dimensions as $entry ) {
-			if ( ! is_array( $entry ) ) {
-				continue;
-			}
-
-			foreach ( ( isset( $entry['buckets'] ) && is_array( $entry['buckets'] ) ? $entry['buckets'] : array() ) as $bucket ) {
-				if ( ! is_array( $bucket ) || empty( $bucket['mix_shift'] ) ) {
-					continue;
-				}
-
-				// The worst-explaining shift wins the sentence: a spike that also
-				// degrades the metric is the one that changes what to do next.
-				if ( null !== $headline && ! ( ! empty( $bucket['degrades_metric'] ) && empty( $headline['degrades_metric'] ) ) ) {
-					continue;
-				}
-
-				$headline = array(
-					'dimension'       => isset( $entry['dimension'] ) ? sanitize_key( $entry['dimension'] ) : '',
-					'dimension_label' => isset( $entry['dimension_label'] ) ? (string) $entry['dimension_label'] : '',
-					'label'           => isset( $bucket['label'] ) ? (string) $bucket['label'] : '',
-					'share'           => isset( $bucket['share'] ) ? (float) $bucket['share'] : 0,
-					'previous_share'  => isset( $bucket['previous_share'] ) ? (float) $bucket['previous_share'] : 0,
-					'degrades_metric' => isset( $bucket['degrades_metric'] ) ? $bucket['degrades_metric'] : null,
-				);
-			}
-		}
-
-		return array(
-			'available'      => true,
-			'locked'         => true,
-			'shift_count'    => isset( $traffic_mix['shift_count'] ) ? (int) $traffic_mix['shift_count'] : 0,
-			'previous_range' => isset( $traffic_mix['previous_range'] ) && is_array( $traffic_mix['previous_range'] )
-				? array(
-					'from' => isset( $traffic_mix['previous_range']['from'] ) ? (string) $traffic_mix['previous_range']['from'] : '',
-					'to'   => isset( $traffic_mix['previous_range']['to'] ) ? (string) $traffic_mix['previous_range']['to'] : '',
-				)
-				: array(
-					'from' => '',
-					'to'   => '',
-				),
-			'headline'       => $headline,
-			'dimensions'     => array(),
-		);
+		return $traffic_mix;
 	}
 
 	/**
@@ -526,12 +536,12 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 	/**
 	 * Shape the correlation/impact story blocks for a Free viewer.
 	 *
-	 * Free keeps the parts that make the problem understandable and comparable:
-	 * the absolute impact headline (how many visitors this leak costs) and how
-	 * many corroborating causes were measured. The measured shares, probe
-	 * internals, evidence sample references, and the WooCommerce revenue exposure
-	 * stay Pro-only; revenue is replaced by a locked hint so the value is visible
-	 * as an upgrade reason without leaking the number.
+	 * The correlation (each cause with its measured share) and the impact block
+	 * (lost visitors and revenue exposure, WooCommerce or owner value) are
+	 * computed by the Free code, so a Free viewer sees them in full
+	 * (WordPress.org guideline 5). Only the raw probe payloads are dropped: no
+	 * screen reads them. The hypothesis, the experiment, and the evidence refs
+	 * below come from Pro modules and stay a preview.
 	 *
 	 * @since 1.3.8
 	 *
@@ -540,49 +550,7 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 	 */
 	private function shape_story_blocks_for_free( $insight ) {
 		if ( ! empty( $insight['correlation'] ) && is_array( $insight['correlation'] ) ) {
-			$correlation = $insight['correlation'];
-			$causes      = isset( $correlation['causes'] ) && is_array( $correlation['causes'] ) ? $correlation['causes'] : array();
-
-			$free_causes = array();
-			foreach ( $causes as $cause ) {
-				if ( ! is_array( $cause ) ) {
-					continue;
-				}
-
-				$free_causes[] = array(
-					'probe' => isset( $cause['probe'] ) ? sanitize_key( $cause['probe'] ) : '',
-					'label' => isset( $cause['label'] ) ? (string) $cause['label'] : '',
-					'rank'  => isset( $cause['rank'] ) ? (int) $cause['rank'] : count( $free_causes ) + 1,
-					'tier'  => self::TIER_PRO_LOCKED,
-				);
-			}
-
-			$insight['correlation'] = array(
-				'version'        => isset( $correlation['version'] ) ? (int) $correlation['version'] : 1,
-				'correlated'     => ! empty( $correlation['correlated'] ),
-				'playbook_label' => isset( $correlation['playbook_label'] ) ? (string) $correlation['playbook_label'] : '',
-				'signal_count'   => isset( $correlation['signal_count'] ) ? (int) $correlation['signal_count'] : 0,
-				'cause_count'    => isset( $correlation['cause_count'] ) ? (int) $correlation['cause_count'] : count( $free_causes ),
-				'causes'         => $free_causes,
-				'shares_locked'  => true,
-				'locked_hint'    => __( 'Upgrade to Pro to see how much of this problem each cause explains.', 'opti-behavior' ),
-			);
-		}
-
-		if ( ! empty( $insight['impact'] ) && is_array( $insight['impact'] ) ) {
-			$impact = $insight['impact'];
-
-			$insight['impact'] = array(
-				'version'      => isset( $impact['version'] ) ? (int) $impact['version'] : 1,
-				'users_lost'   => isset( $impact['users_lost'] ) ? (int) $impact['users_lost'] : 0,
-				'headline'     => isset( $impact['headline'] ) ? (string) $impact['headline'] : '',
-				'basis'        => isset( $impact['basis'] ) ? sanitize_key( $impact['basis'] ) : '',
-				'basis_label'  => isset( $impact['basis_label'] ) ? (string) $impact['basis_label'] : '',
-				'impact_score' => isset( $impact['impact_score'] ) ? (int) $impact['impact_score'] : 0,
-				'impact_rank'  => isset( $impact['impact_rank'] ) ? (int) $impact['impact_rank'] : 0,
-				'cause_count'  => isset( $impact['causes'] ) && is_array( $impact['causes'] ) ? count( $impact['causes'] ) : 0,
-				'revenue'      => $this->shape_revenue_for_free( isset( $impact['revenue'] ) ? $impact['revenue'] : array() ),
-			);
+			unset( $insight['correlation']['probes'] );
 		}
 
 		// The hypothesis and its linked experiment are the Pro half of the loop.
@@ -637,64 +605,14 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 	}
 
 	/**
-	 * Shape the revenue exposure block for a Free viewer.
-	 *
-	 * A WooCommerce-derived average order value is a Pro disclosure and stays
-	 * behind the locked hint. A value the site owner typed into the Smart
-	 * Insights settings is their own number, so it is handed straight back: an
-	 * agency on Free must be able to put a currency figure on the leak.
-	 *
-	 * @since 1.3.9
-	 *
-	 * @param array $revenue Stored revenue block.
-	 * @return array
-	 */
-	private function shape_revenue_for_free( $revenue ) {
-		$locked = array(
-			'available' => false,
-			'locked'    => true,
-			'tier'      => self::TIER_PRO,
-			'hint'      => __( 'Revenue exposure for this leak is available in Pro.', 'opti-behavior' ),
-		);
-
-		// No money exists for this leak (not tied to a sale, too few orders, an
-		// amount of an older rule): nothing is locked, Pro shows no money either.
-		if ( ! is_array( $revenue ) || empty( $revenue['available'] ) ) {
-			return array(
-				'available' => false,
-				'locked'    => false,
-			);
-		}
-
-		$manual_source = class_exists( 'Opti_Behavior_Smart_Insights_Impact_Calculator' )
-			? Opti_Behavior_Smart_Insights_Impact_Calculator::REVENUE_SOURCE_MANUAL
-			: 'manual_conversion_value';
-
-		if ( ! isset( $revenue['source'] ) || $manual_source !== $revenue['source'] ) {
-			return $locked;
-		}
-
-		return array(
-			'available'           => true,
-			'locked'              => false,
-			'amount'              => isset( $revenue['amount'] ) ? (float) $revenue['amount'] : 0.0,
-			'currency'            => isset( $revenue['currency'] ) ? (string) $revenue['currency'] : '',
-			'average_order_value' => isset( $revenue['average_order_value'] ) ? (float) $revenue['average_order_value'] : 0.0,
-			'conversion_factor'   => isset( $revenue['conversion_factor'] ) ? (float) $revenue['conversion_factor'] : 0.0,
-			'orders_sampled'      => 0,
-			'source'              => $manual_source,
-			'tier'                => self::TIER_FREE,
-		);
-	}
-
-	/**
 	 * Cap the recommended actions and place the Pro-context bullet honestly.
 	 *
 	 * A Pro viewer never sees a "use Pro context" bullet: they already have it,
 	 * so it is pure noise in a list that is capped at three lines. A Free viewer
-	 * sees it exactly once, as the last bullet, because for them it is the one
-	 * useful upgrade reason attached to a concrete finding. Doing this here means
-	 * the JS renderer never has to branch on the viewer's tier.
+	 * gets the same real actions as a Pro viewer (WordPress.org guideline 5: a
+	 * computed action is never swapped for an upsell) and the bullet only in a
+	 * free slot, once, last. Doing this here means the JS renderer never has to
+	 * branch on the viewer's tier.
 	 *
 	 * @since 1.4.0
 	 *
@@ -738,11 +656,10 @@ class Opti_Behavior_Smart_Insights_Capabilities {
 		// second upsell bullet on top of it.
 		$is_locked_preview = ! empty( $insight['is_locked_preview'] );
 
-		if ( ! $this->has_pro_access && ! $is_locked_preview && ! empty( $actions ) ) {
-			$actions   = array_slice( $actions, 0, max( 1, $limit - 1 ) );
+		$actions = array_slice( $actions, 0, $limit );
+
+		if ( ! $this->has_pro_access && ! $is_locked_preview && ! empty( $actions ) && count( $actions ) < $limit ) {
 			$actions[] = $this->get_pro_context_action();
-		} else {
-			$actions = array_slice( $actions, 0, $limit );
 		}
 
 		$insight['recommended_actions'] = array_values( $actions );

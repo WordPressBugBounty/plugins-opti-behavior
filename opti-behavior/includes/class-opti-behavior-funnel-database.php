@@ -18,6 +18,51 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Opti_Behavior_Funnel_Database {
 
 	/**
+	 * Schema version of the two funnel tables. Bump it whenever
+	 * create_tables() changes a column, a key or a table option.
+	 */
+	const DB_VERSION = '1.0.0';
+
+	/**
+	 * Option holding the installed funnel schema version (not autoloaded:
+	 * only read by the database setup).
+	 */
+	const DB_VERSION_OPTION = 'opti_behavior_funnel_db_version';
+
+	/**
+	 * Create or update the funnel tables only when needed: the schema version
+	 * changed or one of the two tables is missing.
+	 *
+	 * Called from Opti_Behavior_Heatmap_Database::setup_locked() (activation,
+	 * plugin update, admin self-heal). Never called on a front-end or AJAX
+	 * request: dbDelta() used to run DESCRIBE + SHOW INDEX on both tables on
+	 * every request of the site.
+	 *
+	 * @return bool True when dbDelta() ran.
+	 */
+	public static function maybe_create_tables() {
+		global $wpdb;
+
+		if ( self::DB_VERSION === get_option( self::DB_VERSION_OPTION ) ) {
+			$missing = false;
+			foreach ( array( 'opti_behavior_funnels', 'opti_behavior_funnel_tracking' ) as $suffix ) {
+				$table = $wpdb->prefix . $suffix;
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Schema check during setup only.
+				if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) ) ) {
+					$missing = true;
+					break;
+				}
+			}
+			if ( ! $missing ) {
+				return false;
+			}
+		}
+
+		self::create_tables();
+		return true;
+	}
+
+	/**
 	 * Create funnel database tables
 	 */
 	public static function create_tables() {
@@ -68,6 +113,8 @@ class Opti_Behavior_Funnel_Database {
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		dbDelta( $sql_funnels );
 		dbDelta( $sql_tracking );
+
+		update_option( self::DB_VERSION_OPTION, self::DB_VERSION, false );
 
 		// Do NOT create default funnel - users should define their own funnels
 	}

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+<style>
+.bar{transform-origin:200px 0;animation:gr 1.2s cubic-bezier(.2,.7,.2,1) both}
+.b2{animation-delay:.1s}.b3{animation-delay:.2s}.b4{animation-delay:.3s}.b5{animation-delay:.4s}
+@keyframes gr{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@media (prefers-reduced-motion:reduce){.bar{animation:none}}
+</style>
+<rect width="960" height="440" fill="#fff"/>
+<text x="40" y="44" font-size="15" fill="#111827" font-weight="700">Contact form · /contact</text>
+<text x="40" y="66" font-size="12" fill="#6b7280">1,000 visitors started the form · 480 submitted</text>
+<g font-size="12" fill="#6b7280" font-weight="600"><text x="40" y="104">FIELD</text><text x="200" y="104">VISITORS STILL IN THE FORM</text><text x="740" y="104">TIME</text><text x="830" y="104">REFILLS</text></g>
+<g font-size="13" fill="#111827">
+<text x="40" y="138">Name</text>
+<rect class="bar" x="200" y="122" width="500" height="24" rx="6" fill="#6366f1"/><text x="684" y="139" fill="#fff" text-anchor="end" font-weight="700">100%</text>
+<text x="740" y="138" fill="#374151">3 s</text><text x="830" y="138" fill="#374151">1%</text>
+
+<text x="40" y="184">Email</text>
+<rect class="bar b2" x="200" y="168" width="460" height="24" rx="6" fill="#6366f1"/><text x="644" y="185" fill="#fff" text-anchor="end" font-weight="700">92%</text>
+<text x="740" y="184" fill="#374151">5 s</text><text x="830" y="184" fill="#374151">4%</text>
+
+<text x="40" y="230" font-weight="700">Phone</text>
+<rect class="bar b3" x="200" y="214" width="305" height="24" rx="6" fill="#ef4444"/><text x="489" y="231" fill="#fff" text-anchor="end" font-weight="700">61%</text>
+<rect x="515" y="214" width="150" height="24" rx="12" fill="#fef2f2" stroke="#fecaca"/><text x="590" y="231" font-size="12" fill="#991b1b" text-anchor="middle" font-weight="700">−31% leave here</text>
+<text x="740" y="230" fill="#991b1b" font-weight="700">14 s</text><text x="830" y="230" fill="#991b1b" font-weight="700">18%</text>
+
+<text x="40" y="276">Company</text>
+<rect class="bar b4" x="200" y="260" width="285" height="24" rx="6" fill="#a5b4fc"/><text x="469" y="277" fill="#1e1b4b" text-anchor="end" font-weight="700">57%</text>
+<rect x="495" y="260" width="150" height="24" rx="12" fill="#f1f5f9"/><text x="570" y="277" font-size="12" fill="#475569" text-anchor="middle" font-weight="600">88% leave it empty</text>
+<text x="740" y="276" fill="#374151">2 s</text><text x="830" y="276" fill="#374151">0%</text>
+
+<text x="40" y="322">Message</text>
+<rect class="bar b5" x="200" y="306" width="250" height="24" rx="6" fill="#6366f1"/><text x="434" y="323" fill="#fff" text-anchor="end" font-weight="700">50%</text>
+<text x="740" y="322" fill="#374151">31 s</text><text x="830" y="322" fill="#374151">2%</text>
+
+<text x="40" y="368" font-weight="700">Submit</text>
+<rect x="200" y="352" width="240" height="24" rx="6" fill="#10b981"/><text x="424" y="369" fill="#fff" text-anchor="end" font-weight="700">48%</text>
+</g>
+<text x="40" y="414" font-size="12" fill="#6b7280">Field names and timings only — values typed by visitors are never sent.</text>
+</svg>

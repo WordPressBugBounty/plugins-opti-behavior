@@ -26,20 +26,39 @@ class Opti_Behavior_Welcome {
 	/** WordPress option that stores whether consent was accepted. */
 	const OPTION_CONSENT  = 'opti_behavior_consent_accepted';
 
+	/** WordPress option storing the admin's data-sharing choice: 'accepted' or 'declined'. */
+	const OPTION_CHOICE = 'opti_behavior_consent_choice';
+
+	/** WordPress option storing the version of the data-sharing text the admin accepted. */
+	const OPTION_CONSENT_VERSION = 'opti_behavior_consent_version';
+
+	/** Current version of the data-sharing text (2 = itemised list + has_data_7d). */
+	const CONSENT_VERSION = 2;
+
+	/** Cron hook of the daily status message (Opti_Behavior_Free_Tracker). */
+	const HEARTBEAT_HOOK = 'opti_behavior_daily_heartbeat';
+
 	/** Transient/option used to trigger the post-activation redirect. */
 	const OPTION_REDIRECT = 'opti_behavior_activation_redirect';
+
+	/** Unix time of the first Free activation (written once; absent = installed before this rule). */
+	const OPTION_FIRST_ACTIVATED = 'opti_behavior_first_activated_at';
+
+	/** Wait after the first activation before asking about data sharing (0 = welcome screen right away, OPT-697). */
+	const CONSENT_PROMPT_DELAY = 0;
 
 	/** Slug for the hidden welcome admin page. */
 	const WELCOME_SLUG = 'opti-behavior-welcome';
 
-	/** Option storing the trial license key obtained from API. */
+	/**
+	 * Trial licence key of a trial started from the welcome screen before OPT-765.
+	 * Read only (hides the trial card); Free no longer writes it: the trial starts
+	 * on optiuser.com.
+	 */
 	const OPTION_TRIAL_LICENSE_KEY = 'opti_behavior_trial_license_key';
 
-	/** Option storing trial expiry datetime from API. */
-	const OPTION_TRIAL_EXPIRES_AT = 'opti_behavior_trial_expires_at';
-
-	/** Transient key for the short-lived Pro download URL (TTL: 280s). */
-	const TRANSIENT_PRO_DOWNLOAD_URL = 'opti_behavior_pro_download_url';
+	/** Option set to 'declined' by "Continue with Free only": the welcome trial card is not shown again. */
+	const OPTION_TRIAL_CHOICE = 'opti_behavior_trial_choice';
 
 	/**
 	 * Plugin page slugs that require consent before access.
@@ -83,7 +102,11 @@ class Opti_Behavior_Welcome {
 		add_action( 'admin_init',            array( $this, 'maybe_redirect' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_welcome_styles' ) );
 		add_action( 'admin_post_opti_behavior_accept_consent', array( $this, 'handle_accept' ) );
+		add_action( 'admin_post_opti_behavior_decline_consent', array( $this, 'handle_decline' ) );
+		add_action( 'admin_post_opti_behavior_share_status', array( $this, 'handle_share_status_setting' ) );
+		add_action( 'admin_post_opti_behavior_welcome_skip_trial', array( $this, 'handle_skip_trial' ) );
 		add_action( 'admin_notices',         array( $this, 'render_trial_failed_notice' ) );
+		add_action( 'admin_notices',         array( $this, 'render_consent_update_notice' ) );
 		// Fix PHP 8.2 deprecation: pages registered with parent_slug=null are hidden pages that
 		// WordPress's get_admin_page_title() cannot find, leaving $title as null.
 		// admin-header.php then calls strip_tags(null) → deprecation warning.
@@ -115,8 +138,6 @@ class Opti_Behavior_Welcome {
 
 		if ( self::WELCOME_SLUG === $current_page ) {
 			$title = __( 'Welcome to Opti-Behavior', 'opti-behavior' );
-		} elseif ( 'opti-behavior-install-trial' === $current_page ) {
-			$title = __( 'Installing Opti-Behavior Pro', 'opti-behavior' );
 		}
 		// phpcs:enable WordPress.WP.GlobalVariablesOverride.Prohibited
 	}
@@ -131,19 +152,147 @@ class Opti_Behavior_Welcome {
 	}
 
 	/**
+	 * Return true once the admin answered the welcome screen: accepted OR declined.
+	 * Sites that accepted before the choice option existed count as accepted.
+	 *
+	 * @return bool
+	 */
+	public static function has_made_choice() {
+		if ( self::has_consent() ) {
+			return true;
+		}
+		return in_array( get_option( self::OPTION_CHOICE, '' ), array( 'accepted', 'declined' ), true );
+	}
+
+	/**
+	 * Version of the data-sharing text the admin accepted (0 = none, 1 = accepted before v2).
+	 *
+	 * @return int
+	 */
+	public static function get_consent_version() {
+		if ( ! self::has_consent() ) {
+			return 0;
+		}
+		return max( 1, (int) get_option( self::OPTION_CONSENT_VERSION, 1 ) );
+	}
+
+	/**
+	 * True when the admin accepted an older data-sharing text and has not answered the current one.
+	 *
+	 * @return bool
+	 */
+	public static function needs_consent_update() {
+		return self::has_consent() && self::get_consent_version() < self::CONSENT_VERSION;
+	}
+
+	/**
+	 * True when a registered Pro sends its own daily site status (OPT-693): the Free
+	 * "Share installation status" card, its save handler and the update notice step aside.
+	 *
+	 * @return bool
+	 */
+	public static function pro_handles_status() {
+		return class_exists( 'Opti_Behavior_Free_Tracker' ) && Opti_Behavior_Free_Tracker::pro_handles_status();
+	}
+
+	/**
+	 * True when Opti-Behavior Pro runs with a licence or a trial (gate bucket "pro"), or when the
+	 * Pro plugin is active at all, even before it checked its licence (OPT-697): Pro then talks to
+	 * the API under the contract (GDPR Art. 6(1)(b)), so no data-sharing prompt.
+	 * Pro absent = Free behaviour.
+	 *
+	 * @return bool
+	 */
+	public static function is_pro_licensed() {
+		// Pro plugin loaded (constant defined at the top of opti-behavior-pro.php), licence checked or not.
+		$licensed = defined( 'OPTI_BEHAVIOR_PRO_VERSION' );
+		if ( ! $licensed && class_exists( 'Opti_Behavior_Gate' ) && method_exists( 'Opti_Behavior_Gate', 'pro_active' ) ) {
+			try {
+				$licensed = (bool) Opti_Behavior_Gate::pro_active();
+			} catch ( \Throwable $e ) {
+				$licensed = false;
+			}
+		}
+		/**
+		 * Filters whether the data-sharing prompts treat this site as running a licensed Pro.
+		 *
+		 * @param bool $licensed Pro plugin active, or gate bucket "pro" (licence, trial or grace period).
+		 */
+		return (bool) apply_filters( 'opti_behavior_consent_pro_licensed', $licensed );
+	}
+
+	/**
+	 * True once the data-sharing question may be asked: at least CONSENT_PROMPT_DELAY after
+	 * the first activation (default 0 since OPT-697: right away; filter kept for sites that
+	 * want a wait). Sites installed before this rule (no stored time) are past the delay.
+	 *
+	 * @return bool
+	 */
+	public static function consent_prompt_due() {
+		$activated_at = (int) get_option( self::OPTION_FIRST_ACTIVATED, 0 );
+		if ( $activated_at <= 0 ) {
+			return true;
+		}
+		$delay = (int) apply_filters( 'opti_behavior_consent_prompt_delay', self::CONSENT_PROMPT_DELAY );
+		return time() >= $activated_at + max( 0, $delay );
+	}
+
+	/**
+	 * Whether the data-sharing question (welcome screen or update notice) may be shown now:
+	 * Free alone (no licensed Pro) and the post-activation delay is over.
+	 *
+	 * @return bool
+	 */
+	public static function may_prompt_for_consent() {
+		return ! self::is_pro_licensed() && self::consent_prompt_due();
+	}
+
+	/**
+	 * Record "share the installation status": consent flag, choice, text version, daily cron.
+	 *
+	 * @return void
+	 */
+	public static function accept_sharing() {
+		update_option( self::OPTION_CONSENT, '1' );
+		update_option( self::OPTION_CHOICE, 'accepted' );
+		update_option( self::OPTION_CONSENT_VERSION, (string) self::CONSENT_VERSION );
+
+		if ( ! wp_next_scheduled( self::HEARTBEAT_HOOK ) ) {
+			wp_schedule_event( time() + DAY_IN_SECONDS, 'daily', self::HEARTBEAT_HOOK );
+		}
+	}
+
+	/**
+	 * Record "do not share": the consent flag every API call checks is removed and the
+	 * daily status message is unscheduled, so nothing is sent to api.optiuser.com.
+	 *
+	 * @return void
+	 */
+	public static function decline_sharing() {
+		delete_option( self::OPTION_CONSENT );
+		delete_option( self::OPTION_CONSENT_VERSION );
+		update_option( self::OPTION_CHOICE, 'declined' );
+		wp_clear_scheduled_hook( self::HEARTBEAT_HOOK );
+	}
+
+	/**
 	 * Called on plugin activation via register_activation_hook().
 	 * Sets a flag that triggers a redirect to the welcome page.
 	 *
 	 * @return void
 	 */
 	public static function on_activation() {
-		if ( ! get_option( self::OPTION_CONSENT ) ) {
+		if ( ! self::has_made_choice() ) {
 			update_option( self::OPTION_REDIRECT, '1' );
+			// First activation only: an existing time is never overwritten.
+			if ( ! get_option( self::OPTION_FIRST_ACTIVATED ) ) {
+				update_option( self::OPTION_FIRST_ACTIVATED, (string) time() );
+			}
 		}
 	}
 
 	/**
-	 * Register the hidden welcome page and the trial installer page.
+	 * Register the hidden welcome page.
 	 *
 	 * @return void
 	 */
@@ -155,16 +304,6 @@ class Opti_Behavior_Welcome {
 			'manage_options',
 			self::WELCOME_SLUG,
 			array( $this, 'render_welcome_page' )
-		);
-
-		// Hidden installer page — only reachable after trial activation flow.
-		add_submenu_page(
-			'', // hidden — empty string avoids PHP 8.2 null deprecation
-			__( 'Installing Opti-Behavior Pro', 'opti-behavior' ),
-			__( 'Install Pro', 'opti-behavior' ),
-			'manage_options',
-			'opti-behavior-install-trial',
-			array( $this, 'render_trial_installer_page' )
 		);
 	}
 
@@ -189,8 +328,19 @@ class Opti_Behavior_Welcome {
 			return;
 		}
 
-		// Once consent is given, enforcement is done.
-		if ( self::has_consent() ) {
+		// Once the admin answered (accepted OR declined), the screen never blocks again:
+		// every feature works without sharing (WordPress.org guideline 7).
+		if ( self::has_made_choice() ) {
+			return;
+		}
+
+		// Pro active (licence calls = contract) or still inside an optional filtered delay:
+		// no choice screen. The activation flag is dropped so it never hijacks a later admin page;
+		// once the delay is over, the screen comes from the plugin pages below.
+		if ( ! self::may_prompt_for_consent() ) {
+			if ( get_option( self::OPTION_REDIRECT ) ) {
+				delete_option( self::OPTION_REDIRECT );
+			}
 			return;
 		}
 
@@ -201,7 +351,7 @@ class Opti_Behavior_Welcome {
 			exit;
 		}
 
-		// Block any protected plugin page if consent was never given.
+		// Show the choice screen once before any plugin page while no choice was made.
 		if ( in_array( $current_page, self::$protected_pages, true ) ) {
 			wp_safe_redirect( admin_url( 'admin.php?page=' . self::WELCOME_SLUG ) );
 			exit;
@@ -209,8 +359,9 @@ class Opti_Behavior_Welcome {
 	}
 
 	/**
-	 * Process the "Accept & Continue" form submission.
-	 * Handles both the standard consent flow and the optional trial activation.
+	 * Process the "Accept & Continue" form submission: daily status sharing only.
+	 * The Pro trial starts on optiuser.com (link on the trial card, OPT-765): a
+	 * start_trial field posted by an old form is ignored, no trial request is made.
 	 *
 	 * @return void
 	 */
@@ -221,36 +372,11 @@ class Opti_Behavior_Welcome {
 			wp_die( esc_html__( 'Insufficient permissions', 'opti-behavior' ) );
 		}
 
-		// Always set consent flag first — regardless of trial choice.
-		update_option( self::OPTION_CONSENT, '1' );
+		self::accept_sharing();
 
-		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above via check_admin_referer
-		$start_trial = isset( $_POST['start_trial'] ) && '1' === $_POST['start_trial'];
-
-		if ( $start_trial ) {
-			$trial_result = $this->request_trial_from_api();
-
-			if ( $trial_result && ! empty( $trial_result['trial_license_key'] ) ) {
-				// Store trial info — NOTE: master_secret is intentionally NOT stored here.
-				// The Pro plugin will receive and encrypt it via its own /register call.
-				update_option( self::OPTION_TRIAL_LICENSE_KEY, sanitize_text_field( $trial_result['trial_license_key'] ) );
-				update_option( self::OPTION_TRIAL_EXPIRES_AT, sanitize_text_field( $trial_result['trial_expires_at'] ) );
-				update_option( 'opti_behavior_installation_id', sanitize_text_field( $trial_result['installation_id'] ) );
-
-				// Store download URL in short-lived transient (single-use, 280s < 5-min token TTL).
-				set_transient( self::TRANSIENT_PRO_DOWNLOAD_URL, esc_url_raw( $trial_result['download_url'] ), 280 );
-
-				wp_safe_redirect( admin_url( 'admin.php?page=opti-behavior-install-trial' ) );
-				exit;
-			}
-
-			// Trial API call failed — set notice transient and fall through to normal redirect.
-			set_transient( 'opti_behavior_trial_failed', '1', 60 );
-
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-				error_log( '[Opti-Behavior] Trial activation failed, proceeding without trial.' );
-			}
+		// Answer from the "updated data-sharing text" notice: back to the screen it was shown on.
+		if ( $this->is_notice_submission() ) {
+			$this->redirect_back();
 		}
 
 		wp_safe_redirect( admin_url( 'admin.php?page=opti-behavior-analytics' ) );
@@ -258,239 +384,96 @@ class Opti_Behavior_Welcome {
 	}
 
 	/**
-	 * Call the API /trial-install endpoint to generate a trial license and download URL.
-	 * Accepts HTTP 200 (new trial) and HTTP 409 trial_already_active (existing trial) as success.
-	 *
-	 * @return array|false Array with keys: installation_id, trial_license_key,
-	 *                     trial_expires_at, download_url. Returns false on failure.
-	 */
-	private function request_trial_from_api() {
-		// Sodium is required to generate a client keypair for the API handshake.
-		if ( ! function_exists( 'sodium_crypto_box_keypair' ) ) {
-			set_transient( 'opti_behavior_trial_debug', 'FAIL:sodium_not_available', 300 );
-			return false;
-		}
-
-		try {
-			$keypair    = sodium_crypto_box_keypair();
-			$public_key = base64_encode( sodium_crypto_box_publickey( $keypair ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
-			// Never call sodium_memzero() — WordPress's sodium_compat polyfill throws
-			// because secure memory wiping is impossible in pure PHP. Use unset() instead.
-			unset( $keypair );
-		} catch ( \Throwable $e ) {
-			set_transient( 'opti_behavior_trial_debug', 'FAIL:sodium_throw:' . $e->getMessage(), 300 );
-			return false;
-		}
-
-		// Select API URL: local dev when OPTI_BEHAVIOR_ENVIRONMENT = 'local' AND WP_DEBUG,
-		// otherwise production. Matches the pattern in class-opti-behavior-license-manager.php.
-		$api_url = 'https://api.optiuser.com/';
-		if ( defined( 'OPTI_BEHAVIOR_ENVIRONMENT' ) && 'local' === OPTI_BEHAVIOR_ENVIRONMENT
-			&& defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			$api_url = 'http://localhost/API/'; // phpcs:ignore PluginCheck.CodeAnalysis.Localhost.Found -- dev-only URL, only active when OPTI_BEHAVIOR_ENVIRONMENT=local and WP_DEBUG are set; never active in production.
-		}
-
-		$domain = wp_parse_url( home_url(), PHP_URL_HOST );
-		if ( empty( $domain ) ) {
-			$domain = 'localhost';
-		}
-
-		$free_version = defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '1.0.0';
-		$contact_email = $this->resolve_trial_contact_email();
-
-		if ( empty( $contact_email ) ) {
-			set_transient( 'opti_behavior_trial_debug', 'FAIL:contact_email_unavailable', 300 );
-
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Debug logging only when WP_DEBUG is on.
-				error_log( '[Opti-Behavior] Trial activation skipped: no valid administrator contact email available.' );
-			}
-
-			return false;
-		}
-
-		$response = wp_remote_post(
-			$api_url . 'trial-install',
-			array(
-				'body'      => wp_json_encode(
-					array(
-						'domain'              => $domain,
-						'email'               => $contact_email,
-						'site_url'            => get_site_url(),
-						'site_name'           => get_bloginfo( 'name' ) ?: get_site_url(),
-						'client_public_key'   => $public_key,
-						'free_plugin_version' => $free_version,
-					)
-				),
-				'headers'   => array( 'Content-Type' => 'application/json' ),
-				'timeout'   => 30,
-				'sslverify' => true,
-			)
-		);
-
-		if ( is_wp_error( $response ) ) {
-			set_transient( 'opti_behavior_trial_debug', 'FAIL:wp_error:' . $response->get_error_message(), 300 );
-			return false;
-		}
-
-		$code = wp_remote_retrieve_response_code( $response );
-		$body = json_decode( wp_remote_retrieve_body( $response ), true );
-
-		// HTTP 200 = new trial created successfully.
-		$is_new = ( 200 === $code && ! empty( $body['success'] ) && ! empty( $body['data'] ) );
-
-		// HTTP 409 trial_already_active = existing trial — treat as success (Issue 3 fix).
-		$is_existing = (
-			409 === $code
-			&& isset( $body['error'] )
-			&& 'trial_already_active' === $body['error']
-			&& ! empty( $body['data'] )
-		);
-
-		if ( ! $is_new && ! $is_existing ) {
-			set_transient( 'opti_behavior_trial_debug', 'FAIL:api_http' . $code . ':' . substr( wp_remote_retrieve_body( $response ), 0, 200 ), 300 );
-			return false;
-		}
-
-		$data = $body['data'];
-
-		// Validate all required keys are present.
-		foreach ( array( 'installation_id', 'trial_license_key', 'trial_expires_at', 'download_url' ) as $key ) {
-			if ( empty( $data[ $key ] ) ) {
-				return false;
-			}
-		}
-
-		// master_secret is intentionally not validated or returned (Issue 1 fix).
-		set_transient( 'opti_behavior_trial_debug', 'OK:trial_data_received', 300 );
-		return $data;
-	}
-
-	/**
-	 * Resolve the contact email used by the interactive trial-install request.
-	 *
-	 * The trial endpoint requires a valid email. Prefer the current managing
-	 * administrator because accepting the welcome screen is an explicit admin
-	 * action, then fall back through the shared resolver's deterministic site
-	 * contact candidates.
-	 *
-	 * @return string|null Valid email address, or null when no contact is available.
-	 */
-	private function resolve_trial_contact_email() {
-		if ( class_exists( 'Opti_Behavior_Heatmap_Admin_Email_Resolver' ) ) {
-			return Opti_Behavior_Heatmap_Admin_Email_Resolver::get_email(
-				array(
-					'prefer_current_user'  => true,
-					'include_current_user' => true,
-				)
-			);
-		}
-
-		$admin_email = sanitize_email( get_option( 'admin_email' ) );
-
-		return is_email( $admin_email ) ? $admin_email : null;
-	}
-
-	/**
-	 * Render the Pro plugin trial installer page.
-	 * Uses WordPress's native Plugin_Upgrader to download and install the Pro ZIP.
+	 * "Continue with Free only" on the welcome screen: no network call, the trial card is
+	 * hidden from now on, back to the data-sharing question (still to answer).
 	 *
 	 * @return void
 	 */
-	public function render_trial_installer_page() {
-		if ( ! current_user_can( 'install_plugins' ) ) {
-			wp_die( esc_html__( 'You do not have permission to install plugins.', 'opti-behavior' ) );
+	public function handle_skip_trial() {
+		check_admin_referer( 'opti_behavior_welcome_skip_trial' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Insufficient permissions', 'opti-behavior' ) );
 		}
 
-		// Retrieve and immediately delete the single-use download URL transient.
-		$download_url = get_transient( self::TRANSIENT_PRO_DOWNLOAD_URL );
-		delete_transient( self::TRANSIENT_PRO_DOWNLOAD_URL );
+		update_option( self::OPTION_TRIAL_CHOICE, 'declined' );
 
-		if ( empty( $download_url ) ) {
-			echo '<div class="wrap"><h1>' . esc_html__( 'Install Opti-Behavior Pro', 'opti-behavior' ) . '</h1>';
-			echo '<div class="notice notice-error"><p>';
-			printf(
-				/* translators: %s: support URL */
-				esc_html__( 'The Pro plugin download link has expired. Please try again from the welcome page, or %s.', 'opti-behavior' ),
-				'<a href="https://optiuser.com/pro" target="_blank" rel="noopener noreferrer">' . esc_html__( 'visit optiuser.com/pro', 'opti-behavior' ) . '</a>'
-			);
-			echo '</p></div>';
-			echo '<p><a href="' . esc_url( admin_url( 'admin.php?page=opti-behavior-analytics' ) ) . '" class="button">'
-				. esc_html__( 'Continue without Pro', 'opti-behavior' ) . '</a></p></div>';
-			return;
+		wp_safe_redirect( admin_url( 'admin.php?page=' . self::WELCOME_SLUG . '#ob-consent-form' ) );
+		exit;
+	}
+
+	/**
+	 * Process "Continue without sharing" (welcome screen or update notice).
+	 * Nothing is sent to the API: no status message, no trial request.
+	 *
+	 * @return void
+	 */
+	public function handle_decline() {
+		check_admin_referer( 'opti_behavior_decline_consent' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Insufficient permissions', 'opti-behavior' ) );
 		}
 
-		// Check if Pro plugin is already installed.
-		$pro_plugin_file = 'opti-behavior-pro/opti-behavior-pro.php';
-		if ( file_exists( WP_PLUGIN_DIR . '/opti-behavior-pro/opti-behavior-pro.php' ) ) {
-			// Already installed — activate if not active, then redirect.
-			if ( ! is_plugin_active( $pro_plugin_file ) ) {
-				$activated = activate_plugin( $pro_plugin_file );
-				if ( is_wp_error( $activated ) ) {
-					echo '<div class="wrap"><h1>' . esc_html__( 'Install Opti-Behavior Pro', 'opti-behavior' ) . '</h1>';
-					echo '<div class="notice notice-warning"><p>'
-						. esc_html__( 'Pro plugin is installed but could not be activated automatically.', 'opti-behavior' )
-						. ' ' . esc_html( $activated->get_error_message() ) . '</p></div>';
-					echo '<p><a href="' . esc_url( admin_url( 'plugins.php' ) ) . '" class="button button-primary">'
-						. esc_html__( 'Go to Plugins page', 'opti-behavior' ) . '</a></p></div>';
-					return;
-				}
-			}
-			wp_safe_redirect( admin_url( 'admin.php?page=opti-behavior-analytics&trial=activated' ) );
+		self::decline_sharing();
+
+		if ( $this->is_notice_submission() ) {
+			$this->redirect_back();
+		}
+
+		wp_safe_redirect( admin_url( 'admin.php?page=opti-behavior-analytics' ) );
+		exit;
+	}
+
+	/**
+	 * Save the Settings → Privacy "Share installation status with Opti-Behavior" choice.
+	 *
+	 * @return void
+	 */
+	public function handle_share_status_setting() {
+		check_admin_referer( 'opti_behavior_share_status' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Insufficient permissions', 'opti-behavior' ) );
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above via check_admin_referer
+		$share = isset( $_POST['ob_share_status'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['ob_share_status'] ) );
+
+		// Pro sends the site status: the stored Yes / No is kept as is for a return to Free alone.
+		if ( self::pro_handles_status() ) {
+			wp_safe_redirect( admin_url( 'admin.php?page=opti-behavior-settings&settings_tab=privacy-gdpr' ) );
 			exit;
 		}
 
-		// Load WordPress upgrader classes.
-		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
-		require_once ABSPATH . 'wp-admin/includes/plugin-install.php';
-		require_once ABSPATH . 'wp-admin/includes/file.php';
-		require_once ABSPATH . 'wp-admin/includes/misc.php';
-		require_once ABSPATH . 'wp-admin/includes/plugin.php';
-
-		echo '<div class="wrap"><h1>' . esc_html__( 'Installing Opti-Behavior Pro…', 'opti-behavior' ) . '</h1>';
-
-		// Use WP_Upgrader_Skin to display progress inline.
-		$skin     = new WP_Upgrader_Skin();
-		$upgrader = new Plugin_Upgrader( $skin );
-
-		$result = $upgrader->install( esc_url_raw( $download_url ) );
-
-		if ( is_wp_error( $result ) ) {
-			echo '<div class="notice notice-error"><p>'
-				. esc_html__( 'Installation failed:', 'opti-behavior' ) . ' '
-				. esc_html( $result->get_error_message() ) . '</p></div>';
-			echo '<p><a href="' . esc_url( admin_url( 'admin.php?page=opti-behavior-analytics' ) ) . '" class="button">'
-				. esc_html__( 'Continue without Pro', 'opti-behavior' ) . '</a></p></div>';
-			return;
+		if ( $share ) {
+			self::accept_sharing();
+		} else {
+			self::decline_sharing();
 		}
 
-		if ( false === $result ) {
-			echo '<div class="notice notice-error"><p>'
-				. esc_html__( 'Installation could not be completed. Please try installing the Pro plugin manually.', 'opti-behavior' )
-				. '</p></div>';
-			echo '<p><a href="' . esc_url( admin_url( 'admin.php?page=opti-behavior-analytics' ) ) . '" class="button">'
-				. esc_html__( 'Continue without Pro', 'opti-behavior' ) . '</a></p></div>';
-			return;
-		}
+		wp_safe_redirect( admin_url( 'admin.php?page=opti-behavior-settings&settings_tab=privacy-gdpr&ob_share_status=saved' ) );
+		exit;
+	}
 
-		// Activate the Pro plugin.
-		$activated = activate_plugin( $pro_plugin_file );
+	/**
+	 * Whether the current consent POST comes from the update notice (not the welcome screen).
+	 *
+	 * @return bool
+	 */
+	private function is_notice_submission() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- callers verify the nonce first.
+		return isset( $_POST['ob_from_notice'] ) && '1' === $_POST['ob_from_notice'];
+	}
 
-		if ( is_wp_error( $activated ) ) {
-			echo '<div class="notice notice-warning"><p>'
-				. esc_html__( 'Pro plugin installed but could not be activated automatically.', 'opti-behavior' )
-				. ' ' . esc_html( $activated->get_error_message() ) . '</p></div>';
-			echo '<p><a href="' . esc_url( admin_url( 'plugins.php' ) ) . '" class="button button-primary">'
-				. esc_html__( 'Go to Plugins page', 'opti-behavior' ) . '</a></p></div>';
-			return;
-		}
-
-		// Headers are already sent (installer progress output), so use JS redirect.
-		$redirect_url = admin_url( 'admin.php?page=opti-behavior-analytics&trial=activated' );
-		echo '<div class="notice notice-success"><p>'
-			. esc_html__( 'Pro plugin activated! Redirecting to Analytics…', 'opti-behavior' )
-			. '</p></div></div>';
-		echo '<script>window.location.href=' . wp_json_encode( $redirect_url ) . ';</script>';
+	/**
+	 * Redirect to the admin screen the form was posted from (Analytics as fallback).
+	 *
+	 * @return void
+	 */
+	private function redirect_back() {
+		$back = wp_get_referer();
+		wp_safe_redirect( $back ? $back : admin_url( 'admin.php?page=opti-behavior-analytics' ) );
 		exit;
 	}
 
@@ -522,20 +505,208 @@ class Opti_Behavior_Welcome {
 		printf(
 			/* translators: %s: link to Pro page */
 			esc_html__( 'The Pro Trial could not be activated automatically. You can %s to start your trial manually.', 'opti-behavior' ),
-			'<a href="https://optiuser.com/pro" target="_blank" rel="noopener noreferrer">' . esc_html__( 'visit optiuser.com/pro', 'opti-behavior' ) . '</a>'
+			'<a href="https://optiuser.com/opti-behavior/pricing/" target="_blank" rel="noopener noreferrer">' . esc_html__( 'see Pro plans', 'opti-behavior' ) . '</a>'
 		);
 		echo '</p></div>';
 	}
 
 	/**
-	 * Enqueue inline CSS for the welcome and trial installer pages.
+	 * Print the data-sharing text (welcome screen, update notice).
+	 * The retention period lives in ONE string, so a change touches one msgid.
+	 *
+	 * @return void
+	 */
+	public static function render_privacy_text() {
+		$policy_link = '<a href="https://optiuser.com/privacy-policy/" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Privacy Policy', 'opti-behavior' ) . '</a>';
+		$items       = array(
+			__( 'your site URL', 'opti-behavior' ),
+			__( 'plugin type (Free or Pro), the Free and Pro version numbers, and whether Pro is running', 'opti-behavior' ),
+			__( 'your WordPress and PHP versions', 'opti-behavior' ),
+			__( 'one administrator email address of this site', 'opti-behavior' ),
+			__( 'whether this site recorded at least one page view in its first 7 days (yes / no)', 'opti-behavior' ),
+		);
+		?>
+		<p><?php esc_html_e( 'Self-hosted: visitor data stays on your own server and is never sent to us.', 'opti-behavior' ); ?></p>
+		<p><?php esc_html_e( 'If you click "Accept & Continue", the plugin sends a short status message to api.optiuser.com once every 24 hours. It contains:', 'opti-behavior' ); ?></p>
+		<ul class="ob-consent-data-list">
+			<?php foreach ( $items as $item ) : ?>
+				<li><?php echo esc_html( $item ); ?></li>
+			<?php endforeach; ?>
+		</ul>
+		<p><?php esc_html_e( 'We use it to count active installations, plan compatibility, manage trials and licences, and send technical and account emails about your installation. Every email has a one-click unsubscribe link. We delete this data 12 months after the last status message.', 'opti-behavior' ); ?></p>
+		<p><?php esc_html_e( 'Sharing this data is optional. Opti-Behavior works fully if you decline, and you can change your choice at any time in Settings.', 'opti-behavior' ); ?></p>
+		<p>
+			<?php
+			printf(
+				/* translators: %s: Privacy Policy hyperlink */
+				esc_html__( 'IP anonymization, consent-mode support and data deletion controls support a privacy-first setup; check your own legal requirements. See our %s.', 'opti-behavior' ),
+				$policy_link // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built above from esc_html__ + a constant URL.
+			);
+			?>
+		</p>
+		<?php
+	}
+
+	/**
+	 * Print the "Continue without sharing" form.
+	 *
+	 * @param bool $from_notice True when printed inside the update notice.
+	 * @return void
+	 */
+	private function render_decline_form( $from_notice ) {
+		?>
+		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="ob-consent-decline-form">
+			<?php wp_nonce_field( 'opti_behavior_decline_consent' ); ?>
+			<input type="hidden" name="action" value="opti_behavior_decline_consent" />
+			<?php if ( $from_notice ) : ?>
+				<input type="hidden" name="ob_from_notice" value="1" />
+			<?php endif; ?>
+			<button type="submit" class="<?php echo esc_attr( $from_notice ? 'button' : 'ob-consent-decline' ); ?>" id="<?php echo esc_attr( $from_notice ? 'ob-consent-notice-decline' : 'ob-consent-decline' ); ?>">
+				<?php esc_html_e( 'Continue without sharing', 'opti-behavior' ); ?>
+			</button>
+		</form>
+		<?php
+	}
+
+	/**
+	 * Non-blocking notice for sites that accepted the previous data-sharing text:
+	 * same text and the same two answers as the welcome screen. Until they accept
+	 * this version, the status message keeps its old content (no has_data_7d).
+	 *
+	 * @return void
+	 */
+	public function render_consent_update_notice() {
+		if ( ! current_user_can( 'manage_options' ) || ! self::needs_consent_update() || self::pro_handles_status() ) {
+			return;
+		}
+
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only GET param for page detection.
+		$current_page = isset( $_GET['page'] ) ? sanitize_text_field( wp_unslash( $_GET['page'] ) ) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		// Settings has its own Yes / No card (render_share_status_setting): never ask twice there.
+		if ( ! in_array( $current_page, self::$protected_pages, true ) || 'opti-behavior-settings' === $current_page ) {
+			return;
+		}
+
+		if ( ! self::may_prompt_for_consent() ) {
+			return;
+		}
+
+		// Class must carry "opti-behavior": notice-cleanup.js strips foreign notices on our screens.
+		// "inline": WordPress common.js would otherwise move it into our page header (clipped).
+		?>
+		<?php // No "update" / "welcome" / "cookie" in class names: assets/css/admin-notices.css hides such divs. ?>
+		<div id="opti-behavior-consent-update-notice" class="notice notice-info inline opti-behavior-notice ob-consent-v2-notice" style="margin:12px 20px 12px 0;">
+			<p><strong><?php esc_html_e( 'Opti-Behavior: please review what the plugin shares with us', 'opti-behavior' ); ?></strong></p>
+			<div class="ob-consent-v2-text">
+				<style>.ob-consent-v2-text .ob-consent-data-list{list-style:disc;margin:0 0 8px 20px;}</style>
+				<?php self::render_privacy_text(); ?>
+			</div>
+			<div class="ob-consent-v2-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px;">
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+					<?php wp_nonce_field( 'opti_behavior_accept_consent' ); ?>
+					<input type="hidden" name="action" value="opti_behavior_accept_consent" />
+					<input type="hidden" name="ob_from_notice" value="1" />
+					<button type="submit" class="button button-primary" id="ob-consent-notice-accept"><?php esc_html_e( 'Accept & Continue', 'opti-behavior' ); ?></button>
+				</form>
+				<?php $this->render_decline_form( true ); ?>
+			</div>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Settings → Privacy & GDPR: "Installation status: Shared / Not shared · Change" line (OPT-712),
+	 * folded Yes / No choice. Own admin-post form, printed outside the privacy settings form.
+	 *
+	 * @return void
+	 */
+	public static function render_share_status_setting() {
+		// Pro sends the site status and shows its own box (licence tab): no Free card, no licence block.
+		if ( ! current_user_can( 'manage_options' ) || self::pro_handles_status() ) {
+			return;
+		}
+		// An answer to the previous text is not an answer to this one: nothing pre-ticked then.
+		$text_changed = self::needs_consent_update();
+		$sharing      = self::has_consent() && ! $text_changed;
+		$declined     = ! self::has_consent();
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only confirmation flag.
+		$saved = isset( $_GET['ob_share_status'] ) && 'saved' === sanitize_key( wp_unslash( $_GET['ob_share_status'] ) );
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+		?>
+		<div class="settings-section" id="ob-share-status-setting">
+			<?php if ( self::is_pro_licensed() ) : ?>
+				<?php $policy_link = '<a href="https://optiuser.com/privacy-policy/" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Privacy Policy', 'opti-behavior' ) . '</a>'; ?>
+				<div class="ob-share-status-licence">
+					<span class="ob-share-status-licence-icon" aria-hidden="true"><i data-lucide="info"></i></span>
+					<p class="ob-share-status-licence-info">
+						<?php
+						printf(
+							/* translators: %s: Privacy Policy hyperlink */
+							esc_html__( 'Opti-Behavior Pro contacts api.optiuser.com to activate and check your licence or trial: site domain, licence key, installation ID, plugin versions, and, after each saved recording, the recording\'s internal session ID (a random identifier) so it counts towards your quota. No recordings, IP addresses, page content or form data are sent. Legal basis: performance of our contract (GDPR Art. 6(1)(b)). The daily installation status below is a separate, optional choice: your Pro licence works the same whether you answer Yes or No. Details: %s.', 'opti-behavior' ),
+							$policy_link // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built above from esc_html__ + a constant URL.
+						);
+						?>
+					</p>
+				</div>
+			<?php endif; ?>
+			<?php
+			// OPT-712: one discreet line, same look and place for Yes and No; "Change" unfolds the choice
+			// in place (native <details>: keyboard + screen readers, no script). Folded by default.
+			$status_label = self::has_consent() ? __( 'Shared', 'opti-behavior' ) : __( 'Not shared', 'opti-behavior' );
+			?>
+			<details class="ob-share-status-details">
+				<summary class="ob-share-status-summary">
+					<span class="ob-share-status-state">
+						<?php
+						/* translators: %s: "Shared" or "Not shared" */
+						printf( esc_html__( 'Installation status: %s', 'opti-behavior' ), esc_html( $status_label ) );
+						?>
+					</span>
+					<span class="ob-share-status-sep" aria-hidden="true">·</span>
+					<span class="ob-share-status-change"><?php esc_html_e( 'Change', 'opti-behavior' ); ?></span>
+				</summary>
+				<div class="ob-share-status-panel">
+					<p class="ob-share-status-help" id="ob-share-status-help">
+						<?php esc_html_e( 'Yes: once every 24 hours the plugin sends a short status message to api.optiuser.com: site URL, administrator email, Free / Pro and plugin versions, WordPress and PHP versions, and whether visits were recorded in the first 7 days. It helps us count active installations. No: nothing is sent. Visitor data is never sent to us, and Opti-Behavior (Free and Pro) works fully either way.', 'opti-behavior' ); ?>
+					</p>
+					<?php if ( $text_changed ) : ?>
+						<p class="ob-share-status-text-changed"><?php esc_html_e( 'The text below changed since you last answered. Please confirm your choice.', 'opti-behavior' ); ?></p>
+					<?php endif; ?>
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="ob-share-status-form">
+						<?php wp_nonce_field( 'opti_behavior_share_status' ); ?>
+						<input type="hidden" name="action" value="opti_behavior_share_status" />
+						<fieldset class="ob-share-status-choices" aria-describedby="ob-share-status-help">
+							<legend class="screen-reader-text" id="ob-share-status-title"><?php esc_html_e( 'Share installation status with Opti-Behavior', 'opti-behavior' ); ?></legend>
+							<label class="ob-share-status-choice">
+								<input type="radio" name="ob_share_status" value="1" <?php checked( $sharing ); ?> <?php echo $text_changed ? 'required' : ''; ?> />
+								<?php esc_html_e( 'Yes, share the installation status', 'opti-behavior' ); ?>
+							</label>
+							<label class="ob-share-status-choice">
+								<input type="radio" name="ob_share_status" value="0" <?php checked( $declined ); ?> />
+								<?php esc_html_e( 'No, do not share anything', 'opti-behavior' ); ?>
+							</label>
+						</fieldset>
+						<button type="submit" class="button"><?php esc_html_e( 'Save Settings', 'opti-behavior' ); ?></button>
+					</form>
+				</div>
+			</details>
+			<?php if ( $saved ) : ?>
+				<p class="ob-share-status-saved" role="status"><?php esc_html_e( 'Your choice was saved.', 'opti-behavior' ); ?></p>
+			<?php endif; ?>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Enqueue inline CSS for the welcome page.
 	 *
 	 * @param string $hook Current admin page hook.
 	 * @return void
 	 */
 	public function enqueue_welcome_styles( $hook ) {
-		if ( 'admin_page_opti-behavior-welcome' !== $hook
-			&& 'admin_page_opti-behavior-install-trial' !== $hook ) {
+		if ( 'admin_page_opti-behavior-welcome' !== $hook ) {
 			return;
 		}
 		wp_add_inline_style( 'wp-admin', $this->get_welcome_css() );
@@ -550,7 +721,11 @@ class Opti_Behavior_Welcome {
 		$logo_url          = OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'images/256x256.png';
 		$action_url        = esc_url( admin_url( 'admin-post.php' ) );
 		$trial_already_set = (bool) get_option( self::OPTION_TRIAL_LICENSE_KEY );
-		$version           = defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '1.0.0';
+		// Not asked again once declined or started; hidden from admins who cannot install plugins.
+		$show_trial_card   = ! $trial_already_set
+			&& 'declined' !== get_option( self::OPTION_TRIAL_CHOICE, '' )
+			&& current_user_can( 'install_plugins' );
+		$version          = defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '1.0.0';
 		?>
 		<div class="ob-consent-wrap">
 
@@ -569,20 +744,35 @@ class Opti_Behavior_Welcome {
 
 			<div class="ob-consent-divider"></div>
 
-			<?php if ( ! $trial_already_set ) : ?>
-			<!-- Pro Trial Opt-in Card (shown prominently before features) -->
+			<?php if ( $show_trial_card ) : ?>
+			<!-- Pro Trial Card: its own decision, separate from the daily status sharing below (OPT-617).
+			     Since OPT-765 the button is a plain link to the trial page on optiuser.com:
+			     the plugin sends nothing, only the site address travels in the URL. -->
 			<div class="ob-consent-trial-card" id="ob-trial-card">
 				<div class="ob-consent-trial-badge"><?php esc_html_e( '✨ Free Offer', 'opti-behavior' ); ?></div>
 				<h3><?php esc_html_e( 'Start Your Free 6-Month Pro Trial', 'opti-behavior' ); ?></h3>
 				<p>
 					<?php esc_html_e( 'Get full access to Session Recordings, Form Analytics, Error Tracking, User Journey Maps, and Smart Insights — completely free for 6 months. No credit card required.', 'opti-behavior' ); ?>
 				</p>
-				<label class="ob-consent-trial-label" for="ob_start_trial">
-					<input type="checkbox" id="ob_start_trial" name="start_trial" value="1" form="ob-consent-form" checked="checked" />
-					<span><?php esc_html_e( 'Yes, activate my free 6-month Pro Trial', 'opti-behavior' ); ?></span>
-				</label>
+				<p class="ob-trial-disclosure">
+					<?php
+					printf(
+						/* translators: %s: Privacy Policy hyperlink */
+						esc_html__( 'Opens the Pro trial page on optiuser.com. Only your site address is passed in the link; you choose what to share there. See our %s.', 'opti-behavior' ),
+						'<a href="https://optiuser.com/privacy-policy/" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Privacy Policy', 'opti-behavior' ) . '</a>' // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_html__ + constant URL.
+					);
+					?>
+				</p>
+				<p class="ob-trial-form" id="ob-trial-form">
+					<a href="<?php echo esc_url( Opti_Behavior_Trial_Invite::link_url( 'welcome' ) ); ?>" class="ob-trial-start" id="ob-start-trial-btn" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Start your Pro trial on optiuser.com', 'opti-behavior' ); ?></a>
+				</p>
+				<form method="post" action="<?php echo esc_url( $action_url ); ?>" class="ob-trial-skip-form" id="ob-trial-skip-form">
+					<?php wp_nonce_field( 'opti_behavior_welcome_skip_trial' ); ?>
+					<input type="hidden" name="action" value="opti_behavior_welcome_skip_trial" />
+					<button type="submit" class="ob-trial-skip" id="ob-trial-skip"><?php esc_html_e( 'Continue with Free only', 'opti-behavior' ); ?></button>
+				</form>
 				<p class="ob-consent-trial-note">
-					<?php esc_html_e( "The Pro plugin will be installed automatically using WordPress's standard installer. You can remove it at any time.", 'opti-behavior' ); ?>
+					<?php esc_html_e( 'The Free plugin does not install Pro for you: you choose whether to download and install it. No payment details are asked and nothing is billed automatically: after the trial, Pro features stop unless you buy a licence. You can remove Pro at any time.', 'opti-behavior' ); ?>
 				</p>
 			</div>
 			<?php endif; ?>
@@ -597,7 +787,7 @@ class Opti_Behavior_Welcome {
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12c0-3 2.5-6 2.5-6s2.5 3 2.5 6a2.5 2.5 0 1 1-5 0Z"/><path d="M12 2v1"/><path d="M12 21v1"/><path d="m4.6 4.6.7.7"/><path d="m18.7 18.7.7.7"/><path d="M2 12h1"/><path d="M21 12h1"/><path d="m4.6 19.4.7-.7"/><path d="m18.7 5.3.7-.7"/></svg>
 					</div>
 					<h3><?php esc_html_e( 'Visual Heatmaps', 'opti-behavior' ); ?></h3>
-					<p><?php esc_html_e( 'Click, scroll and attention heatmaps with color-coded intensity overlays on every page.', 'opti-behavior' ); ?></p>
+					<p><?php esc_html_e( 'Click heatmaps on every page (scroll, move and attention layers in Pro).', 'opti-behavior' ); ?></p>
 				</div>
 
 				<div class="ob-consent-feature">
@@ -612,7 +802,7 @@ class Opti_Behavior_Welcome {
 					<div class="ob-consent-feature-icon icon-recordings">
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
 					</div>
-					<h3><?php esc_html_e( 'Session Recordings', 'opti-behavior' ); ?></h3>
+					<h3><?php esc_html_e( 'Session Recordings', 'opti-behavior' ); ?> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></h3>
 					<p><?php esc_html_e( 'Replay full visitor sessions to see precisely how users interact with every page.', 'opti-behavior' ); ?></p>
 				</div>
 
@@ -628,7 +818,7 @@ class Opti_Behavior_Welcome {
 					<div class="ob-consent-feature-icon icon-forms">
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 8h10"/><path d="M7 12h7"/><path d="M7 16h4"/></svg>
 					</div>
-					<h3><?php esc_html_e( 'Form Analytics', 'opti-behavior' ); ?></h3>
+					<h3><?php esc_html_e( 'Form Analytics', 'opti-behavior' ); ?> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></h3>
 					<p><?php esc_html_e( 'Measure form field interactions, abandonment rates and completion times.', 'opti-behavior' ); ?></p>
 				</div>
 
@@ -636,7 +826,7 @@ class Opti_Behavior_Welcome {
 					<div class="ob-consent-feature-icon icon-errors">
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
 					</div>
-					<h3><?php esc_html_e( 'Errors & Performance', 'opti-behavior' ); ?></h3>
+					<h3><?php esc_html_e( 'Errors & Performance', 'opti-behavior' ); ?> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></h3>
 					<p><?php esc_html_e( 'Capture JavaScript errors and performance bottlenecks in real time.', 'opti-behavior' ); ?></p>
 				</div>
 
@@ -644,7 +834,7 @@ class Opti_Behavior_Welcome {
 					<div class="ob-consent-feature-icon icon-journey">
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="3"/><path d="M5 9v6"/><circle cx="5" cy="18" r="3"/><path d="M12 3h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7"/><path d="M12 13h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7"/></svg>
 					</div>
-					<h3><?php esc_html_e( 'User Journey Analytics', 'opti-behavior' ); ?></h3>
+					<h3><?php esc_html_e( 'User Journey Analytics', 'opti-behavior' ); ?> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></h3>
 					<p><?php esc_html_e( 'Visualize complete visitor navigation paths from entry to exit across your site.', 'opti-behavior' ); ?></p>
 				</div>
 
@@ -660,8 +850,8 @@ class Opti_Behavior_Welcome {
 					<div class="ob-consent-feature-icon icon-privacy-shield">
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.5 2.9 8.5 7 10 4.1-1.5 7-5.5 7-10V6l-7-3Z"/><path d="m9.5 12 1.8 1.8 3.7-4.1"/></svg>
 					</div>
-					<h3><?php esc_html_e( 'GDPR Compliant by Design', 'opti-behavior' ); ?></h3>
-					<p><?php esc_html_e( 'IP anonymization, no cross-border transfers, configurable consent and full data controls.', 'opti-behavior' ); ?></p>
+					<h3><?php esc_html_e( 'Privacy-first by design', 'opti-behavior' ); ?></h3>
+					<p><?php esc_html_e( 'IP anonymization, configurable consent and full data controls. Visitor data stays on your own server.', 'opti-behavior' ); ?></p>
 				</div>
 
 			</div><!-- /.ob-consent-features -->
@@ -675,17 +865,9 @@ class Opti_Behavior_Welcome {
 					<strong><?php esc_html_e( 'Privacy & Data Protection', 'opti-behavior' ); ?></strong>
 				</div>
 				<div class="ob-consent-privacy-body">
-					<?php
-					printf(
-						/* translators: %s: Privacy Policy hyperlink */
-						esc_html__( 'All visitor analytics data is processed and stored exclusively on your own server — no external services, no cross-border data transfers. IP anonymization, consent-mode support, and full data deletion controls help you comply with GDPR, CCPA, and other privacy regulations. By clicking "Accept & Continue" you agree to our %s.', 'opti-behavior' ),
-						'<a href="https://optiuser.com/privacy-policy/" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Privacy Policy', 'opti-behavior' ) . '</a>'
-					);
-					?>
+					<?php self::render_privacy_text(); ?>
 				</div>
 				<div class="ob-consent-badges">
-					<span class="ob-consent-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><?php esc_html_e( 'GDPR Ready', 'opti-behavior' ); ?></span>
-					<span class="ob-consent-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><?php esc_html_e( 'CCPA Compliant', 'opti-behavior' ); ?></span>
 					<span class="ob-consent-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><?php esc_html_e( 'Self-Hosted Data', 'opti-behavior' ); ?></span>
 					<span class="ob-consent-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><?php esc_html_e( 'No Third-Party Sharing', 'opti-behavior' ); ?></span>
 					<span class="ob-consent-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><?php esc_html_e( 'IP Anonymization', 'opti-behavior' ); ?></span>
@@ -700,10 +882,15 @@ class Opti_Behavior_Welcome {
 					<?php esc_html_e( 'Accept & Continue', 'opti-behavior' ); ?>
 					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
 				</button>
+			</form>
+
+			<!-- Decline form (separate admin-post action: nothing is sent) -->
+			<div class="ob-consent-cta-section ob-consent-decline-section">
+				<?php $this->render_decline_form( false ); ?>
 				<p class="ob-consent-footer-note">
 					<?php esc_html_e( 'You can review and adjust all privacy and tracking settings at any time from the Settings page.', 'opti-behavior' ); ?>
 				</p>
-			</form>
+			</div>
 
 			<!-- Bottom brand -->
 			<div class="ob-consent-bottom-brand">
@@ -885,6 +1072,9 @@ class Opti_Behavior_Welcome {
 }
 .ob-consent-privacy-body a { color: #6366f1; text-decoration: none; font-weight: 500; }
 .ob-consent-privacy-body a:hover { text-decoration: underline; }
+.ob-consent-privacy-body p { margin: 0 0 6px; font-size: 12px; }
+.ob-consent-data-list { margin: 0 0 6px 18px; padding: 0; list-style: disc; }
+.ob-consent-data-list li { margin: 0 0 2px; }
 .ob-consent-badges { display: flex; flex-wrap: wrap; gap: 5px; }
 .ob-consent-badge {
 	display: inline-flex;
@@ -932,32 +1122,57 @@ class Opti_Behavior_Welcome {
 	margin: 0 0 12px;
 	line-height: 1.55;
 }
-.ob-consent-trial-label {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	cursor: pointer;
-	margin-bottom: 8px;
-}
-.ob-consent-trial-label input[type="checkbox"] {
-	width: 16px;
-	height: 16px;
-	flex-shrink: 0;
-	accent-color: #d97706;
-	cursor: pointer;
-}
-.ob-consent-trial-label span {
+.ob-trial-disclosure {
 	font-size: 13px;
-	font-weight: 600;
-	color: #78350f;
-	line-height: 1.4;
+	color: #451a03;
+	background: rgba(255,255,255,.65);
+	border: 1px solid #fde68a;
+	border-radius: 8px;
+	padding: 10px 12px;
+	margin: 0 0 14px;
+	line-height: 1.55;
 }
+.ob-trial-disclosure a { color: #1d4ed8; text-decoration: underline; }
+.ob-trial-form, .ob-trial-skip-form { margin: 0; text-align: center; }
+.ob-trial-start {
+	display: inline-block;
+	background: #b45309;
+	color: #fff;
+	font-size: 15px;
+	font-weight: 700;
+	padding: 13px 34px;
+	border: none;
+	border-radius: 8px;
+	cursor: pointer;
+	box-shadow: 0 2px 12px rgba(180,83,9,.30);
+	line-height: 1.2;
+	transition: background .2s, box-shadow .2s;
+}
+.ob-trial-start:hover { background: #92400e; box-shadow: 0 4px 16px rgba(146,64,14,.38); }
+.ob-trial-start, .ob-trial-start:hover, .ob-trial-start:focus, .ob-trial-start:visited { color: #fff; text-decoration: none; }
+.ob-trial-start:focus-visible, .ob-trial-skip:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.ob-trial-skip {
+	background: none;
+	border: none;
+	padding: 8px 6px;
+	margin-top: 4px;
+	color: #78350f;
+	font-size: 14px;
+	font-weight: 500;
+	text-decoration: underline;
+	cursor: pointer;
+}
+.ob-trial-skip:hover { color: #451a03; }
 .ob-consent-trial-note {
-	font-size: 11px;
-	color: #92400e;
-	margin: 0;
-	opacity: .75;
+	font-size: 12px;
+	color: #78350f;
+	margin: 8px 0 0;
+	text-align: center;
 	line-height: 1.5;
+}
+@media (max-width: 520px) {
+	.ob-consent-trial-card { padding: 16px 14px; }
+	.ob-trial-start { display: block; width: 100%; box-sizing: border-box; padding: 13px 12px; text-align: center; }
 }
 /* CTA form */
 .ob-consent-cta-section { text-align: center; padding: 4px 0 0; }
@@ -986,6 +1201,19 @@ class Opti_Behavior_Welcome {
 }
 .ob-consent-cta:active { transform: translateY(0); }
 .ob-consent-cta svg { width: 15px; height: 15px; flex-shrink: 0; }
+.ob-consent-decline-section { padding-top: 10px; }
+.ob-consent-decline-form { margin: 0; }
+.ob-consent-decline {
+	background: transparent;
+	border: 1px solid #cbd5e1;
+	border-radius: 8px;
+	color: #475569;
+	font-size: 13px;
+	font-weight: 500;
+	padding: 9px 24px;
+	cursor: pointer;
+}
+.ob-consent-decline:hover { background: #f1f5f9; color: #1e293b; }
 .ob-consent-footer-note {
 	margin-top: 10px;
 	font-size: 11px;

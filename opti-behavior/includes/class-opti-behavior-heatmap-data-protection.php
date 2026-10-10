@@ -407,8 +407,8 @@ class Opti_Behavior_Heatmap_Data_Protection {
 			<p>
 				<strong>✅ opti-behavior Heatmap Data Protection:</strong> 
 				Your heatmap data has been automatically recovered! 
-				<?php echo esc_html( number_format( $event_count ) ); ?> events and 
-				<?php echo esc_html( number_format( $accessible_count ) ); ?> heatmaps are now accessible.
+				<?php echo esc_html( number_format_i18n( $event_count ) ); ?> events and 
+				<?php echo esc_html( number_format_i18n( $accessible_count ) ); ?> heatmaps are now accessible.
 			</p>
 			<p>
 				<em>The plugin detected and fixed data integrity issues automatically. No data was lost.</em>

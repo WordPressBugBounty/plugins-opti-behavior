@@ -564,6 +564,9 @@ class Opti_Behavior_Heatmap_Core {
 		// and runs batched invalid-data cleanup OFF the web-request path — one
 		// heavy statement per tick, resumable.
 		add_action( Opti_Behavior_Heatmap_Database::HEAVY_MIGRATIONS_CRON_HOOK, array( $this->database, 'run_heavy_migrations' ) );
+		// OPT-574: queue the one-time repair of stored URLs (personal data) on
+		// the same worker until it is done.
+		add_action( 'admin_init', array( $this->database, 'maybe_schedule_url_privacy_repair' ) );
 		// Stale-session finalize sweep: recurring cron + opportunistic run when the
 		// analytics dashboard loads, so an admin viewing the reports sees sessions
 		// whose is_final beacon was lost already finalized (spam vs human) instead
@@ -574,6 +577,7 @@ class Opti_Behavior_Heatmap_Core {
 		add_action( Opti_Behavior_Smart_Insights_Generator::CRON_HOOK, array( $this, 'process_smart_insights_daily' ) );
 		add_action( Opti_Behavior_Smart_Insights_Scheduler::BATCH_HOOK, array( $this, 'process_smart_insights_scheduler_batch' ) );
 		add_action( Opti_Behavior_Smart_Insights_Scheduler::OUTCOME_HOOK, array( $this, 'process_smart_insights_outcome_check' ) );
+		add_action( Opti_Behavior_Smart_Insights_Scheduler::UPGRADE_REGENERATE_HOOK, array( $this, 'process_smart_insights_upgrade_regenerate' ) );
 		add_filter( 'cron_schedules', array( 'Opti_Behavior_Smart_Insights_Scheduler', 'add_cron_schedules' ) );
 		add_action( 'load-toplevel_page_opti-behavior-analytics', array( $this, 'maybe_refresh_smart_insights_admin' ) );
 		add_action( 'load-opti-behavior_page_opti-behavior-smart-insights', array( $this, 'maybe_refresh_smart_insights_admin' ) );
@@ -667,6 +671,13 @@ class Opti_Behavior_Heatmap_Core {
 		// dossiers built by the older rules and regenerate once.
 		if ( class_exists( 'Opti_Behavior_Smart_Insights_Scheduler' ) ) {
 			Opti_Behavior_Smart_Insights_Scheduler::maybe_apply_rules_upgrade();
+			Opti_Behavior_Smart_Insights_Scheduler::maybe_repair_story_parent_loops();
+		}
+
+		// Heatmap mapping rows a `?query` variant took over before OPT-348:
+		// hand them back to their clean page once per version (OPT-365).
+		if ( class_exists( 'Opti_Behavior_Heatmap_Storage' ) ) {
+			Opti_Behavior_Heatmap_Storage::get_instance()->maybe_repair_query_variant_mappings();
 		}
 
 		// Check for version updates
@@ -718,6 +729,8 @@ class Opti_Behavior_Heatmap_Core {
 					"{$wpdb->prefix}optibehavior_ab_conversions",
 					"{$wpdb->prefix}optibehavior_ab_daily_stats",
 					"{$wpdb->prefix}optibehavior_ab_decision_log",
+					"{$wpdb->prefix}opti_behavior_funnels",
+					"{$wpdb->prefix}opti_behavior_funnel_tracking",
 				);
 				foreach ( $tables as $t ) {
 					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Checking table existence.
@@ -761,6 +774,10 @@ class Opti_Behavior_Heatmap_Core {
 			// One-time aggregate resync after the 1.7.5 heatmap allow-list
 			// page-identity fix. Idempotent (guarded by an option flag).
 			$this->database->migrate_resync_heatmap_aggregates_for_allowlist();
+
+			// One-time aggregate resync: list clicks deduped like the detail
+			// (OPT-589). Idempotent (guarded by an option flag).
+			$this->database->migrate_resync_heatmap_aggregates_for_click_dedupe();
 
 			// One-time cleanup: collapse duplicate optibehavior_heatmap_pages
 			// mappings (stale QA/alias URLs colliding on one page_id) that
@@ -1262,7 +1279,15 @@ class Opti_Behavior_Heatmap_Core {
 		$fallback                           = $this->run_recording_files_fallback();
 		$summary['recording_files_deleted'] = $fallback['deleted'];
 
-		// --- 3. Optional aggregates cap (default 0 = kept FOREVER). ---
+		// --- 2c. Script errors + page speed: short window (30 days default). ---
+		if ( class_exists( 'Opti_Behavior_Smart_Cleanup_Service' ) ) {
+			$service = new Opti_Behavior_Smart_Cleanup_Service();
+			if ( method_exists( $service, 'prune_error_performance_rows' ) ) {
+				$summary['error_performance_rows_pruned'] = array_sum( $service->prune_error_performance_rows() );
+			}
+		}
+
+		// --- 3. Aggregates cap (default 12 months; 0 = kept FOREVER). ---
 		$agg_months = Opti_Behavior_Retention_Policy::get_aggregates_retention_months();
 		if ( $agg_months > 0 && method_exists( $this->database, 'prune_aggregates_older_than_months' ) ) {
 			$summary['aggregate_rows_pruned'] = absint( $this->database->prune_aggregates_older_than_months( $agg_months ) );
@@ -1512,6 +1537,26 @@ class Opti_Behavior_Heatmap_Core {
 
 		if ( $this->debug_manager ) {
 			$this->debug_manager->log( 'Smart Insights outcome check completed: ' . wp_json_encode( $result ), 'info', 'smart-insights' );
+		}
+	}
+
+	/**
+	 * Cron callback: one regeneration after a plugin update (OPT-546), so the
+	 * stored cards carry what the new version stores.
+	 */
+	public function process_smart_insights_upgrade_regenerate() {
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Scheduler' ) ) {
+			return;
+		}
+
+		$result = Opti_Behavior_Smart_Insights_Scheduler::run_upgrade_regeneration( $this->get_smart_insights_generator() );
+
+		if ( $this->debug_manager ) {
+			if ( is_wp_error( $result ) ) {
+				$this->debug_manager->log( 'Smart Insights upgrade regeneration failed: ' . $result->get_error_message(), 'warning', 'smart-insights' );
+			} else {
+				$this->debug_manager->log( 'Smart Insights upgrade regeneration completed: ' . wp_json_encode( $result ), 'info', 'smart-insights' );
+			}
 		}
 	}
 
@@ -2207,6 +2252,7 @@ class Opti_Behavior_Heatmap_Core {
 			// --- One-off events ---------------------------------------------------
 			'opti_behavior_debug_auto_disable',              // Opti_Behavior_Heatmap_Debug_Manager::AUTO_DISABLE_CRON_HOOK.
 			'opti_behavior_smart_insights_scheduler_batch',  // Opti_Behavior_Smart_Insights_Scheduler::BATCH_HOOK.
+			'opti_behavior_smart_insights_upgrade_regenerate', // Opti_Behavior_Smart_Insights_Scheduler::UPGRADE_REGENERATE_HOOK (once per plugin update).
 			'opti_behavior_heatmap_agg_sync',                // Aggregate-index sync worker.
 			'opti_behavior_heatmap_daily_sync',              // Daily-index sync worker.
 			'opti_behavior_heatmap_stats_warm',              // Opti_Behavior_Heatmap_Dashboard::HEATMAP_STATS_WARM_CRON_HOOK (scheduled WITH args).
@@ -2224,6 +2270,7 @@ class Opti_Behavior_Heatmap_Core {
 			'opti_behavior_engagement_counters_tick',        // Opti_Behavior_Heatmap_Engagement_Counters::TICK_HOOK (backfill + purge).
 			'opti_behavior_page_type_prune_run',             // 1.9.5 archive-page prune run-now + continuation.
 			'opti_behavior_spam_few_scrolls_repair',         // Opti_Behavior_Stats_Spam_Filter::FEW_SCROLLS_REPAIR_HOOK (one-time repair).
+			'opti_behavior_spam_referrer_repair',            // Opti_Behavior_Stats_Spam_Filter::REFERRER_REPAIR_HOOK (one-time repair, OPT-562).
 			'opti_behavior_page_type_prune_restore',         // 1.9.5 archive-page prune restore pass.
 			'opti_behavior_page_type_prune_purge',           // 1.9.5 archive-page prune purge pass.
 			'opti_behavior_heatmap_migration_batch',         // Heatmap file-storage migration batch worker.

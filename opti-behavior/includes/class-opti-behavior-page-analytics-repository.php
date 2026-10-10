@@ -34,6 +34,10 @@ final class Opti_Behavior_Page_Analytics_Repository {
 	const TRAFFIC_SCOPE_HUMAN = 'human';
 	const TRAFFIC_SCOPE_ALL   = 'all';
 	const TRAFFIC_SCOPE_BOT   = 'bot';
+	// Human visits that have their session row = Traffic's universe (OPT-568:
+	// page views always INNER JOIN sessions). Used by Page X-Ray (OPT-588);
+	// `human` keeps page views without a session row (Heatmaps, metabox).
+	const TRAFFIC_SCOPE_HUMAN_SESSIONS = 'human_sessions';
 
 	/**
 	 * WordPress database adapter.
@@ -90,6 +94,15 @@ final class Opti_Behavior_Page_Analytics_Repository {
 	 */
 	public function get_page_metrics( array $args ) {
 		$identity      = $this->resolve_page_identity( $args );
+		// Explicit page group (heatmap URL-only pages, OPT-365): count exactly
+		// these ids, the ones the Heatmaps list counts.
+		if ( ! empty( $args['group_page_ids'] ) && is_array( $args['group_page_ids'] ) ) {
+			$group = array_values( array_unique( array_filter( array_map( 'absint', $args['group_page_ids'] ) ) ) );
+			if ( ! empty( $group ) ) {
+				$identity['page_ids'] = $group;
+				$identity['page_id']  = $group[0];
+			}
+		}
 		$period        = isset( $args['period'] ) ? sanitize_key( $args['period'] ) : $this->get_default_period();
 		$date_range    = $this->normalize_date_range(
 			$period,
@@ -148,7 +161,9 @@ final class Opti_Behavior_Page_Analytics_Repository {
 	 *
 	 * @param int   $page_id Internal optibehavior_pages.id.
 	 * @param array $args    Optional overrides: period, start_date, end_date,
-	 *                       traffic_scope. Defaults to human scope, Free source
+	 *                       traffic_scope, group_page_ids (explicit page group,
+	 *                       e.g. the Page X-Ray identity members, OPT-602).
+	 *                       Defaults to human scope, Free source
 	 *                       (prefer_pro=false — Pro's session override already
 	 *                       resolves to the same human universe post-BUG-2).
 	 * @return array|null Metric block (see get_page_metrics()), or null when the
@@ -175,7 +190,13 @@ final class Opti_Behavior_Page_Analytics_Repository {
 		if ( ! empty( $row['post_id'] ) ) {
 			$resolver['post_id'] = absint( $row['post_id'] );
 		} elseif ( ! empty( $row['url'] ) ) {
+			// URL-only page: count the same base-URL variant group as the
+			// Heatmaps list row. Resolving by the stored URL alone missed the
+			// clean page when the row was a `?query` variant (OPT-365).
 			$resolver['page_url'] = (string) $row['url'];
+			if ( empty( $args['group_page_ids'] ) ) {
+				$resolver['group_page_ids'] = $this->get_url_variant_group_page_ids( $page_id );
+			}
 		} else {
 			return null;
 		}
@@ -331,74 +352,7 @@ final class Opti_Behavior_Page_Analytics_Repository {
 		$url_devices = array(); // base_key => device bucket map.
 		$id_to_base  = array(); // input url-only page id => base_key.
 		if ( ! empty( $url_only ) ) {
-			// Resolve each input url-only id to its canonical base URL key.
-			$uph   = implode( ',', array_fill( 0, count( $url_only ), '%d' ) );
-			$urows = $this->wpdb->get_results(
-				$this->wpdb->prepare(
-					"SELECT id, url FROM {$this->tables['pages']} WHERE id IN ({$uph})",
-					...$url_only
-				),
-				ARRAY_A
-			);
-
-			$base_members  = array(); // base_key => array of member page ids.
-			$like_bases    = array(); // base_key => untrailingslashed base for sibling LIKE fetch.
-			foreach ( $urows as $ur ) {
-				$id   = absint( $ur['id'] );
-				$base = $this->untrailingslash_url( (string) strtok( (string) $ur['url'], '?#' ) );
-				if ( strlen( $base ) < 8 ) {
-					// No usable base URL: keep the page as its own standalone group.
-					$key = 'id:' . $id;
-				} else {
-					$key                = $base;
-					$like_bases[ $key ] = $base;
-				}
-				$id_to_base[ $id ] = $key;
-				if ( ! isset( $base_members[ $key ] ) ) {
-					$base_members[ $key ] = array();
-				}
-				$base_members[ $key ][ $id ] = $id; // input id is always a member.
-			}
-
-			// Fetch sibling page ids that share any of these base URLs (exact base,
-			// trailing-slash base, or a tracked-query/AB variant "base?..."), then
-			// assign each sibling to the base key its own URL normalizes to.
-			if ( ! empty( $like_bases ) ) {
-				$conds  = array();
-				$params = array();
-				foreach ( $like_bases as $b ) {
-					$bslash = $this->trailingslash_url( $b );
-					foreach ( array( 'url', 'url2' ) as $col ) {
-						$conds[]  = "{$col} = %s";
-						$params[] = $b;
-						$conds[]  = "{$col} = %s";
-						$params[] = $bslash;
-						$conds[]  = "{$col} LIKE %s";
-						$params[] = $this->wpdb->esc_like( $b ) . '?%';
-						$conds[]  = "{$col} LIKE %s";
-						$params[] = $this->wpdb->esc_like( $bslash ) . '?%';
-					}
-				}
-				$sibs = $this->wpdb->get_results(
-					$this->wpdb->prepare(
-						"SELECT id, url, url2 FROM {$this->tables['pages']}
-						WHERE " . implode( ' OR ', $conds ) . '
-						LIMIT 2000',
-						...$params
-					),
-					ARRAY_A
-				);
-				foreach ( $sibs as $sr ) {
-					$sid   = absint( $sr['id'] );
-					$sbase = $this->untrailingslash_url( (string) strtok( (string) $sr['url'], '?#' ) );
-					if ( ! isset( $base_members[ $sbase ] ) && ! empty( $sr['url2'] ) ) {
-						$sbase = $this->untrailingslash_url( (string) strtok( (string) $sr['url2'], '?#' ) );
-					}
-					if ( isset( $base_members[ $sbase ] ) ) {
-						$base_members[ $sbase ][ $sid ] = $sid;
-					}
-				}
-			}
+			list( $id_to_base, $base_members ) = $this->resolve_url_only_groups( $url_only );
 
 			// Assign a dense group index per base key. Single-member groups (the
 			// overwhelming majority — pages without AB/tracked-query variants)
@@ -621,6 +575,118 @@ final class Opti_Behavior_Page_Analytics_Repository {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Group URL-only pages (post_id = 0) by canonical base URL — THE grouping of
+	 * the Heatmaps list (get_group_session_counts_for_pages()) and of the detail
+	 * surfaces (get_canonical_metrics_for_page_id()), so both count the same
+	 * page ids (OPT-365: home row 689 sessions, detail 4).
+	 *
+	 * A page joins a group when its url (or url2) is the base, the base with a
+	 * trailing slash, or a `base?…` variant of it.
+	 *
+	 * @param int[] $url_only URL-only page ids.
+	 * @return array{0:array<int,string>,1:array<string,array<int,int>>} [ id => base key, base key => member ids ].
+	 */
+	private function resolve_url_only_groups( array $url_only ) {
+		$id_to_base   = array();
+		$base_members = array(); // base_key => array of member page ids.
+		$url_only     = array_values( array_unique( array_filter( array_map( 'absint', $url_only ) ) ) );
+		if ( empty( $url_only ) ) {
+			return array( $id_to_base, $base_members );
+		}
+
+		// Resolve each input url-only id to its canonical base URL key.
+		$uph   = implode( ',', array_fill( 0, count( $url_only ), '%d' ) );
+		$urows = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT id, url FROM {$this->tables['pages']} WHERE id IN ({$uph})",
+				...$url_only
+			),
+			ARRAY_A
+		);
+
+		$like_bases = array(); // base_key => untrailingslashed base for sibling LIKE fetch.
+		foreach ( $urows as $ur ) {
+			$id   = absint( $ur['id'] );
+			$base = $this->untrailingslash_url( (string) strtok( (string) $ur['url'], '?#' ) );
+			if ( strlen( $base ) < 8 ) {
+				// No usable base URL: keep the page as its own standalone group.
+				$key = 'id:' . $id;
+			} else {
+				$key                = $base;
+				$like_bases[ $key ] = $base;
+			}
+			$id_to_base[ $id ] = $key;
+			if ( ! isset( $base_members[ $key ] ) ) {
+				$base_members[ $key ] = array();
+			}
+			$base_members[ $key ][ $id ] = $id; // input id is always a member.
+		}
+
+		// Fetch sibling page ids that share any of these base URLs (exact base,
+		// trailing-slash base, or a tracked-query/AB variant "base?..."), then
+		// assign each sibling to the base key its own URL normalizes to.
+		if ( ! empty( $like_bases ) ) {
+			$conds  = array();
+			$params = array();
+			foreach ( $like_bases as $b ) {
+				$bslash = $this->trailingslash_url( $b );
+				foreach ( array( 'url', 'url2' ) as $col ) {
+					$conds[]  = "{$col} = %s";
+					$params[] = $b;
+					$conds[]  = "{$col} = %s";
+					$params[] = $bslash;
+					$conds[]  = "{$col} LIKE %s";
+					$params[] = $this->wpdb->esc_like( $b ) . '?%';
+					$conds[]  = "{$col} LIKE %s";
+					$params[] = $this->wpdb->esc_like( $bslash ) . '?%';
+				}
+			}
+			$sibs = $this->wpdb->get_results(
+				$this->wpdb->prepare(
+					"SELECT id, url, url2 FROM {$this->tables['pages']}
+					WHERE " . implode( ' OR ', $conds ) . '
+					LIMIT 2000',
+					...$params
+				),
+				ARRAY_A
+			);
+			foreach ( $sibs as $sr ) {
+				$sid   = absint( $sr['id'] );
+				$sbase = $this->untrailingslash_url( (string) strtok( (string) $sr['url'], '?#' ) );
+				if ( ! isset( $base_members[ $sbase ] ) && ! empty( $sr['url2'] ) ) {
+					$sbase = $this->untrailingslash_url( (string) strtok( (string) $sr['url2'], '?#' ) );
+				}
+				if ( isset( $base_members[ $sbase ] ) ) {
+					$base_members[ $sbase ][ $sid ] = $sid;
+				}
+			}
+		}
+
+		return array( $id_to_base, $base_members );
+	}
+
+	/**
+	 * Page ids the Heatmaps list counts for one URL-only page (its base-URL
+	 * variant group, the page itself first). See resolve_url_only_groups().
+	 *
+	 * @param int $page_id URL-only optibehavior_pages.id.
+	 * @return int[] Member page ids (just the page when it has no siblings).
+	 */
+	public function get_url_variant_group_page_ids( $page_id ) {
+		$page_id = absint( $page_id );
+		if ( ! $page_id || ! $this->table_exists( 'pages' ) ) {
+			return array();
+		}
+		list( $id_to_base, $base_members ) = $this->resolve_url_only_groups( array( $page_id ) );
+		if ( ! isset( $id_to_base[ $page_id ], $base_members[ $id_to_base[ $page_id ] ] ) ) {
+			return array( $page_id );
+		}
+		$members = array_map( 'absint', array_values( $base_members[ $id_to_base[ $page_id ] ] ) );
+		sort( $members, SORT_NUMERIC );
+		return array_values( array_unique( array_merge( array( $page_id ), $members ) ) );
 	}
 
 	/**
@@ -889,12 +955,16 @@ final class Opti_Behavior_Page_Analytics_Repository {
 
 		$sql = " AND ({$column} IS NULL OR {$column} = '' OR {$column} NOT IN ('spam', 'bot', 'automated'))";
 
-		if ( $this->is_spam_detection_enabled() ) {
-			$sql .= ' AND COALESCE(' . $duration_col . ', 0) >= ' . absint( $this->get_spam_duration_threshold() );
-			return array(
-				'sql'    => $sql,
-				'params' => array(),
-			);
+		if ( self::TRAFFIC_SCOPE_HUMAN_SESSIONS === $traffic_scope ) {
+			// Traffic's universe (OPT-568 / OPT-588), for Page X-Ray: the page
+			// view needs its session row, and the stored verdict of that session
+			// decides (the classifier already applied the duration / scroll /
+			// click thresholds and the referred-visit rule, OPT-562) — no second
+			// duration floor at query time.
+			$sql .= $prefix ? " AND {$prefix}.id IS NOT NULL" : '';
+		} elseif ( $this->is_spam_detection_enabled() ) {
+			// A visit referred by another site passes the duration floor (OPT-562).
+			$sql .= ' AND ' . Opti_Behavior_Stats_Spam_Filter::referrer_or_thresholds_sql( 'COALESCE(' . $duration_col . ', 0) >= ' . absint( $this->get_spam_duration_threshold() ), $prefix );
 		}
 
 		return array(
@@ -1404,6 +1474,11 @@ final class Opti_Behavior_Page_Analytics_Repository {
 			'preview_nonce',
 		);
 
+		// Same url2 as rebuild_url(): no personal data (OPT-574).
+		if ( function_exists( 'opti_behavior_strip_sensitive_query_args' ) ) {
+			$url = opti_behavior_strip_sensitive_query_args( $url );
+		}
+
 		return remove_query_arg( $strip_keys, strtok( $url, '#' ) );
 	}
 
@@ -1500,7 +1575,7 @@ final class Opti_Behavior_Page_Analytics_Repository {
 	 */
 	private function normalize_traffic_scope( $traffic_scope ) {
 		$traffic_scope = sanitize_key( $traffic_scope );
-		if ( in_array( $traffic_scope, array( self::TRAFFIC_SCOPE_HUMAN, self::TRAFFIC_SCOPE_ALL, self::TRAFFIC_SCOPE_BOT ), true ) ) {
+		if ( in_array( $traffic_scope, array( self::TRAFFIC_SCOPE_HUMAN, self::TRAFFIC_SCOPE_ALL, self::TRAFFIC_SCOPE_BOT, self::TRAFFIC_SCOPE_HUMAN_SESSIONS ), true ) ) {
 			return $traffic_scope;
 		}
 

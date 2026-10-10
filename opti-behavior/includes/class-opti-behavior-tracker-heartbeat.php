@@ -83,11 +83,12 @@ class Opti_Behavior_Tracker_Heartbeat {
 	/**
 	 * Documentation link shown in the notice.
 	 *
-	 * Points at the live support page (verified HTTP 200 on 2026-07-09; the
-	 * originally planned /docs/tracking-blocked-by-cache-plugin/ slug does
-	 * not exist yet). Swap to the dedicated docs article once published.
+	 * Points at the "tracking not working" checklist (verified HTTP 200 on
+	 * 2026-10-03): Setup check, cache, consent, spam, excluded IPs, WP-Cron,
+	 * debug. Also the help link of the Setup check rows (Setup_Guide).
+	 * /support/ redirects to the contact form, so it is not a help page.
 	 */
-	const DOC_URL = 'https://optiuser.com/support/';
+	const DOC_URL = 'https://optiuser.com/docs/tracking-not-working-checklist/';
 
 	/**
 	 * Per-request cache of the resolved module registry.

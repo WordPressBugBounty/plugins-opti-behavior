@@ -2375,7 +2375,8 @@ class Opti_Behavior_AB_Test_Database {
 		$event_created  = "{$alias}.created_at";
 		$traffic_sql    = "(s.traffic_type IS NULL OR s.traffic_type = '' OR s.traffic_type NOT IN ('spam', 'bot', 'automated'))";
 		$duration_sql   = '(CASE WHEN s.duration > 0 THEN s.duration ELSE TIMESTAMPDIFF(SECOND, s.start_time, COALESCE(s.end_time, s.start_time)) END)';
-		$policy_sql     = "{$traffic_sql} AND {$duration_sql} >= {$threshold}";
+		// A visit referred by another site passes the duration floor (OPT-562).
+		$policy_sql     = "{$traffic_sql} AND " . Opti_Behavior_Stats_Spam_Filter::referrer_or_thresholds_sql( "{$duration_sql} >= {$threshold}", 's' );
 
 		return " AND (
 			EXISTS (

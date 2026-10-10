@@ -1259,7 +1259,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         'insights_prune_months'       => 12,
                         'spam_daily_enabled'          => true,
                         'files_retention_days'        => 90,
-                        'aggregates_retention_months' => 0,
+                        'aggregates_retention_months' => 12,
                         'db_max_mb'                   => 0,
                         'table_max_mb'                => 0,
                     );
@@ -1277,7 +1277,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <?php esc_html_e( 'Data Retention', 'opti-behavior' ); ?>
                     </h4>
                     <p class="smart-cleanup-description">
-                        <?php esc_html_e( 'Tiered retention: spam and bot sessions are purged daily, heavy files (recordings and raw heatmap event files) expire first, detailed per-visitor data expires later, and dashboard summaries are kept forever — charts and totals keep working for dates older than these windows.', 'opti-behavior' ); ?>
+                        <?php esc_html_e( 'Tiered retention: spam and bot sessions are purged daily, heavy files (recordings and raw heatmap event files) expire first, detailed per-visitor data expires later, and dashboard summaries are kept 12 months — charts and totals keep working for dates older than the detailed-data window.', 'opti-behavior' ); ?>
                     </p>
                     <label class="condition-row">
                         <input type="checkbox" id="sc-spam-daily-enabled" <?php checked( $spam_daily_enabled ); ?>>
@@ -1312,7 +1312,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <label class="condition-row" style="margin-top:8px;">
                             <span class="condition-label"><?php esc_html_e( 'Cap dashboard summaries at', 'opti-behavior' ); ?></span>
                             <input type="number" id="sc-aggregates-retention-months" class="condition-input condition-input-small" min="0" max="120" value="<?php echo esc_attr( (string) $agg_months_value ); ?>">
-                            <span class="condition-unit"><?php esc_html_e( 'months (0 = keep forever, recommended)', 'opti-behavior' ); ?></span>
+                            <span class="condition-unit"><?php esc_html_e( 'months (0 = keep forever)', 'opti-behavior' ); ?></span>
                         </label>
                         <label class="condition-row" style="margin-top:8px;">
                             <span class="condition-label"><?php esc_html_e( 'Remove resolved/dismissed insights after', 'opti-behavior' ); ?></span>
@@ -2665,7 +2665,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             <?php esc_html_e( 'Privacy & GDPR Settings', 'opti-behavior' ); ?>
                         </h3>
                         <p class="section-description">
-                            <?php esc_html_e( 'Control how visitor data is collected and stored to comply with GDPR and other privacy regulations.', 'opti-behavior' ); ?>
+                            <?php esc_html_e( 'Control how visitor data is collected and stored on your server.', 'opti-behavior' ); ?>
                         </p>
                     </div>
 
@@ -2701,33 +2701,29 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px;"><?php esc_html_e( 'Daily hash (non-personal)', 'opti-behavior' ); ?></div>
                             <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px;"><?php esc_html_e( 'Persistent cookie', 'opti-behavior' ); ?></div>
 
-                            <div style="padding:8px 10px; border-bottom:1px solid #eee;"><?php esc_html_e( 'Consent banner required', 'opti-behavior' ); ?></div>
-                            <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center;"><span style="<?php echo esc_attr( $opti_behavior_pill_ok ); ?>"><?php esc_html_e( 'Not required', 'opti-behavior' ); ?></span></div>
-                            <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center;"><span style="<?php echo esc_attr( $opti_behavior_pill_req ); ?>"><?php esc_html_e( 'Required', 'opti-behavior' ); ?></span></div>
+                            <div style="padding:8px 10px; border-bottom:1px solid #eee;"><?php esc_html_e( 'Waits for visitor consent', 'opti-behavior' ); ?></div>
+                            <div style="padding:8px 10px; border-left:1px solid #ddd; text-align:center;"><span style="<?php echo esc_attr( $opti_behavior_pill_ok ); ?>"><?php esc_html_e( 'No', 'opti-behavior' ); ?></span></div>
+                            <div style="padding:8px 10px; border-left:1px solid #ddd; text-align:center;"><span style="<?php echo esc_attr( $opti_behavior_pill_req ); ?>"><?php esc_html_e( 'Yes', 'opti-behavior' ); ?></span></div>
 
-                            <div style="padding:8px 10px; background:#fafafa;"><?php esc_html_e( 'GDPR compliant', 'opti-behavior' ); ?></div>
-                            <div style="padding:8px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa;"><span style="<?php echo esc_attr( $opti_behavior_pill_ok ); ?>">&#10003; <?php esc_html_e( 'By default', 'opti-behavior' ); ?></span></div>
-                            <div style="padding:8px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa;"><span style="<?php echo esc_attr( $opti_behavior_pill_ok ); ?>">&#10003; <?php esc_html_e( 'With consent', 'opti-behavior' ); ?></span></div>
+                            <div style="padding:8px 10px; border-top:2px solid #ddd; font-weight:600; background:#fafafa;"><?php esc_html_e( 'Tracking quality', 'opti-behavior' ); ?></div>
+                            <div style="padding:8px 10px; border-left:1px solid #ddd; border-top:2px solid #ddd; text-align:center; background:#fafafa;"><span style="display:inline-block; padding:2px 12px; border-radius:10px; font-size:11px; font-weight:600; background:#fff3e0; color:#e65100;"><?php esc_html_e( 'Basic', 'opti-behavior' ); ?></span></div>
+                            <div style="padding:8px 10px; border-left:1px solid #ddd; border-top:2px solid #ddd; text-align:center; background:#fafafa;"><span style="display:inline-block; padding:2px 12px; border-radius:10px; font-size:11px; font-weight:600; background:#e8f5e9; color:#2e7d32;"><?php esc_html_e( 'Complete', 'opti-behavior' ); ?></span></div>
 
-                            <div style="padding:8px 10px; border-top:2px solid #ddd; font-weight:600;"><?php esc_html_e( 'Tracking quality', 'opti-behavior' ); ?></div>
-                            <div style="padding:8px 10px; border-left:1px solid #ddd; border-top:2px solid #ddd; text-align:center;"><span style="display:inline-block; padding:2px 12px; border-radius:10px; font-size:11px; font-weight:600; background:#fff3e0; color:#e65100;"><?php esc_html_e( 'Basic', 'opti-behavior' ); ?></span></div>
-                            <div style="padding:8px 10px; border-left:1px solid #ddd; border-top:2px solid #ddd; text-align:center;"><span style="display:inline-block; padding:2px 12px; border-radius:10px; font-size:11px; font-weight:600; background:#e8f5e9; color:#2e7d32;"><?php esc_html_e( 'Complete', 'opti-behavior' ); ?></span></div>
+                            <div style="padding:6px 10px; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'Returning visitors', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#999;"><?php esc_html_e( 'Not identified', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Recognized across visits', 'opti-behavior' ); ?></div>
 
-                            <div style="padding:6px 10px; background:#fafafa; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'Returning visitors', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#999;"><?php esc_html_e( 'Not identified', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Recognized across visits', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; background:#fafafa; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'Session accuracy', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#999;"><?php esc_html_e( 'Estimated (daily hash)', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Precise (cookie-based)', 'opti-behavior' ); ?></div>
 
-                            <div style="padding:6px 10px; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'Session accuracy', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#999;"><?php esc_html_e( 'Estimated (daily hash)', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Precise (cookie-based)', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'Visitor location', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#999;"><?php esc_html_e( 'Not available', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Country & city level', 'opti-behavior' ); ?></div>
 
-                            <div style="padding:6px 10px; background:#fafafa; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'Visitor location', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#999;"><?php esc_html_e( 'Not available', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Country & city level', 'opti-behavior' ); ?></div>
-
-                            <div style="padding:6px 10px; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'User journey tracking', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#999;"><?php esc_html_e( 'Single session only', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Full cross-session journey', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; background:#fafafa; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'User journey tracking', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#999;"><?php esc_html_e( 'Single session only', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Full cross-session journey', 'opti-behavior' ); ?></div>
                         </div>
                         </div>
                     </div>
@@ -2753,7 +2749,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                         <?php opti_behavior_tooltip_e( $tooltips['anonymous_mode']['title'], $tooltips['anonymous_mode']['content'], $tooltips['anonymous_mode']['simple'], $tooltips['anonymous_mode']['example'], array( 'position' => 'right' ) ); ?>
                                     </span>
                                 </div>
-                                <span class="radio-description" style="margin-top:8px; padding-left:28px; font-size:12px;"><?php esc_html_e( 'GDPR-safe, recommended. No cookies, no client-side storage, no IP storage, no geolocation. No consent banner needed.', 'opti-behavior' ); ?></span>
+                                <span class="radio-description" style="margin-top:8px; padding-left:28px; font-size:12px;"><?php esc_html_e( 'Recommended. No cookies, no client-side storage, no IP storage, no geolocation.', 'opti-behavior' ); ?></span>
                             </label>
                             <label class="radio-option ob-privacy-mode-option" style="margin:0; border-radius:0 6px 6px 0; flex-direction:column;">
                                 <div style="display:flex; align-items:center; gap:10px;">
@@ -3092,6 +3088,13 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         </div>
                     </form>
                 </div>
+
+                <?php
+                // Installation status sharing (own admin-post form, outside the privacy form).
+                if ( class_exists( 'Opti_Behavior_Welcome' ) ) {
+                    Opti_Behavior_Welcome::render_share_status_setting();
+                }
+                ?>
 
             </div>
             <?php
@@ -3518,7 +3521,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         'manual_recovery_completed',
                         esc_html__( '✅ Data Recovery Completed!', 'opti-behavior' ) . ' '
                             /* translators: %1$s: number of events, %2$s: number of accessible heatmaps */
-                            . esc_html( sprintf( __( 'Found and recovered: %1$s events, %2$s accessible heatmaps.', 'opti-behavior' ), number_format($event_count), number_format($accessible_count) ) ) . ' '
+                            . esc_html( sprintf( __( 'Found and recovered: %1$s events, %2$s accessible heatmaps.', 'opti-behavior' ), number_format_i18n($event_count), number_format_i18n($accessible_count) ) ) . ' '
                             /* translators: %s: list of fixed issues */
                             . esc_html( sprintf( __( 'Issues fixed: %s', 'opti-behavior' ), implode(', ', array_map(function($fix) {
                                 return str_replace('_', ' ', ucfirst($fix));
@@ -3531,7 +3534,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         'manual_recovery_checked',
                         esc_html__( '✅ Data Check Completed!', 'opti-behavior' ) . ' '
                             /* translators: %s: number of events */
-                            . esc_html( sprintf( __( 'No issues detected. Your data is healthy with %s events.', 'opti-behavior' ), number_format($event_count) ) ),
+                            . esc_html( sprintf( __( 'No issues detected. Your data is healthy with %s events.', 'opti-behavior' ), number_format_i18n($event_count) ) ),
                         'info'
                     );
                 }
@@ -4451,21 +4454,21 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <div class="stat-card">
                             <div class="stat-icon"><i data-lucide="files"></i></div>
                             <div class="stat-content">
-                                <div class="stat-value"><?php echo number_format($stats['file_count']); ?></div>
+                                <div class="stat-value"><?php echo esc_html( number_format_i18n( $stats['file_count'] ) ); ?></div>
                                 <div class="stat-label"><?php esc_html_e( 'Total Files', 'opti-behavior' ); ?></div>
                             </div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-icon"><i data-lucide="video"></i></div>
                             <div class="stat-content">
-                                <div class="stat-value"><?php echo number_format($stats['recordings_count']); ?></div>
+                                <div class="stat-value"><?php echo esc_html( number_format_i18n( $stats['recordings_count'] ) ); ?></div>
                                 <div class="stat-label"><?php esc_html_e( 'Recording Files', 'opti-behavior' ); ?></div>
                             </div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-icon"><i data-lucide="activity"></i></div>
                             <div class="stat-content">
-                                <div class="stat-value"><?php echo number_format($stats['events_count']); ?></div>
+                                <div class="stat-value"><?php echo esc_html( number_format_i18n( $stats['events_count'] ) ); ?></div>
                                 <div class="stat-label"><?php esc_html_e( 'Event Files', 'opti-behavior' ); ?></div>
                             </div>
                         </div>
@@ -4475,14 +4478,14 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <div class="stat-card">
                             <div class="stat-icon"><i data-lucide="database"></i></div>
                             <div class="stat-content">
-                                <div class="stat-value"><?php echo number_format($archiver_stats['db_recordings']); ?></div>
+                                <div class="stat-value"><?php echo esc_html( number_format_i18n( $archiver_stats['db_recordings'] ) ); ?></div>
                                 <div class="stat-label"><?php esc_html_e( 'Database Recordings', 'opti-behavior' ); ?></div>
                             </div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-icon"><i data-lucide="folder-open"></i></div>
                             <div class="stat-content">
-                                <div class="stat-value"><?php echo number_format($archiver_stats['file_recordings']); ?></div>
+                                <div class="stat-value"><?php echo esc_html( number_format_i18n( $archiver_stats['file_recordings'] ) ); ?></div>
                                 <div class="stat-label"><?php esc_html_e( 'File-Based Recordings', 'opti-behavior' ); ?></div>
                             </div>
                         </div>
@@ -4790,7 +4793,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <a href="<?php echo esc_url( $recordings_page_url ); ?>" class="button button-primary button-large">
                             <?php esc_html_e( 'See what Session Recordings offers', 'opti-behavior' ); ?>
                         </a>
-                        <a href="https://optiuser.com/opti-behavior/" class="button button-secondary button-large" target="_blank" rel="noopener noreferrer">
+                        <a href="<?php echo esc_url( class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::link_url( 'settings-recordings' ) : '' ); ?>" class="button button-secondary button-large" target="_blank" rel="noopener noreferrer">
                             <?php esc_html_e( 'Upgrade to Opti-Behavior Pro', 'opti-behavior' ); ?>
                         </a>
                     </p>
@@ -4830,7 +4833,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <li>✅ <?php esc_html_e( 'Support for high-traffic sites (30K+ visits/day)', 'opti-behavior' ); ?></li>
                     </ul>
                     <div class="pro-upgrade-actions">
-                        <a href="#" class="button button-primary button-large pro-upgrade-button">
+                        <a href="<?php echo esc_url( class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::link_url( 'settings-storage' ) : '' ); ?>" class="button button-primary button-large pro-upgrade-button" target="_blank" rel="noopener noreferrer">
                             🚀 <?php esc_html_e( 'Upgrade to Pro', 'opti-behavior' ); ?>
                         </a>
                         <a href="#" class="button button-secondary button-large">
@@ -5278,6 +5281,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             </div>
                         </div>
                     </div>
+                    <p class="description ob-spam-traffic-card__scope"><?php esc_html_e( 'These thresholds apply only to visits without a referring site (direct or unknown). Visits that arrive from another site (search engine, social network, link) are kept, unless they come from a known bot or an automation tool.', 'opti-behavior' ); ?></p>
 
                     <div class="ob-spam-traffic-card__note">
                         <span class="dashicons dashicons-info-outline" aria-hidden="true"></span>
@@ -6642,11 +6646,23 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 : __( 'The full launcher is available for your account.', 'opti-behavior' );
             ?>
             <div class="ob-smart-insights-settings opti-behavior-settings-form">
-                <?php if ( get_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id() ) ) : ?>
-                    <?php delete_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id() ); ?>
+                <?php $saved_flag = get_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id() ); ?>
+                <?php if ( $saved_flag ) : ?>
+                    <?php
+                    delete_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id() );
+                    // A recovery button stores its own key: the message names only that action (OPT-267).
+                    $recovery_messages = array(
+                        'show_again'   => __( 'Your full launcher is back. Other settings were not changed.', 'opti-behavior' ),
+                        'compact_side' => __( 'Your launcher is now on the side point. Other settings were not changed.', 'opti-behavior' ),
+                        'reset_seen'   => __( 'Your unread badge was cleared. Other settings were not changed.', 'opti-behavior' ),
+                    );
+                    $saved_message = is_string( $saved_flag ) && isset( $recovery_messages[ $saved_flag ] )
+                        ? $recovery_messages[ $saved_flag ]
+                        : __( 'Smart Insights notification settings saved.', 'opti-behavior' );
+                    ?>
                     <div class="notice notice-success opti-behavior-notice is-dismissible ob-si-saved-notice" style="background:#d1fae5;border:1px solid #6ee7b7;color:#065f46;padding:12px 16px;border-radius:8px;margin-bottom:16px;display:flex;align-items:center;gap:8px;">
                         <span aria-hidden="true" style="font-size:16px;">✓</span>
-                        <strong><?php esc_html_e( 'Smart Insights notification settings saved.', 'opti-behavior' ); ?></strong>
+                        <strong><?php echo esc_html( $saved_message ); ?></strong>
                     </div>
                 <?php endif; ?>
 
@@ -6701,7 +6717,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         </div>
                     </div>
 
-                    <form method="post" action="" class="opti-behavior-category-form">
+                    <form method="post" action="" class="opti-behavior-category-form" id="ob-si-settings-form">
                         <?php wp_nonce_field( 'opti_behavior_smart_insights_notifications_save', 'opti_behavior_smart_insights_notifications_nonce' ); ?>
 
                         <?php if ( ! empty( $scheduler_settings ) ) : ?>
@@ -6907,13 +6923,14 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                 <tr>
                                     <th scope="row"><?php esc_html_e( 'Recovery controls', 'opti-behavior' ); ?> <?php if ( ! empty( $tooltips['recovery_controls'] ) && function_exists( 'opti_behavior_tooltip_e' ) ) { opti_behavior_tooltip_e( $tooltips['recovery_controls']['title'], $tooltips['recovery_controls']['content'], $tooltips['recovery_controls']['simple'], '', array( 'position' => 'right' ) ); } ?></th>
                                     <td style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-                                        <button type="submit" name="opti_behavior_smart_insights_show_again" class="button">
+                                        <?php // Submitted by the separate #ob-si-recovery-form below: they never post (nor drop) the settings fields (OPT-267). ?>
+                                        <button type="submit" form="ob-si-recovery-form" name="opti_behavior_smart_insights_show_again" class="button">
                                             <?php esc_html_e( 'Restore full launcher for me', 'opti-behavior' ); ?>
                                         </button>
-                                        <button type="submit" name="opti_behavior_smart_insights_compact_side" class="button">
+                                        <button type="submit" form="ob-si-recovery-form" name="opti_behavior_smart_insights_compact_side" class="button">
                                             <?php esc_html_e( 'Move mine to side point', 'opti-behavior' ); ?>
                                         </button>
-                                        <button type="submit" name="opti_behavior_smart_insights_reset_seen" class="button">
+                                        <button type="submit" form="ob-si-recovery-form" name="opti_behavior_smart_insights_reset_seen" class="button">
                                             <?php esc_html_e( 'Clear unread badge for me', 'opti-behavior' ); ?>
                                         </button>
                                         <p class="description" style="flex-basis:100%;margin:0;"><?php esc_html_e( 'Use these controls to recover from compact/hidden side mode or to intentionally place your personal launcher back on the side point.', 'opti-behavior' ); ?></p>
@@ -6929,6 +6946,33 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             </button>
                         </p>
                     </form>
+
+                    <?php // Personal recovery actions: own form, same nonce and handler (OPT-267). ?>
+                    <form method="post" action="" id="ob-si-recovery-form">
+                        <input type="hidden" name="opti_behavior_smart_insights_notifications_nonce" value="<?php echo esc_attr( wp_create_nonce( 'opti_behavior_smart_insights_notifications_save' ) ); ?>" />
+                    </form>
+                    <script>
+                    ( function () {
+                        var settingsForm = document.getElementById( 'ob-si-settings-form' );
+                        var recoveryForm = document.getElementById( 'ob-si-recovery-form' );
+                        if ( ! settingsForm || ! recoveryForm || ! window.FormData ) {
+                            return;
+                        }
+                        var snapshot = function () {
+                            var parts = [];
+                            new window.FormData( settingsForm ).forEach( function ( value, key ) {
+                                parts.push( key + '=' + value );
+                            } );
+                            return parts.join( '&' );
+                        };
+                        var initial = snapshot();
+                        recoveryForm.addEventListener( 'submit', function ( event ) {
+                            if ( snapshot() !== initial && ! window.confirm( <?php echo wp_json_encode( __( 'You changed settings on this page without saving them. This button does not save them. Continue and lose these changes?', 'opti-behavior' ) ); ?> ) ) {
+                                event.preventDefault();
+                            }
+                        } );
+                    }() );
+                    </script>
                 </div>
             </div>
             <?php
@@ -6950,21 +6994,22 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             if ( isset( $_POST['opti_behavior_smart_insights_show_again'] ) ) {
                 delete_user_meta( get_current_user_id(), 'opti_behavior_si_notification_hidden' );
                 delete_user_meta( get_current_user_id(), 'opti_behavior_si_notification_minimized' );
-                set_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id(), true, 30 );
+                // The action key (not true) makes the notice name this action only (OPT-267).
+                set_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id(), 'show_again', 30 );
                 return;
             }
 
             if ( isset( $_POST['opti_behavior_smart_insights_compact_side'] ) ) {
                 update_user_meta( get_current_user_id(), 'opti_behavior_si_notification_minimized', 1 );
                 delete_user_meta( get_current_user_id(), 'opti_behavior_si_notification_hidden' );
-                set_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id(), true, 30 );
+                set_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id(), 'compact_side', 30 );
                 return;
             }
 
             if ( isset( $_POST['opti_behavior_smart_insights_reset_seen'] ) ) {
                 update_user_meta( get_current_user_id(), 'opti_behavior_si_notifications_last_seen', time() );
                 delete_user_meta( get_current_user_id(), 'opti_behavior_si_notification_minimized' );
-                set_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id(), true, 30 );
+                set_transient( 'opti_behavior_si_notifications_saved_' . get_current_user_id(), 'reset_seen', 30 );
                 return;
             }
 

@@ -16,6 +16,12 @@
  * significance of the gap. No visitor identifiers, IPs, URLs beyond the scope
  * the insight already carries, or raw rows are returned.
  *
+ * Free edition (OPT-403, WordPress.org guideline 5): this class computes the
+ * scope totals, the traffic-mix comparison and the daily curve. The
+ * per-audience breakdown (outliers, pulses, combinations, sparklines, the
+ * one-audience curve) lives in Opti-Behavior Pro, which subclasses this
+ * builder and fills build_segment_breakdown() / resolve_segment_filter().
+ *
  * @package opti-behavior
  * @since   1.3.9
  */
@@ -47,21 +53,15 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * pageviews/sessions/visitors and started returning per-bucket metrics.
 		 * Bumped to 3 for combination dimensions, per-bucket split-half trends and
 		 * the explicit insufficient-data fields.
+		 * Bumped to 4 when the per-audience breakdown moved to Pro (OPT-403):
+		 * a v3 transient holds the full breakdown and must never reach Free.
 		 */
-		const SCHEMA_VERSION = 3;
+		const SCHEMA_VERSION = 4;
 
 		/**
 		 * Maximum buckets returned per dimension (hard SQL LIMIT).
 		 */
 		const MAX_SEGMENTS = 8;
-
-		/**
-		 * Maximum outliers surfaced across all dimensions.
-		 *
-		 * Raised from 3 to 4 in schema v3 so a combination pattern can surface next
-		 * to the single-dimension findings instead of pushing one out.
-		 */
-		const MAX_OUTLIERS = 4;
 
 		/**
 		 * Minimum sessions in the whole scope before any split is attempted.
@@ -87,27 +87,6 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * Two-sided 95% significance threshold for z / Welch t.
 		 */
 		const SIGNIFICANCE_Z = 1.96;
-
-		/**
-		 * Two-sided 99% threshold used for combination buckets.
-		 *
-		 * A pair stage multiplies the number of comparisons, so the same 95%
-		 * threshold would manufacture findings out of noise.
-		 */
-		const COMBO_SIGNIFICANCE_Z = 2.58;
-
-		/**
-		 * Minimum scope sessions before the combination stage runs at all.
-		 *
-		 * Below 100 sessions a pair bucket cannot hold 30 sessions AND 10% of the
-		 * scope on more than one side, so the stage could only ever return noise.
-		 */
-		const MIN_COMBO_SCOPE_SESSIONS = 100;
-
-		/**
-		 * Hard cap on combination queries per matrix build.
-		 */
-		const MAX_COMBO_QUERIES = 6;
 
 		/**
 		 * Minimum sessions in one half of the period before a trend is stated.
@@ -152,21 +131,21 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 *
 		 * @var array
 		 */
-		private $column_cache = array();
+		protected $column_cache = array();
 
 		/**
 		 * Cached table existence lookups.
 		 *
 		 * @var array
 		 */
-		private $table_cache = array();
+		protected $table_cache = array();
 
 		/**
 		 * Whether the last get_matrix() call was answered from cache.
 		 *
 		 * @var bool
 		 */
-		private $served_from_cache = false;
+		protected $served_from_cache = false;
 
 		/**
 		 * Build the segment matrix for one insight.
@@ -256,7 +235,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param bool  $exclude_spam Spam policy.
 		 * @return array
 		 */
-		private function build_matrix( $insight, $args, $scope, $exclude_spam ) {
+		protected function build_matrix( $insight, $args, $scope, $exclude_spam ) {
 			global $wpdb;
 
 			// Funnel and form insights are step-scoped, not page-scoped: splitting
@@ -313,89 +292,49 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 			}
 
 			$scope_sessions = (int) $totals['sessions'];
-			$dimensions     = array();
-			$candidates     = array();
-			$top            = null;
 			$midpoint       = $this->get_period_midpoint( $scope );
 			$single_defs    = $this->get_dimensions();
 			$single_buckets = array();
 
-			foreach ( $single_defs as $key => $dimension ) {
-				$buckets = $this->query_dimension( $key, $dimension, $where, $cta, $totals, $primary_metric, $metric_def, array( 'midpoint' => $midpoint ) );
-				if ( empty( $buckets ) ) {
+			// Free measures only the dimensions its traffic-mix table compares
+			// (country, source, device): the per-audience breakdown that answers
+			// "where is the problem" is a Pro feature since OPT-403 and is added by
+			// the Pro subclass through build_segment_breakdown().
+			foreach ( $this->get_mix_dimensions() as $key ) {
+				if ( ! isset( $single_defs[ $key ] ) ) {
 					continue;
 				}
 
-				$single_buckets[ $key ] = $buckets;
-				$dimensions[]           = $this->format_dimension_entry( $key, $dimension, $buckets, $scope_sessions );
-
-				// One outlier per dimension: "mobile bounces more" and "desktop
-				// bounces less" are the same finding stated twice. The bucket on the
-				// WORSE side of the metric wins the slot even when the other side
-				// holds more sessions, because "desktop bounces less than mobile" is
-				// not an answer to "where is the problem".
-				$best = $this->pick_dimension_outlier( $buckets );
-
-				if ( null !== $best ) {
-					$best['dimension']       = $key;
-					$best['dimension_label'] = isset( $dimension['label'] ) ? (string) $dimension['label'] : $key;
-					$best['report_key']      = isset( $dimension['report_key'] ) ? sanitize_key( $dimension['report_key'] ) : '';
-					$candidates[]            = $best;
-				}
-
-				$leader = $buckets[0];
-				if ( count( $buckets ) > 1 && ( null === $top || $leader['share'] > $top['share'] ) ) {
-					$top = array(
-						'dimension'       => $key,
-						'dimension_label' => isset( $dimension['label'] ) ? (string) $dimension['label'] : $key,
-						'key'             => $leader['key'],
-						'label'           => $leader['label'],
-						'sessions'        => $leader['sessions'],
-						'share'           => $leader['share'],
-					);
+				$buckets = $this->query_dimension( $key, $single_defs[ $key ], $where, $cta, $totals, $primary_metric, $metric_def, array( 'midpoint' => $midpoint ) );
+				if ( ! empty( $buckets ) ) {
+					$single_buckets[ $key ] = $buckets;
 				}
 			}
 
-			if ( empty( $dimensions ) ) {
-				return $this->unavailable( 'no_segment_dimensions', $scope, $exclude_spam, $scope_sessions );
+			$breakdown = $this->build_segment_breakdown(
+				array(
+					'scope'          => $scope,
+					'where'          => $where,
+					'cta'            => $cta,
+					'totals'         => $totals,
+					'primary_metric' => $primary_metric,
+					'metric_def'     => $metric_def,
+					'scope_sessions' => $scope_sessions,
+					'midpoint'       => $midpoint,
+					'definitions'    => $single_defs,
+					'single_buckets' => $single_buckets,
+				)
+			);
+
+			if ( is_array( $breakdown ) && ! empty( $breakdown['unavailable_reason'] ) ) {
+				return $this->unavailable( (string) $breakdown['unavailable_reason'], $scope, $exclude_spam, $scope_sessions );
 			}
 
-			$combo = $this->build_combo_stage(
-				$single_defs,
-				$single_buckets,
-				$candidates,
-				$where,
-				$cta,
-				$totals,
-				$primary_metric,
-				$metric_def,
-				$scope_sessions,
-				$midpoint
-			);
-
-			$dimensions = array_merge( $dimensions, $combo['dimensions'] );
-			$candidates = array_merge( $candidates, $combo['candidates'] );
-
-			usort(
-				$candidates,
-				function ( $left, $right ) {
-					if ( $left['is_worse_side'] !== $right['is_worse_side'] ) {
-						return $left['is_worse_side'] ? -1 : 1;
-					}
-					if ( $left['rank_score'] === $right['rank_score'] ) {
-						return strcmp( (string) $left['dimension'], (string) $right['dimension'] );
-					}
-
-					return $left['rank_score'] < $right['rank_score'] ? 1 : -1;
-				}
-			);
-
-			$outliers = array_slice( $candidates, 0, self::MAX_OUTLIERS );
-
-			// Sparklines are the last stage on purpose: only the entries that
-			// survived the ranking get a query, so the cost is bounded by
-			// MAX_OUTLIERS and not by the number of buckets that were tested.
-			$outliers = $this->attach_outlier_sparklines( $outliers, $scope, $where, $cta, $primary_metric, $single_defs );
+			// The breakdown measured every dimension: the mix reuses its buckets
+			// instead of querying the same three dimensions twice.
+			if ( is_array( $breakdown ) && ! empty( $breakdown['single_buckets'] ) && is_array( $breakdown['single_buckets'] ) ) {
+				$single_buckets = array_merge( $single_buckets, $breakdown['single_buckets'] );
+			}
 
 			$traffic_mix = $this->build_traffic_mix(
 				$scope,
@@ -422,327 +361,36 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 				// instead of the generic "not enough data" sentence.
 				'min_scope_sessions'    => self::MIN_SCOPE_SESSIONS,
 				'exclude_spam'          => $exclude_spam,
-				'dimension_count'       => count( $dimensions ),
-				'combo_dimension_count' => count( $combo['dimensions'] ),
-				'dimensions'            => $dimensions,
-				'outliers'              => $outliers,
-				'uniform'               => empty( $outliers ),
-				'top_segment'           => $top,
+				// False = no audience breakdown in this payload (Free alone, closed
+				// licence): an empty outlier list then means "not measured", never
+				// "the problem is everywhere", so `uniform` stays false.
+				'segments_included'     => false,
+				'dimension_count'       => 0,
+				'combo_dimension_count' => 0,
+				'dimensions'            => array(),
+				'outliers'              => array(),
+				'uniform'               => false,
+				'top_segment'           => null,
 				// Null when nothing moved: the card is quiet by default and only
 				// appears when the audience itself actually changed.
 				'traffic_mix'           => $traffic_mix,
 			);
+
+			if ( is_array( $breakdown ) ) {
+				$matrix['segments_included']     = true;
+				$matrix['dimension_count']       = isset( $breakdown['dimensions'] ) ? count( (array) $breakdown['dimensions'] ) : 0;
+				$matrix['combo_dimension_count'] = isset( $breakdown['combo_dimension_count'] ) ? (int) $breakdown['combo_dimension_count'] : 0;
+				$matrix['dimensions']            = isset( $breakdown['dimensions'] ) ? (array) $breakdown['dimensions'] : array();
+				$matrix['outliers']              = isset( $breakdown['outliers'] ) ? (array) $breakdown['outliers'] : array();
+				$matrix['uniform']               = empty( $matrix['outliers'] );
+				$matrix['top_segment']           = isset( $breakdown['top_segment'] ) && is_array( $breakdown['top_segment'] ) ? $breakdown['top_segment'] : null;
+			}
 
 			if ( '' !== $cache_key ) {
 				set_transient( $cache_key, $matrix, self::CACHE_TTL );
 			}
 
 			return $matrix;
-		}
-
-		/**
-		 * Shape one dimension entry for the payload.
-		 *
-		 * `tested_bucket_count` is what lets the UI say "3 segments measured, 5
-		 * below the data floor" instead of silently hiding the small ones.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param string $key            Dimension key.
-		 * @param array  $dimension      Dimension definition.
-		 * @param array  $buckets        Computed buckets.
-		 * @param int    $scope_sessions Scope denominator.
-		 * @return array
-		 */
-		private function format_dimension_entry( $key, $dimension, $buckets, $scope_sessions ) {
-			$tested = 0;
-			foreach ( $buckets as $bucket ) {
-				if ( empty( $bucket['insufficient'] ) && 'unknown' !== $bucket['key'] ) {
-					$tested++;
-				}
-			}
-
-			$entry = array(
-				'dimension'           => $key,
-				'dimension_label'     => isset( $dimension['label'] ) ? (string) $dimension['label'] : $key,
-				'report_key'          => isset( $dimension['report_key'] ) ? sanitize_key( $dimension['report_key'] ) : '',
-				'total'               => (int) $scope_sessions,
-				'bucket_count'        => count( $buckets ),
-				'tested_bucket_count' => $tested,
-				// The pulse verdict is computed here, once, so Free and Pro read
-				// the exact same colour and no client ever re-derives it.
-				'pulse'               => $this->compute_dimension_pulse( $buckets, $tested ),
-				'is_combo'            => ! empty( $dimension['is_combo'] ),
-				'buckets'             => $buckets,
-				// Legacy alias: v1 consumers (and the Free teaser shaping) read
-				// `segments` with `key/label/sessions/share`.
-				'segments'            => $buckets,
-			);
-
-			if ( ! empty( $dimension['is_combo'] ) && ! empty( $dimension['parts'] ) ) {
-				$parts = array();
-				foreach ( (array) $dimension['parts'] as $part ) {
-					// Only the identity of each half travels: the SQL expression
-					// behind it never leaves the class.
-					$parts[] = array(
-						'dimension'       => isset( $part['dimension'] ) ? sanitize_key( $part['dimension'] ) : '',
-						'dimension_label' => isset( $part['dimension_label'] ) ? (string) $part['dimension_label'] : '',
-					);
-				}
-				$entry['parts'] = $parts;
-			}
-
-			return $entry;
-		}
-
-		/**
-		 * Pick the single bucket that answers "where is the problem" for a dimension.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param array $buckets Computed buckets.
-		 * @return array|null
-		 */
-		private function pick_dimension_outlier( $buckets ) {
-			$best = null;
-
-			foreach ( $buckets as $bucket ) {
-				if ( empty( $bucket['is_outlier'] ) ) {
-					continue;
-				}
-				if ( null === $best ) {
-					$best = $bucket;
-					continue;
-				}
-				if ( $bucket['is_worse_side'] !== $best['is_worse_side'] ) {
-					if ( $bucket['is_worse_side'] ) {
-						$best = $bucket;
-					}
-					continue;
-				}
-				if ( $bucket['rank_score'] > $best['rank_score'] ) {
-					$best = $bucket;
-				}
-			}
-
-			return $best;
-		}
-
-		/**
-		 * Reduce one dimension's buckets to a single pulse verdict.
-		 *
-		 * Four states, in priority order, because the eye reads the strip before
-		 * it reads anything else:
-		 *   - `insufficient` : nothing in this dimension was testable at all,
-		 *   - `broken`       : a significant bucket sits on the worse side,
-		 *   - `watch`        : nothing is significant yet but a bucket is degrading,
-		 *   - `healthy`      : measured, and no problem found.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param array $buckets Computed buckets.
-		 * @param int   $tested  How many buckets cleared the data floor.
-		 * @return string
-		 */
-		private function compute_dimension_pulse( $buckets, $tested ) {
-			if ( (int) $tested < 1 ) {
-				return 'insufficient';
-			}
-
-			$watch = false;
-
-			foreach ( $buckets as $bucket ) {
-				if ( ! empty( $bucket['insufficient'] ) || 'unknown' === $bucket['key'] ) {
-					continue;
-				}
-
-				if ( ! empty( $bucket['is_outlier'] ) && ! empty( $bucket['is_worse_side'] ) ) {
-					return 'broken';
-				}
-
-				if ( isset( $bucket['trend']['direction'] ) && 'degrading' === $bucket['trend']['direction'] ) {
-					$watch = true;
-				}
-			}
-
-			return $watch ? 'watch' : 'healthy';
-		}
-
-		/**
-		 * Attach a daily sparkline to every surviving outlier.
-		 *
-		 * One grouped query per distinct outlier dimension (at most MAX_OUTLIERS of
-		 * them), never one per bucket, and the result lands inside the same matrix
-		 * transient — reopening the modal still costs zero queries.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param array  $outliers       Ranked outliers.
-		 * @param array  $scope          Resolved scope.
-		 * @param array  $where          Scope WHERE fragment (already range-scoped).
-		 * @param array  $cta            CTA join fragment.
-		 * @param string $primary_metric Metric key.
-		 * @param array  $definitions    Single dimension registry.
-		 * @return array
-		 */
-		private function attach_outlier_sparklines( $outliers, $scope, $where, $cta, $primary_metric, $definitions ) {
-			if ( empty( $outliers ) ) {
-				return $outliers;
-			}
-
-			$days = $this->build_day_index(
-				array(
-					'from' => $scope['date_from'],
-					'to'   => $scope['date_to'],
-				)
-			);
-
-			if ( empty( $days ) ) {
-				return $outliers;
-			}
-
-			// Group by dimension first: two outliers on the same dimension share one
-			// query instead of paying for two.
-			$grouped = array();
-			foreach ( $outliers as $index => $outlier ) {
-				$dimension = isset( $outlier['dimension'] ) ? (string) $outlier['dimension'] : '';
-				$key       = isset( $outlier['key'] ) ? (string) $outlier['key'] : '';
-				if ( '' === $dimension || '' === $key ) {
-					continue;
-				}
-				$grouped[ $dimension ][ $index ] = $key;
-			}
-
-			foreach ( $grouped as $dimension => $keys ) {
-				$definition = $this->resolve_dimension_definition( $dimension, $definitions );
-				if ( null === $definition ) {
-					continue;
-				}
-
-				$series = $this->query_segment_daily_series( $definition, array_values( array_unique( $keys ) ), $where, $cta, $primary_metric, $days );
-
-				foreach ( $keys as $index => $key ) {
-					$outliers[ $index ]['sparkline'] = isset( $series[ $key ] ) ? $series[ $key ] : array();
-				}
-			}
-
-			// Never leave the field undefined: an empty array is "measured, nothing
-			// to draw", a missing key would make the renderer guess.
-			foreach ( $outliers as $index => $outlier ) {
-				if ( ! isset( $outliers[ $index ]['sparkline'] ) ) {
-					$outliers[ $index ]['sparkline'] = array();
-				}
-			}
-
-			return $outliers;
-		}
-
-		/**
-		 * Resolve the definition backing a single OR combination dimension key.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param string $dimension   Dimension key.
-		 * @param array  $definitions Single dimension registry.
-		 * @return array|null
-		 */
-		private function resolve_dimension_definition( $dimension, $definitions ) {
-			if ( isset( $definitions[ $dimension ] ) && ! empty( $definitions[ $dimension ]['expression'] ) ) {
-				return $definitions[ $dimension ];
-			}
-
-			$combos = $this->get_combo_dimensions();
-			if ( ! isset( $combos[ $dimension ] ) ) {
-				return null;
-			}
-
-			list( $left, $right ) = $combos[ $dimension ];
-			if ( ! isset( $definitions[ $left ], $definitions[ $right ] ) ) {
-				return null;
-			}
-
-			return $this->build_combo_definition( $definitions[ $left ], $definitions[ $right ], $left, $right );
-		}
-
-		/**
-		 * One grouped day-by-day aggregation restricted to a set of bucket keys.
-		 *
-		 * Same zero-fill and null-gap convention as query_daily_series(): a day with
-		 * no traffic in the bucket has `sessions = 0` and a null value, so the
-		 * sparkline breaks instead of drawing a fake 0 %.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param array  $definition     Dimension definition.
-		 * @param array  $keys           Bucket keys to restrict to.
-		 * @param array  $where          Scope WHERE fragment.
-		 * @param array  $cta            CTA join fragment.
-		 * @param string $primary_metric Metric key.
-		 * @param array  $days           Day index of the scope range.
-		 * @return array Bucket key => series.
-		 */
-		private function query_segment_daily_series( $definition, $keys, $where, $cta, $primary_metric, $days ) {
-			global $wpdb;
-
-			$expression = isset( $definition['expression'] ) ? (string) $definition['expression'] : '';
-			if ( '' === $expression || empty( $keys ) || empty( $days ) ) {
-				return array();
-			}
-
-			$needs_visitors = isset( $definition['needs'] ) && 'visitors' === $definition['needs'];
-			$placeholders   = implode( ', ', array_fill( 0, count( $keys ), '%s' ) );
-
-			$sql = "SELECT {$expression} AS segment_key, DATE(pv.view_time) AS series_day, " . $this->get_aggregate_select( $cta ) . ' '
-				. $this->get_from_clause( $needs_visitors, $cta )
-				. " WHERE {$where['sql']} AND {$expression} IN ({$placeholders})"
-				. ' GROUP BY segment_key, series_day ORDER BY segment_key ASC, series_day ASC LIMIT %d';
-
-			$values = array_merge(
-				$cta['values'],
-				$where['values'],
-				array_map( 'strval', $keys ),
-				array( count( $keys ) * count( $days ) )
-			);
-
-			$rows = $wpdb->get_results( $wpdb->prepare( $sql, $values ), ARRAY_A );
-			$rows = is_array( $rows ) ? $rows : array();
-
-			$by_key = array();
-			foreach ( $rows as $row ) {
-				$segment_key = isset( $row['segment_key'] ) ? (string) $row['segment_key'] : '';
-				$day         = isset( $row['series_day'] ) ? substr( (string) $row['series_day'], 0, 10 ) : '';
-				if ( '' === $segment_key || '' === $day ) {
-					continue;
-				}
-				$by_key[ $segment_key ][ $day ] = $this->normalize_aggregate_row( $row );
-			}
-
-			$series = array();
-			foreach ( $keys as $key ) {
-				$points = array();
-				foreach ( $days as $day ) {
-					if ( ! isset( $by_key[ $key ][ $day ] ) ) {
-						$points[] = array(
-							'date'     => $day,
-							'sessions' => 0,
-							'value'    => null,
-						);
-						continue;
-					}
-
-					$aggregate = $by_key[ $key ][ $day ];
-					$metrics   = $this->format_metrics( $aggregate, $aggregate['sessions'] );
-					$points[]  = array(
-						'date'     => $day,
-						'sessions' => (int) $aggregate['sessions'],
-						'value'    => isset( $metrics[ $primary_metric ] ) ? $metrics[ $primary_metric ] : null,
-					);
-				}
-
-				$series[ $key ] = $points;
-			}
-
-			return $series;
 		}
 
 		/**
@@ -806,7 +454,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $single_buckets Computed single buckets keyed by dimension.
 		 * @return array|null
 		 */
-		private function build_traffic_mix( $scope, $exclude_spam, $cta, $totals, $definitions, $single_buckets ) {
+		protected function build_traffic_mix( $scope, $exclude_spam, $cta, $totals, $definitions, $single_buckets ) {
 			if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Trend_Calculator' ) ) {
 				return null;
 			}
@@ -893,7 +541,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $cta       CTA join fragment.
 		 * @return array Bucket key => sessions.
 		 */
-		private function query_mix_shares( $dimension, $where, $cta ) {
+		protected function query_mix_shares( $dimension, $where, $cta ) {
 			global $wpdb;
 
 			$expression = isset( $dimension['expression'] ) ? (string) $dimension['expression'] : '';
@@ -942,7 +590,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param int    $previous_sessions Previous scope denominator.
 		 * @return array|null
 		 */
-		private function build_mix_dimension_entry( $dimension_key, $definition, $buckets, $previous_shares, $current_sessions, $previous_sessions ) {
+		protected function build_mix_dimension_entry( $dimension_key, $definition, $buckets, $previous_shares, $current_sessions, $previous_sessions ) {
 			$shaped        = array();
 			$shift_count   = 0;
 			$degrades_any  = false;
@@ -1058,251 +706,6 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		}
 
 		/**
-		 * Registry of curated combination dimensions (pairs).
-		 *
-		 * All 28 pairs of the 8 single dimensions would be a query blow-up for a
-		 * modal, so only the pairs an agency actually acts on are computed.
-		 *
-		 * @since 1.4.1
-		 * @return array Combo key => [left dimension, right dimension].
-		 */
-		public function get_combo_dimensions() {
-			$pairs = array(
-				'device_x_country'  => array( 'device', 'country' ),
-				'device_x_source'   => array( 'device', 'source' ),
-				'browser_x_country' => array( 'browser', 'country' ),
-				'browser_x_device'  => array( 'browser', 'device' ),
-				'country_x_source'  => array( 'country', 'source' ),
-				'device_x_campaign' => array( 'device', 'campaign' ),
-			);
-
-			/**
-			 * Filter the combination dimensions the segment matrix tests.
-			 *
-			 * Every entry is `combo_key => array( left_dimension, right_dimension )`
-			 * where both halves must be keys of the single dimension registry. The
-			 * list is truncated to MAX_COMBO_QUERIES entries whatever it returns.
-			 *
-			 * @since 1.4.1
-			 *
-			 * @param array $pairs Combination registry.
-			 */
-			$pairs = apply_filters( 'opti_behavior_smart_insights_segment_combo_dimensions', $pairs );
-			if ( ! is_array( $pairs ) ) {
-				return array();
-			}
-
-			$clean = array();
-			foreach ( $pairs as $combo_key => $parts ) {
-				$combo_key = sanitize_key( $combo_key );
-				if ( '' === $combo_key || ! is_array( $parts ) || 2 !== count( $parts ) ) {
-					continue;
-				}
-
-				$parts = array_values( $parts );
-				$left  = sanitize_key( (string) $parts[0] );
-				$right = sanitize_key( (string) $parts[1] );
-				if ( '' === $left || '' === $right || $left === $right ) {
-					continue;
-				}
-
-				$clean[ $combo_key ] = array( $left, $right );
-
-				if ( count( $clean ) >= self::MAX_COMBO_QUERIES ) {
-					break;
-				}
-			}
-
-			return $clean;
-		}
-
-		/**
-		 * Run the combination stage on top of the single-dimension results.
-		 *
-		 * Gated hard: below MIN_COMBO_SCOPE_SESSIONS a pair bucket cannot clear the
-		 * session floor AND the share floor, so the stage would only ever be noise.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param array  $definitions       Single dimension registry.
-		 * @param array  $single_buckets    Computed single buckets keyed by dimension.
-		 * @param array  $single_candidates Single-dimension outliers already found.
-		 * @param array  $where             Scope WHERE fragment.
-		 * @param array  $cta               CTA join fragment.
-		 * @param array  $totals            Scope aggregates.
-		 * @param string $primary_metric    Metric key.
-		 * @param array  $metric_def        Metric definition.
-		 * @param int    $scope_sessions    Scope denominator.
-		 * @param string $midpoint          Period midpoint for the trend halves.
-		 * @return array {dimensions, candidates}
-		 */
-		private function build_combo_stage( $definitions, $single_buckets, $single_candidates, $where, $cta, $totals, $primary_metric, $metric_def, $scope_sessions, $midpoint ) {
-			$result = array(
-				'dimensions' => array(),
-				'candidates' => array(),
-			);
-
-			if ( $scope_sessions < self::MIN_COMBO_SCOPE_SESSIONS ) {
-				return $result;
-			}
-
-			$parents = array();
-			foreach ( $single_candidates as $candidate ) {
-				$parents[ $candidate['dimension'] . '|' . $candidate['key'] ] = $candidate;
-			}
-
-			foreach ( $this->get_combo_dimensions() as $combo_key => $pair ) {
-				list( $left, $right ) = $pair;
-
-				if ( ! isset( $definitions[ $left ], $definitions[ $right ] ) ) {
-					continue;
-				}
-
-				// A pair only carries information when both parents actually split.
-				if ( ! isset( $single_buckets[ $left ], $single_buckets[ $right ] ) ) {
-					continue;
-				}
-				if ( count( $single_buckets[ $left ] ) < 2 || count( $single_buckets[ $right ] ) < 2 ) {
-					continue;
-				}
-
-				$definition = $this->build_combo_definition( $definitions[ $left ], $definitions[ $right ], $left, $right );
-				if ( null === $definition ) {
-					continue;
-				}
-
-				$buckets = $this->query_dimension(
-					$combo_key,
-					$definition,
-					$where,
-					$cta,
-					$totals,
-					$primary_metric,
-					$metric_def,
-					array(
-						'midpoint'       => $midpoint,
-						'significance_z' => self::COMBO_SIGNIFICANCE_Z,
-					)
-				);
-
-				if ( empty( $buckets ) ) {
-					continue;
-				}
-
-				$result['dimensions'][] = $this->format_dimension_entry( $combo_key, $definition, $buckets, $scope_sessions );
-
-				$best = $this->pick_dimension_outlier( $buckets );
-				if ( null === $best || $this->is_explained_by_parent( $best, $parents, $metric_def ) ) {
-					continue;
-				}
-
-				$best['dimension']       = $combo_key;
-				$best['dimension_label'] = $definition['label'];
-				$best['report_key']      = '';
-				$result['candidates'][]  = $best;
-			}
-
-			return $result;
-		}
-
-		/**
-		 * Build the synthetic dimension definition backing one pair.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param array  $left_def  Left dimension definition.
-		 * @param array  $right_def Right dimension definition.
-		 * @param string $left      Left dimension key.
-		 * @param string $right     Right dimension key.
-		 * @return array|null
-		 */
-		private function build_combo_definition( $left_def, $right_def, $left, $right ) {
-			$left_expr  = isset( $left_def['expression'] ) ? (string) $left_def['expression'] : '';
-			$right_expr = isset( $right_def['expression'] ) ? (string) $right_def['expression'] : '';
-
-			if ( '' === $left_expr || '' === $right_expr ) {
-				return null;
-			}
-
-			$left_needs  = isset( $left_def['needs'] ) ? (string) $left_def['needs'] : '';
-			$right_needs = isset( $right_def['needs'] ) ? (string) $right_def['needs'] : '';
-
-			$left_label  = isset( $left_def['label'] ) ? (string) $left_def['label'] : $left;
-			$right_label = isset( $right_def['label'] ) ? (string) $right_def['label'] : $right;
-
-			$extra = array();
-			foreach ( array( $left_def, $right_def ) as $part_def ) {
-				if ( ! empty( $part_def['extra_select'] ) && is_array( $part_def['extra_select'] ) ) {
-					$extra = array_merge( $extra, $part_def['extra_select'] );
-				}
-			}
-
-			return array(
-				'expression'   => "CONCAT_WS('|', {$left_expr}, {$right_expr})",
-				'needs'        => ( 'visitors' === $left_needs || 'visitors' === $right_needs ) ? 'visitors' : '',
-				/* translators: 1: first dimension label, 2: second dimension label. */
-				'label'        => sprintf( __( '%1$s × %2$s', 'opti-behavior' ), $left_label, $right_label ),
-				'report_key'   => '',
-				'is_combo'     => true,
-				'extra_select' => $extra,
-				'parts'        => array(
-					array(
-						'dimension'       => $left,
-						'dimension_label' => $left_label,
-						'definition'      => $left_def,
-					),
-					array(
-						'dimension'       => $right,
-						'dimension_label' => $right_label,
-						'definition'      => $right_def,
-					),
-				),
-			);
-		}
-
-		/**
-		 * Whether a pair finding is already fully explained by a single dimension.
-		 *
-		 * "Safari × France bounces badly" is only worth a slot when it is worse than
-		 * "Safari" and worse than "France"; otherwise it restates a finding the
-		 * reader already has, with a smaller sample behind it.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param array $bucket     Combination bucket.
-		 * @param array $parents    Single-dimension outliers keyed "dimension|key".
-		 * @param array $metric_def Metric definition.
-		 * @return bool
-		 */
-		private function is_explained_by_parent( $bucket, $parents, $metric_def ) {
-			$value = isset( $bucket['value'] ) ? $bucket['value'] : null;
-			if ( null === $value ) {
-				return true;
-			}
-
-			$worse_sign = ! empty( $metric_def['higher_is_worse'] ) ? 1 : -1;
-			$parts      = isset( $bucket['parts'] ) && is_array( $bucket['parts'] ) ? $bucket['parts'] : array();
-
-			foreach ( $parts as $part ) {
-				$lookup = $part['dimension'] . '|' . $part['key'];
-				if ( ! isset( $parents[ $lookup ] ) ) {
-					continue;
-				}
-
-				$parent_value = isset( $parents[ $lookup ]['value'] ) ? $parents[ $lookup ]['value'] : null;
-				if ( null === $parent_value ) {
-					continue;
-				}
-
-				if ( ( $worse_sign * ( $value - $parent_value ) ) < ( self::MIN_RELATIVE_DELTA * abs( $parent_value ) ) ) {
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-		/**
 		 * Midpoint timestamp splitting the scope period in two halves.
 		 *
 		 * @since 1.4.1
@@ -1310,7 +713,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $scope Resolved scope.
 		 * @return string Empty when the period is degenerate.
 		 */
-		private function get_period_midpoint( $scope ) {
+		protected function get_period_midpoint( $scope ) {
 			$from = strtotime( $scope['date_from'] . ' 00:00:00' );
 			$to   = strtotime( $scope['date_to'] . ' 23:59:59' );
 
@@ -1319,6 +722,60 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 			}
 
 			return gmdate( 'Y-m-d H:i:s', $from + (int) floor( ( $to - $from ) / 2 ) );
+		}
+
+		/**
+		 * Per-audience breakdown ("where is the problem?") — Pro extension point.
+		 *
+		 * Free computes no breakdown (WordPress.org guideline 5, OPT-403): it
+		 * returns null and the payload carries the traffic mix only. The Pro
+		 * subclass returns {dimensions, outliers, combo_dimension_count,
+		 * top_segment, single_buckets} or {unavailable_reason}.
+		 *
+		 * @since 1.10.0
+		 *
+		 * @param array $context Scope, WHERE / CTA fragments, totals, metric, definitions, mix buckets.
+		 * @return array|null
+		 */
+		protected function build_segment_breakdown( $context ) {
+			unset( $context );
+
+			return null;
+		}
+
+		/**
+		 * Identify one combination bucket — Pro extension point.
+		 *
+		 * Free never queries a combination dimension, so it identifies none.
+		 *
+		 * @since 1.10.0
+		 *
+		 * @param array  $dimension   Combination dimension definition.
+		 * @param string $segment_key Composite bucket key.
+		 * @param array  $row         Raw row.
+		 * @return array|null {parts, label}
+		 */
+		protected function resolve_combo_bucket( $dimension, $segment_key, $row ) {
+			unset( $dimension, $segment_key, $row );
+
+			return null;
+		}
+
+		/**
+		 * Optional one-audience restriction of the daily series — Pro extension point.
+		 *
+		 * The curve of one audience belongs to the Pro breakdown, so Free always
+		 * answers with the whole scope.
+		 *
+		 * @since 1.10.0
+		 *
+		 * @param array $args Request args.
+		 * @return array|null
+		 */
+		protected function resolve_segment_filter( $args ) {
+			unset( $args );
+
+			return null;
 		}
 
 		/**
@@ -1360,7 +817,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param bool  $exclude_spam Spam policy.
 		 * @return array
 		 */
-		private function build_timeseries( $insight, $args, $scope, $exclude_spam ) {
+		protected function build_timeseries( $insight, $args, $scope, $exclude_spam ) {
 			global $wpdb;
 
 			if ( in_array( $scope['entity_type'], array( 'funnel', 'form' ), true ) ) {
@@ -1493,7 +950,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array|null  $segment        Optional segment restriction.
 		 * @return array
 		 */
-		private function query_daily_series( $scope, $exclude_spam, $range, $cta, $primary_metric, $segment ) {
+		protected function query_daily_series( $scope, $exclude_spam, $range, $cta, $primary_metric, $segment ) {
 			global $wpdb;
 
 			$where = $this->build_scope_where( $scope, $exclude_spam, $range );
@@ -1566,7 +1023,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $range {from,to} range.
 		 * @return array
 		 */
-		private function build_day_index( $range ) {
+		protected function build_day_index( $range ) {
 			$from = strtotime( $this->normalize_date( isset( $range['from'] ) ? $range['from'] : '' ) . ' 00:00:00' );
 			$to   = strtotime( $this->normalize_date( isset( $range['to'] ) ? $range['to'] : '' ) . ' 00:00:00' );
 
@@ -1583,92 +1040,12 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		}
 
 		/**
-		 * Resolve an optional segment restriction from request args.
-		 *
-		 * Accepts a single dimension key, or a combination dimension whose key is
-		 * the pipe-joined pair ("mobile|France"), which expands to two independent
-		 * equality restrictions instead of one comparison on the concatenation.
-		 *
-		 * @param array $args Request args.
-		 * @return array|null
-		 */
-		private function resolve_segment_filter( $args ) {
-			$dimension = isset( $args['segment_dimension'] ) ? sanitize_key( $args['segment_dimension'] ) : '';
-			$key       = isset( $args['segment_key'] ) && is_scalar( $args['segment_key'] ) ? sanitize_text_field( (string) $args['segment_key'] ) : '';
-
-			if ( '' === $dimension || '' === $key ) {
-				return null;
-			}
-
-			$dimensions = $this->get_dimensions();
-
-			if ( isset( $dimensions[ $dimension ] ) && ! empty( $dimensions[ $dimension ]['expression'] ) ) {
-				return array(
-					'dimension'      => $dimension,
-					'key'            => $key,
-					'definition'     => $dimensions[ $dimension ],
-					'label'          => $this->segment_label( $dimensions[ $dimension ], $key ),
-					'needs_visitors' => isset( $dimensions[ $dimension ]['needs'] ) && 'visitors' === $dimensions[ $dimension ]['needs'],
-					'restrictions'   => array(
-						array(
-							'expression' => (string) $dimensions[ $dimension ]['expression'],
-							'value'      => $key,
-						),
-					),
-				);
-			}
-
-			$combos = $this->get_combo_dimensions();
-			if ( ! isset( $combos[ $dimension ] ) ) {
-				return null;
-			}
-
-			list( $left, $right ) = $combos[ $dimension ];
-			if ( ! isset( $dimensions[ $left ], $dimensions[ $right ] ) ) {
-				return null;
-			}
-
-			$parts = explode( '|', $key );
-			if ( 2 !== count( $parts ) || '' === trim( $parts[0] ) || '' === trim( $parts[1] ) ) {
-				return null;
-			}
-
-			$definition = $this->build_combo_definition( $dimensions[ $left ], $dimensions[ $right ], $left, $right );
-			if ( null === $definition ) {
-				return null;
-			}
-
-			return array(
-				'dimension'      => $dimension,
-				'key'            => $key,
-				'definition'     => $definition,
-				'label'          => $this->combo_label(
-					array(
-						array( 'label' => $this->segment_label( $dimensions[ $left ], trim( $parts[0] ) ) ),
-						array( 'label' => $this->segment_label( $dimensions[ $right ], trim( $parts[1] ) ) ),
-					)
-				),
-				'needs_visitors' => 'visitors' === $definition['needs'],
-				'restrictions'   => array(
-					array(
-						'expression' => (string) $dimensions[ $left ]['expression'],
-						'value'      => trim( $parts[0] ),
-					),
-					array(
-						'expression' => (string) $dimensions[ $right ]['expression'],
-						'value'      => trim( $parts[1] ),
-					),
-				),
-			);
-		}
-
-		/**
 		 * First time this insight's group key was ever stored.
 		 *
 		 * @param array $insight Insight payload.
 		 * @return string
 		 */
-		private function get_first_detected_at( $insight ) {
+		protected function get_first_detected_at( $insight ) {
 			$group_key = isset( $insight['group_key'] ) && is_scalar( $insight['group_key'] ) ? (string) $insight['group_key'] : '';
 			if ( '' === $group_key || ! class_exists( 'Opti_Behavior_Smart_Insights_Repository' ) ) {
 				return isset( $insight['created_at'] ) ? (string) $insight['created_at'] : '';
@@ -1693,7 +1070,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array|null $segment      Segment restriction.
 		 * @return string
 		 */
-		private function get_series_cache_key( $insight, $scope, $exclude_spam, $segment ) {
+		protected function get_series_cache_key( $insight, $scope, $exclude_spam, $segment ) {
 			$insight_id = isset( $insight['id'] ) ? absint( $insight['id'] ) : 0;
 			if ( $insight_id < 1 ) {
 				return '';
@@ -1723,7 +1100,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param bool   $exclude_spam Spam policy.
 		 * @return array
 		 */
-		private function unavailable_series( $reason, $scope, $exclude_spam ) {
+		protected function unavailable_series( $reason, $scope, $exclude_spam ) {
 			return array(
 				'version'           => self::SCHEMA_VERSION,
 				'available'         => false,
@@ -1933,7 +1310,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $metric Metric key.
 		 * @return array
 		 */
-		private function get_metric_definition( $metric ) {
+		protected function get_metric_definition( $metric ) {
 			$definitions = $this->get_metric_definitions();
 
 			return isset( $definitions[ $metric ] ) ? $definitions[ $metric ] : $definitions['bounce_rate'];
@@ -1988,7 +1365,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $signal_id Signal id.
 		 * @return string
 		 */
-		private function get_fallback_primary_metric( $signal_id ) {
+		protected function get_fallback_primary_metric( $signal_id ) {
 			$map = array(
 				'high_exit_rate_page'                      => 'exit_rate',
 				'quick_exit_pattern'                       => 'exit_rate',
@@ -2040,7 +1417,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $entity_type Entity type.
 		 * @return object|null
 		 */
-		private function find_signal( $signal_id, $entity_type ) {
+		protected function find_signal( $signal_id, $entity_type ) {
 			if ( '' === $signal_id || ! class_exists( 'Opti_Behavior_Smart_Insights_Signal_Registry' ) ) {
 				return null;
 			}
@@ -2077,7 +1454,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $cta   CTA join fragment.
 		 * @return array
 		 */
-		private function query_scope_totals( $where, $cta ) {
+		protected function query_scope_totals( $where, $cta ) {
 			global $wpdb;
 
 			$sql = 'SELECT ' . $this->get_aggregate_select( $cta ) . ' ' . $this->get_from_clause( true, $cta ) . " WHERE {$where['sql']}";
@@ -2099,7 +1476,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array  $options        Optional: midpoint, significance_z.
 		 * @return array
 		 */
-		private function query_dimension( $key, $dimension, $where, $cta, $totals, $primary_metric, $metric_def, $options = array() ) {
+		protected function query_dimension( $key, $dimension, $where, $cta, $totals, $primary_metric, $metric_def, $options = array() ) {
 			global $wpdb;
 
 			$expression = isset( $dimension['expression'] ) ? (string) $dimension['expression'] : '';
@@ -2148,12 +1525,13 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 				$label = $this->segment_label( $dimension, $segment_key );
 
 				if ( $is_combo ) {
-					$parts = $this->split_combo_key( $dimension, $segment_key, $row );
-					if ( null === $parts ) {
+					$combo = $this->resolve_combo_bucket( $dimension, $segment_key, $row );
+					if ( null === $combo ) {
 						continue;
 					}
 
-					$label = $this->combo_label( $parts );
+					$parts = $combo['parts'];
+					$label = $combo['label'];
 				}
 
 				$complement = $this->subtract_aggregates( $totals, $aggregate );
@@ -2216,7 +1594,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $dimension Dimension definition.
 		 * @return string
 		 */
-		private function get_extra_select( $dimension ) {
+		protected function get_extra_select( $dimension ) {
 			if ( empty( $dimension['extra_select'] ) || ! is_array( $dimension['extra_select'] ) ) {
 				return '';
 			}
@@ -2241,7 +1619,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $row Raw row.
 		 * @return string
 		 */
-		private function read_country_code( $row ) {
+		protected function read_country_code( $row ) {
 			if ( ! isset( $row['bucket_country_code'] ) ) {
 				return '';
 			}
@@ -2249,72 +1627,6 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 			$code = strtoupper( preg_replace( '/[^A-Za-z]/', '', (string) $row['bucket_country_code'] ) );
 
 			return 2 === strlen( $code ) ? $code : '';
-		}
-
-		/**
-		 * Split one combination bucket key into its two identified halves.
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param array  $dimension   Combination dimension definition.
-		 * @param string $segment_key Composite bucket key.
-		 * @param array  $row         Raw row (companion columns).
-		 * @return array|null Null when a half cannot be identified.
-		 */
-		private function split_combo_key( $dimension, $segment_key, $row ) {
-			$keys        = explode( '|', $segment_key );
-			$definitions = isset( $dimension['parts'] ) && is_array( $dimension['parts'] ) ? array_values( $dimension['parts'] ) : array();
-
-			if ( 2 !== count( $keys ) || 2 !== count( $definitions ) ) {
-				return null;
-			}
-
-			$country_code = $this->read_country_code( $row );
-			$parts        = array();
-
-			foreach ( $keys as $index => $part_key ) {
-				$part_key = trim( (string) $part_key );
-
-				// A pair with an unidentified half is not an audience anyone can act
-				// on, exactly like a plain `unknown` bucket.
-				if ( '' === $part_key || 'unknown' === $part_key ) {
-					return null;
-				}
-
-				$part_dimension = isset( $definitions[ $index ]['dimension'] ) ? sanitize_key( $definitions[ $index ]['dimension'] ) : '';
-				$entry          = array(
-					'dimension'       => $part_dimension,
-					'dimension_label' => isset( $definitions[ $index ]['dimension_label'] ) ? (string) $definitions[ $index ]['dimension_label'] : $part_dimension,
-					'key'             => $part_key,
-					'label'           => $this->segment_label( isset( $definitions[ $index ]['definition'] ) ? $definitions[ $index ]['definition'] : array(), $part_key ),
-				);
-
-				if ( 'country' === $part_dimension && '' !== $country_code ) {
-					$entry['country_code'] = $country_code;
-				}
-
-				$parts[] = $entry;
-			}
-
-			return $parts;
-		}
-
-		/**
-		 * Human label for a combination bucket ("Mobile × France").
-		 *
-		 * @since 1.4.1
-		 *
-		 * @param array $parts Resolved parts.
-		 * @return string
-		 */
-		private function combo_label( $parts ) {
-			$labels = array();
-			foreach ( (array) $parts as $part ) {
-				$labels[] = isset( $part['label'] ) ? (string) $part['label'] : '';
-			}
-
-			/* translators: 1: first segment label, 2: second segment label. */
-			return sprintf( __( '%1$s × %2$s', 'opti-behavior' ), $labels[0], $labels[1] );
 		}
 
 		/**
@@ -2331,7 +1643,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $midpoint       Period midpoint (Y-m-d H:i:s), '' to skip.
 		 * @return array {sql, values}
 		 */
-		private function get_trend_select( $primary_metric, $metric_def, $cta, $midpoint ) {
+		protected function get_trend_select( $primary_metric, $metric_def, $cta, $midpoint ) {
 			global $wpdb;
 
 			$empty = array(
@@ -2417,7 +1729,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $metric_def Metric definition.
 		 * @return array
 		 */
-		private function compute_trend( $row, $metric_def ) {
+		protected function compute_trend( $row, $metric_def ) {
 			$trend = array(
 				'direction'   => 'insufficient',
 				'early_value' => null,
@@ -2487,7 +1799,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param float|null $significance_z Significance threshold (combos are stricter).
 		 * @return array
 		 */
-		private function test_bucket( $metric, $metric_def, $bucket, $complement, $sessions, $scope_sessions, $value, $comp_value, $significance_z = null ) {
+		protected function test_bucket( $metric, $metric_def, $bucket, $complement, $sessions, $scope_sessions, $value, $comp_value, $significance_z = null ) {
 			$threshold_z = ( null === $significance_z ) ? self::SIGNIFICANCE_Z : (float) $significance_z;
 
 			// A bucket under the session or share floor was never tested at all: the
@@ -2559,7 +1871,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $metric Metric key.
 		 * @return string
 		 */
-		private function get_rate_numerator_key( $metric ) {
+		protected function get_rate_numerator_key( $metric ) {
 			switch ( $metric ) {
 				case 'exit_rate':
 					return 'exit_sessions';
@@ -2579,7 +1891,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param float $n2 Trials in group 2.
 		 * @return float|null
 		 */
-		private function two_proportion_z( $x1, $n1, $x2, $n2 ) {
+		protected function two_proportion_z( $x1, $n1, $x2, $n2 ) {
 			if ( $n1 <= 0 || $n2 <= 0 ) {
 				return null;
 			}
@@ -2604,7 +1916,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param float $n2   Count group 2.
 		 * @return float|null
 		 */
-		private function welch_t( $sum1, $sq1, $n1, $sum2, $sq2, $n2 ) {
+		protected function welch_t( $sum1, $sq1, $n1, $sum2, $sq2, $n2 ) {
 			if ( $n1 < 2 || $n2 < 2 ) {
 				return null;
 			}
@@ -2628,7 +1940,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $cta CTA join fragment.
 		 * @return string
 		 */
-		private function get_aggregate_select( $cta ) {
+		protected function get_aggregate_select( $cta ) {
 			global $wpdb;
 
 			$pageviews_table = $wpdb->prefix . 'optibehavior_pageviews';
@@ -2664,7 +1976,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $cta           CTA join fragment.
 		 * @return string
 		 */
-		private function get_from_clause( $with_visitors, $cta ) {
+		protected function get_from_clause( $with_visitors, $cta ) {
 			global $wpdb;
 
 			$pageviews_table = $wpdb->prefix . 'optibehavior_pageviews';
@@ -2691,7 +2003,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param bool  $required Whether the caller needs CTA data.
 		 * @return array
 		 */
-		private function build_cta_join( $scope, $required ) {
+		protected function build_cta_join( $scope, $required ) {
 			global $wpdb;
 
 			$empty = array(
@@ -2737,7 +2049,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $alias Table alias.
 		 * @return string
 		 */
-		private function get_cta_case_expression( $alias ) {
+		protected function get_cta_case_expression( $alias ) {
 			global $wpdb;
 
 			$events_table = $wpdb->prefix . 'optibehavior_events';
@@ -2771,7 +2083,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 *
 		 * @return string
 		 */
-		private function get_source_expression() {
+		protected function get_source_expression() {
 			global $wpdb;
 
 			$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
@@ -2803,7 +2115,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $row Raw row.
 		 * @return array
 		 */
-		private function normalize_aggregate_row( $row ) {
+		protected function normalize_aggregate_row( $row ) {
 			return array(
 				'segment_key'     => isset( $row['segment_key'] ) ? (string) $row['segment_key'] : '',
 				'sessions'        => isset( $row['sessions'] ) ? (int) $row['sessions'] : 0,
@@ -2831,7 +2143,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $bucket Bucket aggregates.
 		 * @return array
 		 */
-		private function subtract_aggregates( $totals, $bucket ) {
+		protected function subtract_aggregates( $totals, $bucket ) {
 			$complement = array( 'segment_key' => '' );
 
 			foreach ( array( 'sessions', 'bounce_sessions', 'exit_sessions', 'cta_sessions', 'scroll_n', 'scroll_sum', 'scroll_sq', 'time_n', 'time_sum', 'time_sq' ) as $field ) {
@@ -2848,7 +2160,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param int   $sessions  Denominator.
 		 * @return array
 		 */
-		private function format_metrics( $aggregate, $sessions ) {
+		protected function format_metrics( $aggregate, $sessions ) {
 			$sessions = (int) $sessions;
 
 			return array(
@@ -2868,7 +2180,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $key       Segment key.
 		 * @return string
 		 */
-		private function segment_label( $dimension, $key ) {
+		protected function segment_label( $dimension, $key ) {
 			$labels = isset( $dimension['labels'] ) && is_array( $dimension['labels'] ) ? $dimension['labels'] : array();
 			if ( isset( $labels[ $key ] ) ) {
 				return (string) $labels[ $key ];
@@ -2901,7 +2213,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $range        Optional {from,to} override (time series).
 		 * @return array
 		 */
-		private function build_scope_where( $scope, $exclude_spam, $range = null ) {
+		protected function build_scope_where( $scope, $exclude_spam, $range = null ) {
 			global $wpdb;
 
 			$empty = array(
@@ -2951,7 +2263,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param bool  $exclude_spam Spam policy.
 		 * @return string
 		 */
-		private function get_cache_key( $insight, $scope, $exclude_spam ) {
+		protected function get_cache_key( $insight, $scope, $exclude_spam ) {
 			$insight_id = isset( $insight['id'] ) ? absint( $insight['id'] ) : 0;
 			if ( $insight_id < 1 ) {
 				return '';
@@ -2963,6 +2275,10 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 					array(
 						self::SCHEMA_VERSION,
 						self::get_cache_salt(),
+						// The builder class is part of the key: a Free payload and a
+						// Pro payload of the same insight never share a transient, so a
+						// licence change is never answered from the other tier's cache.
+						get_class( $this ),
 						$insight_id,
 						$exclude_spam ? '1' : '0',
 						$scope['date_from'],
@@ -3038,7 +2354,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param array $args Request args.
 		 * @return bool
 		 */
-		private function resolve_exclude_spam( $args ) {
+		protected function resolve_exclude_spam( $args ) {
 			if ( array_key_exists( 'exclude_spam', $args ) && null !== $args['exclude_spam'] ) {
 				return (bool) $args['exclude_spam'];
 			}
@@ -3060,7 +2376,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $date Date value.
 		 * @return string
 		 */
-		private function normalize_date( $date ) {
+		protected function normalize_date( $date ) {
 			$timestamp = is_scalar( $date ) ? strtotime( (string) $date ) : false;
 
 			return $timestamp ? gmdate( 'Y-m-d', $timestamp ) : gmdate( 'Y-m-d' );
@@ -3075,7 +2391,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param int    $total        Known denominator.
 		 * @return array
 		 */
-		private function unavailable( $reason, $scope, $exclude_spam, $total = 0 ) {
+		protected function unavailable( $reason, $scope, $exclude_spam, $total = 0 ) {
 			return array(
 				'version'               => self::SCHEMA_VERSION,
 				'available'             => false,
@@ -3108,7 +2424,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $table Table name.
 		 * @return bool
 		 */
-		private function table_exists( $table ) {
+		protected function table_exists( $table ) {
 			global $wpdb;
 
 			if ( ! array_key_exists( $table, $this->table_cache ) ) {
@@ -3125,7 +2441,7 @@ if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Segment_Matrix' ) ) {
 		 * @param string $column Column name.
 		 * @return bool
 		 */
-		private function column_exists( $table, $column ) {
+		protected function column_exists( $table, $column ) {
 			global $wpdb;
 
 			$key = $table . '.' . $column;

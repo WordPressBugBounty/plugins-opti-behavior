@@ -133,7 +133,7 @@ if ( ! trait_exists( 'Opti_Behavior_Heatmaps_Views_Trait' ) ) {
 				<div class="stat-card">
 					<div class="stat-icon"><i data-lucide="mouse-pointer-click"></i></div>
 					<div class="stat-content">
-						<div class="stat-number"><?php echo $value( esc_html( $loading ? '' : number_format( $stats['total_clicks'] ) ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- placeholder is static HTML, value pre-escaped ?></div>
+						<div class="stat-number"><?php echo $value( esc_html( $loading ? '' : number_format_i18n( $stats['total_clicks'] ) ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- placeholder is static HTML, value pre-escaped ?></div>
 						<div class="stat-label"><?php esc_html_e( 'Total Clicks', 'opti-behavior' ); ?><?php opti_behavior_tooltip_e( $tooltips['total_clicks']['title'], $tooltips['total_clicks']['content'], $tooltips['total_clicks']['simple'], '', array( 'position' => 'bottom' ) ); ?></div>
 						<div class="stat-change <?php echo esc_attr( $c_clicks['class'] ); ?>"><?php echo esc_html( $c_clicks['text'] ); ?></div>
 					</div>
@@ -142,7 +142,7 @@ if ( ! trait_exists( 'Opti_Behavior_Heatmaps_Views_Trait' ) ) {
 				<div class="stat-card">
 					<div class="stat-icon"><i data-lucide="users"></i></div>
 					<div class="stat-content">
-						<div class="stat-number"><?php echo $value( esc_html( $loading ? '' : number_format( isset( $stats['total_sessions'] ) ? (int) $stats['total_sessions'] : 0 ) ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- placeholder is static HTML, value pre-escaped ?></div>
+						<div class="stat-number"><?php echo $value( esc_html( $loading ? '' : number_format_i18n( isset( $stats['total_sessions'] ) ? (int) $stats['total_sessions'] : 0 ) ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- placeholder is static HTML, value pre-escaped ?></div>
 						<div class="stat-label"><?php esc_html_e( 'Total Sessions', 'opti-behavior' ); ?><?php opti_behavior_tooltip_e( $tooltips['total_sessions']['title'], $tooltips['total_sessions']['content'], $tooltips['total_sessions']['simple'], '', array( 'position' => 'bottom' ) ); ?></div>
 						<div class="stat-change <?php echo esc_attr( $c_sessions['class'] ); ?>"><?php echo esc_html( $c_sessions['text'] ); ?></div>
 					</div>

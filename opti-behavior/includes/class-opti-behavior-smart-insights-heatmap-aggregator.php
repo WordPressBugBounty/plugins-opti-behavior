@@ -219,6 +219,12 @@ class Opti_Behavior_Smart_Insights_Heatmap_Aggregator {
 			return ' AND 1=0';
 		}
 
+		if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ) {
+			// One counting universe with Traffic (OPT-588): stored verdict only.
+			$where = Opti_Behavior_Stats_Spam_Filter::session_sql( 's', 'AND', true );
+			return '' === $where ? '' : " AND {$event_alias}.session_id IN (SELECT s.id FROM {$sessions_table} s WHERE 1=1{$where})";
+		}
+
 		$conditions = array();
 		if ( $this->column_exists( $sessions_table, 'traffic_type' ) ) {
 			$conditions[] = "(s.traffic_type IS NULL OR s.traffic_type = '' OR s.traffic_type NOT IN ('spam', 'bot', 'automated'))";
@@ -230,7 +236,12 @@ class Opti_Behavior_Smart_Insights_Heatmap_Aggregator {
 				$settings = array();
 			}
 			if ( ! array_key_exists( 'spam_detection_enabled', $settings ) || ! empty( $settings['spam_detection_enabled'] ) ) {
-				$conditions[] = 's.duration >= ' . max( 0, isset( $settings['spam_duration_threshold'] ) ? absint( $settings['spam_duration_threshold'] ) : 3 );
+				$duration_condition = 's.duration >= ' . max( 0, isset( $settings['spam_duration_threshold'] ) ? absint( $settings['spam_duration_threshold'] ) : 3 );
+				if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) && $this->column_exists( $sessions_table, 'referrer' ) ) {
+					// A visit referred by another site passes the duration floor (OPT-562).
+					$duration_condition = Opti_Behavior_Stats_Spam_Filter::referrer_or_thresholds_sql( $duration_condition, 's' );
+				}
+				$conditions[] = $duration_condition;
 			}
 		}
 

@@ -34,6 +34,20 @@ class Opti_Behavior_Broadcast {
 	const CACHE_TTL = 21600;
 
 	/**
+	 * Cache TTL of a failed fetch (API unreachable or error), in seconds (12 hours).
+	 *
+	 * @var int
+	 */
+	const FAILURE_CACHE_TTL = 43200;
+
+	/**
+	 * HTTP timeout of the broadcast fetch, in seconds (runs during an admin page).
+	 *
+	 * @var int
+	 */
+	const HTTP_TIMEOUT = 3;
+
+	/**
 	 * User meta key prefix for dismissed broadcasts.
 	 *
 	 * @var string
@@ -152,28 +166,56 @@ class Opti_Behavior_Broadcast {
 	}
 
 	/**
+	 * Whether announcements may be fetched from the API.
+	 *
+	 * Allowed when Pro is active (licence / trial) or when the admin accepted
+	 * the daily status sharing on the Welcome screen — the same option the
+	 * track-install heartbeat checks (Opti_Behavior_Welcome::OPTION_CONSENT).
+	 * Free alone, declined or not answered yet = no call (OPT-655).
+	 *
+	 * @return bool
+	 */
+	public static function may_fetch() {
+		if ( function_exists( 'opti_behavior_pro_active' ) && opti_behavior_pro_active() ) {
+			return true;
+		}
+		if ( class_exists( 'Opti_Behavior_Welcome' ) ) {
+			return Opti_Behavior_Welcome::has_consent();
+		}
+		return (bool) get_option( 'opti_behavior_consent_accepted', false );
+	}
+
+	/**
 	 * Fetch broadcasts from the API (with caching).
 	 *
 	 * @return array Array of broadcast objects.
 	 */
 	private function get_broadcasts() {
+		// No call to the API before the admin opted in (OPT-655, WP.org guideline 7).
+		if ( ! self::may_fetch() ) {
+			return array();
+		}
+
 		$cached = get_transient( self::CACHE_KEY );
 		if ( false !== $cached ) {
 			return $cached;
 		}
 
+		// Only the licence type is sent: no domain, no site data (OPT-655).
 		$license_type = $this->get_license_type();
 		$api_base     = $this->get_api_url();
-		$api_url      = $api_base . 'get-broadcasts?license_type=' . urlencode( $license_type ) . '&domain=' . urlencode( wp_parse_url( home_url(), PHP_URL_HOST ) );
+		$api_url      = $api_base . 'get-broadcasts?license_type=' . urlencode( $license_type );
 
 		$response = wp_remote_get( $api_url, array(
-			'timeout'   => 10,
-			'sslverify' => true,
+			'timeout'    => self::HTTP_TIMEOUT,
+			'sslverify'  => true,
+			// WordPress's default user-agent carries home_url(): send none of the site address.
+			'user-agent' => 'Opti-Behavior/' . ( defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '0' ),
 		) );
 
 		if ( is_wp_error( $response ) ) {
-			// Cache empty result for 30 minutes to avoid hammering API
-			set_transient( self::CACHE_KEY, array(), 1800 );
+			// Cache empty result for 12 hours: an unreachable API must not slow every admin page.
+			set_transient( self::CACHE_KEY, array(), self::FAILURE_CACHE_TTL );
 			return array();
 		}
 
@@ -181,7 +223,7 @@ class Opti_Behavior_Broadcast {
 		$body = wp_remote_retrieve_body( $response );
 
 		if ( 200 !== $code ) {
-			set_transient( self::CACHE_KEY, array(), 1800 );
+			set_transient( self::CACHE_KEY, array(), self::FAILURE_CACHE_TTL );
 			return array();
 		}
 
@@ -521,19 +563,7 @@ class Opti_Behavior_Broadcast {
 		$dismissed[ $broadcast_id ] = time();
 		update_user_meta( $user_id, self::DISMISS_META_KEY, $dismissed );
 
-		// Notify API about dismissal (non-blocking, fire-and-forget)
-		$domain = wp_parse_url( home_url(), PHP_URL_HOST );
-		wp_remote_post( $this->get_api_url() . 'dismiss-broadcast', array(
-			'body'      => wp_json_encode( array(
-				'broadcast_id' => $broadcast_id,
-				'domain'       => $domain,
-			) ),
-			'headers'   => array( 'Content-Type' => 'application/json' ),
-			'timeout'   => 5,
-			'sslverify' => true,
-			'blocking'  => false,
-		) );
-
+		// Dismissal stays local: nothing is sent to the API (OPT-655).
 		wp_send_json_success( array( 'dismissed' => $broadcast_id ) );
 	}
 }

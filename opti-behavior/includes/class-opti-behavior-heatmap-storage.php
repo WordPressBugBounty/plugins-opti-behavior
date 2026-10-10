@@ -14,11 +14,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+// Whole file: every table is $wpdb->prefix + a fixed suffix, column names come from fixed lists written in this file, values are bound with $wpdb->prepare(); these are ingest and maintenance queries on plugin tables that must read live rows.
 // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared
 // phpcs:disable WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
 // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery
 // phpcs:disable WordPress.DB.DirectDatabaseQuery.NoCaching
+// phpcs:disable PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 /**
  * Opti_Behavior_Heatmap_Storage
@@ -183,6 +185,31 @@ class Opti_Behavior_Heatmap_Storage {
 		}
 
 		return md5( $normalized );
+	}
+
+	/**
+	 * Whether a tracked hit on `$incoming_url` would hand a mapping row that
+	 * currently names a clean URL (no query string) over to a query variant
+	 * of it (`?utm_…`, `?qa-funnel-…`, A/B parameters…).
+	 *
+	 * Both URLs share one url_hash ({@see get_url_hash()} drops the query),
+	 * so the row stands for the clean page; the variant must not become the
+	 * page the Heatmaps list shows and opens (OPT-348).
+	 *
+	 * @since 1.10.0
+	 * @param string $existing_url URL stored on the mapping row.
+	 * @param string $incoming_url URL of the current tracked hit.
+	 * @return bool True when the row must keep its page_id and URL.
+	 */
+	public static function is_query_variant_takeover( $existing_url, $incoming_url ) {
+		$existing_url = (string) $existing_url;
+		$incoming_url = (string) $incoming_url;
+		if ( '' === $existing_url || '' === $incoming_url ) {
+			return false;
+		}
+		$incoming_query = (string) wp_parse_url( $incoming_url, PHP_URL_QUERY );
+		$existing_query = (string) wp_parse_url( $existing_url, PHP_URL_QUERY );
+		return '' !== $incoming_query && '' === $existing_query;
 	}
 
 	/**
@@ -615,6 +642,9 @@ class Opti_Behavior_Heatmap_Storage {
 	 */
 	private function log_heatmap_file_write_failure( $filepath, $type ) {
 		$this->log( sprintf( 'Heatmap %s file write failed (%s) — registry row updated from DB so the page stays visible on the Heatmaps list.', $type, $filepath ), 'error' );
+		if ( class_exists( 'Opti_Behavior_Storage_Health' ) ) {
+			Opti_Behavior_Storage_Health::report_failure( $filepath, 'heatmaps' );
+		}
 
 		static $logged = false;
 		if ( ! $logged && defined( 'WP_DEBUG' ) && WP_DEBUG ) {
@@ -742,6 +772,9 @@ class Opti_Behavior_Heatmap_Storage {
 		$dir = $this->get_heatmap_dir( $url_hash, $type );
 		if ( ! $this->ensure_directory_exists( $dir ) ) {
 			$this->log( 'Failed to create directory: ' . $dir, 'error' );
+			if ( class_exists( 'Opti_Behavior_Storage_Health' ) ) {
+				Opti_Behavior_Storage_Health::report_failure( $dir, 'heatmaps' );
+			}
 			return false;
 		}
 
@@ -1060,6 +1093,10 @@ class Opti_Behavior_Heatmap_Storage {
 
 		$page_id = isset( $metadata['page_id'] ) ? (int) $metadata['page_id'] : 0;
 		$url = isset( $metadata['url'] ) ? $metadata['url'] : '';
+		// Personal data out of the mapping row (OPT-574); url_hash ignores the query, so it is unchanged.
+		if ( function_exists( 'opti_behavior_strip_sensitive_query_args' ) ) {
+			$url = opti_behavior_strip_sensitive_query_args( $url );
+		}
 
 		// Check if record exists
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
@@ -1088,11 +1125,18 @@ class Opti_Behavior_Heatmap_Storage {
 			// resets AUTO_INCREMENT and lets brand-new pages reuse old IDs. Without
 			// this re-sync the stale FK persists forever, because this UPDATE
 			// branch otherwise only touches counters/timestamps.
-			if ( $page_id > 0 && (int) $existing->page_id !== $page_id ) {
+			//
+			// url_hash ignores the query string, so every `?utm=` / `?qa-funnel-…`
+			// variant of a page shares this row. A variant hit must never
+			// re-point a row that names the clean URL (OPT-348: the home row
+			// ended up opening `/?qa-funnel-…=1`); a clean hit does heal a
+			// row that a variant took over.
+			$keep_clean_mapping = self::is_query_variant_takeover( (string) $existing->url, (string) $url );
+			if ( ! $keep_clean_mapping && $page_id > 0 && (int) $existing->page_id !== $page_id ) {
 				$update_data['page_id'] = $page_id;
 				$update_format[]        = '%d';
 			}
-			if ( '' !== $url && $existing->url !== $url ) {
+			if ( ! $keep_clean_mapping && '' !== $url && $existing->url !== $url ) {
 				$update_data['url'] = $url;
 				$update_format[]    = '%s';
 			}
@@ -1174,9 +1218,208 @@ class Opti_Behavior_Heatmap_Storage {
 		// New heatmap data landed — drop cached aggregates so the Heatmaps page
 		// recomputes exact counts on its next load (covers Free + Pro ingest,
 		// since Pro writes its event files through this same storage class).
-		if ( function_exists( 'opti_behavior_flush_heatmap_caches' ) ) {
+		// Throttled on large installs only (2026-09-30, 2026-10-10): at most one
+		// rotation per 5 minutes there, otherwise a busy site never had a warm
+		// Heatmaps cache; a small site rotates on every ingest.
+		if ( function_exists( 'opti_behavior_flush_heatmap_caches_on_ingest' ) ) {
+			opti_behavior_flush_heatmap_caches_on_ingest();
+		} elseif ( function_exists( 'opti_behavior_flush_heatmap_caches' ) ) {
 			opti_behavior_flush_heatmap_caches();
 		}
+	}
+
+	/**
+	 * Option holding the state of the query-variant mapping repair (OPT-365):
+	 * { version, cursor, repaired, at }.
+	 */
+	const VARIANT_REPAIR_OPTION = 'opti_behavior_hm_variant_repair';
+
+	/**
+	 * Throttle transient of the Heatmaps-list detection pass (OPT-365).
+	 */
+	const VARIANT_REPAIR_CHECK_TRANSIENT = 'opti_behavior_hm_variant_check';
+
+	/**
+	 * Run the query-variant mapping repair when it is due (OPT-365).
+	 *
+	 * Due once per plugin version (first admin screen after an update), and,
+	 * from the Heatmaps list (`$from_list`), at most once per hour while a
+	 * repairable row is detected. Bounded batches + time budget: an
+	 * unfinished pass keeps its cursor and continues on the next call.
+	 *
+	 * @since 1.10.0
+	 * @param bool $from_list True when called from the Heatmaps list render.
+	 * @return int Rows repaired by this call.
+	 */
+	public function maybe_repair_query_variant_mappings( $from_list = false ) {
+		$version = defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? (string) OPTI_BEHAVIOR_HEATMAP_VERSION : '';
+		$state   = get_option( self::VARIANT_REPAIR_OPTION, array() );
+		$state   = is_array( $state ) ? $state : array();
+		$done    = isset( $state['version'] ) && $version === (string) $state['version'];
+
+		if ( $done ) {
+			if ( ! $from_list || get_transient( self::VARIANT_REPAIR_CHECK_TRANSIENT ) ) {
+				return 0;
+			}
+			set_transient( self::VARIANT_REPAIR_CHECK_TRANSIENT, 1, HOUR_IN_SECONDS );
+			$state['cursor'] = 0;
+		}
+
+		$cursor   = isset( $state['cursor'] ) ? (int) $state['cursor'] : 0;
+		$repaired = 0;
+		$started  = microtime( true );
+		do {
+			$pass      = $this->repair_query_variant_mappings( $cursor, 200 );
+			$repaired += $pass['repaired'];
+			$cursor    = $pass['cursor'];
+		} while ( ! $pass['done'] && ( microtime( true ) - $started ) < 2.0 );
+
+		$state['cursor']   = $pass['done'] ? 0 : $cursor;
+		$state['repaired'] = ( isset( $state['repaired'] ) ? (int) $state['repaired'] : 0 ) + $repaired;
+		if ( $pass['done'] ) {
+			$state['version'] = $version;
+			$state['at']      = time();
+		}
+		update_option( self::VARIANT_REPAIR_OPTION, $state, false );
+
+		return $repaired;
+	}
+
+	/**
+	 * Hand mapping rows that a `?query` variant took over back to their clean
+	 * page (OPT-365, follow-up of OPT-348).
+	 *
+	 * Before OPT-348 a variant hit re-pointed the row (page_id + url) of its
+	 * url_hash to the variant, and only a later clean visit healed it — never
+	 * on a site whose home redirects or is rarely visited clean. A row is
+	 * repaired when its URL has a query string and a tracked page row exists
+	 * for the clean URL with the SAME url_hash (home: `page_on_front` rows
+	 * first when a static front page is set). Idempotent and non-destructive:
+	 * only `page_id` + `url` change (aggregates marked stale, like the ingest
+	 * self-heal); no click / session data, no file and no mapping row is
+	 * deleted. A clean page already owned by another mapping row is skipped
+	 * (no duplicate page_id rows).
+	 *
+	 * @since 1.10.0
+	 * @param int $after_id Mapping row id cursor (exclusive).
+	 * @param int $limit    Rows examined per batch.
+	 * @return array{repaired:int,cursor:int,done:bool}
+	 */
+	public function repair_query_variant_mappings( $after_id = 0, $limit = 200 ) {
+		global $wpdb;
+		$map_table   = $wpdb->prefix . 'optibehavior_heatmap_pages';
+		$pages_table = $wpdb->prefix . 'optibehavior_pages';
+		$result      = array(
+			'repaired' => 0,
+			'cursor'   => (int) $after_id,
+			'done'     => true,
+		);
+		$limit       = max( 1, (int) $limit );
+
+		// Table names from $wpdb->prefix; bounded maintenance batch (sniffs are disabled for the whole file, see the header).
+		if ( ! $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $map_table ) ) ) {
+			return $result;
+		}
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, page_id, url_hash, url FROM {$map_table} WHERE id > %d AND url LIKE %s ORDER BY id ASC LIMIT %d",
+				(int) $after_id,
+				'%' . $wpdb->esc_like( '?' ) . '%',
+				$limit
+			),
+			ARRAY_A
+		);
+		if ( empty( $rows ) ) {
+			return $result;
+		}
+		$result['done'] = count( $rows ) < $limit;
+
+		$front_id = 0;
+		if ( 'page' === get_option( 'show_on_front' ) ) {
+			$front_id = (int) get_option( 'page_on_front' );
+		}
+		$home_key = untrailingslashit( strtolower( (string) home_url( '/' ) ) );
+		$touched  = array();
+
+		foreach ( $rows as $row ) {
+			$result['cursor'] = (int) $row['id'];
+			$clean            = (string) strtok( (string) $row['url'], '?#' );
+			if ( strlen( $clean ) < 8 || ! self::is_query_variant_takeover( $clean, (string) $row['url'] ) ) {
+				continue;
+			}
+			$forms = array_values( array_unique( array( $clean, trailingslashit( $clean ), untrailingslashit( $clean ) ) ) );
+			$ph    = implode( ',', array_fill( 0, count( $forms ), '%s' ) );
+			$order = 'CASE WHEN post_id > 0 THEN 1 ELSE 2 END, id ASC';
+			$args  = array_merge( $forms, $forms );
+			if ( $front_id > 0 && untrailingslashit( strtolower( $clean ) ) === $home_key ) {
+				$order = 'CASE WHEN post_id = %d THEN 0 WHEN post_id > 0 THEN 1 ELSE 2 END, id ASC';
+				$args[] = $front_id;
+			}
+			$candidates = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT id, url FROM {$pages_table} WHERE url IN ({$ph}) OR url2 IN ({$ph}) ORDER BY {$order} LIMIT 10",
+					...$args
+				),
+				ARRAY_A
+			);
+
+			$target = null;
+			foreach ( (array) $candidates as $candidate ) {
+				if ( '' !== (string) wp_parse_url( (string) $candidate['url'], PHP_URL_QUERY ) ) {
+					continue;
+				}
+				if ( $this->get_url_hash( (string) $candidate['url'] ) === (string) $row['url_hash'] ) {
+					$target = $candidate;
+					break;
+				}
+			}
+			if ( ! $target ) {
+				continue;
+			}
+
+			$owner = (int) $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT COUNT(*) FROM {$map_table} WHERE page_id = %d AND id <> %d",
+					(int) $target['id'],
+					(int) $row['id']
+				)
+			);
+			if ( $owner > 0 ) {
+				continue;
+			}
+
+			$data   = array(
+				'page_id' => (int) $target['id'],
+				'url'     => (string) $target['url'],
+			);
+			$format = array( '%d', '%s' );
+			if ( $this->heatmap_agg_columns_exist() ) {
+				$data['agg_synced_at'] = null;
+				$format[]              = '%s';
+			}
+			if ( $this->heatmap_daily_columns_exist() ) {
+				$data['daily_synced_at'] = null;
+				$format[]                = '%s';
+			}
+			if ( false !== $wpdb->update( $map_table, $data, array( 'id' => (int) $row['id'] ), $format, array( '%d' ) ) ) {
+				++$result['repaired'];
+				$touched[] = (int) $row['page_id'];
+				$touched[] = (int) $target['id'];
+			}
+		}
+
+		if ( $result['repaired'] > 0 ) {
+			foreach ( array_unique( $touched ) as $pid ) {
+				wp_cache_delete( 'opti_url_hash_' . $pid, 'opti-behavior' );
+				wp_cache_delete( 'opti_url_hashes_' . $pid, 'opti-behavior' );
+			}
+			if ( function_exists( 'opti_behavior_flush_heatmap_caches' ) ) {
+				opti_behavior_flush_heatmap_caches();
+			}
+		}
+
+		return $result;
 	}
 
 	/**

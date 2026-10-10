@@ -9,6 +9,20 @@ window.optiBehaviorCurrentForceRefreshFlag = window.optiBehaviorCurrentForceRefr
 	const params = new URLSearchParams(window.location.search);
 	return params.get('force_refresh') === '1' ? '1' : '0';
 };
+// A change of null = the previous period has no data: no percentage, a dash
+// with a tooltip instead of "+100%" (OPT-590). baseClass resets the classes.
+window.optiBehaviorSetNoPreviousChange = window.optiBehaviorSetNoPreviousChange || function(el, baseClass) {
+	const i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
+	const tip = i18n.noPreviousData || 'No data for the previous period';
+	el.textContent = '—';
+	el.setAttribute('title', tip);
+	if (baseClass) {
+		el.className = baseClass + ' neutral';
+	} else {
+		el.classList.remove('positive', 'negative');
+		el.classList.add('neutral');
+	}
+};
 
 
 // Browser icon SVG helper (window.optiBehaviorBrowserIconSVG) moved to the
@@ -267,18 +281,21 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 							} else if (mapping.format === 'percent') {
 								displayValue = displayValue.toFixed(1) + '%';
 							} else {
-								displayValue = Number(displayValue).toLocaleString();
+								displayValue = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(displayValue) : String(displayValue));
 							}
 							targetValue.textContent = displayValue;
 						}
 
-						if (targetChange && mapping.change !== undefined) {
+						if (targetChange && mapping.change === null) {
+							window.optiBehaviorSetNoPreviousChange(targetChange, 'stat-change');
+						} else if (targetChange && mapping.change !== undefined) {
 							const sign = mapping.change > 0 ? '+' : '';
 							const _i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
 							targetChange.textContent = sign + Math.round(mapping.change) + (_i18n.vsLastPeriod || '% vs last period');
 							// Bounce rate is an inverted metric: an increase is bad (red), a decrease is good (green).
 							const isGood = mapping.id === 'bounce_rate' ? mapping.change <= 0 : mapping.change >= 0;
 							targetChange.className = 'stat-change ' + (isGood ? 'positive' : 'negative');
+							targetChange.removeAttribute('title');
 						}
 					});
 
@@ -305,16 +322,19 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 							} else if (statKey === 'avg_scroll_depth' || statKey === 'bounce_rate') {
 								displayValue = displayValue.toFixed(1) + '%';
 							} else {
-								displayValue = Number(displayValue).toLocaleString();
+								displayValue = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(displayValue) : String(displayValue));
 							}
 							valueEl.textContent = displayValue;
 						}
 
-						if (statKey && changeEl && changes[statKey] !== undefined) {
+						if (statKey && changeEl && changes[statKey] === null) {
+							window.optiBehaviorSetNoPreviousChange(changeEl, null);
+						} else if (statKey && changeEl && changes[statKey] !== undefined) {
 							const change = changes[statKey];
 							const sign = change > 0 ? '+' : '';
 							const _i18n2 = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
 							changeEl.textContent = sign + Math.round(change) + (_i18n2.vsLastPeriod || '% vs last period');
+							changeEl.removeAttribute('title');
 						}
 					});
 
@@ -1077,7 +1097,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 		                  const value = context.parsed || 0;
 		                  const total = (context.dataset && context.dataset.data || []).reduce((a, b) => a + (+b || 0), 0);
 		                  const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
-		                  return label + ': ' + value.toLocaleString() + ' (' + percentage + '%)';
+		                  return label + ': ' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(value) : String(value)) + ' (' + percentage + '%)';
 		                } catch(e) {
 		                  return (context.label || '') + ': ' + (context.parsed || 0);
 		                }
@@ -1235,7 +1255,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 		                  const value = context.parsed || 0;
 		                  const total = (context.dataset && context.dataset.data || []).reduce((a, b) => a + (+b || 0), 0);
 		                  const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
-		                  return label + ': ' + value.toLocaleString() + ' (' + percentage + '%)';
+		                  return label + ': ' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(value) : String(value)) + ' (' + percentage + '%)';
 		                } catch(e) {
 		                  return (context.label || '') + ': ' + (context.parsed || 0);
 		                }
@@ -1263,7 +1283,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
       Chart.defaults.scales = Chart.defaults.scales || {};
       Chart.defaults.scales.linear = Chart.defaults.scales.linear || {};
       Chart.defaults.scales.linear.ticks = Chart.defaults.scales.linear.ticks || {};
-      Chart.defaults.scales.linear.ticks.callback = function(value){ try{ return new Intl.NumberFormat().format(value); }catch(e){ return value; } };
+      Chart.defaults.scales.linear.ticks.callback = function(value){ try{ return (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(value) : String(value)); }catch(e){ return value; } };
       // Legibility for legends and tooltips
       Chart.defaults.plugins = Chart.defaults.plugins || {};
       Chart.defaults.plugins.legend = Chart.defaults.plugins.legend || {};
@@ -1297,7 +1317,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 					}catch(e){}
 				}
 
-      Chart.defaults.plugins.tooltip.callbacks.label = function(ctx){ var v = ctx.raw || 0; var name = (ctx.dataset && ctx.dataset.label) ? ctx.dataset.label+': ' : ''; try{ return name + new Intl.NumberFormat().format(v); }catch(e){ return name + v; } };
+      Chart.defaults.plugins.tooltip.callbacks.label = function(ctx){ var v = ctx.raw || 0; var name = (ctx.dataset && ctx.dataset.label) ? ctx.dataset.label+': ' : ''; try{ return name + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(v) : String(v)); }catch(e){ return name + v; } };
       // Line elements: no point radius to avoid wobbles
       Chart.defaults.elements = Chart.defaults.elements || {};
       Chart.defaults.elements.point = Object.assign({}, Chart.defaults.elements.point || {}, { radius: 0, hoverRadius: 3, hitRadius: 6 });
@@ -2382,7 +2402,7 @@ x = Math.min(x, maxX);
 										if (label) {
 											label += ': ';
 										}
-										label += context.parsed.y.toLocaleString();
+										label += (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(context.parsed.y) : String(context.parsed.y));
 										return label;
 									}
 								}
@@ -2424,7 +2444,7 @@ x = Math.min(x, maxX);
 										if (value >= 1000) {
 											return (value / 1000).toFixed(1) + 'k';
 										}
-										return value.toLocaleString();
+										return (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(value) : String(value));
 									}
 								}
 							},
@@ -3056,7 +3076,7 @@ x = Math.min(x, maxX);
 		                const total = (ctx.dataset.data || []).reduce((a, b) => a + (+b || 0), 0);
 		                const v = ctx.parsed || 0;
 		                const pct = total ? ((v / total) * 100).toFixed(1) : 0;
-		                return (ctx.label || '') + ': ' + v.toLocaleString() + ' (' + pct + '%)';
+		                return (ctx.label || '') + ': ' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(v) : String(v)) + ' (' + pct + '%)';
 		              }
 		            }
 		          }
@@ -3209,7 +3229,7 @@ x = Math.min(x, maxX);
 			                const label = context.label || '';
 			                const value = context.parsed || 0;
 			                const percentage = total > 0 ? Math.round((value / total) * 100) : 0;
-			                return label + ': ' + value.toLocaleString() + ' (' + percentage + '%)';
+			                return label + ': ' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(value) : String(value)) + ' (' + percentage + '%)';
 			              }
 			            }
 			          }
@@ -4060,6 +4080,8 @@ x = Math.min(x, maxX);
 					const card = document.querySelector('.stat-card[data-stat="' + key + '"]') || Array.from(document.querySelectorAll('.stat-card')).find(c => (c.querySelector('.stat-label')?.textContent||'').toLowerCase().includes(key.replace(/_/g,'')) );
 					if (!card) return;
 					const el = card.querySelector('.stat-change'); if (!el) return;
+					if (delta === null) { window.optiBehaviorSetNoPreviousChange(el, 'stat-change'); return; }
+					el.removeAttribute('title');
 					const d = Math.round(delta||0);
 					const i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
 					const vsLastPeriod = i18n.vsLastPeriod || '% vs last period';
@@ -4139,8 +4161,8 @@ x = Math.min(x, maxX);
 
 			let html = '';
 			topPages.forEach(page => {
-				const title = page.title || '';
-				const url = page.url || '#';
+				const title = escapeHtml(page.title || '');
+				const url = escapeHtml(page.url || '#');
 				html += `
 					<div class="page-item">
 						<div class="page-info">
@@ -4195,8 +4217,10 @@ x = Math.min(x, maxX);
 				let html = '';
 				topPages.forEach((page, pageIndex) => {
 					const rank = pageIndex + 1;
-					const title = page.title || '';
-					const url = page.url || '#';
+					const title = escapeHtml(page.title || '');
+					// Only http(s) URLs become links (a stored javascript: URL must never be clickable).
+					const url = escapeHtml(page.url || '#');
+					const urlHref = /^javascript:|^data:|^vbscript:/i.test(String(page.url || '').trim()) ? '#' : url;
 					const viewsRaw = page.views || 0;
 					const sessionsRaw = page.sessions || 0;
 					const clicksRaw = page.clicks || 0;
@@ -4260,10 +4284,22 @@ x = Math.min(x, maxX);
 						? `<a class="page-edit-link" href="${escapeHtml(editUrl)}" title="${escapeHtml(editLabel)}"><i data-lucide="pencil"></i></a>`
 						: '';
 
-					// "Hot" badge heuristic: no dedicated data field exists, so approximate it
-					// from the existing views trend/change (presentation-only, mirrors PHP fallback).
-					const isHot = viewsTrend === 'up' && viewsChangeDisplay >= 50;
+					// "Hot" needs a real base (OPT-590): the server decides it per row
+					// (is_top_page_hot), a row with no previous data is never hot.
+					const isHot = page.is_hot === true;
 					const hotBadgeHtml = isHot ? `<span class="page-hot-badge">🔥 Hot</span>` : '';
+
+					// Trend "new" = no data in the previous period: a dash with a tooltip.
+					const noBaseTip = escapeHtml(i18n.noPreviousData || 'No data for the previous period');
+					const changeHtml = function(trend, trendClass, arrow, changeDisplay) {
+						if (trend === 'new') {
+							return `<span class="metric-change neutral" title="${noBaseTip}"><span class="metric-percent">—</span></span>`;
+						}
+						return `<span class="metric-change ${trendClass}">
+											<span class="metric-arrow">${arrow}</span>
+											<span class="metric-percent">${changeDisplay}%</span>
+										</span>`;
+					};
 
 					html += `
 						<div class="page-item">
@@ -4273,31 +4309,22 @@ x = Math.min(x, maxX);
 								${editLinkHtml}
 								${hotBadgeHtml}
 							</div>
-							<a class="page-url" href="${url}" target="_blank" rel="noopener noreferrer" title="${url}">${url}</a>
+							<a class="page-url" href="${urlHref}" target="_blank" rel="noopener noreferrer" title="${url}">${url}</a>
 							<div class="page-metrics">
 								<div class="metric metric-views" title="${interactionsLabel}">
 									<i class="metric-icon" data-lucide="flame"></i>
-									<span class="metric-value">${sessions.toLocaleString()}</span>
-									<span class="metric-change ${viewsTrendClass}">
-										<span class="metric-arrow">${viewsArrow}</span>
-										<span class="metric-percent">${viewsChangeDisplay}%</span>
-									</span>
+									<span class="metric-value">${(typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(sessions) : String(sessions))}</span>
+									${changeHtml(viewsTrend, viewsTrendClass, viewsArrow, viewsChangeDisplay)}
 								</div>
 								<div class="metric metric-clicks" title="${clicksLabel}">
 									<i class="metric-icon" data-lucide="mouse-pointer-click"></i>
-									<span class="metric-value">${clicks.toLocaleString()}</span>
-									<span class="metric-change ${clicksTrendClass}">
-										<span class="metric-arrow">${clicksArrow}</span>
-										<span class="metric-percent">${clicksChangeDisplay}%</span>
-									</span>
+									<span class="metric-value">${(typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(clicks) : String(clicks))}</span>
+									${changeHtml(clicksTrend, clicksTrendClass, clicksArrow, clicksChangeDisplay)}
 								</div>
 								<div class="metric metric-avg-time" title="${avgTimeLabel}">
 									<i class="metric-icon" data-lucide="clock"></i>
 									<span class="metric-value">${escapeHtml(avgTimeFormatted)}</span>
-									<span class="metric-change ${avgTimeTrendClass}">
-										<span class="metric-arrow">${avgTimeArrow}</span>
-										<span class="metric-percent">${avgTimeChangeDisplay}%</span>
-									</span>
+									${changeHtml(avgTimeTrend, avgTimeTrendClass, avgTimeArrow, avgTimeChangeDisplay)}
 								</div>
 							</div>
 						</div>
@@ -4505,7 +4532,7 @@ x = Math.min(x, maxX);
 						<td class="browser-name-cell">
 							<span class="ob-metric-main">
 								<span class="browser-icon-svg">${browserIconSVG}</span>
-								<span class="browser-name ob-metric-label" title="${browser}">${browser}</span>
+								<span class="browser-name ob-metric-label" title="${escapeHtml(browser)}">${escapeHtml(browser)}</span>
 							</span>
 						</td>
 						<td class="browser-visitors-cell">
@@ -4567,7 +4594,7 @@ x = Math.min(x, maxX);
 				card.classList.toggle('is-zero', spamCount <= 0);
 
 				if (countEl) {
-					countEl.textContent = spamCount.toLocaleString();
+					countEl.textContent = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(spamCount) : String(spamCount));
 				}
 
 				if (percentageEl) {
@@ -4735,7 +4762,7 @@ x = Math.min(x, maxX);
 											const value = context.parsed || 0;
 											const total = (context.dataset && context.dataset.data || []).reduce((a, b) => a + (+b || 0), 0);
 											const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
-											return label + ': ' + value.toLocaleString() + ' (' + percentage + '%)';
+											return label + ': ' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(value) : String(value)) + ' (' + percentage + '%)';
 										} catch(e) {
 											return (context.label || '') + ': ' + (context.parsed || 0);
 										}
@@ -4964,7 +4991,7 @@ x = Math.min(x, maxX);
 						</td>
 						<td class="country-visitors-cell">
 							<div class="ob-metric-values">
-								<span class="visitor-count">${count.toLocaleString()}</span>
+								<span class="visitor-count">${(typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(count) : String(count))}</span>
 								<span class="visitor-percentage">${percentage}%</span>
 								<span class="visitor-trend ${trendClass}">
 									${trendIcon}
@@ -5291,7 +5318,7 @@ x = Math.min(x, maxX);
 						<td class="referrer-name-cell">
 							<span class="ob-metric-main">
 								<span class="referrer-icon-svg">${referrerIconSVG}</span>
-								<span class="referrer-name ob-metric-label" title="${referrer}">${referrer}</span>
+								<span class="referrer-name ob-metric-label" title="${escapeHtml(referrer)}">${escapeHtml(referrer)}</span>
 							</span>
 						</td>
 						<td class="referrer-visitors-cell">
@@ -6148,7 +6175,7 @@ x = Math.min(x, maxX);
 		if (metaDiv) metaDiv.style.display = '';
 
 		// Update total count
-		if (totalSpan) totalSpan.textContent = total.toLocaleString();
+		if (totalSpan) totalSpan.textContent = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(total) : String(total));
 
 		// Update change percentage
 		const changePct = botData.change_percentage || 0;
@@ -6189,7 +6216,7 @@ x = Math.min(x, maxX);
 				html += '    <span class="bot-label ob-metric-label">' + escapeHtml(botLabel) + '</span>';
 				html += '  </div>';
 				html += '  <div class="bot-stats ob-metric-values">';
-				html += '    <span class="visitor-count">' + count.toLocaleString() + '</span>';
+				html += '    <span class="visitor-count">' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(count) : String(count)) + '</span>';
 				html += '    <span class="visitor-percentage">' + percentage.toFixed(1) + '%</span>';
 				html += '    <span class="visitor-trend ' + trendClass + '">' + trendIcon + Math.abs(change) + '%</span>';
 				html += '  </div>';
@@ -6342,10 +6369,15 @@ x = Math.min(x, maxX);
 	}
 
 	// Helper function to escape HTML
+	// Safe for HTML text AND quoted attributes: escapes & < > " '.
 	function escapeHtml(text) {
-		const div = document.createElement('div');
-		div.textContent = text;
-		return div.innerHTML;
+		if (text === null || typeof text === 'undefined') return '';
+		return String(text)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#039;');
 	}
 
 	/**
@@ -6378,7 +6410,7 @@ x = Math.min(x, maxX);
 				const day = parseInt(parts[2], 10);
 				if (!Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
 					const localDate = new Date(year, month - 1, day);
-					return localDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+					return (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.date(localDate, { month: 'short', day: 'numeric' }) : new Date(localDate).toDateString());
 				}
 			}
 			return safeDate;

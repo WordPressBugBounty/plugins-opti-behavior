@@ -846,6 +846,19 @@
 		}
 	}
 
+	/**
+	 * The tracker matches click goals with element.matches() / closest(): CSS only.
+	 * Anything else (an XPath copied from the browser tools) would never count a click.
+	 */
+	function isValidCssSelector( selector ) {
+		try {
+			document.createDocumentFragment().querySelector( selector );
+			return true;
+		} catch ( ex ) {
+			return false;
+		}
+	}
+
 	function validateStep(step) {
 		switch (step) {
 			case 1:
@@ -926,6 +939,23 @@
 				var maxGoals = isPro ? 20 : ( parseInt( limits.max_goals_per_test, 10 ) || 3 );
 				if ( goalRows.length > maxGoals ) {
 					showToast( ( strings.limit_goals_reached || 'Free plan limit reached: maximum %d goals per test.' ).replace( '%d', maxGoals ), 'error' );
+					return false;
+				}
+				var $badSelector = null;
+				goalRows.each(function() {
+					if ( $(this).find('.opti-ab-goal-type').val() !== 'click' ) { return; }
+					$(this).find('.opti-ab-goal-selectors-list .opti-ab-goal-selector-input').each(function() {
+						var v = $(this).val().trim();
+						if ( v && ! isValidCssSelector( v ) ) {
+							$badSelector = $(this);
+							return false;
+						}
+					});
+					if ( $badSelector ) { return false; }
+				});
+				if ( $badSelector ) {
+					showToast( strings.validate_goal_selector || 'This is not a CSS selector, so clicks would never be counted (XPath is not supported). Example: #menu a, .buy-button', 'error' );
+					$badSelector.focus();
 					return false;
 				}
 				return true;
@@ -1703,7 +1733,7 @@
 							var ch = changes[ci], icon, iconClass, label;
 							if ( ch.insert_after ) {
 								icon = '+'; iconClass = 'insert';
-								label = ( ch.block_name || ( strings.vc_block || 'Block' ) ) + ' <span class="ob-vcard__sel">' + ( strings.vc_after || 'after' ) + ' ' + escAttr(ch.selector || ( strings.vc_page || 'page' )) + '</span>';
+								label = escHtml( ch.block_name || ( strings.vc_block || 'Block' ) ) + ' <span class="ob-vcard__sel">' + ( strings.vc_after || 'after' ) + ' ' + escAttr(ch.selector || ( strings.vc_page || 'page' )) + '</span>';
 							} else if ( ch.duplicate ) {
 								icon = '⧉'; iconClass = 'other';
 								label = ( strings.vc_duplicate || 'Duplicate' ) + ' <span class="ob-vcard__sel">' + escAttr(ch.selector) + '</span>';
@@ -3192,7 +3222,10 @@
 				goals:        goals,
 				results:      data.results || [],
 				activeGoalId: activeGId,
-				excludeSpam:  getExcludeSpamFlag()
+				excludeSpam:  getExcludeSpamFlag(),
+				// Lets the Pro header know a winner is already declared (QA-P-AB-071).
+				winnerVariantId: ( data.test && data.test.winner_variant_id ) ? parseInt( data.test.winner_variant_id, 10 ) || 0 : 0,
+				testStatus:      ( data.test && data.test.status ) ? String( data.test.status ) : ''
 			};
 
 			// Notify Pro plugins that a results render cycle completed.
@@ -3237,7 +3270,9 @@
 			goals:        goals,
 			results:      data.results || [],
 			activeGoalId: activeGId,
-			excludeSpam:  getExcludeSpamFlag()
+			excludeSpam:  getExcludeSpamFlag(),
+			winnerVariantId: ( data.test && data.test.winner_variant_id ) ? parseInt( data.test.winner_variant_id, 10 ) || 0 : 0,
+			testStatus:      ( data.test && data.test.status ) ? String( data.test.status ) : ''
 		};
 
 		document.dispatchEvent(
@@ -3823,7 +3858,7 @@
 					var ch = changes[ci], chIcon, chClass, chLabel;
 					if ( ch.insert_after ) {
 						chIcon = '+'; chClass = 'insert';
-						chLabel = ( ch.block_name || ( strings.vc_block || 'Block' ) ) + ' <span class="ob-vcard__sel">' + ( strings.vc_after || 'after' ) + ' ' + escAttr(ch.selector || ( strings.vc_page || 'page' )) + '</span>';
+						chLabel = escHtml( ch.block_name || ( strings.vc_block || 'Block' ) ) + ' <span class="ob-vcard__sel">' + ( strings.vc_after || 'after' ) + ' ' + escAttr(ch.selector || ( strings.vc_page || 'page' )) + '</span>';
 					} else if ( ch.duplicate ) {
 						chIcon = '⧉'; chClass = 'other';
 						chLabel = ( strings.vc_duplicate || 'Duplicate' ) + ' <span class="ob-vcard__sel">' + escAttr(ch.selector) + '</span>';
@@ -4821,7 +4856,7 @@
 
 	function escHtml(str) {
 		if ( ! str ) return '';
-		return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+		return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 	}
 
 	function escAttr(str) {
@@ -4845,7 +4880,7 @@
 		if ( ! str ) return '—';
 		var d = new Date(str);
 		if ( isNaN(d.getTime()) ) return str;
-		return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+		return (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.date(d, { month: 'short', day: 'numeric' }) : new Date(d).toDateString());
 	}
 
 	function debounce(fn, delay) {

@@ -1607,7 +1607,7 @@
 	}
 
 	.heatmaps-panel .heatmaps-modern-table td.interactions-count::before {
-		content: "Interactions";
+		content: "Clicks";
 	}
 
 	.heatmaps-panel .heatmaps-modern-table td.sessions-count::before {

@@ -206,8 +206,10 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			wp_send_json_error( __( 'Invalid data', 'opti-behavior' ) );
 		}
 
-		$url   = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';
-		$title = isset( $_POST['title'] ) ? sanitize_text_field( wp_unslash( $_POST['title'] ) ) : '';
+		// Personal data (email, access_code, token…) never reaches the tables (OPT-574).
+		$data_array = opti_behavior_strip_sensitive_urls_deep( $data_array );
+		$url        = isset( $_POST['url'] ) ? opti_behavior_strip_sensitive_query_args( esc_url_raw( wp_unslash( $_POST['url'] ) ) ) : '';
+		$title      = isset( $_POST['title'] ) ? sanitize_text_field( wp_unslash( $_POST['title'] ) ) : '';
 
 		$debug_manager->log( 'Processing heatmap data for URL: ' . $url . ' (' . count( $data_array ) . ' events)', 'info', 'ajax' );
 
@@ -219,7 +221,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		$screen_height = isset( $_POST['screen_height'] ) ? intval( $_POST['screen_height'] ) : null;
 
 		// Extract referrer and UTM parameters from POST
-		$referrer = isset( $_POST['referrer'] ) ? esc_url_raw( wp_unslash( $_POST['referrer'] ) ) : '';
+		$referrer = isset( $_POST['referrer'] ) ? opti_behavior_strip_sensitive_query_args( esc_url_raw( wp_unslash( $_POST['referrer'] ) ) ) : '';
 		$utm_source = isset( $_POST['utm_source'] ) ? sanitize_text_field( wp_unslash( $_POST['utm_source'] ) ) : '';
 		$utm_medium = isset( $_POST['utm_medium'] ) ? sanitize_text_field( wp_unslash( $_POST['utm_medium'] ) ) : '';
 		$utm_campaign = isset( $_POST['utm_campaign'] ) ? sanitize_text_field( wp_unslash( $_POST['utm_campaign'] ) ) : '';
@@ -305,7 +307,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		$debug_manager->log( "handle_heatmap_event called with event_data: " . json_encode($event_data), 'debug', 'ajax' );
 
 		$event_type = isset( $event_data['event'] ) ? sanitize_text_field( $event_data['event'] ) : '';
-		$url        = isset( $event_data['url'] ) ? esc_url_raw( $event_data['url'] ) : '';
+		$url        = isset( $event_data['url'] ) ? opti_behavior_strip_sensitive_query_args( esc_url_raw( $event_data['url'] ) ) : '';
 		$title      = isset( $event_data['title'] ) ? sanitize_text_field( $event_data['title'] ) : '';
 		$x          = isset( $event_data['x'] ) ? intval( $event_data['x'] ) : 0;
 		$y          = isset( $event_data['y'] ) ? intval( $event_data['y'] ) : 0;
@@ -1725,6 +1727,8 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// Sanitize the decoded JSON data recursively
 		// This ensures all string values from JSON are properly sanitized
 		$data = $this->sanitize_json_data( $data );
+		// Every URL of the payload (page, entry, referrer, outbound source / target) loses its personal data (OPT-574).
+		$data = opti_behavior_strip_sensitive_urls_deep( $data );
 
 		$debug_manager->log( 'Processing session recording data', 'info', 'ajax' );
 
@@ -3034,6 +3038,18 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			$debug_manager->log( 'Initial pageview ensured for session start', 'debug', 'ajax' );
 		}
 
+		// Browser driven by an automation tool (navigator.webdriver): the session is
+		// `automated`, never reclassified, even with a referrer (OPT-562).
+		if ( ! empty( $data['webdriver'] ) && Opti_Behavior_Ingest_Gate::automated_detection_enabled() ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics session classification on a fixed plugin table.
+			$wpdb->query(
+				$wpdb->prepare(
+					"UPDATE {$wpdb->prefix}optibehavior_sessions SET traffic_type = 'automated', spam_reason = 'webdriver' WHERE id = %s AND (traffic_type IS NULL OR traffic_type IN ('', 'human', 'spam'))",
+					$session_id
+				)
+			);
+		}
+
 		$debug_manager->log( 'Session start processed successfully', 'debug', 'ajax' );
 		wp_send_json_success(
 			array(
@@ -3113,7 +3129,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 				// the scroll > 25% clears elsewhere still apply.
 				$current_url = isset( $event['data']['url'] ) ? $event['data']['url'] : ( isset( $data['url'] ) ? $data['url'] : '' );
 				if ( empty( $current_url ) ) {
-					$current_url = isset( $_SERVER['HTTP_REFERER'] ) ? esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) : '';
+					$current_url = isset( $_SERVER['HTTP_REFERER'] ) ? opti_behavior_strip_sensitive_query_args( esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) ) : '';
 				}
 
 				if ( ! empty( $current_url ) ) {
@@ -3192,7 +3208,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			if ( $event['type'] === 'scroll' && isset( $event['data']['scrollY'], $event['data']['scrollHeight'] ) ) {
 				$current_url = isset( $event['data']['url'] ) ? $event['data']['url'] : ( isset( $data['url'] ) ? $data['url'] : '' );
 				if ( empty( $current_url ) ) {
-					$current_url = isset( $_SERVER['HTTP_REFERER'] ) ? esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) : '';
+					$current_url = isset( $_SERVER['HTTP_REFERER'] ) ? opti_behavior_strip_sensitive_query_args( esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) ) : '';
 				}
 
 				if ( ! empty( $current_url ) ) {
@@ -3464,7 +3480,10 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		if ( ! preg_match( '/^([a-z][a-z0-9+.\-]*):/i', $url, $m ) || ! in_array( strtolower( $m[1] ), $protocols, true ) ) {
 			return '';
 		}
-		return esc_url_raw( $url, $protocols );
+		$url = esc_url_raw( $url, $protocols );
+
+		// Personal data (email, access_code, token…) out of stored URLs (OPT-574).
+		return function_exists( 'opti_behavior_strip_sensitive_query_args' ) ? opti_behavior_strip_sensitive_query_args( $url ) : $url;
 	}
 
 	/**
@@ -3790,17 +3809,21 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 
 		$session_id = isset( $_POST['session_id'] ) ? sanitize_text_field( wp_unslash( $_POST['session_id'] ) ) : '';
 		$visitor_id = isset( $_POST['visitor_id'] ) ? sanitize_text_field( wp_unslash( $_POST['visitor_id'] ) ) : '';
-		$url        = isset( $_POST['url'] ) ? esc_url_raw( wp_unslash( $_POST['url'] ) ) : '';
+		$url        = isset( $_POST['url'] ) ? opti_behavior_strip_sensitive_query_args( esc_url_raw( wp_unslash( $_POST['url'] ) ) ) : '';
 		$title      = isset( $_POST['title'] ) ? sanitize_text_field( wp_unslash( $_POST['title'] ) ) : '';
 		$duration   = isset( $_POST['duration'] ) ? intval( $_POST['duration'] ) : 0;
 		$scroll_depth = isset( $_POST['scroll_depth'] ) ? intval( $_POST['scroll_depth'] ) : 0;
 
-		// VALIDATION: Cap session duration at 1 hour (3600 seconds) to prevent inflated averages
-		// This protects against sessions left open for hours/days in background tabs
+		// VALIDATION: a duration above 1 hour (3600 seconds) is a tab left open, not
+		// a visit. Current trackers send the time up to the last real activity, so
+		// only an older cached tracker (wall-clock time since page load) gets here:
+		// ignore that value instead of snapping it to 3600, which made a pile of
+		// sessions last exactly 1:00:00 (OPT-590). The stored duration / time on
+		// page are kept by the max() / GREATEST() merges below.
 		$max_duration = 3600; // 1 hour in seconds
 		if ( $duration > $max_duration ) {
-			$debug_manager->log( "Duration capped from {$duration}s to {$max_duration}s for session: {$session_id}", 'warning', 'ajax' );
-			$duration = $max_duration;
+			$debug_manager->log( "Duration {$duration}s over {$max_duration}s ignored for session: {$session_id}", 'warning', 'ajax' );
+			$duration = 0;
 		}
 
 		// Per-page dwell time for THIS pageview row (time on the current page).

@@ -41,10 +41,15 @@
 		opts.signal = ctrl.signal;
 		return fetch(url, opts).finally(function(){ clearTimeout(timer); });
 	}
+	// Localized strings (optiBehaviorHeatmapsL10n, assets trait); '' when missing.
+	function hmStr(key){
+		var s = (typeof optiBehaviorHeatmapsL10n !== 'undefined' && optiBehaviorHeatmapsL10n.strings) ? optiBehaviorHeatmapsL10n.strings : {};
+		return s[key] || '';
+	}
 	function buildErrorNotice(message, retryAttr){
 		return '<div class="notice notice-error" style="margin:12px 0;padding:12px;">' +
 			'<p style="margin:0 0 8px;">' + message + '</p>' +
-			'<button type="button" class="button" ' + retryAttr + '>Retry</button>' +
+			'<button type="button" class="button" ' + retryAttr + '>' + (hmStr('retry') || 'Retry') + '</button>' +
 			'</div>';
 	}
 	var sortPendingRequestId = 0;
@@ -135,7 +140,7 @@
 			if(panel){
 				var container = panel.querySelector('[data-optibehavior-table-wrapper]');
 				if(!container){ container = document.createElement('div'); container.setAttribute('data-optibehavior-table-wrapper',''); panel.appendChild(container); }
-				container.innerHTML = buildErrorNotice('Heatmap table could not be loaded (server timeout or error).', 'data-optibehavior-table-retry data-params=\'' + JSON.stringify(params).replace(/'/g, '&#39;') + '\'');
+				container.innerHTML = buildErrorNotice(hmStr('tableError') || 'Heatmap table could not be loaded (server timeout or error).', 'data-optibehavior-table-retry data-params=\'' + JSON.stringify(params).replace(/'/g, '&#39;') + '\'');
 				var oldShell = document.querySelector('.simplified-heatmap-table'); if(oldShell){ oldShell.style.display='none'; }
 			}
 		})
@@ -179,7 +184,7 @@
 				setTimeout(function(){ fetchStats(attempt + 1); }, 4000);
 				return;
 			}
-			container.innerHTML = buildErrorNotice('Analytics stats could not be loaded (server timeout or error).', 'data-optibehavior-stats-retry');
+			container.innerHTML = buildErrorNotice(hmStr('statsError') || 'Analytics stats could not be loaded (server timeout or error).', 'data-optibehavior-stats-retry');
 		});
 	}
 	function getFrontendStatsDeepLink(){
@@ -214,19 +219,21 @@
 		fetchStats();
 		fetchTable({orderby:'last_updated', order:'desc', paged:1, per_page:10, search:deepLink.pageUrl || ''});
 	});
-	document.addEventListener('click', function(e){ var a=e.target.closest('[data-optibehavior-table] thead a[data-sort]'); if(a){ e.preventDefault(); var wrap = a.closest('[data-optibehavior-table]'); var orderby = a.getAttribute('data-sort'); var nextOrder = a.getAttribute('data-order') || 'desc'; if(wrap){ wrap.dataset.orderby = orderby; wrap.dataset.order = nextOrder; } var searchInput = document.getElementById('heatmaps-search'); var search = searchInput ? searchInput.value.trim() : ''; fetchTable({orderby:orderby, order:nextOrder, paged:1, per_page:10, search:search}, {pendingSort:orderby}); }});
+	document.addEventListener('click', function(e){ var a=e.target.closest('[data-optibehavior-table] thead a[data-sort]'); if(a){ e.preventDefault(); var wrap = a.closest('[data-optibehavior-table]'); var orderby = a.getAttribute('data-sort'); var nextOrder = a.getAttribute('data-order') || 'desc'; if(wrap){ wrap.dataset.orderby = orderby; wrap.dataset.order = nextOrder; } heatmapsSort = {orderby:orderby, order:nextOrder}; var searchInput = document.getElementById('heatmaps-search'); var search = searchInput ? searchInput.value.trim() : ''; fetchTable({orderby:orderby, order:nextOrder, paged:1, per_page:10, search:search}, {pendingSort:orderby}); }});
 	document.addEventListener('click', function(e){ var p=e.target.closest('[data-paging] .pagination-btn'); if(!p||p.hasAttribute('disabled')) return; e.preventDefault(); var pag = e.target.closest('.table-pagination'); var cur = pag && pag.querySelector('.pagination-current'); var page = parseInt(cur && cur.textContent || '1',10); var totalPages = parseInt((pag && pag.getAttribute('data-total-pages'))||'1',10); if(p.hasAttribute('data-first')) page=1; else if(p.hasAttribute('data-prev')) page=Math.max(1,page-1); else if(p.hasAttribute('data-next')) page=Math.min(totalPages,page+1); else if(p.hasAttribute('data-last')) page=totalPages; else if(p.hasAttribute('data-page')) page=parseInt(p.getAttribute('data-page'),10); var orderby = pag ? (pag.getAttribute('data-orderby') || 'last_updated') : 'last_updated'; var order = pag ? (pag.getAttribute('data-order') || 'desc') : 'desc'; var searchInput = document.getElementById('heatmaps-search'); var search = searchInput ? searchInput.value.trim() : ''; fetchTable({orderby:orderby, order:order, paged:page, per_page:10, search:search}); });
 
 	// Search handler with debounce
 	var searchTimeout;
+	var heatmapsSort = {orderby:'last_updated', order:'desc'};
 	document.addEventListener('input', function(e){
 		if(e.target && e.target.id === 'heatmaps-search'){
 			clearTimeout(searchTimeout);
 			searchTimeout = setTimeout(function(){
 				var searchTerm = e.target.value.trim();
-				var wrap = document.querySelector('[data-optibehavior-table]');
-				var orderby = wrap ? (wrap.dataset.orderby || 'last_updated') : 'last_updated';
-				var order = wrap ? (wrap.dataset.order || 'desc') : 'desc';
+				// The table markup is replaced on every fetch (its data-* sort is lost):
+				// keep the last chosen sort in memory (QA-B-HEAT-089).
+				var orderby = heatmapsSort.orderby || 'last_updated';
+				var order = heatmapsSort.order || 'desc';
 				fetchTable({orderby:orderby, order:order, paged:1, per_page:10, search:searchTerm});
 			}, 300);
 		}
@@ -320,7 +327,7 @@
 		if(!$tr || !devicesAll) return;
 		var setCount = function($btn, n){
 			if(!$btn) return;
-			var count = Number(n || 0).toLocaleString();
+			var count = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(n || 0) : String(n || 0));
 			$btn.innerHTML = $btn.innerHTML.replace(/\([\d,]*\)/, '(' + count + ')');
 		};
 		setCount($tr.querySelector('.optibehavior-btn-desktop'), devicesAll.desktop);

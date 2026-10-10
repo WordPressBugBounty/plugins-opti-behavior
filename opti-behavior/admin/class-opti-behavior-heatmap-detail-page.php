@@ -79,6 +79,34 @@ class Opti_Behavior_Heatmap_Detail_Page {
 
 		add_action( 'admin_menu', array( $this, 'add_hidden_page' ), 999 );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
+		add_action( 'load-admin_page_opti-behavior-heatmap-detail', array( $this, 'set_browser_title' ) );
+	}
+
+	/**
+	 * Give the hidden page a browser-tab title.
+	 *
+	 * A page registered without a parent has no menu title, so WordPress
+	 * printed "‹ Site — WordPress". Setting the global $title before
+	 * admin-header.php lets core build "Heatmap: {page} ‹ Site — WordPress"
+	 * (core strips tags and escapes it).
+	 */
+	public function set_browser_title() {
+		global $title;
+
+		$page_ids = $this->get_request_page_ids();
+		$page     = ! empty( $page_ids ) ? $this->get_page_data( absint( $page_ids[0] ) ) : false;
+		$label    = '';
+		if ( $page ) {
+			$label = trim( wp_strip_all_tags( (string) $page['title'] ) );
+			if ( '' === $label ) {
+				$label = (string) $page['url'];
+			}
+		}
+
+		$title = '' !== $label
+			/* translators: %s: title (or address) of the page the heatmap belongs to. */
+			? sprintf( __( 'Heatmap: %s', 'opti-behavior' ), $label )
+			: __( 'Heatmap Details', 'opti-behavior' );
 	}
 
 	/**
@@ -134,7 +162,7 @@ class Opti_Behavior_Heatmap_Detail_Page {
 			'lucide-icons',
 			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/lucide.min.js',
 			array(),
-			OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . time(),
+			self::asset_version( 'assets/js/lucide.min.js' ),
 			true
 		);
 
@@ -174,7 +202,7 @@ class Opti_Behavior_Heatmap_Detail_Page {
 			'opti-behavior-heatmap-detail',
 			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/heatmap-detail.js',
 			array( 'jquery', 'heatmap-js', 'lucide-icons', 'html2canvas', 'opti-behavior-filter-badge' ),
-			OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . time(),
+			self::asset_version( 'assets/js/heatmap-detail.js' ),
 			true
 		);
 
@@ -218,10 +246,10 @@ class Opti_Behavior_Heatmap_Detail_Page {
 				'variant_id'    => isset( $_GET['variant_id'] ) ? absint( $_GET['variant_id'] ) : 0,
 				'variant_name'  => $opti_behavior_variant_name_js,
 				'assets_url'    => OPTI_BEHAVIOR_HEATMAP_ASSETS_URL,
-				'upgrade_url'   => 'https://optiuser.com/',
+				// OPT-764: the single Pro trial page (heatmap Pro bubble).
+				'upgrade_url'   => class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::link_url( 'heatmap-bubble' ) : '',
 				// "Count Bar Display" (Settings → Data Collection): gates the
-				// click-count hover bubble on the Click heatmap. Pro-only feature —
-				// always 0 when the Pro plugin is inactive.
+				// click-count hover bubble on the Click heatmap (Free and Pro).
 				'count_bar'     => $this->get_count_bar_setting(),
 				'i18n'          => array(
 					/* translators: {views}: number of views, {percent}: scroll reach percentage. */
@@ -342,8 +370,23 @@ class Opti_Behavior_Heatmap_Detail_Page {
 			'opti-behavior-heatmap-detail',
 			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/heatmap-detail.css',
 			array(),
-			OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . time()
+			self::asset_version( 'assets/css/heatmap-detail.css' )
 		);
+	}
+
+	/**
+	 * Asset version that only changes when the file changes, so the browser
+	 * cache is reused between visits (a time() suffix forced a re-download
+	 * on every page load).
+	 *
+	 * @param string $relative_path Path relative to the plugin directory.
+	 * @return string
+	 */
+	public static function asset_version( $relative_path ) {
+		$file = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . $relative_path;
+		return file_exists( $file )
+			? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $file )
+			: OPTI_BEHAVIOR_HEATMAP_VERSION;
 	}
 
 	/**
@@ -369,18 +412,14 @@ class Opti_Behavior_Heatmap_Detail_Page {
 	/**
 	 * Read the "Count Bar Display" toggle (Settings → Data Collection).
 	 *
-	 * Gates the click-count hover bubble on the Click heatmap. Pro-only
-	 * feature: returns 0 whenever the Pro plugin is inactive, regardless of
-	 * the stored setting. Stored as 0|1 inside the opti_behavior_heatmap_option
-	 * blob; defaults to 1 (show) when Pro is active.
+	 * Gates the click-count hover bubble on the Click heatmap, Free and Pro
+	 * (OPT-806: the toggle is offered in the Free settings, so it works there
+	 * too). Stored as 0|1 inside the opti_behavior_heatmap_option blob;
+	 * defaults to 1 (show).
 	 *
 	 * @return int 1 when the count bubble should show, 0 otherwise.
 	 */
 	private function get_count_bar_setting() {
-		if ( ! function_exists( 'opti_behavior_pro_active' ) || ! opti_behavior_pro_active() ) {
-			return 0;
-		}
-
 		$options = maybe_unserialize( get_option( 'opti_behavior_heatmap_option', array() ) );
 		if ( ! is_array( $options ) ) {
 			return 1;
@@ -1096,8 +1135,8 @@ class Opti_Behavior_Heatmap_Detail_Page {
 					<div class="filter-group">
 						<label for="filter-visitor-type"><?php esc_html_e( 'Visitor Type', 'opti-behavior' ); ?> <?php if ( ! empty( $heatmap_tooltips['filter_visitor_type'] ) ) { opti_behavior_tooltip_e( $heatmap_tooltips['filter_visitor_type']['title'], $heatmap_tooltips['filter_visitor_type']['content'], $heatmap_tooltips['filter_visitor_type']['simple'], '', array( 'position' => 'bottom' ) ); } ?></label>
 						<select id="filter-visitor-type" class="filter-select advanced-filter-select" data-filter="visitor_type">
-							<option value=""><?php esc_html_e( 'All Visitors', 'opti-behavior' ); ?></option>
-							<option value="guest" selected="selected"><?php esc_html_e( 'Guest Visitor', 'opti-behavior' ); ?></option>
+							<option value="" selected="selected"><?php esc_html_e( 'All Visitors', 'opti-behavior' ); ?></option>
+							<option value="guest"><?php esc_html_e( 'Guest Visitor', 'opti-behavior' ); ?></option>
 							<option value="logged_in"><?php esc_html_e( 'Logged In', 'opti-behavior' ); ?></option>
 						</select>
 					</div>
@@ -1383,7 +1422,7 @@ class Opti_Behavior_Heatmap_Detail_Page {
 							<?php echo esc_html( $config['label'] ); ?>
 							<?php if ( $is_pro_feature && ! $is_pro ) : ?>
 								<span class="pro-badge">PRO</span>
-								<span class="pro-tooltip"><?php echo esc_html( $config['title'] ); ?> <a href="https://optiuser.com/" target="_blank"><?php esc_html_e( 'Upgrade to PRO', 'opti-behavior' ); ?> &rarr;</a></span>
+								<span class="pro-tooltip"><?php echo esc_html( $config['title'] ); ?> <a href="<?php echo esc_url( class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::link_url( 'heatmap-bubble' ) : '' ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Upgrade to PRO', 'opti-behavior' ); ?> &rarr;</a></span>
 							<?php endif; ?>
 							<?php if ( ! $disabled && ! empty( $heatmap_tooltips[ $tooltip_key ] ) ) { opti_behavior_tooltip_e( $heatmap_tooltips[ $tooltip_key ]['title'], $heatmap_tooltips[ $tooltip_key ]['content'], $heatmap_tooltips[ $tooltip_key ]['simple'], '', array( 'class' => 'ob-tooltip-xs' ) ); } ?>
 						</button>

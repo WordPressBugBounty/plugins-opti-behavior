@@ -124,15 +124,53 @@ class Opti_Behavior_Heatmap_Frontend {
 			define( 'DONOTCACHEPAGE', true ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- Cross-plugin standard constant read by page caches.
 		}
 		nocache_headers();
-		ob_start(
-			static function ( $html ) {
-				// Scripts go; embedded frames (videos, maps) become a grey block of
-				// the same shape, since they would try to run their own scripts.
-				$html = (string) preg_replace( '#<script\b[^>]*>.*?</script\s*>#is', '', (string) $html );
+		ob_start( array( __CLASS__, 'strip_scripts_for_xray_preview' ) );
+	}
 
-				return (string) preg_replace( '#<iframe\b[^>]*>.*?</iframe\s*>#is', '<div style="aspect-ratio:16/9;width:100%;background:#e5e7eb"></div>', $html );
-			}
+	/**
+	 * Remove everything that would try to run a script in the sandboxed
+	 * Page X-Ray thumbnail frame (`sandbox="allow-same-origin"`, never
+	 * `allow-scripts`), each of which logs "Blocked script execution" in the
+	 * admin console:
+	 * - `<script>` tags (incl. import maps and modules);
+	 * - `<link rel="modulepreload">` and `<link rel="preload" as="script">`:
+	 *   the browser fetches + compiles the module and is blocked (OPT-348:
+	 *   the 4 errors of a WooCommerce page = its 4 modulepreload links);
+	 * - inline handlers `on*=` (`<link onload>` of performance plugins,
+	 *   `<img onerror>`, `<a onclick>`…) and `javascript:` URLs;
+	 * - embedded frames (videos, maps) → a grey block of the same shape,
+	 *   since they would run their own scripts.
+	 * `<noscript>` content is kept: scripting is off in this frame, so the
+	 * page shows what a visitor without JavaScript sees (lazy-load image
+	 * fallbacks, gallery opacity fixes); a `<noscript>` frame is caught by
+	 * the iframe rule.
+	 *
+	 * @param string $html Buffered page HTML.
+	 * @return string HTML without any script entry point.
+	 */
+	public static function strip_scripts_for_xray_preview( $html ) {
+		$html = (string) preg_replace( '#<script\b[^>]*>.*?</script\s*>#is', '', (string) $html );
+		$html = (string) preg_replace( '#<script\b[^>]*/?>#i', '', $html );
+		$html = (string) preg_replace( '#<link\b(?=[^>]*\brel\s*=\s*["\']?\s*modulepreload\b)[^>]*>#i', '', $html );
+		$html = (string) preg_replace( '#<link\b(?=[^>]*\brel\s*=\s*["\']?\s*preload\b)(?=[^>]*\bas\s*=\s*["\']?\s*script\b)[^>]*>#i', '', $html );
+		$html = (string) preg_replace( '#<iframe\b[^>]*>.*?</iframe\s*>#is', '<div style="aspect-ratio:16/9;width:100%;background:#e5e7eb"></div>', $html );
+		$html = (string) preg_replace( '#<object\b[^>]*>.*?</object\s*>#is', '', $html );
+		$html = (string) preg_replace( '#<embed\b[^>]*>#i', '', $html );
+
+		// Inline event handlers + javascript: URLs, only inside tags (text such
+		// as "on=" stays).
+		$html = (string) preg_replace_callback(
+			'#<[a-zA-Z][^<>]*>#',
+			static function ( $tag ) {
+				$clean = (string) preg_replace( '#\s+on[a-z]+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)#i', '', $tag[0] );
+				$attrs = '(\s(?:href|src|action|formaction|xlink:href)\s*=\s*)';
+				$clean = (string) preg_replace( '#' . $attrs . '(["\'])\s*javascript:.*?\2#is', '$1$2#$2', $clean );
+				return (string) preg_replace( '#' . $attrs . 'javascript:[^\s>]*#i', '$1#', $clean );
+			},
+			$html
 		);
+
+		return $html;
 	}
 
 	/**
@@ -970,6 +1008,8 @@ class Opti_Behavior_Heatmap_Frontend {
 			'utm_term'         => isset( $_GET['utm_term'] ) ? sanitize_text_field( wp_unslash( $_GET['utm_term'] ) ) : '',
 			'utm_content'      => isset( $_GET['utm_content'] ) ? sanitize_text_field( wp_unslash( $_GET['utm_content'] ) ) : '',
 			// phpcs:enable WordPress.Security.NonceVerification.Recommended
+			// Query parameters the tracker removes from every URL it sends (OPT-574).
+			'url_privacy'      => opti_behavior_url_privacy_js_config(),
 		);
 
 		wp_localize_script( 'opti-behavior-reporter', 'optiBehaviorHeatmapConfig', $config );
@@ -1421,7 +1461,7 @@ JS;
 		if ( ! isset( $_SERVER['HTTP_REFERER'] ) ) {
 			return '';
 		}
-		$referrer = esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) );
+		$referrer = opti_behavior_strip_sensitive_query_args( esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) );
 		if ( empty( $referrer ) ) {
 			return '';
 		}
@@ -1960,6 +2000,8 @@ JS;
 				'heatmaps_url'       => admin_url( 'admin.php?page=opti-behavior-heatmaps' ),
 				'nonce'              => wp_create_nonce( 'opti_behavior_frontend_stats_nonce' ),
 				'recordings_url'     => admin_url( 'admin.php?page=opti-behavior-recordings' ),
+				'errors_url'         => admin_url( 'admin.php?page=opti-behavior-errors&tab=errors' ),
+				'friction_url'       => admin_url( 'admin.php?page=opti-behavior-errors&tab=friction' ),
 				'settings'           => $settings,
 				'periods'            => Opti_Behavior_Page_Analytics_Repository::get_standard_periods(),
 				'default_period'     => Opti_Behavior_Page_Analytics_Repository::get_default_standard_period(),
@@ -2057,10 +2099,30 @@ JS;
 				);
 			}
 			if ( ! empty( $settings['show_errors'] ) ) {
-				$stat_items[] = array( 'key' => 'pro.errors', 'icon' => 'alert-triangle', 'label' => __( 'Errors', 'opti-behavior' ) );
+				// Clickable (2026-09-30): opens the Errors screen scoped to this page
+				// and the bar period; frontend-stats-bar.js builds the href and
+				// highlights the pill when the page has errors.
+				$stat_items[] = array(
+					'key'        => 'pro.errors',
+					'icon'       => 'alert-triangle',
+					'label'      => __( 'Errors', 'opti-behavior' ),
+					'clickable'  => true,
+					'url'        => admin_url( 'admin.php?page=opti-behavior-errors&tab=errors' ),
+					'link_class' => 'opti-stats-bar__item--errors-link',
+					'aria_label' => __( 'View the errors of this page', 'opti-behavior' ),
+				);
 			}
 			if ( ! empty( $settings['show_friction'] ) ) {
-				$stat_items[] = array( 'key' => 'pro.friction', 'icon' => 'zap', 'label' => __( 'Friction', 'opti-behavior' ) );
+				// Clickable like Errors: Friction Events tab scoped to this page.
+				$stat_items[] = array(
+					'key'        => 'pro.friction',
+					'icon'       => 'zap',
+					'label'      => __( 'Friction', 'opti-behavior' ),
+					'clickable'  => true,
+					'url'        => admin_url( 'admin.php?page=opti-behavior-errors&tab=friction' ),
+					'link_class' => 'opti-stats-bar__item--friction-link',
+					'aria_label' => __( 'View the friction events of this page', 'opti-behavior' ),
+				);
 			}
 			if ( ! empty( $settings['show_forms'] ) ) {
 				$stat_items[] = array( 'key' => 'pro.forms', 'icon' => 'file-text', 'label' => __( 'Forms', 'opti-behavior' ) );

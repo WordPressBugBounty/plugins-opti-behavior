@@ -139,6 +139,13 @@ class Opti_Behavior_Cleanup_Task_Registry {
 			$retention_details[] = __( 'Heatmap files of deleted sessions are moved to the archive — restorable until the archived heatmap data purge removes them.', 'opti-behavior' );
 		}
 
+		/** This filter is documented in includes/class-opti-behavior-smart-cleanup-service.php */
+		$errors_days = absint( apply_filters( 'opti_behavior_errors_retention_days', 30 ) );
+		if ( $errors_days > 0 ) {
+			/* translators: %d: days script errors and page speed measurements are kept */
+			$retention_details[] = sprintf( __( 'Script errors and page speed measurements older than %d days.', 'opti-behavior' ), $errors_days );
+		}
+
 		$retention_details[] = __( 'Heatmap page entries left without any data, and old debug log files.', 'opti-behavior' );
 
 		$retention_details[] = $agg_months > 0

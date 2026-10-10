@@ -71,7 +71,7 @@ class Opti_Behavior_Smart_Insights_Page {
 		$exclude_spam_label   = $exclude_spam ? __( 'Excluding Spam', 'opti-behavior' ) : __( 'Including Spam', 'opti-behavior' );
 		$exclude_spam_title   = $exclude_spam ? __( 'Spam traffic is excluded from Smart Insights', 'opti-behavior' ) : __( 'Spam traffic is included in Smart Insights', 'opti-behavior' );
 		$has_pro              = $this->viewer_has_pro_access();
-		$upgrade_url          = $this->get_pro_download_url();
+		$upgrade_url          = $this->get_pro_trial_url( 'smart-insights-weekly' );
 		$tooltips             = function_exists( 'opti_behavior_get_smart_insights_tooltips' ) ? opti_behavior_get_smart_insights_tooltips() : array();
 
 		$view_args = array(
@@ -223,16 +223,20 @@ class Opti_Behavior_Smart_Insights_Page {
 				<div class="dashboard-content ob-smart-insights-center-content">
 					<?php
 					self::render_tabs( 'insights', array( 'exclude_spam' => $exclude_spam ? '1' : '0' ) + $view_args );
-					// "How it works" strip: the collector modules feed this screen.
-					if ( class_exists( 'Opti_Behavior_Smart_Insights_Sensors' ) ) {
-						Opti_Behavior_Smart_Insights_Sensors::render(
-							array(
-								'period'       => $period,
-								'start_date'   => $start_date,
-								'end_date'     => $end_date,
-								'exclude_spam' => $exclude_spam,
-							)
-						);
+					// The "How it works" strip moved to the Page X-Ray list (2026-09-30,
+					// user decision): see render_pages_tab().
+					try {
+						/**
+						 * Print a block under the Insights tab bar (Opti-Behavior Pro:
+						 * open problems it found before its licence ended, OPT-371).
+						 *
+						 * @param array $view_args `period`, `start_date`, `end_date`, `exclude_spam`.
+						 * @param bool  $has_pro   Viewer has Pro Smart Insights access.
+						 */
+						do_action( 'opti_behavior_smart_insights_after_tabs', $view_args, $has_pro );
+					} catch ( Throwable $e ) {
+						// A faulty extension never costs the Insights view.
+						unset( $e );
 					}
 					?>
 					<div class="dashboard-widget ob-smart-insights-weekly-summary <?php echo $has_pro ? 'is-pro-ready' : 'is-free-placeholder'; ?>">
@@ -394,7 +398,7 @@ class Opti_Behavior_Smart_Insights_Page {
 		if ( ! $pro_active ) {
 			$text   = __( 'Page X-Ray is part of Opti-Behavior Pro.', 'opti-behavior' );
 			$button = __( 'Get Opti-Behavior Pro', 'opti-behavior' );
-			$url    = $this->get_pro_download_url();
+			$url    = $this->get_pro_trial_url( 'page-xray' );
 			$target = true;
 		} elseif ( ! $this->viewer_has_pro_access() ) {
 			$text   = __( 'Activate your Opti-Behavior Pro licence to open Page X-Ray.', 'opti-behavior' );
@@ -469,7 +473,7 @@ class Opti_Behavior_Smart_Insights_Page {
 						<?php endif; ?>
 					</a>
 					<?php if ( ! $pro_active ) : ?>
-						<p class="ob-si-xray-locked__note"><?php esc_html_e( 'Try Pro FREE for 6 Months!', 'opti-behavior' ); ?></p>
+						<p class="ob-si-xray-locked__note"><?php esc_html_e( 'Try Pro free for 6 months', 'opti-behavior' ); ?></p>
 					<?php endif; ?>
 				</div>
 			</div>
@@ -587,6 +591,16 @@ class Opti_Behavior_Smart_Insights_Page {
 			<div class="dashboard-content ob-smart-insights-center-content">
 				<?php
 				self::render_tabs( self::XRAY_TAB, array( 'period' => $period, 'exclude_spam' => $view_args['exclude_spam'] ? '1' : '0' ) );
+				// "How it works" strip on the page list too (not inside a dossier),
+				// same component, same fold state as the Insights view (2026-09-30).
+				if ( 0 === $page_id && class_exists( 'Opti_Behavior_Smart_Insights_Sensors' ) ) {
+					Opti_Behavior_Smart_Insights_Sensors::render(
+						array(
+							'period'       => $period,
+							'exclude_spam' => ! empty( $view_args['exclude_spam'] ),
+						)
+					);
+				}
 				if ( $open ) {
 					try {
 						/**
@@ -616,24 +630,14 @@ class Opti_Behavior_Smart_Insights_Page {
 	}
 
 	/**
-	 * Build a Pro download URL for locked Smart Insights CTAs.
+	 * Pro trial page URL for locked Smart Insights CTAs (OPT-764: the single
+	 * trial page, `Opti_Behavior_Trial_Invite::link_url()`).
 	 *
+	 * @param string $placement utm_medium of the link.
 	 * @return string
 	 */
-	private function get_pro_download_url() {
-		$current_user = wp_get_current_user();
-		$cache_key    = 'ob_dl_access_' . md5( $current_user->user_login . site_url() );
-		$access_code  = get_transient( $cache_key );
-
-		return add_query_arg(
-			array(
-				'site_url'    => rawurlencode( site_url() ),
-				'username'    => rawurlencode( $current_user->user_login ),
-				'email'       => rawurlencode( $current_user->user_email ),
-				'access_code' => rawurlencode( $access_code ? $access_code : '' ),
-			),
-			'https://optiuser.com/opti-behavior/ob-download-pro/'
-		);
+	private function get_pro_trial_url( $placement ) {
+		return class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::link_url( $placement ) : '';
 	}
 
 	/**

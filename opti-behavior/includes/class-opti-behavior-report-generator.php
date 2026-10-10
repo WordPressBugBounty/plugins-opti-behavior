@@ -648,18 +648,20 @@ class Opti_Behavior_Report_Generator {
 			);
 		}
 
-		// Get active funnels with tracking stats for the period.
+		// Get active funnels with tracking stats for the period. Visits, never
+		// tracking rows (OPT-588): same entries / completions as the Funnels
+		// screen and Smart Insights (a visit with several rows counts once).
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
 		$funnels = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT
 					f.id,
 					f.name,
-					COUNT(ft.id) as total_entries,
-					SUM(CASE WHEN ft.completed = 1 THEN 1 ELSE 0 END) as completions,
+					COUNT(DISTINCT ft.session_id) as total_entries,
+					COUNT(DISTINCT CASE WHEN ft.completed = 1 THEN ft.session_id END) as completions,
 					ROUND(
-						SUM(CASE WHEN ft.completed = 1 THEN 1 ELSE 0 END) * 100.0
-						/ NULLIF(COUNT(ft.id), 0), 1
+						COUNT(DISTINCT CASE WHEN ft.completed = 1 THEN ft.session_id END) * 100.0
+						/ NULLIF(COUNT(DISTINCT ft.session_id), 0), 1
 					) as conversion_rate
 				FROM {$table_funnels} f
 				LEFT JOIN {$table_tracking} ft

@@ -53,7 +53,9 @@
 		var nodes = root.querySelectorAll('.ob-hiw-node');
 		var sparkAnims = [];
 		root.querySelectorAll('.ob-hiw-wire[data-spark]').forEach(function (wire, i) {
-			if (wire.classList.contains('is-off')) {
+			// Sparks only where data arrives: a locked wire is still, a "listening"
+			// wire (module on, no data yet) flows in CSS (how-it-works.css).
+			if (wire.classList.contains('is-off') || wire.classList.contains('is-listening')) {
 				return;
 			}
 			var spark = root.querySelector('.ob-hiw-spark[data-for="' + wire.id + '"]');
@@ -123,14 +125,18 @@
 			if (loop) {
 				loop.pause();
 			}
+			// "Listening" wires keep their CSS dash flow: no draw-in on them.
+			var drawn = Array.prototype.filter.call(root.querySelectorAll('.ob-hiw-wire'), function (w) {
+				return !w.classList.contains('is-listening');
+			});
 			anime({
-				targets: root.querySelectorAll('.ob-hiw-wire'),
+				targets: drawn,
 				strokeDashoffset: [anime.setDashoffset, 0],
 				easing: 'easeInOutSine',
 				duration: 1100,
 				delay: anime.stagger(90),
 				complete: function () {
-					root.querySelectorAll('.ob-hiw-wire').forEach(function (w) {
+					drawn.forEach(function (w) {
 						w.style.strokeDashoffset = '';
 						w.style.strokeDasharray = '';
 					});
@@ -145,6 +151,8 @@
 		var paused = false;
 		function setPaused(state) {
 			paused = state;
+			// Stops the CSS dash flow of the "listening" wires too.
+			root.classList.toggle('is-paused', paused);
 			[intro, loop].concat(sparkAnims).forEach(function (a) {
 				if (!a || (a === intro && a.completed)) {
 					return;

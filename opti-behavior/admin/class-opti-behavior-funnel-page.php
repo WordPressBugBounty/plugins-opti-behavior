@@ -76,15 +76,10 @@ class Opti_Behavior_Funnel_Page {
 	 */
 	public function __construct( $heatmap ) {
 		$this->heatmap = $heatmap;
-		$this->init_database();
+		// Funnel tables are created / updated by the database setup
+		// (Opti_Behavior_Funnel_Database::maybe_create_tables()), never here:
+		// this class is built on every front-end and AJAX request.
 		$this->init_hooks();
-	}
-
-	/**
-	 * Initialize database tables
-	 */
-	private function init_database() {
-		Opti_Behavior_Funnel_Database::create_tables();
 	}
 
 	/**
@@ -213,12 +208,15 @@ class Opti_Behavior_Funnel_Page {
 			OPTI_BEHAVIOR_HEATMAP_VERSION
 		);
 
-		// Enqueue funnel CSS.
+		// Enqueue funnel CSS (cache-bust on file change, like dashboard_styles.css).
+		$funnels_css_path = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/funnels.css';
 		wp_enqueue_style(
 			'opti-behavior-funnels',
 			plugins_url( 'assets/css/funnels.css', dirname( __FILE__ ) ),
 			array( 'opti-behavior-dashboard', 'opti-behavior-dashboard-styles', 'opti-behavior-heatmaps', 'opti-behavior-filter-ui' ),
-			OPTI_BEHAVIOR_HEATMAP_VERSION
+			file_exists( $funnels_css_path )
+				? OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . filemtime( $funnels_css_path )
+				: OPTI_BEHAVIOR_HEATMAP_VERSION
 		);
 
 		// Shared filter-UI module (window.OptiBehaviorFilterUI) — dependency-free,
@@ -260,6 +258,7 @@ class Opti_Behavior_Funnel_Page {
 			array(
 				'ajaxUrl' => admin_url( 'admin-ajax.php' ),
 				'nonce'   => wp_create_nonce( 'opti_behavior_filter_profiles' ),
+				'i18n'    => ( class_exists( 'Opti_Behavior_Filter_Profiles' ) && method_exists( 'Opti_Behavior_Filter_Profiles', 'client_i18n' ) ) ? Opti_Behavior_Filter_Profiles::client_i18n() : array(),
 			)
 		);
 
@@ -381,6 +380,7 @@ class Opti_Behavior_Funnel_Page {
 					'customRangeStartBeforeEnd'=> __( 'Start date must be before end date', 'opti-behavior' ),
 					'funnelNameRequired'       => __( 'Please enter a funnel name', 'opti-behavior' ),
 					'stepNamesRequired'        => __( 'Please fill in all step names', 'opti-behavior' ),
+					'stepUrlRequired'          => __( 'Please enter a URL for each step (or choose "Any page").', 'opti-behavior' ),
 					'errorSavingFunnel'        => __( 'Error saving funnel', 'opti-behavior' ),
 					'errorSavingFunnelRetry'   => __( 'Error saving funnel. Please try again.', 'opti-behavior' ),
 					'errorLoadingFunnel'       => __( 'Error loading funnel', 'opti-behavior' ),
@@ -955,7 +955,7 @@ class Opti_Behavior_Funnel_Page {
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$funnel = $wpdb->get_row(
 			$wpdb->prepare(
-				"SELECT * FROM {$table_funnels} WHERE id = %d AND status = 'active'",
+				"SELECT * FROM {$table_funnels} WHERE id = %d AND status IN ('active', 'suspended')",
 				$funnel_id
 			)
 		);
@@ -1051,7 +1051,8 @@ class Opti_Behavior_Funnel_Page {
 
 		// Calculate step-by-step progression.
 		$funnel_steps = array();
-		$initial_entries = $total_entries; // Keep initial count for all comparisons
+		$initial_entries  = (int) $total_entries; // Keep initial count for all comparisons
+		$previous_reached = $initial_entries;
 
 		foreach ( $steps_definitions as $index => $step_def ) {
 			$step_number = (int) $index + 1;
@@ -1080,20 +1081,13 @@ class Opti_Behavior_Funnel_Page {
 				$completed = 0;
 			}
 
-			// Always calculate against initial entries (Step 1), not previous step
-			$abandoned = $initial_entries - $completed;
-			$completion_rate = $initial_entries > 0 ? round( ( $completed / $initial_entries ) * 100, 1 ) : 0;
-			$abandonment_rate = round( 100 - $completion_rate, 1 );
-
-			$funnel_steps[] = array(
-				'step_number'      => $step_number,
-				'step_name'        => $step_def['name'],
-				'completed'        => $completed,
-				'abandoned'        => $abandoned,
-				'completion_rate'  => $completion_rate,
-				'abandonment_rate' => $abandonment_rate,
-				'total_from_prev'  => $initial_entries, // Always show total from initial
-			);
+			// Completed = share of the funnel entries (bar height). Abandoned =
+			// ONE rule everywhere (OPT-588): visits that reached the previous step
+			// (step 1: entered the funnel) and not this one — the drop-off band,
+			// the Smart Insights "lost" count and the funnel_scope=abandoned replays.
+			$step_row         = self::build_step_row( $step_number, $step_def['name'], $completed, $previous_reached, $initial_entries );
+			$funnel_steps[]   = $step_row;
+			$previous_reached = (int) $completed;
 		}
 
 		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
@@ -1139,6 +1133,39 @@ class Opti_Behavior_Funnel_Page {
 			'funnel_steps'     => $funnel_steps,
 			'entry_pages'      => $entry_pages,
 			'exit_pages'       => $exit_pages,
+		);
+	}
+
+	/**
+	 * One step row of the funnel detail (pure, OPT-588).
+	 *
+	 * completed / completion_rate = visits that reached this step, share of the
+	 * funnel entries (bar height). abandoned / abandonment_rate = visits that
+	 * reached the previous step (step 1: entered the funnel) and not this one,
+	 * share of that previous step: the same count as the Smart Insights
+	 * transition "lost" and the funnel_scope=abandoned recordings.
+	 *
+	 * @param int    $step_number      1-based step number.
+	 * @param string $step_name        Step label.
+	 * @param int    $completed        Visits that reached this step or beyond.
+	 * @param int    $previous_reached Visits that reached the previous step (entries for step 1).
+	 * @param int    $entries          Funnel entries (distinct visits).
+	 * @return array
+	 */
+	public static function build_step_row( $step_number, $step_name, $completed, $previous_reached, $entries ) {
+		$entries          = max( 0, (int) $entries );
+		$previous_reached = max( 0, (int) $previous_reached );
+		$completed        = max( 0, min( (int) $completed, $previous_reached ) );
+		$abandoned        = $previous_reached - $completed;
+
+		return array(
+			'step_number'      => (int) $step_number,
+			'step_name'        => $step_name,
+			'completed'        => $completed,
+			'abandoned'        => $abandoned,
+			'completion_rate'  => $entries > 0 ? round( ( $completed / $entries ) * 100, 1 ) : 0,
+			'abandonment_rate' => $previous_reached > 0 ? round( ( $abandoned / $previous_reached ) * 100, 1 ) : 0,
+			'total_from_prev'  => $previous_reached,
 		);
 	}
 
@@ -1783,13 +1810,28 @@ class Opti_Behavior_Funnel_Page {
 			wp_send_json_error( array( 'message' => __( 'Invalid steps format', 'opti-behavior' ) ) );
 		}
 
+		// An update keeps the funnel's own status (editing a suspended funnel must not
+		// reactivate it, QA-B-FUNNEL-062) and only targets a live funnel: a deleted or
+		// missing id is refused instead of resurrecting the row (QA-B-FUNNEL-063).
+		$status = 'active';
+		if ( $funnel_id > 0 ) {
+			global $wpdb;
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Custom table, id bound via prepare(); real-time read.
+			$current_status = $wpdb->get_var( $wpdb->prepare( "SELECT status FROM {$wpdb->prefix}opti_behavior_funnels WHERE id = %d", $funnel_id ) );
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			if ( null === $current_status || 'deleted' === $current_status ) {
+				wp_send_json_error( array( 'message' => __( 'Funnel not found', 'opti-behavior' ) ) );
+			}
+			$status = ( 'suspended' === $current_status ) ? 'suspended' : 'active';
+		}
+
 		// Single shared write path (insert + update + cache purge).
 		$saved_id = $this->persist_funnel(
 			array(
 				'name'        => $name,
 				'description' => $description,
 				'steps'       => $steps_array,
-				'status'      => 'active',
+				'status'      => $status,
 			),
 			$funnel_id
 		);
@@ -1909,6 +1951,14 @@ class Opti_Behavior_Funnel_Page {
 			$clean[ $index ]['name']        = sanitize_text_field( $step['name'] );
 			$clean[ $index ]['url_pattern'] = substr( preg_replace( '/[\x00-\x1F\x7F]/', '', $step['url_pattern'] ), 0, 500 );
 			$clean[ $index ]['match_type']  = sanitize_key( $step['match_type'] );
+
+			// A URL-based match needs a URL: '*' / '' (a blank field) would match no
+			// page at all for contains / exact / starts_with / ends_with / regex
+			// (QA-B-FUNNEL-064). Only any / pageview accept a wildcard.
+			$pattern = trim( $clean[ $index ]['url_pattern'] );
+			if ( ! in_array( $clean[ $index ]['match_type'], array( 'any', 'pageview' ), true ) && ( '' === $pattern || '*' === $pattern ) ) {
+				return false;
+			}
 		}
 
 		return $clean;
