@@ -1005,6 +1005,24 @@ class Opti_Behavior_Smart_Insights_Correlator {
 	}
 
 	/**
+	 * Smallest share of the affected visits one segment must hold before
+	 * "Concentrated in one visitor segment" counts as a likely cause (OPT-1627).
+	 */
+	const SEGMENT_SKEW_MIN_SHARE = 0.6;
+
+	/**
+	 * Segment concentration floor (filter
+	 * `opti_behavior_smart_insights_segment_skew_min_share`, 0-1).
+	 *
+	 * @return float
+	 */
+	public static function segment_skew_min_share() {
+		$share = function_exists( 'apply_filters' ) ? apply_filters( 'opti_behavior_smart_insights_segment_skew_min_share', self::SEGMENT_SKEW_MIN_SHARE ) : self::SEGMENT_SKEW_MIN_SHARE;
+
+		return is_numeric( $share ) ? max( 0.0, min( 1.0, (float) $share ) ) : self::SEGMENT_SKEW_MIN_SHARE;
+	}
+
+	/**
 	 * Rank available probe results into likely causes by measured share.
 	 *
 	 * @param array $probe_results Probe results keyed by probe id.
@@ -1020,6 +1038,12 @@ class Opti_Behavior_Smart_Insights_Correlator {
 
 			$share = isset( $result['share'] ) && null !== $result['share'] ? (float) $result['share'] : null;
 			if ( null === $share || $share <= 0 ) {
+				continue;
+			}
+			// OPT-1627: "Concentrated in one visitor segment" only when that
+			// segment really holds most of the affected visits (27 of 126 = 21 %
+			// was printed as the likely cause).
+			if ( 'segment_skew' === $probe_id && $share < self::segment_skew_min_share() ) {
 				continue;
 			}
 

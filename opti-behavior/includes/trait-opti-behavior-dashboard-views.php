@@ -78,8 +78,9 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
             ?>
             <div class="dashboard-header">
                 <div class="dashboard-title-section">
-                    <div class="dashboard-icon"><i data-lucide="bar-chart-3"></i></div>
+                    <?php Opti_Behavior_Admin_Brand::render_mark(); ?>
                     <div class="dashboard-title-text">
+                        <?php Opti_Behavior_Admin_Brand::render_name(); ?>
                         <h1 class="dashboard-title">
                             <?php esc_html_e( 'Traffic Overview', 'opti-behavior' ); ?>
                             <?php opti_behavior_tooltip_e( $tooltips['dashboard_overview']['title'], $tooltips['dashboard_overview']['content'], $tooltips['dashboard_overview']['simple'], '', array( 'position' => 'bottom' ) ); ?>
@@ -138,6 +139,11 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
 							<?php endif; ?>
 						</div>
 					</div>
+					<?php
+					if ( class_exists( 'Opti_Behavior_Reports_Screen' ) ) {
+						Opti_Behavior_Reports_Screen::render_header_link( 'traffic', $period, $start_val, $end_val, $exclude_spam_active );
+					}
+					?>
                     <button class="<?php echo esc_attr( $exclude_spam_classes ); ?>" id="exclude-spam-toggle" aria-pressed="<?php echo esc_attr( $exclude_spam_active ? 'true' : 'false' ); ?>" aria-label="<?php echo esc_attr( $exclude_spam_label ); ?>" title="<?php echo esc_attr( $exclude_spam_title ); ?>">
                         <span class="filter-icon"><i data-lucide="<?php echo esc_attr( $exclude_spam_icon ); ?>"></i></span>
                         <span class="filter-label"><?php echo esc_html( $exclude_spam_label ); ?></span>
@@ -364,6 +370,11 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
             $tooltips = opti_behavior_get_dashboard_tooltips();
             ?>
             <div class="dashboard-content">
+                <?php
+                if ( class_exists( 'Opti_Behavior_Setup_Guide' ) ) {
+                    Opti_Behavior_Setup_Guide::render_first_day_box( 'traffic' );
+                }
+                ?>
                 <div class="dashboard-sections">
                 <?php $this->render_dashboard_section_open( 1, 'key-metrics', __( 'Traffic Overview', 'opti-behavior' ), true ); ?>
                     <?php $this->render_dashboard_stats( $dashboard_data['stats'], $dashboard_data['changes'] ); ?>
@@ -411,7 +422,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                     <span class="visitor-flag-country"><span class="visitor-flag"><?php echo $visitor['flag']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Flag emoji is safe, generated from validated ISO country code ?></span> <span class="visitor-location"><?php echo esc_html($visitor['country']); ?></span></span>
                                     <span class="visitor-pageblock"><span class="visitor-title"><?php echo esc_html($visitor['page_title'] ?? ''); ?></span><a class="visitor-url" href="<?php echo esc_url($visitor['current_url'] ?? ''); ?>" target="_blank" rel="noopener"><?php echo esc_html($visitor['current_url'] ?? ''); ?></a></span>
                                     <span class="visitor-ip-col"><?php
-									$ip_raw = isset( $visitor['ip'] ) ? trim( (string) $visitor['ip'] ) : '';
+									$ip_raw = opti_behavior_display_ip( isset( $visitor['ip'] ) ? (string) $visitor['ip'] : '' );
 									if ( '' === $ip_raw ) {
 										echo '<span class="visitor-ip-pill">-</span>';
 									} elseif ( 'Anonymous' === $ip_raw ) {
@@ -525,6 +536,17 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                         <div class="optibehavior-empty-sub"><?php esc_html_e( 'Once visitors view pages, you will see them here.', 'opti-behavior' ); ?></div>
                                     </div>
                                 <?php else : ?>
+                                    <?php
+                                    // Rows with the same title show their short path under it (OPT-1635).
+                                    $ob_top_title_counts = array_count_values(
+                                        array_map(
+                                            function ( $row ) {
+                                                return trim( (string) ( is_array( $row ) ? ( $row['title'] ?? '' ) : '' ) );
+                                            },
+                                            (array) $dashboard_data['charts']['top_pages']
+                                        )
+                                    );
+                                    ?>
                                     <?php foreach ( $dashboard_data['charts']['top_pages'] as $page_index => $page ) : ?>
                                         <?php
                                         $rank               = $page_index + 1;
@@ -607,13 +629,27 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                                     <span class="page-hot-badge"><?php echo esc_html__( '🔥 Hot', 'opti-behavior' ); ?></span>
                                                 <?php endif; ?>
                                             </div>
+                                            <?php
+                                            $url_text = $url;
+                                            if ( ( $ob_top_title_counts[ trim( $title ) ] ?? 0 ) > 1 ) {
+                                                $short_path  = (string) wp_parse_url( $url, PHP_URL_PATH );
+                                                $short_query = (string) wp_parse_url( $url, PHP_URL_QUERY );
+                                                $short_path  = ( '' === $short_path ? '/' : $short_path ) . ( '' !== $short_query ? '?' . $short_query : '' );
+                                                $url_text    = $short_path;
+                                            }
+                                            ?>
                                             <a class="page-url" href="<?php echo esc_url( $url ); ?>" target="_blank" rel="noopener noreferrer" title="<?php echo esc_attr( $url ); ?>">
-                                                <?php echo esc_html( $url ); ?>
+                                                <?php echo esc_html( $url_text ); ?>
                                             </a>
                                             <div class="page-metrics">
-                                                <div class="metric metric-views" title="<?php echo esc_attr__( 'Heatmap sessions', 'opti-behavior' ); ?>">
-                                                    <i class="metric-icon" data-lucide="flame"></i>
+                                                <?php // Visits = distinct visits of the page; page views = the KPI "Page Views" counted for this page (OPT-1604). The trend belongs to page views. ?>
+                                                <div class="metric metric-views" title="<?php echo esc_attr__( 'Visits', 'opti-behavior' ); ?>" aria-label="<?php echo esc_attr( __( 'Visits', 'opti-behavior' ) . ': ' . number_format_i18n( $sessions ) ); ?>">
+                                                    <i class="metric-icon" data-lucide="users"></i>
                                                     <span class="metric-value"><?php echo esc_html( number_format_i18n( $sessions ) ); ?></span>
+                                                </div>
+                                                <div class="metric metric-pageviews" title="<?php echo esc_attr__( 'Page views', 'opti-behavior' ); ?>" aria-label="<?php echo esc_attr( __( 'Page views', 'opti-behavior' ) . ': ' . number_format_i18n( $views ) ); ?>">
+                                                    <i class="metric-icon" data-lucide="eye"></i>
+                                                    <span class="metric-value"><?php echo esc_html( number_format_i18n( $views ) ); ?></span>
                                                     <?php $render_change( $views_trend, $views_trend_class, $views_arrow, $views_change_display ); ?>
                                                 </div>
                                                 <div class="metric metric-clicks" title="<?php echo esc_attr__( 'Clicks', 'opti-behavior' ); ?>">

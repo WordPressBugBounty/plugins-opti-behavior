@@ -1172,6 +1172,17 @@ class Opti_Behavior_Smart_Insights_Repository {
 	 * @return array
 	 */
 	public function collapse_story_children( $insights ) {
+		return self::drop_story_children( $insights );
+	}
+
+	/**
+	 * Pure body of collapse_story_children() (OPT-1618: also used by the
+	 * static summarize_open_problems()).
+	 *
+	 * @param array $insights Insight rows.
+	 * @return array
+	 */
+	public static function drop_story_children( $insights ) {
 		if ( ! is_array( $insights ) || count( $insights ) < 2 ) {
 			return is_array( $insights ) ? array_values( $insights ) : array();
 		}
@@ -1429,6 +1440,84 @@ class Opti_Behavior_Smart_Insights_Repository {
 		$now      = $this->current_mysql_time();
 		$sql      = "UPDATE {$this->table} SET status = %s, updated_at = %s, resolved_at = %s WHERE " . implode( ' AND ', $where );
 		$result   = $wpdb->query( $wpdb->prepare( $sql, array_merge( array( self::STATUS_RULE_UPDATED, $now, $now ), $values ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- placeholders built above.
+
+		if ( false === $result ) {
+			return new WP_Error( 'opti_behavior_smart_insights_rule_updated_failed', __( 'Unable to close Smart Insights raised by an older rule.', 'opti-behavior' ) );
+		}
+
+		if ( $result > 0 ) {
+			self::flush_menu_severity();
+		}
+
+		return (int) $result;
+	}
+
+	/**
+	 * Close the open cards of suggested template funnels (OPT-1619): a funnel
+	 * the user has not confirmed is not a problem to fix. Status
+	 * `rule_updated` (closed, never counted as resolved); ignored cards stay.
+	 *
+	 * @param int[] $funnel_ids Suggested funnel ids.
+	 * @return int|WP_Error Rows closed.
+	 */
+	public function close_suggested_funnel_insights( $funnel_ids ) {
+		global $wpdb;
+
+		$funnel_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $funnel_ids ) ) ) );
+		if ( empty( $funnel_ids ) ) {
+			return 0;
+		}
+		if ( ! $this->table_exists() ) {
+			return $this->missing_table_error();
+		}
+
+		$ids      = array_map( 'strval', $funnel_ids );
+		$statuses = array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS );
+		$now      = $this->current_mysql_time();
+		$sql      = "UPDATE {$this->table} SET status = %s, updated_at = %s, resolved_at = %s WHERE entity_type = 'funnel' AND entity_id IN (" . implode( ',', array_fill( 0, count( $ids ), '%s' ) ) . ') AND status IN (' . implode( ',', array_fill( 0, count( $statuses ), '%s' ) ) . ')';
+		$result   = $wpdb->query( $wpdb->prepare( $sql, array_merge( array( self::STATUS_RULE_UPDATED, $now, $now ), $ids, $statuses ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- placeholders built above.
+
+		if ( false === $result ) {
+			return new WP_Error( 'opti_behavior_smart_insights_suggested_funnel_failed', __( 'Unable to close Smart Insights raised by an older rule.', 'opti-behavior' ) );
+		}
+
+		if ( $result > 0 ) {
+			self::flush_menu_severity();
+		}
+
+		return (int) $result;
+	}
+
+	/**
+	 * Close the open cards of OTHER periods after a rules upgrade (OPT-1722):
+	 * the upgrade regenerates one period only, so an open card of another
+	 * period kept the figures of the older rules (e.g. "802 visits lost" for
+	 * 412 entries). Status `rule_updated` (closed, never counted as resolved);
+	 * ignored / resolved cards and the cards the regeneration wrote or touched
+	 * (`updated_at` >= $before) stay. The next view of such a period
+	 * regenerates it with the current rules.
+	 *
+	 * @param string $date_from Regenerated range start.
+	 * @param string $date_to   Regenerated range end.
+	 * @param string $before    Start of the regeneration (Y-m-d H:i:s, site time).
+	 * @return int|WP_Error Rows closed.
+	 */
+	public function close_open_insights_outside_range( $date_from, $date_to, $before ) {
+		global $wpdb;
+
+		if ( ! $this->table_exists() ) {
+			return $this->missing_table_error();
+		}
+
+		$statuses = array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS );
+		$now      = $this->current_mysql_time();
+		$sql      = "UPDATE {$this->table} SET status = %s, updated_at = %s, resolved_at = %s WHERE status IN (" . implode( ',', array_fill( 0, count( $statuses ), '%s' ) ) . ') AND NOT ( date_from = %s AND date_to = %s ) AND updated_at < %s';
+		$values   = array_merge(
+			array( self::STATUS_RULE_UPDATED, $now, $now ),
+			$statuses,
+			array( $this->normalize_date( $date_from ), $this->normalize_date( $date_to ), $this->normalize_datetime( $before ) )
+		);
+		$result   = $wpdb->query( $wpdb->prepare( $sql, $values ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- placeholders built above.
 
 		if ( false === $result ) {
 			return new WP_Error( 'opti_behavior_smart_insights_rule_updated_failed', __( 'Unable to close Smart Insights raised by an older rule.', 'opti-behavior' ) );
@@ -1947,19 +2036,126 @@ class Opti_Behavior_Smart_Insights_Repository {
 	}
 
 	/**
+	 * THE count of open Smart Insights problems (OPT-1618), pure.
+	 *
+	 * Rows = the list's rows after collapse_open_insights_by_group() (group
+	 * collapse, family merge, action signals attached). `active` = rows whose
+	 * status is new / viewed / in progress, story children whose primary is
+	 * also open left out (drop_story_children(): one story = one problem) =
+	 * the "Active" figure of the Smart Insights screen (weekly brief);
+	 * `critical` / `warning` (High + Medium) / `low` split the same rows by
+	 * their stored priority label. Locked previews count: the screen shows
+	 * them. Menu, screen and site report all read this.
+	 *
+	 * @param array $rows Collapsed decoded rows.
+	 * @return array{active:int,critical:int,warning:int,low:int,level:string}
+	 */
+	public static function summarize_open_problems( $rows ) {
+		$out = array(
+			'active'   => 0,
+			'critical' => 0,
+			'warning'  => 0,
+			'low'      => 0,
+			'level'    => 'green',
+		);
+		$open = array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS );
+		$keep = array();
+		foreach ( is_array( $rows ) ? $rows : array() as $row ) {
+			if ( is_array( $row ) && in_array( isset( $row['status'] ) ? sanitize_key( $row['status'] ) : '', $open, true ) ) {
+				$keep[] = $row;
+			}
+		}
+		foreach ( self::drop_story_children( $keep ) as $row ) {
+			++$out['active'];
+			$scores = isset( $row['scores'] ) && is_array( $row['scores'] ) ? $row['scores'] : array();
+			$key    = ! empty( $scores['priority_label_key'] ) ? sanitize_key( $scores['priority_label_key'] ) : '';
+			if ( '' === $key && ! empty( $scores['priority_label'] ) && class_exists( 'Opti_Behavior_Smart_Insights_Scorer' ) && method_exists( 'Opti_Behavior_Smart_Insights_Scorer', 'normalize_label_key' ) ) {
+				$key = Opti_Behavior_Smart_Insights_Scorer::normalize_label_key( $scores['priority_label'] );
+			}
+			if ( 'critical' === $key ) {
+				++$out['critical'];
+			} elseif ( 'high' === $key || 'medium' === $key ) {
+				++$out['warning'];
+			} else {
+				++$out['low'];
+			}
+		}
+		if ( $out['critical'] > 0 ) {
+			$out['level'] = 'red';
+		} elseif ( $out['warning'] > 0 ) {
+			$out['level'] = 'yellow';
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Open problems of one period and spam scope, counted like the Smart
+	 * Insights screen (OPT-1618): every open row of the period (pages of 500,
+	 * same cap filter as the list), collapsed, then summarize_open_problems().
+	 *
+	 * @param string $date_from  Y-m-d.
+	 * @param string $date_to    Y-m-d.
+	 * @param string $spam_scope exclude_spam_1 / exclude_spam_0.
+	 * @return array{active:int,critical:int,warning:int,low:int,level:string}
+	 */
+	public function get_open_problem_summary( $date_from, $date_to, $spam_scope ) {
+		$rows = array();
+		if ( $this->table_exists() ) {
+			$max  = max( 500, absint( apply_filters( 'opti_behavior_smart_insights_list_scan_limit', 5000 ) ) );
+			$args = array(
+				'status__in' => array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS ),
+				'date_from'  => $date_from,
+				'date_to'    => $date_to,
+				'spam_scope' => $spam_scope,
+				'orderby'    => 'last_seen_at',
+				'order'      => 'DESC',
+			);
+			$seen = array();
+			for ( $offset = 0; $offset < $max; $offset += 500 ) {
+				$args['limit']  = min( 500, $max - $offset );
+				$args['offset'] = $offset;
+				$batch          = $this->get_insights( $args );
+				foreach ( $batch as $row ) {
+					$id = isset( $row['id'] ) ? (int) $row['id'] : 0;
+					if ( $id && isset( $seen[ $id ] ) ) {
+						continue;
+					}
+					$seen[ $id ] = true;
+					$rows[]      = $row;
+				}
+				if ( count( $batch ) < $args['limit'] ) {
+					break;
+				}
+			}
+		}
+
+		return self::summarize_open_problems( $this->collapse_open_insights_by_group( $rows ) );
+	}
+
+	/**
 	 * Colour of the Smart Insights lightbulb in the admin menu.
 	 *
 	 * red = at least one open Critical insight, yellow = at least one open High
-	 * or Medium, green = nothing open (or Low only). Open = new / viewed /
-	 * in progress, top-level, not suppressed, default (spam excluded) scope:
-	 * the insight list's "Active" definition. The priority key is the final
-	 * label the generator stores in scores_json (`priority_label_key`).
+	 * or Medium, green = nothing open (or Low only). The priority key is the
+	 * final label the generator stores in scores_json (`priority_label_key`).
 	 *
-	 * @return array{level:string,critical:int,warning:int,computed_at:int}
+	 * OPT-1618: with a range (`from`, `to`, `scope`) the counts are
+	 * get_open_problem_summary() of that period = the screen's "Active" of the
+	 * same period and scope; `active` = every open problem. Without a range =
+	 * the older whole-table count (top-level rows, spam excluded).
+	 *
+	 * @param array $range Optional { from, to, scope }.
+	 * @return array{level:string,critical:int,warning:int,active:int,computed_at:int}
 	 */
-	public function get_menu_severity() {
+	public function get_menu_severity( $range = array() ) {
+		$range  = is_array( $range ) ? $range : array();
+		$keyed  = ! empty( $range['from'] ) && ! empty( $range['to'] );
+		$scope  = $keyed && ! empty( $range['scope'] ) ? sanitize_key( (string) $range['scope'] ) : 'exclude_spam_1';
+		$for    = $keyed ? $range['from'] . '|' . $range['to'] . '|' . $scope : '';
 		$stored = get_option( self::MENU_SEVERITY_OPTION, null );
-		if ( is_array( $stored ) && isset( $stored['level'], $stored['computed_at'] )
+		if ( is_array( $stored ) && isset( $stored['level'], $stored['computed_at'], $stored['active'] )
+			&& ( $stored['for'] ?? '' ) === $for
 			&& ( time() - (int) $stored['computed_at'] ) < self::MENU_SEVERITY_TTL ) {
 			return $stored;
 		}
@@ -1968,10 +2164,18 @@ class Opti_Behavior_Smart_Insights_Repository {
 			'level'       => 'green',
 			'critical'    => 0,
 			'warning'     => 0,
+			'active'      => 0,
+			'for'         => $for,
 			'computed_at' => time(),
 		);
 
-		if ( $this->table_exists() ) {
+		if ( $keyed ) {
+			$summary            = $this->get_open_problem_summary( $range['from'], $range['to'], $scope );
+			$result['level']    = $summary['level'];
+			$result['critical'] = $summary['critical'];
+			$result['warning']  = $summary['warning'];
+			$result['active']   = $summary['active'];
+		} elseif ( $this->table_exists() ) {
 			global $wpdb;
 
 			$statuses = array( self::STATUS_NEW, self::STATUS_VIEWED, self::STATUS_IN_PROGRESS );
@@ -1993,6 +2197,7 @@ class Opti_Behavior_Smart_Insights_Repository {
 
 			$result['critical'] = isset( $row['critical'] ) ? (int) $row['critical'] : 0;
 			$result['warning']  = isset( $row['warning'] ) ? (int) $row['warning'] : 0;
+			$result['active']   = $result['critical'] + $result['warning'];
 			if ( $result['critical'] > 0 ) {
 				$result['level'] = 'red';
 			} elseif ( $result['warning'] > 0 ) {

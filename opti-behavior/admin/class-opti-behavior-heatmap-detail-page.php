@@ -452,6 +452,11 @@ class Opti_Behavior_Heatmap_Detail_Page {
 
 		$this->maybe_handle_reset_heatmap_data();
 
+		// Review reminder: an administrator opening a heatmap with clicks has seen the plugin work.
+		if ( class_exists( 'Opti_Behavior_Review_Banner' ) ) {
+			Opti_Behavior_Review_Banner::mark_value_seen_for_heatmap( $this->page_ids );
+		}
+
 		// Get current view parameters.
 		$current_device = isset( $_GET['device'] ) ? sanitize_text_field( wp_unslash( $_GET['device'] ) ) : 'desktop';
 		$current_type   = isset( $_GET['type'] ) ? sanitize_text_field( wp_unslash( $_GET['type'] ) ) : 'click';
@@ -889,7 +894,9 @@ class Opti_Behavior_Heatmap_Detail_Page {
 				<a href="<?php echo esc_url( $back_url ); ?>" class="opti-heatmap-hero-back" title="<?php esc_attr_e( 'Back to Heatmaps', 'opti-behavior' ); ?>" aria-label="<?php esc_attr_e( 'Back to Heatmaps', 'opti-behavior' ); ?>">
 					<i data-lucide="arrow-left"></i>
 				</a>
+				<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 				<div class="opti-heatmap-title">
+					<?php Opti_Behavior_Admin_Brand::render_name(); ?>
 					<h1>
 						<?php echo esc_html( $this->page_data['title'] ); ?>
 						<span class="recordings-count" data-count="0">
@@ -1182,6 +1189,7 @@ class Opti_Behavior_Heatmap_Detail_Page {
 							<option value=""><?php esc_html_e( 'All Channels', 'opti-behavior' ); ?></option>
 							<option value="Direct"><?php esc_html_e( 'Direct', 'opti-behavior' ); ?></option>
 							<option value="Organic Search"><?php esc_html_e( 'Organic Search', 'opti-behavior' ); ?></option>
+							<option value="AI Assistants"><?php esc_html_e( 'AI Assistants', 'opti-behavior' ); ?></option>
 							<option value="Paid Ads"><?php esc_html_e( 'Paid Ads', 'opti-behavior' ); ?></option>
 							<option value="Social Media"><?php esc_html_e( 'Social Media', 'opti-behavior' ); ?></option>
 							<option value="Email"><?php esc_html_e( 'Email', 'opti-behavior' ); ?></option>
@@ -1590,12 +1598,12 @@ class Opti_Behavior_Heatmap_Detail_Page {
 				<div class="stats-header">
 					<div class="stats-title-group">
 						<div class="stats-title">
-							<i data-lucide="sparkles" class="ai-icon"></i>
-							<h2><?php esc_html_e( 'AI Insights', 'opti-behavior' ); ?></h2>
+							<i data-lucide="mouse-pointer-click" class="ai-icon"></i>
+							<h2><?php esc_html_e( 'Top Clicked Elements', 'opti-behavior' ); ?></h2>
 							<span class="stats-badge"><?php esc_html_e( 'Beta', 'opti-behavior' ); ?></span>
 							<?php if ( ! empty( $heatmap_tooltips['ai_insights'] ) ) { opti_behavior_tooltip_e( $heatmap_tooltips['ai_insights']['title'], $heatmap_tooltips['ai_insights']['content'], $heatmap_tooltips['ai_insights']['simple'], '', array( 'position' => 'left' ) ); } ?>
 						</div>
-						<p class="stats-subtitle"><?php esc_html_e( 'Top Clicked Elements', 'opti-behavior' ); ?></p>
+						<p class="stats-subtitle"><?php esc_html_e( 'Ranked by number of clicks', 'opti-behavior' ); ?></p>
 					</div>
 					<div class="view-toggle">
 						<button type="button" class="view-btn active" data-view="simple">

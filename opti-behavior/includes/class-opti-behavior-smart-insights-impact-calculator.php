@@ -95,6 +95,9 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 		'high_exit_rate_page'             => 'exit',
 		'low_scroll_depth_important_page' => 'scroll',
 		'high_traffic_low_engagement'     => 'engagement',
+		// OPT-1627: a source card compares bounce only; "8 conversions lost"
+		// was priced on a conversion gap the card never measured.
+		'low_quality_traffic_source'      => 'bounce',
 	);
 
 	/**
@@ -555,6 +558,10 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 		}
 
 		$own_gaps = self::OWN_GAP_SIGNALS;
+		// A source card whose rule DID compare conversions keeps the conversion gap.
+		if ( 'low_quality_traffic_source' === $signal_id && isset( $insight['detection']['reason'] ) && 'conversion_low_bounce_high' === $insight['detection']['reason'] ) {
+			unset( $own_gaps[ $signal_id ] );
+		}
 		if ( isset( $own_gaps[ $signal_id ] ) ) {
 			$sessions = $this->positive_int( $metrics, array( 'sessions', 'pageviews', 'users' ) );
 			$gap      = $sessions > 0 ? $this->resolve_engagement_gap( $metrics, $own_gaps[ $signal_id ] ) : null;

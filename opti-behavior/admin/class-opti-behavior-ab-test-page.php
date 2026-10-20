@@ -165,7 +165,7 @@ class Opti_Behavior_AB_Test_Page {
 			'confirm_stop_button'   => __( 'Stop Test', 'opti-behavior' ),
 			'confirm_cancel'        => __( 'Cancel', 'opti-behavior' ),
 			'confirm_winner_title'  => __( 'Declare Best-Performing Variant', 'opti-behavior' ),
-			'confirm_winner'        => __( 'Opti Behavior will declare the variant with the highest conversion rate as the winner based on the current test results.', 'opti-behavior' ),
+			'confirm_winner'        => __( 'Opti-Behavior will declare the variant with the highest conversion rate as the winner based on the current test results.', 'opti-behavior' ),
 			'confirm_winner_button' => __( 'Declare Best Performer', 'opti-behavior' ),
 			'confirm_revert_title'  => __( 'Disable Applied Winner', 'opti-behavior' ),
 			'confirm_revert'        => __( 'This will disable the permanent winner change and return the test to Completed. The declared winner and historical data will be preserved.', 'opti-behavior' ),
@@ -751,10 +751,9 @@ class Opti_Behavior_AB_Test_Page {
 		<div class="opti-ab-page-header">
 			<div class="opti-ab-page-header__content">
 				<div class="opti-ab-page-header__title-section">
-					<div class="opti-ab-page-header__icon">
-						<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/><path d="m15 9 6-6"/><path d="M16.5 21.5 12 17"/></svg>
-					</div>
+					<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 					<div>
+						<?php Opti_Behavior_Admin_Brand::render_name(); ?>
 						<h1 class="opti-ab-page-header__title">
 							<?php esc_html_e( 'A/B Testing', 'opti-behavior' ); ?>
 							<?php if ( ! empty( $opti_behavior_ab_tooltips['ab_testing_heading'] ) ) : ?>
@@ -1192,9 +1191,15 @@ class Opti_Behavior_AB_Test_Page {
 						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
 						<?php esc_html_e( 'Back to Tests', 'opti-behavior' ); ?>
 					</a>
-					<h1 class="opti-ab-subpage-header__title">
-						<?php echo $test_id ? esc_html__( 'Edit Test', 'opti-behavior' ) : esc_html__( 'Create New Test', 'opti-behavior' ); ?>
-					</h1>
+					<div class="ob-brand-title">
+						<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
+						<div>
+							<?php Opti_Behavior_Admin_Brand::render_name(); ?>
+							<h1 class="opti-ab-subpage-header__title">
+								<?php echo $test_id ? esc_html__( 'Edit Test', 'opti-behavior' ) : esc_html__( 'Create New Test', 'opti-behavior' ); ?>
+							</h1>
+						</div>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -1857,10 +1862,16 @@ class Opti_Behavior_AB_Test_Page {
 						<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
 						<?php esc_html_e( 'Back to Tests', 'opti-behavior' ); ?>
 					</a>
-					<h1 class="opti-ab-subpage-header__title">
-						<?php echo esc_html( $test->name ); ?>
-						<span class="opti-ab-badge opti-ab-badge--<?php echo esc_attr( $test->status ); ?>"><?php echo esc_html( ucfirst( $test->status ) ); ?></span>
-					</h1>
+					<div class="ob-brand-title">
+						<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
+						<div>
+							<?php Opti_Behavior_Admin_Brand::render_name(); ?>
+							<h1 class="opti-ab-subpage-header__title">
+								<?php echo esc_html( $test->name ); ?>
+								<span class="opti-ab-badge opti-ab-badge--<?php echo esc_attr( $test->status ); ?>"><?php echo esc_html( ucfirst( $test->status ) ); ?></span>
+							</h1>
+						</div>
+					</div>
 				</div>
 				<div class="opti-ab-subpage-header__right">
 					<button type="button" class="filter-btn opti-ab-exclude-spam <?php echo $exclude_spam ? 'active' : ''; ?>" id="opti-ab-exclude-spam-toggle" aria-pressed="<?php echo esc_attr( $exclude_spam ? 'true' : 'false' ); ?>" aria-label="<?php esc_attr_e( 'Exclude spam traffic', 'opti-behavior' ); ?>" title="<?php esc_attr_e( 'Exclude spam traffic from A/B testing results', 'opti-behavior' ); ?>">

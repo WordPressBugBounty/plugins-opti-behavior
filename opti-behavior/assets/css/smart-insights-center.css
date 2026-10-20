@@ -108,6 +108,15 @@
    2. Shared primitives
    ========================================================================== */
 
+/* The floating "Insights" launcher sits over the bottom right corner: the page
+   ends with a strip of its height, so the last row and its button can always
+   be scrolled clear of it (OPT-1155). */
+@media screen {
+	.ob-smart-insights-center-page {
+		padding-bottom: 72px;
+	}
+}
+
 /* Numbers must never render with irregular figure widths ("1 466"). */
 .ob-smart-insights-center-page .ob-smart-insights-summary-metrics strong,
 .ob-smart-insights-center-page .ob-smart-insights-brief-amount,
@@ -2888,7 +2897,8 @@
 /* The menu PRO badge is 8px white on #6366f1 (under 4.5:1): darker and
    larger here, white on #4338ca = 7.9:1. */
 .ob-smart-insights-center-page .ob-si-tabs__tab .opti-menu-pro-badge,
-.ob-smart-insights-center-page .ob-si-xray-locked__title .opti-menu-pro-badge {
+.ob-smart-insights-center-page .ob-si-xray-locked__title .opti-menu-pro-badge,
+.ob-smart-insights-center-page .ob-si-xray-preview__lock .opti-menu-pro-badge {
 	margin-left: 0;
 	padding: 1px 6px;
 	font-size: 10px;
@@ -3272,6 +3282,149 @@
 	font-weight: 600;
 }
 
+/* Real preview (OPT-998): the three most visited pages, score + first problem. */
+.ob-smart-insights-center-page .ob-si-xray-preview__list {
+	display: grid;
+	gap: var(--ob-si-space-3);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* Same tones as the Pro page list and dossier (OPT-1065): good = green,
+   watch = amber, fix = red, on a 4px strip like the Pro problem cards. The
+   state is also written in the ring, never colour alone (WCAG 1.4.1). */
+.ob-smart-insights-center-page .ob-si-xray-preview__card {
+	--ob-si-xray-preview-tone: var(--ob-si-medium);
+	--ob-si-xray-preview-soft: var(--ob-si-medium-soft);
+	--ob-si-xray-preview-border: var(--ob-si-medium-border);
+	margin: 0;
+	border-left: 4px solid var(--ob-si-xray-preview-tone);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__card.is-good {
+	--ob-si-xray-preview-tone: var(--ob-si-better);
+	--ob-si-xray-preview-soft: var(--ob-si-better-soft);
+	--ob-si-xray-preview-border: var(--ob-si-better-border);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__card.is-fix {
+	--ob-si-xray-preview-tone: var(--ob-si-critical);
+	--ob-si-xray-preview-soft: var(--ob-si-critical-soft);
+	--ob-si-xray-preview-border: var(--ob-si-critical-border);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__id {
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__id .ob-si-xray-demo__page,
+.ob-smart-insights-center-page .ob-si-xray-preview__id .ob-si-xray-demo__meta {
+	overflow-wrap: anywhere;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__id .ob-si-xray-demo__page {
+	line-height: 1.3;
+}
+
+/* A long path wraps on its own: the number of visits stays in one piece. */
+.ob-smart-insights-center-page .ob-si-xray-preview__id .ob-si-xray-demo__meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 4px;
+	margin-top: 4px;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__path {
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__card .ob-si-xray-demo__ring-value {
+	stroke: var(--ob-si-xray-preview-tone);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__card .ob-si-xray-demo__ring-text small {
+	color: var(--ob-si-xray-preview-tone);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__problem {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 10px;
+	align-items: center;
+	margin: var(--ob-si-space-3) 0 0;
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-title);
+	font-weight: 700;
+	line-height: 1.35;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__problem.is-none {
+	display: block;
+	padding: var(--ob-si-space-2) var(--ob-si-space-3);
+	border: 1px solid var(--ob-si-xray-preview-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-xray-preview-soft);
+	color: var(--ob-si-text);
+	font-size: var(--ob-si-fs-body);
+	font-weight: 600;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__problem-label {
+	flex: 0 0 auto;
+	padding: 2px 9px;
+	border: 1px solid var(--ob-si-xray-preview-border);
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-xray-preview-soft);
+	color: var(--ob-si-xray-preview-tone);
+	font-size: var(--ob-si-fs-label);
+	font-weight: 700;
+	line-height: 1.5;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	white-space: nowrap;
+}
+
+/* Lock, text, PRO badge on one row: the badge never drops alone on a line. */
+.ob-smart-insights-center-page .ob-si-xray-preview__lock {
+	display: flex;
+	gap: 8px;
+	align-items: flex-start;
+	margin: var(--ob-si-space-3) 0 0;
+	padding: var(--ob-si-space-2) var(--ob-si-space-3);
+	border: 1px dashed var(--ob-si-accent-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-accent-soft);
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-meta);
+	line-height: 1.5;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__lock svg {
+	flex: 0 0 auto;
+	width: 14px;
+	height: 14px;
+	margin-top: 2px;
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__lock > span:not(.opti-menu-pro-badge) {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__lock .opti-menu-pro-badge {
+	flex: 0 0 auto;
+	margin-top: 1px;
+}
+
+.ob-smart-insights-center-page .ob-si-xray-preview__note {
+	margin: var(--ob-si-space-3) 0 0;
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-meta);
+}
 @media (max-width: 960px) {
 	.ob-smart-insights-center-page .ob-si-xray-locked {
 		grid-template-columns: minmax(0, 1fr);
@@ -4008,4 +4161,148 @@
         grid-column: 2;
         margin-top: -4px;
     }
+}
+
+/* One visual language with the Page X-Ray tab (OPT-1169), screen only. The two
+   tabs of the module share one family:
+   - card: white, same corner and shadow, the severity is the coloured left
+     edge of the card itself (as on a Page X-Ray problem card), no floating rail;
+   - one filled button per card (the accent of the module), every other button
+     is white with a grey edge;
+   - severity pill: tinted, coloured edge; any other label is a quiet white chip
+     (as the chips of a Page X-Ray card), so the colour only says the severity;
+   - "what to do" block: the green band, in both tabs;
+   - the "?" help mark is a quiet outline, not a second accent. */
+@media screen {
+	.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card {
+		padding-left: 22px;
+		border-left: 4px solid var(--ob-si-border-strong);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card.is-critical {
+		border-left-color: var(--ob-si-critical);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card.is-high {
+		border-left-color: var(--ob-si-high);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card.is-medium {
+		border-left-color: var(--ob-si-medium);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card.is-low {
+		border-left-color: var(--ob-si-accent);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card.is-info {
+		border-left-color: #8fa6b8;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card > .ob-smart-insights-severity-rail {
+		display: none;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-card.ob-si-card .ob-si-badge.is-category {
+		padding: 2px 9px;
+		border: 1px solid var(--ob-si-border);
+		background: var(--ob-si-surface);
+		color: var(--ob-si-text-muted);
+		font-size: 11.5px;
+		font-weight: 600;
+		letter-spacing: 0;
+		text-transform: none;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-content .ob-tooltip > .ob-tooltip-icon {
+		border-color: var(--ob-si-border-strong);
+		background: var(--ob-si-surface);
+		box-shadow: none;
+		color: var(--ob-si-text-faint);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-center-content .ob-tooltip:hover > .ob-tooltip-icon,
+	.ob-smart-insights-center-page .ob-smart-insights-center-content .ob-tooltip:focus-visible > .ob-tooltip-icon {
+		border-color: var(--ob-si-accent);
+		color: var(--ob-si-accent-strong);
+	}
+}
+
+/* ==========================================================================
+   Loading skeleton (OPT-1168): grey blocks the size of the real blocks while
+   the list and the weekly summary load, so nothing jumps when they arrive.
+   Markup: .ob-smart-insights-loading.has-skeleton > .ob-si-skel > i (one per
+   block), printed by the page class and by smart-insights.js
+   renderLoadingMarkup(). The sentence stays for screen readers.
+   ========================================================================== */
+
+.ob-smart-insights-center-page .ob-smart-insights-loading.has-skeleton {
+	display: block;
+	min-height: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	text-align: left;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-loading.has-skeleton .ob-smart-insights-spinner {
+	display: none;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-loading.has-skeleton .ob-smart-insights-loading-text {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-skel {
+	display: grid;
+	gap: var(--ob-si-space-4);
+}
+
+/* Heights measured on the real screen at 1440 px (a card 322 to 333 px, the
+   weekly summary 381 px) and on a phone-wide pane (cards stack their zones). */
+.ob-smart-insights-center-page .ob-si-skel > i {
+	display: block;
+	height: 328px;
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-lg);
+	background: linear-gradient(90deg, var(--ob-si-surface-sunken) 0%, var(--ob-si-surface-muted) 50%, var(--ob-si-surface-sunken) 100%);
+	background-size: 200% 100%;
+	animation: ob-si-skel-sweep 1.4s ease-in-out infinite;
+}
+
+.ob-smart-insights-center-page .ob-smart-insights-weekly-summary .ob-si-skel > i {
+	height: 380px;
+	border-radius: var(--ob-si-radius-md);
+}
+
+@media (max-width: 782px) {
+	.ob-smart-insights-center-page .ob-si-skel > i,
+	.ob-smart-insights-center-page .ob-smart-insights-weekly-summary .ob-si-skel > i {
+		height: 640px;
+	}
+}
+
+@keyframes ob-si-skel-sweep {
+	from {
+		background-position: 100% 0;
+	}
+
+	to {
+		background-position: -100% 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-smart-insights-center-page .ob-si-skel > i {
+		animation: none;
+	}
 }

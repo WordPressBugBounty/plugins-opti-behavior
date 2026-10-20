@@ -136,7 +136,7 @@ class Opti_Behavior_Cron_Health {
 			self::DISMISS_ACTION
 		);
 
-		$message = __( 'Opti Behavior: WP-Cron does not appear to be firing on this site. Scheduled background tasks (reports, aggregation, cleanup) are overdue. Low-traffic sites or a misconfigured cron setup are common causes.', 'opti-behavior' );
+		$message = __( 'Opti-Behavior: WP-Cron does not appear to be firing on this site. Scheduled background tasks (reports, aggregation, cleanup) are overdue. Low-traffic sites or a misconfigured cron setup are common causes.', 'opti-behavior' );
 
 		if ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) {
 			$message .= ' ' . __( 'DISABLE_WP_CRON is set to true in wp-config.php — make sure a real (system) cron job requests wp-cron.php regularly.', 'opti-behavior' );

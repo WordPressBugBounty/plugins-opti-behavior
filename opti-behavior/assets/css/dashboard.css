@@ -1488,6 +1488,10 @@
 	color: #f97316; /* flame */
 }
 
+.opti-behavior-dashboard .top-pages .metric-pageviews .metric-icon {
+	color: #2563eb; /* page views (OPT-1604) */
+}
+
 .opti-behavior-dashboard .top-pages .metric-clicks .metric-icon {
 	color: #0f766e; /* clicks */
 }
@@ -3765,9 +3769,12 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 0.5rem;
-	flex: 0 0 160px;
-	width: 160px;
-	max-width: 160px;
+	/* Width follows the value (OPT-1630 D20): short figures stay compact,
+	   a page title gets the room it needs, nothing is cut. */
+	flex: 0 0 auto;
+	width: auto;
+	min-width: 132px;
+	max-width: 236px;
 	padding: 0.34rem 0.7rem;
 	background: rgba(255, 255, 255, 0.85);
 	border: 1px solid #e7e5f5;
@@ -3813,13 +3820,20 @@
 	white-space: nowrap;
 }
 
+/* Never cut a figure (OPT-1630 D20): the value wraps on a second line
+   (between words, so "1,227 new · 424 ret." stays whole); a page title
+   longer than two lines is clamped, its full text is in the title. */
 .ob-dash-chip-value {
 	font-size: 0.82rem;
 	font-weight: 700;
 	color: #1e1b4b;
-	white-space: nowrap;
+	white-space: normal;
+	overflow-wrap: break-word;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
 	overflow: hidden;
-	text-overflow: ellipsis;
 }
 
 /* Empty/degraded chip value. */
@@ -3914,6 +3928,28 @@
 /* Hide teaser chips once a section is expanded (the real widgets show the data). */
 .ob-dash-section:not(.is-collapsed) .ob-dash-section-summary {
 	display: none;
+}
+
+/* OPT-1630 D20: between phone and wide screens the centred chips ran over
+   the section title; they sit in the row, right-aligned, instead. The title
+   keeps its full width; chips that do not fit wrap to a second row (never
+   over the title). Up to 1366px: centred chips still hit the longest title
+   with the WP menu open (-11px at 1181px). */
+@media (min-width: 783px) and (max-width: 1366px) {
+	.ob-dash-section-heading {
+		flex: 0 0 auto;
+		min-width: max-content;
+	}
+	.ob-dash-section-summary {
+		position: static;
+		transform: none;
+		flex: 1 1 0;
+		min-width: 0;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		row-gap: 0.4rem;
+		margin: 0 12px 0 0;
+	}
 }
 
 @media (max-width: 782px) {

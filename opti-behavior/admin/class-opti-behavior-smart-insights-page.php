@@ -99,8 +99,9 @@ class Opti_Behavior_Smart_Insights_Page {
 				<div class="dashboard-header ob-smart-insights-dashboard-header">
 					<div class="ob-smart-insights-header-main">
 						<div class="dashboard-title-section">
-							<div class="dashboard-icon" aria-hidden="true"><i data-lucide="lightbulb"></i></div>
+							<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 							<div class="dashboard-title-text">
+								<?php Opti_Behavior_Admin_Brand::render_name(); ?>
 								<h1 class="dashboard-title">
 									<?php esc_html_e( 'Smart Insights', 'opti-behavior' ); ?>
 									<?php if ( ! empty( $tooltips['center_heading'] ) && function_exists( 'opti_behavior_tooltip_e' ) ) : ?>
@@ -118,6 +119,11 @@ class Opti_Behavior_Smart_Insights_Page {
 									<?php opti_behavior_tooltip_e( $tooltips['refresh_insights']['title'], $tooltips['refresh_insights']['content'], $tooltips['refresh_insights']['simple'], '', array( 'position' => 'bottom', 'align' => 'right' ) ); ?>
 								<?php endif; ?>
 							</button>
+							<?php
+							if ( class_exists( 'Opti_Behavior_Reports_Screen' ) ) {
+								Opti_Behavior_Reports_Screen::render_header_link( 'insights', $period, $start_date, $end_date, $exclude_spam );
+							}
+							?>
 							<button type="button" class="<?php echo esc_attr( $exclude_spam_classes ); ?>" id="smart-insights-exclude-spam-toggle" aria-pressed="<?php echo esc_attr( $exclude_spam ? 'true' : 'false' ); ?>" aria-label="<?php echo esc_attr( $exclude_spam_label ); ?>" title="<?php echo esc_attr( $exclude_spam_title ); ?>">
 								<span class="filter-icon"><i data-lucide="<?php echo esc_attr( $exclude_spam_icon ); ?>" aria-hidden="true"></i></span>
 								<span class="filter-label"><?php echo esc_html( $exclude_spam_label ); ?></span>
@@ -254,7 +260,11 @@ class Opti_Behavior_Smart_Insights_Page {
 						</div>
 						<div class="widget-content">
 							<?php if ( $has_pro ) : ?>
-								<p class="ob-smart-insights-summary-loading"><?php esc_html_e( 'Loading weekly CRO summary…', 'opti-behavior' ); ?></p>
+								<?php // OPT-1168: a grey block the size of the summary while it loads; the sentence stays for screen readers. ?>
+								<div class="ob-smart-insights-loading has-skeleton" role="status">
+									<span class="ob-smart-insights-loading-text ob-smart-insights-summary-loading"><?php esc_html_e( 'Loading weekly CRO summary…', 'opti-behavior' ); ?></span>
+									<span class="ob-si-skel" aria-hidden="true"><i></i></span>
+								</div>
 							<?php else : ?>
 								<div class="ob-smart-insights-weekly-lock-card" aria-label="<?php esc_attr_e( 'Weekly CRO Summary is locked in Free mode', 'opti-behavior' ); ?>">
 									<div class="ob-smart-insights-weekly-lock-hero">
@@ -308,9 +318,10 @@ class Opti_Behavior_Smart_Insights_Page {
 						<?php endif; ?>
 					</div>
 					<div class="ob-smart-insights-list" aria-live="polite">
-						<div class="ob-smart-insights-loading">
+						<div class="ob-smart-insights-loading has-skeleton" role="status">
 							<span class="ob-smart-insights-spinner" aria-hidden="true"></span>
-							<span><?php esc_html_e( 'Loading Smart Insights...', 'opti-behavior' ); ?></span>
+							<span class="ob-smart-insights-loading-text"><?php esc_html_e( 'Loading Smart Insights...', 'opti-behavior' ); ?></span>
+							<span class="ob-si-skel" aria-hidden="true"><i></i><i></i><i></i></span>
 						</div>
 					</div>
 				</div>
@@ -386,14 +397,27 @@ class Opti_Behavior_Smart_Insights_Page {
 	}
 
 	/**
-	 * Locked view of the Page X-Ray tab: what the tab does, an example report
-	 * (sample data, labelled as such) so the owner sees what they would get,
-	 * and the one action that opens it (get Pro, activate the licence, or
-	 * update Pro). Static markup: no query, no Pro call.
+	 * Locked view of the Page X-Ray tab: what the tab does, a real preview
+	 * (score + first problem of the three most visited pages, from the data
+	 * Free collects: `Opti_Behavior_Smart_Insights_Page_Preview`, cached) or,
+	 * while no page has enough visits, an example report (sample data,
+	 * labelled as such), and the one action that opens the tab (get Pro,
+	 * activate the licence, or update Pro). No Pro call.
 	 *
+	 * @param array  $args         `period`, `exclude_spam`.
+	 * @param string $period_label Label of the period.
 	 * @return void
 	 */
-	private function render_xray_locked() {
+	private function render_xray_locked( $args = array(), $period_label = '' ) {
+		$preview = array();
+		if ( class_exists( 'Opti_Behavior_Smart_Insights_Page_Preview' ) ) {
+			try {
+				$data    = Opti_Behavior_Smart_Insights_Page_Preview::get_preview( $args );
+				$preview = isset( $data['pages'] ) && is_array( $data['pages'] ) ? $data['pages'] : array();
+			} catch ( Throwable $e ) {
+				$preview = array();
+			}
+		}
 		$pro_active = function_exists( 'opti_behavior_pro_active' ) && opti_behavior_pro_active();
 		if ( ! $pro_active ) {
 			$text   = __( 'Page X-Ray is part of Opti-Behavior Pro.', 'opti-behavior' );
@@ -478,6 +502,50 @@ class Opti_Behavior_Smart_Insights_Page {
 				</div>
 			</div>
 
+			<?php if ( ! empty( $preview ) ) : ?>
+			<figure class="ob-si-xray-demo ob-si-xray-preview" aria-labelledby="ob-si-xray-preview-caption">
+				<?php /* translators: %s: period, e.g. "Last 30 Days". */ ?>
+				<figcaption id="ob-si-xray-preview-caption" class="ob-si-xray-demo__caption"><i data-lucide="eye" aria-hidden="true"></i> <?php echo esc_html( sprintf( __( 'Your most visited pages · %s', 'opti-behavior' ), $period_label ) ); ?></figcaption>
+				<ul class="ob-si-xray-preview__list">
+					<?php foreach ( $preview as $card ) : ?>
+						<?php
+						$card_score  = max( 0, min( 100, (int) $card['score'] ) );
+						$card_health = in_array( $card['health'], array( 'good', 'watch', 'fix' ), true ) ? $card['health'] : 'watch';
+						$card_label  = Opti_Behavior_Smart_Insights_Page_Preview::health_label( $card_health );
+						if ( ! empty( $card['provisional'] ) && class_exists( 'Opti_Behavior_Smart_Insights_Scorer' ) ) {
+							$card_visits = Opti_Behavior_Smart_Insights_Scorer::provisional_text( (int) $card['sessions'] );
+						} else {
+							/* translators: %s: number of visits. */
+							$card_visits = sprintf( __( '%s visits', 'opti-behavior' ), number_format_i18n( (int) $card['sessions'] ) );
+						}
+						?>
+						<li class="ob-si-xray-demo__card ob-si-xray-preview__card is-<?php echo esc_attr( $card_health ); ?>">
+							<div class="ob-si-xray-demo__head">
+								<div class="ob-si-xray-preview__id">
+									<p class="ob-si-xray-demo__page"><?php echo esc_html( $card['title'] ); ?></p>
+									<p class="ob-si-xray-demo__meta"><span class="ob-si-xray-preview__path"><?php echo esc_html( $card['path'] ); ?></span> · <?php echo esc_html( $card_visits ); ?></p>
+								</div>
+								<?php /* translators: 1: health score out of 100, 2: health label, e.g. "Watch". */ ?>
+								<div class="ob-si-xray-demo__ring" role="img" aria-label="<?php echo esc_attr( sprintf( __( 'Health score: %1$d out of 100, %2$s', 'opti-behavior' ), $card_score, $card_label ) ); ?>">
+									<svg viewBox="0 0 80 80" aria-hidden="true" focusable="false">
+										<circle cx="40" cy="40" r="34" class="ob-si-xray-demo__ring-track"></circle>
+										<circle cx="40" cy="40" r="34" class="ob-si-xray-demo__ring-value" stroke-dasharray="<?php echo esc_attr( round( $ring * $card_score / 100, 1 ) . ' ' . round( $ring, 1 ) ); ?>"></circle>
+									</svg>
+									<span class="ob-si-xray-demo__ring-text" aria-hidden="true"><strong><?php echo (int) $card_score; ?></strong><small><?php echo esc_html( $card_label ); ?></small></span>
+								</div>
+							</div>
+							<?php if ( '' !== (string) $card['top_title'] ) : ?>
+								<p class="ob-si-xray-preview__problem"><span class="ob-si-xray-preview__problem-label"><?php esc_html_e( 'Problem #1', 'opti-behavior' ); ?></span> <?php echo esc_html( $card['top_title'] ); ?></p>
+								<p class="ob-si-xray-preview__lock"><i data-lucide="lock" aria-hidden="true"></i> <span><?php esc_html_e( 'Why it happens, what to do, the recordings that show it, and the other problems:', 'opti-behavior' ); ?></span> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></p>
+							<?php else : ?>
+								<p class="ob-si-xray-preview__problem is-none"><?php esc_html_e( 'No problem found on the data available in Free', 'opti-behavior' ); ?></p>
+							<?php endif; ?>
+						</li>
+					<?php endforeach; ?>
+				</ul>
+				<p class="ob-si-xray-preview__note"><?php esc_html_e( 'Preview based on the data the free plugin collects. Pro also checks errors, speed, forms and the page content, so its score can be lower.', 'opti-behavior' ); ?></p>
+			</figure>
+			<?php else : ?>
 			<figure class="ob-si-xray-demo" aria-labelledby="ob-si-xray-demo-caption">
 				<figcaption id="ob-si-xray-demo-caption" class="ob-si-xray-demo__caption"><i data-lucide="eye" aria-hidden="true"></i> <?php esc_html_e( 'Example report (sample data)', 'opti-behavior' ); ?></figcaption>
 				<div class="ob-si-xray-demo__card">
@@ -524,7 +592,12 @@ class Opti_Behavior_Smart_Insights_Page {
 						<?php endforeach; ?>
 					</ol>
 				</div>
+				<?php if ( class_exists( 'Opti_Behavior_Smart_Insights_Page_Preview' ) ) : ?>
+					<?php /* translators: %d: number of visits. */ ?>
+					<p class="ob-si-xray-preview__note"><?php echo esc_html( sprintf( __( 'Your own pages appear here once a page has %d visits.', 'opti-behavior' ), Opti_Behavior_Smart_Insights_Page_Preview::MIN_VISITS ) ); ?></p>
+				<?php endif; ?>
 			</figure>
+			<?php endif; ?>
 		</section>
 		<?php
 	}
@@ -557,8 +630,9 @@ class Opti_Behavior_Smart_Insights_Page {
 			<div class="dashboard-header ob-smart-insights-dashboard-header">
 				<div class="ob-smart-insights-header-main">
 					<div class="dashboard-title-section">
-						<div class="dashboard-icon" aria-hidden="true"><i data-lucide="lightbulb"></i></div>
+						<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 						<div class="dashboard-title-text">
+							<?php Opti_Behavior_Admin_Brand::render_name(); ?>
 							<h1 class="dashboard-title">
 								<?php esc_html_e( 'Smart Insights', 'opti-behavior' ); ?>
 								<?php if ( ! empty( $tooltips['center_heading'] ) && function_exists( 'opti_behavior_tooltip_e' ) ) : ?>
@@ -621,7 +695,13 @@ class Opti_Behavior_Smart_Insights_Page {
 						echo '<p class="ob-si-xray-locked__text">' . esc_html__( 'Page X-Ray could not be displayed. Please reload the page.', 'opti-behavior' ) . '</p>';
 					}
 				} else {
-					$this->render_xray_locked();
+					$this->render_xray_locked(
+						array(
+							'period'       => $period,
+							'exclude_spam' => ! empty( $view_args['exclude_spam'] ),
+						),
+						$periods[ $period ]
+					);
 				}
 				?>
 			</div>

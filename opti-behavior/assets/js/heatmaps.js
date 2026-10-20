@@ -294,7 +294,8 @@
 			second = (null !== fileTotal && fileTotal !== total) ? fileTotal : null;
 			desynced = !!(entry && entry.desynced);
 		}
-		if(strong){ strong.textContent = total; }
+		var fmt = function(n){ return (typeof OptiBehaviorLocale === 'object') ? OptiBehaviorLocale.number(n || 0) : String(n || 0); };
+		if(strong){ strong.textContent = fmt(total); }
 		$td.setAttribute('data-sessions', total);
 		var existingInteractions = $td.querySelector('.sessions-interactions');
 		if(existingInteractions){ existingInteractions.remove(); }
@@ -303,7 +304,7 @@
 		if(null !== second && second !== total){
 			var span = document.createElement('span');
 			span.className = 'sessions-interactions';
-			span.textContent = '/ ' + second;
+			span.textContent = '/ ' + fmt(second);
 			$td.appendChild(span);
 		}
 		if(desynced){
@@ -332,7 +333,22 @@
 		};
 		setCount($tr.querySelector('.optibehavior-btn-desktop'), devicesAll.desktop);
 		setCount($tr.querySelector('.optibehavior-btn-mobile'), devicesAll.mobile);
+		setMobileOff($tr.querySelector('.optibehavior-btn-mobile'), !(parseInt(devicesAll.mobile, 10) > 0));
 	}
+	// "Mobile (0)" reads as disabled (OPT-1630 D23): aria-disabled + tooltip,
+	// the link stays for the row contract and its click is cancelled below.
+	function setMobileOff($btn, off){
+		if(!$btn) return;
+		var l10n = (typeof optiBehaviorHeatmapsL10n !== 'undefined' && optiBehaviorHeatmapsL10n.strings) ? optiBehaviorHeatmapsL10n.strings : {};
+		if(!$btn.hasAttribute('data-on-title')){ $btn.setAttribute('data-on-title', off ? (l10n.openMobileHeatmap || 'Open mobile heatmap') : $btn.title); }
+		$btn.classList.toggle('is-disabled', off);
+		if(off){ $btn.setAttribute('aria-disabled', 'true'); } else { $btn.removeAttribute('aria-disabled'); }
+		$btn.title = off ? (l10n.noMobileData || 'No mobile data yet') : $btn.getAttribute('data-on-title');
+	}
+	document.addEventListener('click', function(e){
+		var off = e.target.closest('.heatmap-action-btn[aria-disabled="true"]');
+		if(off){ e.preventDefault(); }
+	});
 	document.addEventListener('click', function(e){
 		var link = e.target.closest('.sessions-repair-link');
 		if(!link) return;

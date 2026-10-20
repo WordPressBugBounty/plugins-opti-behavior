@@ -14,6 +14,7 @@
 	var $modal = null;
 	var $form = null;
 	var $submitButton = null;
+	var $skipButton = null;
 	var $cancelButton = null;
 	var $errorMessage = null;
 
@@ -43,6 +44,12 @@
 			closeModal();
 		});
 
+		// Skip = deactivate at once, nothing is sent (OPT-1385).
+		$modal.on('click', '.ob-deactivation-survey__skip', function(event) {
+			event.preventDefault();
+			continueWithDeactivation();
+		});
+
 		$modal.on('click', function(event) {
 			if (event.target === $modal.get(0)) {
 				closeModal();
@@ -69,9 +76,19 @@
 		clearError();
 
 		var $selectedReason = $form.find('input[name="ob_reason_key"]:checked');
-		if (!$selectedReason.length) {
-			showError(getI18n('reasonRequired'));
-			return;
+		var feedback = $form.find('textarea[name="ob_feedback"]').val() || '';
+		var reasonKey = $selectedReason.length ? $selectedReason.val() : '';
+		var reasonLabel = $selectedReason.length ? ($selectedReason.data('label') || '') : '';
+
+		// The reason is optional (OPT-1385): no reason and no comment = same as Skip.
+		if (!reasonKey) {
+			if (String(feedback).replace(/^\s+|\s+$/g, '') === '') {
+				continueWithDeactivation();
+				return;
+			}
+
+			reasonKey = 'other';
+			reasonLabel = getReasonLabel('other');
 		}
 
 		var followUpEmail = $form.find('input[name="ob_follow_up_email"]').val() || '';
@@ -87,9 +104,9 @@
 		var requestData = {
 			action: surveyConfig.ajaxAction,
 			nonce: surveyConfig.nonce,
-			reason_key: $selectedReason.val(),
-			reason_label: $selectedReason.data('label') || '',
-			feedback: $form.find('textarea[name="ob_feedback"]').val() || '',
+			reason_key: reasonKey,
+			reason_label: reasonLabel,
+			feedback: feedback,
 			follow_up_email: followUpEmail
 		};
 
@@ -154,6 +171,7 @@
 
 	function setSubmittingState(isSubmitting) {
 		$submitButton.prop('disabled', isSubmitting);
+		$skipButton.prop('disabled', isSubmitting);
 		$cancelButton.prop('disabled', isSubmitting);
 
 		if (isSubmitting) {
@@ -189,11 +207,39 @@
 		return '';
 	}
 
+	function getReasonLabel(key) {
+		var label = '';
+
+		$.each(surveyConfig.reasons || [], function(index, reason) {
+			if (reason && reason.key === key) {
+				label = reason.label || '';
+				return false;
+			}
+		});
+
+		return label;
+	}
+
+	function renderDataNotice() {
+		var html = '<p id="ob-deactivation-survey-data" class="ob-deactivation-survey__notice">';
+		html += escapeHtml(getI18n('dataNotice'));
+
+		var privacyUrl = getI18n('privacyUrl');
+		if (/^https:\/\//.test(privacyUrl)) {
+			html += ' <a href="' + escapeHtml(privacyUrl) + '" target="_blank" rel="noopener">' + escapeHtml(getI18n('privacyLink')) + '</a>';
+		}
+
+		html += '</p>';
+
+		return html;
+	}
+
 	function injectModal() {
 		if ($('#' + modalId).length) {
 			$modal = $('#' + modalId);
 			$form = $modal.find('form');
 			$submitButton = $modal.find('.ob-deactivation-survey__submit');
+			$skipButton = $modal.find('.ob-deactivation-survey__skip');
 			$cancelButton = $modal.find('.ob-deactivation-survey__cancel');
 			$errorMessage = $modal.find('.ob-deactivation-survey__error');
 			return;
@@ -201,10 +247,11 @@
 
 		var modalHtml = '';
 		modalHtml += '<div id="' + modalId + '" class="ob-deactivation-survey" aria-hidden="true">';
-		modalHtml += '<div class="ob-deactivation-survey__dialog" role="dialog" aria-modal="true" aria-labelledby="ob-deactivation-survey-title" aria-describedby="' + modalBodyId + '">';
+		modalHtml += '<div class="ob-deactivation-survey__dialog" role="dialog" aria-modal="true" aria-labelledby="ob-deactivation-survey-title" aria-describedby="' + modalBodyId + ' ob-deactivation-survey-data">';
 		modalHtml += '<button type="button" class="ob-deactivation-survey__close" aria-label="' + escapeHtml(getI18n('close')) + '">&times;</button>';
 		modalHtml += '<h2 id="ob-deactivation-survey-title" class="ob-deactivation-survey__title">' + escapeHtml(getI18n('title')) + '</h2>';
 		modalHtml += '<p id="' + modalBodyId + '" class="ob-deactivation-survey__intro">' + escapeHtml(getI18n('intro')) + '</p>';
+		modalHtml += renderDataNotice();
 		modalHtml += '<form class="ob-deactivation-survey__form">';
 		modalHtml += '<fieldset class="ob-deactivation-survey__fieldset">';
 		modalHtml += '<legend class="ob-deactivation-survey__legend">' + escapeHtml(getI18n('reasonLabel')) + '</legend>';
@@ -214,12 +261,13 @@
 		modalHtml += '<textarea id="ob-feedback" name="ob_feedback" rows="4" maxlength="2000" class="ob-deactivation-survey__textarea"></textarea>';
 		modalHtml += '<p class="ob-deactivation-survey__help">' + escapeHtml(getI18n('feedbackHelp')) + '</p>';
 		modalHtml += '<label class="ob-deactivation-survey__label" for="ob-follow-up-email">' + escapeHtml(getI18n('emailLabel')) + '</label>';
-		modalHtml += '<input id="ob-follow-up-email" name="ob_follow_up_email" type="email" class="ob-deactivation-survey__input" />';
+		modalHtml += '<input id="ob-follow-up-email" name="ob_follow_up_email" type="email" value="" autocomplete="off" class="ob-deactivation-survey__input" />';
 		modalHtml += '<p class="ob-deactivation-survey__help">' + escapeHtml(getI18n('emailHelp')) + '</p>';
 		modalHtml += '<p class="ob-deactivation-survey__error" style="display:none;"></p>';
 		modalHtml += '<div class="ob-deactivation-survey__actions">';
 		modalHtml += '<button type="button" class="button ob-deactivation-survey__cancel">' + escapeHtml(getI18n('cancel')) + '</button>';
-		modalHtml += '<button type="submit" class="button button-primary ob-deactivation-survey__submit">' + escapeHtml(getI18n('submit')) + '</button>';
+		modalHtml += '<button type="button" class="button button-large ob-deactivation-survey__skip">' + escapeHtml(getI18n('skip')) + '</button>';
+		modalHtml += '<button type="submit" class="button button-primary button-large ob-deactivation-survey__submit">' + escapeHtml(getI18n('submit')) + '</button>';
 		modalHtml += '</div>';
 		modalHtml += '</form>';
 		modalHtml += '</div>';
@@ -230,6 +278,7 @@
 		$modal = $('#' + modalId);
 		$form = $modal.find('form');
 		$submitButton = $modal.find('.ob-deactivation-survey__submit');
+		$skipButton = $modal.find('.ob-deactivation-survey__skip');
 		$cancelButton = $modal.find('.ob-deactivation-survey__cancel');
 		$errorMessage = $modal.find('.ob-deactivation-survey__error');
 	}

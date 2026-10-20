@@ -2,8 +2,11 @@
 /**
  * Review Reminder Banner
  *
- * Shows a friendly admin review reminder after the Free plugin has been
- * installed for at least seven days.
+ * Shows a friendly admin review reminder after the "first useful moment":
+ * an administrator has opened a heatmap with clicks or received a funnel
+ * report with entries. The banner is printed from the next Opti-Behavior
+ * screen on, never on the page view of the moment itself, and never during
+ * the first 48 hours after installation.
  *
  * @package opti-behavior
  * @since   1.3.0
@@ -25,8 +28,17 @@ class Opti_Behavior_Review_Banner {
 	/** WordPress option storing the first install timestamp. */
 	const OPTION_INSTALLED_AT = 'opti_behavior_review_installed_at';
 
-	/** WordPress option storing whether the user clicked Done. */
+	/** WordPress option storing 'done' once the user asked not to be asked again. */
 	const OPTION_STATUS = 'opti_behavior_review_banner_status';
+
+	/** WordPress option storing when an administrator first saw the plugin work (written once). */
+	const OPTION_VALUE_SEEN_AT = 'opti_behavior_review_value_seen_at';
+
+	/**
+	 * WordPress option set to '1' by an earlier version once a heatmap with
+	 * clicks existed. Read only: it counts as "moment seen" on updated sites.
+	 */
+	const OPTION_HAS_CLICKS = 'opti_behavior_review_has_clicks';
 
 	/** WordPress option storing the next reminder timestamp. */
 	const OPTION_REMIND_AT = 'opti_behavior_review_banner_remind_at';
@@ -40,17 +52,17 @@ class Opti_Behavior_Review_Banner {
 	/** WordPress.org review URL. */
 	const REVIEW_URL = 'https://wordpress.org/support/plugin/opti-behavior/reviews/#new-post';
 
-	/** Delay before showing the banner for the first time. */
-	const INITIAL_DELAY = 604800; // 7 * DAY_IN_SECONDS.
+	/** Minimum age of the install before the banner may show. */
+	const MIN_INSTALL_AGE = 172800; // 2 * DAY_IN_SECONDS.
 
-	/** Delay used by the "Remind me later" action. */
-	const REMIND_DELAY = 604800; // 7 * DAY_IN_SECONDS.
-
-	/** Delay used by the "Hide" action. */
-	const HIDE_DELAY = 604800; // 7 * DAY_IN_SECONDS.
+	/** Delay used by the "Maybe later" action (and by the 'hide' action of old URLs). */
+	const REMIND_DELAY = 2592000; // 30 * DAY_IN_SECONDS.
 
 	/** @var self|null Singleton instance. */
 	private static $instance = null;
+
+	/** @var bool True when the "first useful moment" was recorded during this request. */
+	private static $marked_in_request = false;
 
 	/**
 	 * Initialize the singleton.
@@ -158,7 +170,150 @@ class Opti_Behavior_Review_Banner {
 			return false;
 		}
 
-		return $installed_at > 0 && $now >= ( $installed_at + self::INITIAL_DELAY );
+		// Never on the day of the installation.
+		if ( 0 >= $installed_at || $now < ( $installed_at + self::MIN_INSTALL_AGE ) ) {
+			return false;
+		}
+
+		// Ask only once the admin has seen the plugin work, and not on the
+		// page view of that moment: from the next Opti-Behavior screen on.
+		if ( self::$marked_in_request || ! self::value_seen() ) {
+			return false;
+		}
+
+		// One Opti-Behavior banner at a time. The "country database" notice is
+		// checked here, not in other_banner_visible(): that notice calls it.
+		if ( class_exists( 'Opti_Behavior_Geo_Country' ) && Opti_Behavior_Geo_Country::notice_wanted() ) {
+			return false;
+		}
+
+		return ! self::other_banner_visible();
+	}
+
+	/**
+	 * Whether an administrator has already seen the plugin work.
+	 *
+	 * True once mark_value_seen() stored its timestamp, or when an earlier
+	 * version stored "this site has a heatmap with clicks" (updated sites).
+	 * Option reads only.
+	 *
+	 * @return bool
+	 */
+	public static function value_seen() {
+		if ( 0 < (int) get_option( self::OPTION_VALUE_SEEN_AT, 0 ) ) {
+			return true;
+		}
+
+		return '1' === (string) get_option( self::OPTION_HAS_CLICKS, '' );
+	}
+
+	/**
+	 * Record the "first useful moment": an administrator has just seen their
+	 * own data (a heatmap with clicks, a funnel report with entries).
+	 *
+	 * Written once with add_option(), never overwritten. The banner stays
+	 * hidden for the rest of this request and may show on the next
+	 * Opti-Behavior screen.
+	 *
+	 * @return void
+	 */
+	public static function mark_value_seen() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		if ( 0 < (int) get_option( self::OPTION_VALUE_SEEN_AT, 0 ) ) {
+			return;
+		}
+
+		self::$marked_in_request = true;
+		add_option( self::OPTION_VALUE_SEEN_AT, (string) time(), '', false );
+	}
+
+	/**
+	 * Record the moment when the heatmap opened by an administrator has clicks.
+	 *
+	 * One light query on the heatmap registry, and none at all once the
+	 * moment is stored.
+	 *
+	 * @param int[] $page_ids Page IDs of the displayed heatmap.
+	 * @return void
+	 */
+	public static function mark_value_seen_for_heatmap( $page_ids ) {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		if ( 0 < (int) get_option( self::OPTION_VALUE_SEEN_AT, 0 ) ) {
+			return;
+		}
+
+		$page_ids = array_values( array_filter( array_map( 'absint', (array) $page_ids ) ) );
+		if ( empty( $page_ids ) ) {
+			return;
+		}
+
+		global $wpdb;
+		$table    = $wpdb->prefix . 'optibehavior_heatmap_pages';
+		$in       = implode( ',', $page_ids );
+		$suppress = $wpdb->suppress_errors( true );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix, IDs cast with absint(); runs until the moment is stored, then never again.
+		$found = $wpdb->get_var( "SELECT 1 FROM `{$table}` WHERE page_id IN ({$in}) AND click_count > 0 LIMIT 1" );
+		$wpdb->suppress_errors( $suppress );
+
+		if ( $found ) {
+			self::mark_value_seen();
+		}
+	}
+
+	/**
+	 * Whether another Opti-Behavior banner is shown on the current screen:
+	 * Pro trial notice, data-sharing (welcome) notice, setup guide message or
+	 * onboarding popup. Mirrors the conditions of those classes.
+	 *
+	 * @return bool
+	 */
+	public static function other_banner_visible() {
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only screen detection.
+		$page       = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
+		$guide_done = class_exists( 'Opti_Behavior_Setup_Guide' ) && isset( $_GET[ Opti_Behavior_Setup_Guide::DONE_ARG ] );
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		// Pro trial notice: Traffic, Settings, How it works.
+		if ( in_array( $page, array( 'opti-behavior-analytics', 'opti-behavior-settings', 'opti-behavior-ai-insights' ), true ) && class_exists( 'Opti_Behavior_Trial_Invite' ) ) {
+			$state = Opti_Behavior_Trial_Invite::state();
+			if ( isset( $state['display'] ) && 'invite' === $state['display'] ) {
+				return true;
+			}
+		}
+
+		// Data-sharing text changed (welcome): every plugin screen but Settings.
+		if ( 'opti-behavior-settings' !== $page && class_exists( 'Opti_Behavior_Welcome' )
+			&& Opti_Behavior_Welcome::needs_consent_update()
+			&& ! Opti_Behavior_Welcome::pro_handles_status()
+			&& Opti_Behavior_Welcome::may_prompt_for_consent() ) {
+			return true;
+		}
+
+		// Setup guide: confirmation, "the menu changed", "your own visits are counted".
+		if ( class_exists( 'Opti_Behavior_Setup_Guide' ) ) {
+			if ( $guide_done ) {
+				return true;
+			}
+			if ( Opti_Behavior_Setup_Guide::GUIDE_SLUG !== $page && 'pending' === get_option( Opti_Behavior_Setup_Guide::OPTION_MENU_NOTICE, '' ) ) {
+				return true;
+			}
+			if ( Opti_Behavior_Setup_Guide::admin_visits_notice_due() ) {
+				return true;
+			}
+		}
+
+		// Onboarding popup (Traffic screen of a fresh install).
+		if ( 'opti-behavior-analytics' === $page && class_exists( 'Opti_Behavior_Onboarding' ) && Opti_Behavior_Onboarding::init()->should_show() ) {
+			return true;
+		}
+
+		return false;
 	}
 
 	/**
@@ -195,7 +350,6 @@ class Opti_Behavior_Review_Banner {
 		$review_url = $this->get_action_url( 'review' );
 		$done_url   = $this->get_action_url( 'done' );
 		$remind_url = $this->get_action_url( 'remind' );
-		$hide_url   = $this->get_action_url( 'hide' );
 		$icon_url   = OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'images/256x256.png';
 		?>
 		<div class="ob-rating-banner" role="status">
@@ -204,49 +358,28 @@ class Opti_Behavior_Review_Banner {
 			</div>
 			<div class="ob-rating-banner__content">
 				<h2 class="ob-rating-banner__title">
-					<?php esc_html_e( 'You have been using Opti-Behavior for some time now. Thank you!', 'opti-behavior' ); ?>
-					<span class="dashicons dashicons-heart ob-rating-banner__heart" aria-hidden="true"></span>
+					<?php esc_html_e( 'Is Opti-Behavior useful on your site?', 'opti-behavior' ); ?>
 				</h2>
 				<p class="ob-rating-banner__text">
-					<?php
-					echo wp_kses(
-						sprintf(
-							/* translators: 1: opening link tag to the WordPress.org review form, 2: closing link tag. */
-							esc_html__( 'Enjoying Opti-Behavior? A %1$sshort review on WordPress.org%2$s helps us a lot.', 'opti-behavior' ),
-							'<a href="' . esc_url( $review_url ) . '" target="_blank" rel="noopener noreferrer">',
-							'</a>'
-						),
-						array(
-							'a' => array(
-								'href'   => array(),
-								'target' => array(),
-								'rel'    => array(),
-							),
-						)
-					);
-					?>
+					<?php esc_html_e( 'A short review on WordPress.org helps other site owners find it. Honest feedback helps us too.', 'opti-behavior' ); ?>
 				</p>
 				<p class="ob-rating-banner__text">
-					<?php esc_html_e( 'Do not hesitate to share your feature requests in the review - we read them and use them to improve the plugin.', 'opti-behavior' ); ?>
+					<?php esc_html_e( '— The Opti-Behavior Team', 'opti-behavior' ); ?>
 				</p>
 				<div class="ob-rating-banner__actions">
 					<a class="button button-primary ob-rating-banner__button" href="<?php echo esc_url( $review_url ); ?>" target="_blank" rel="noopener noreferrer">
 						<span class="dashicons dashicons-edit" aria-hidden="true"></span>
-						<?php esc_html_e( 'Write Review', 'opti-behavior' ); ?>
+						<?php esc_html_e( 'Leave a review', 'opti-behavior' ); ?>
 					</a>
-					<a class="button ob-rating-banner__button" href="<?php echo esc_url( $done_url ); ?>">
-						<span class="dashicons dashicons-yes-alt" aria-hidden="true"></span>
-						<?php esc_html_e( 'Done!', 'opti-behavior' ); ?>
+					<a class="button ob-rating-banner__button" href="<?php echo esc_url( $remind_url ); ?>">
+						<span class="dashicons dashicons-clock" aria-hidden="true"></span>
+						<?php esc_html_e( 'Maybe later', 'opti-behavior' ); ?>
 					</a>
 				</div>
 			</div>
 			<div class="ob-rating-banner__secondary">
-				<a class="button ob-rating-banner__button" href="<?php echo esc_url( $remind_url ); ?>">
-					<span class="dashicons dashicons-clock" aria-hidden="true"></span>
-					<?php esc_html_e( 'Remind me later', 'opti-behavior' ); ?>
-				</a>
-				<a class="ob-rating-banner__hide" href="<?php echo esc_url( $hide_url ); ?>">
-					<?php esc_html_e( 'Hide', 'opti-behavior' ); ?>
+				<a class="ob-rating-banner__hide" href="<?php echo esc_url( $done_url ); ?>">
+					<?php esc_html_e( "Don't ask again", 'opti-behavior' ); ?>
 				</a>
 			</div>
 		</div>
@@ -284,11 +417,8 @@ class Opti_Behavior_Review_Banner {
 				break;
 
 			case 'remind':
+			case 'hide': // Old "Hide" link (page still open, bookmark): same as "Maybe later".
 				update_option( self::OPTION_REMIND_AT, (string) ( time() + self::REMIND_DELAY ), false );
-				break;
-
-			case 'hide':
-				update_option( self::OPTION_REMIND_AT, (string) ( time() + self::HIDE_DELAY ), false );
 				break;
 		}
 

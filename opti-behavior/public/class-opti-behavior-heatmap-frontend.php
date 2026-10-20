@@ -1010,6 +1010,9 @@ class Opti_Behavior_Heatmap_Frontend {
 			// phpcs:enable WordPress.Security.NonceVerification.Recommended
 			// Query parameters the tracker removes from every URL it sends (OPT-574).
 			'url_privacy'      => opti_behavior_url_privacy_js_config(),
+			// Shop page event the tracker sends once per page load (product view /
+			// checkout start). Depends on the page only: true under a page cache.
+			'shop'             => class_exists( 'Opti_Behavior_Shop_Events' ) ? Opti_Behavior_Shop_Events::page_context() : array(),
 		);
 
 		wp_localize_script( 'opti-behavior-reporter', 'optiBehaviorHeatmapConfig', $config );
@@ -1093,6 +1096,10 @@ class Opti_Behavior_Heatmap_Frontend {
 		// Translatable default strings (used when site owner leaves them blank).
 		$default_title   = __( 'We value your privacy', 'opti-behavior' );
 		$default_message = __( 'We use cookies to enhance your browsing experience and analyze our traffic. By clicking "Accept All", you consent to our use of analytics cookies.', 'opti-behavior' );
+		// Shop sites: purchases named as a purpose (legal review OPT-1187).
+		if ( class_exists( 'Opti_Behavior_Shop_Events' ) && Opti_Behavior_Shop_Events::is_enabled() ) {
+			$default_message = __( 'We use cookies to enhance your browsing experience, analyze our traffic and understand purchases in our shop. By clicking "Accept All", you consent to our use of analytics cookies.', 'opti-behavior' );
+		}
 		$default_policy_url = function_exists( 'get_privacy_policy_url' ) ? get_privacy_policy_url() : '';
 		if ( empty( $default_policy_url ) ) {
 			$default_policy_url = home_url( '/privacy-policy/' );

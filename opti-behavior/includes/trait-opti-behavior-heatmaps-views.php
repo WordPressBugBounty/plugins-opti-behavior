@@ -34,8 +34,9 @@ if ( ! trait_exists( 'Opti_Behavior_Heatmaps_Views_Trait' ) ) {
 			<div class="heatmaps-header">
 				<div class="heatmaps-header-content">
 					<div class="heatmaps-title-section">
-						<div class="heatmaps-icon"><i data-lucide="flame"></i></div>
+						<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 						<div class="heatmaps-title-text">
+							<?php Opti_Behavior_Admin_Brand::render_name(); ?>
 							<h1 class="heatmaps-title"><?php esc_html_e( 'Heatmaps', 'opti-behavior' ); ?><?php opti_behavior_tooltip_e( $tooltips['heatmap_overview']['title'], $tooltips['heatmap_overview']['content'], $tooltips['heatmap_overview']['simple'], '', array( 'position' => 'bottom' ) ); ?></h1>
 							<div class="heatmaps-subtitle"><?php esc_html_e( 'View and analyze user interaction heatmaps', 'opti-behavior' ); ?></div>
 						</div>
@@ -187,6 +188,11 @@ if ( ! trait_exists( 'Opti_Behavior_Heatmaps_Views_Trait' ) ) {
 			$tooltips = opti_behavior_get_heatmaps_tooltips();
 			?>
 			<div class="heatmaps-content">
+				<?php
+				if ( class_exists( 'Opti_Behavior_Setup_Guide' ) ) {
+					Opti_Behavior_Setup_Guide::render_first_day_box( 'heatmaps' );
+				}
+				?>
 				<div class="heatmaps-panel">
 					<div class="panel-header">
 						<h3 class="panel-title">

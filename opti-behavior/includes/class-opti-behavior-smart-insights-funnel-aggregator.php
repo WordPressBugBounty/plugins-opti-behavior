@@ -57,6 +57,11 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 			'exclude_spam' => $this->is_spam_excluded(),
 		);
 		$args     = wp_parse_args( $args, $defaults );
+		// The generator passes null for an unscoped run: null = the site default,
+		// never "count every tracking row" (OPT-1617: 406 lost vs 91 entries).
+		if ( null === $args['exclude_spam'] ) {
+			$args['exclude_spam'] = $this->is_spam_excluded();
+		}
 
 		$start_date  = $this->normalize_start_datetime( $start_date );
 		$end_date    = $this->normalize_end_datetime( $end_date );
@@ -71,9 +76,13 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 			return array();
 		}
 
-		$spam_clause = ! empty( $args['exclude_spam'] ) ? $this->get_tracking_spam_exclusion_clause( 't', $sessions_table ) : '';
+		$spam_clause = $this->get_tracking_spam_exclusion_clause( 't', $sessions_table, ! empty( $args['exclude_spam'] ) );
 
 		$status_clause = $this->column_exists( $funnels_table, 'status' ) ? "AND (f.status = 'active' OR f.status IS NULL OR f.status = '')" : '';
+		// OPT-1619: a suggested template funnel (not confirmed) raises no card.
+		if ( class_exists( 'Opti_Behavior_Funnel_Database' ) ) {
+			$status_clause .= Opti_Behavior_Funnel_Database::confirmed_sql( 'f' );
+		}
 
 		$sql = "SELECT
 				f.id AS funnel_id,
@@ -162,7 +171,7 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 		$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
 		$placeholders   = implode( ',', array_fill( 0, count( $funnel_ids ), '%d' ) );
 		$params         = array_merge( $funnel_ids, array( $start_date, $end_date ) );
-		$spam_clause    = ! empty( $args['exclude_spam'] ) ? $this->get_tracking_spam_exclusion_clause( 't', $sessions_table ) : '';
+		$spam_clause    = $this->get_tracking_spam_exclusion_clause( 't', $sessions_table, ! empty( $args['exclude_spam'] ) );
 
 		$sql  = "SELECT x.funnel_id, x.max_step_reached, COUNT(*) AS sessions
 			FROM (
@@ -197,6 +206,59 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 	}
 
 	/**
+	 * A step name a visitor can read (OPT-1627): a discovered step on page 2 of
+	 * an archive was named "2" (last segment of `/category/x/page/2/`). A name
+	 * made of digits only becomes "<archive title> (page N)" — the term of that
+	 * slug when one exists, else the slug in words — or the URL path.
+	 *
+	 * @param string $name        Stored step name.
+	 * @param string $url_pattern Step URL pattern.
+	 * @return string
+	 */
+	public static function readable_step_label( $name, $url_pattern ) {
+		$name = trim( (string) $name );
+		if ( '' !== $name && ! ctype_digit( $name ) ) {
+			return $name;
+		}
+		$path     = (string) ( function_exists( 'wp_parse_url' ) ? wp_parse_url( (string) $url_pattern, PHP_URL_PATH ) : parse_url( (string) $url_pattern, PHP_URL_PATH ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- fallback outside WordPress.
+		$path     = '' !== $path ? $path : (string) $url_pattern;
+		$segments = array_values( array_filter( explode( '/', $path ), 'strlen' ) );
+		$page     = '';
+		if ( ! empty( $segments ) && ctype_digit( (string) end( $segments ) ) ) {
+			$page = (string) array_pop( $segments );
+			if ( ! empty( $segments ) && 'page' === strtolower( (string) end( $segments ) ) ) {
+				array_pop( $segments );
+			}
+		}
+		$slug = empty( $segments ) ? '' : strtolower( trim( (string) end( $segments ) ) );
+		if ( '' === $slug ) {
+			return '' !== $path ? $path : $name;
+		}
+		$title = '';
+		if ( function_exists( 'get_terms' ) ) {
+			$terms = get_terms(
+				array(
+					'slug'       => $slug,
+					'hide_empty' => false,
+					'number'     => 1,
+				)
+			);
+			if ( is_array( $terms ) && ! empty( $terms[0]->name ) ) {
+				$title = wp_strip_all_tags( (string) $terms[0]->name );
+			}
+		}
+		if ( '' === $title ) {
+			$title = ucwords( trim( str_replace( array( '-', '_' ), ' ', wp_strip_all_tags( rawurldecode( $slug ) ) ) ) );
+		}
+		if ( '' === $page ) {
+			return $title;
+		}
+
+		/* translators: 1: archive title, 2: page number. */
+		return sprintf( __( '%1$s (page %2$s)', 'opti-behavior' ), $title, $page );
+	}
+
+	/**
 	 * Step metrics from the step definitions and the visits per deepest step
 	 * reached. Pure.
 	 *
@@ -223,7 +285,7 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 
 			$metrics[] = array(
 				'step_number' => $step_number,
-				'label'       => sanitize_text_field( (string) $name ),
+				'label'       => self::readable_step_label( sanitize_text_field( (string) $name ), isset( $step['url_pattern'] ) ? (string) $step['url_pattern'] : '' ),
 				'reached'     => $reached,
 				'reach_rate'  => $entries > 0 ? round( ( $reached / $entries ) * 100, 2 ) : null,
 				'url_pattern' => isset( $step['url_pattern'] ) ? sanitize_text_field( (string) $step['url_pattern'] ) : '',
@@ -376,29 +438,42 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 	}
 
 	/**
-	 * Build a spam exclusion fragment for funnel tracking rows.
+	 * THE visit scope of funnel tracking rows (OPT-1617), shared by Smart
+	 * Insights, the report and the Funnels screen.
 	 *
-	 * Funnel tracking stores only session IDs, so spam filtering must be applied
-	 * against the canonical session table before entries, sessions, and step
-	 * reach counts are calculated.
+	 * A funnel entry counts only when its session_id is a row of the sessions
+	 * table (the tracker also reports ids of visits the session ingest refused:
+	 * excluded admins, bots, gated hits), and, with spam excluded, only when
+	 * that session is human (stored verdict, Traffic's rule, OPT-588). So
+	 * entries of step 1 never exceed the visits of the site.
 	 *
-	 * @param string $tracking_alias Tracking table alias.
-	 * @param string $sessions_table Sessions table name.
-	 * @return string SQL fragment.
+	 * @param string    $tracking_alias Tracking table alias.
+	 * @param string    $sessions_table Sessions table name ('' = default).
+	 * @param bool|null $exclude_spam   Spam excluded (null = site default).
+	 * @return string SQL fragment starting with " AND", or ''.
 	 */
-	private function get_tracking_spam_exclusion_clause( $tracking_alias, $sessions_table ) {
+	public function get_tracking_spam_exclusion_clause( $tracking_alias, $sessions_table = '', $exclude_spam = true ) {
+		global $wpdb;
+
 		$tracking_alias = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $tracking_alias );
 		$tracking_alias = $tracking_alias ? $tracking_alias : 't';
+		$sessions_table = '' !== (string) $sessions_table ? (string) $sessions_table : $wpdb->prefix . 'optibehavior_sessions';
+		$exclude_spam   = null === $exclude_spam ? $this->is_spam_excluded() : (bool) $exclude_spam;
 
 		if ( ! $this->table_exists( $sessions_table ) ) {
 			return ' AND 1=0';
+		}
+
+		$visit_clause = " AND {$tracking_alias}.session_id IN (SELECT s.id FROM {$sessions_table} s)";
+		if ( ! $exclude_spam ) {
+			return $visit_clause;
 		}
 
 		if ( class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ) {
 			// Same rule as the Funnels screen and Traffic (OPT-588): the stored
 			// verdict of the session, never a second duration floor at query time.
 			$where = Opti_Behavior_Stats_Spam_Filter::session_sql( 's', 'AND', true );
-			return '' === $where ? '' : " AND {$tracking_alias}.session_id IN (SELECT s.id FROM {$sessions_table} s WHERE 1=1{$where})";
+			return '' === $where ? $visit_clause : " AND {$tracking_alias}.session_id IN (SELECT s.id FROM {$sessions_table} s WHERE 1=1{$where})";
 		}
 
 		$conditions = array();
@@ -422,7 +497,7 @@ class Opti_Behavior_Smart_Insights_Funnel_Aggregator {
 		}
 
 		if ( empty( $conditions ) ) {
-			return '';
+			return $visit_clause;
 		}
 
 		return " AND {$tracking_alias}.session_id IN (SELECT s.id FROM {$sessions_table} s WHERE " . implode( ' AND ', $conditions ) . ')';

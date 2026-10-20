@@ -46,8 +46,15 @@
 }
 
 .ob-deactivation-survey__intro {
-	margin: 0 0 16px;
+	margin: 0 0 8px;
 	color: #50575e;
+}
+
+.ob-deactivation-survey__notice {
+	margin: 0 0 16px;
+	font-size: 13px;
+	color: #50575e;
+	overflow-wrap: anywhere;
 }
 
 .ob-deactivation-survey__fieldset {
@@ -97,9 +104,18 @@
 
 .ob-deactivation-survey__actions {
 	display: flex;
+	flex-wrap: wrap;
 	justify-content: flex-end;
+	align-items: center;
 	gap: 8px;
 	margin-top: 20px;
+}
+
+/* Skip is as visible as Submit (OPT-1385): same size, secondary style. */
+.ob-deactivation-survey__actions .ob-deactivation-survey__skip,
+.ob-deactivation-survey__actions .ob-deactivation-survey__submit {
+	min-width: 170px;
+	text-align: center;
 }
 
 .ob-deactivation-survey-open {

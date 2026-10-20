@@ -49,8 +49,9 @@ trait Opti_Behavior_AI_Insights_Views_Trait {
 		?>
 		<div class="dashboard-header roadmap-dashboard-header">
 			<div class="dashboard-title-section">
-				<div class="dashboard-icon" aria-hidden="true"><i data-lucide="compass"></i></div>
+				<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 				<div class="dashboard-title-text">
+					<?php Opti_Behavior_Admin_Brand::render_name(); ?>
 					<h1 class="dashboard-title"><?php esc_html_e( 'How it works', 'opti-behavior' ); ?></h1>
 					<div class="dashboard-subtitle">
 						<span class="subtitle-text"><?php esc_html_e( 'Start here: understand Opti-Behavior in two minutes', 'opti-behavior' ); ?></span>
@@ -354,10 +355,14 @@ trait Opti_Behavior_AI_Insights_Views_Trait {
 				/* translators: %d: number of open Critical Smart Insights. */
 				_n( '%d critical problem to fix', '%d critical problems to fix', $severity['critical'], 'opti-behavior' ),
 				$severity['critical']
-			);
-		} elseif ( 'yellow' === $severity['level'] || $open > 0 ) {
-			// Same count as the menu lightbulb tooltip when it is yellow.
-			$to_review  = 'yellow' === $severity['level'] ? (int) $severity['warning'] : $open;
+			) . ( ! empty( $severity['active'] ) ? ' · ' . sprintf(
+				/* translators: %d: number of open Smart Insights. */
+				_n( '%d problem to review', '%d problems to review', (int) $severity['active'], 'opti-behavior' ),
+				(int) $severity['active']
+			) : '' );
+		} elseif ( ! empty( $severity['active'] ) || $open > 0 ) {
+			// Same count as the menu lightbulb tooltip (OPT-1618).
+			$to_review  = ! empty( $severity['active'] ) ? (int) $severity['active'] : $open;
 			$understand = sprintf(
 				/* translators: %d: number of open Smart Insights. */
 				_n( '%d problem to review', '%d problems to review', $to_review, 'opti-behavior' ),

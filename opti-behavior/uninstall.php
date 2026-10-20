@@ -95,11 +95,19 @@ delete_option( 'opti_behavior_onboarding_goal' );
 delete_option( 'opti_behavior_review_installed_at' );
 delete_option( 'opti_behavior_review_banner_status' );
 delete_option( 'opti_behavior_review_banner_remind_at' );
+delete_option( 'opti_behavior_review_has_clicks' );
+delete_option( 'opti_behavior_review_value_seen_at' );
 // Setup guide (setup check + one-time messages)
 delete_option( 'opti_behavior_admin_visits_choice' );
 delete_option( 'opti_behavior_menu_notice' );
 delete_option( 'opti_behavior_guide_seen_version' );
+delete_option( 'opti_behavior_first_visit_seen' );
 delete_option( 'opti_behavior_storage_error' );
+// Local country database (the file lives in uploads/opti-behavior-data/geo/, deleted with that folder below).
+delete_option( 'opti_behavior_geo_db_optin' );
+delete_option( 'opti_behavior_geo_db_monthly' );
+delete_option( 'opti_behavior_geo_db_status' );
+delete_option( 'opti_behavior_geo_db_notice_dismissed' );
 // A/B testing options.
 delete_option( 'opti_behavior_ab_free_limits' );
 delete_option( 'opti_behavior_ab_settings' );
@@ -173,6 +181,10 @@ delete_option( 'opti_behavior_smart_insights_segment_cache_salt' );
 // Privacy salts + registration / API heartbeat state.
 delete_option( 'opti_behavior_daily_salt' );
 delete_option( 'opti_behavior_daily_salt_date' );
+// Anonymous daily salts: one option per UTC day (opti_behavior_anon_salt_Ymd).
+$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'opti\_behavior\_anon\_salt\_%'" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+delete_option( 'opti_behavior_first_activated_at' );
+delete_option( 'opti_behavior_dash_cache_gen' );
 delete_option( 'opti_behavior_registered_site_url' );
 delete_option( 'opti_behavior_registration_date' );
 delete_option( 'opti_behavior_last_api_success' );
@@ -282,6 +294,7 @@ wp_clear_scheduled_hook( 'opti_behavior_ab_cleanup' );
 wp_clear_scheduled_hook( 'opti_behavior_db_size_cap_run' );
 wp_clear_scheduled_hook( 'opti_behavior_db_schema_migration_run' );
 wp_clear_scheduled_hook( 'opti_behavior_daily_heartbeat' );
+wp_clear_scheduled_hook( 'opti_behavior_shop_weekly_report' );
 // --- One-off events ---
 wp_clear_scheduled_hook( 'opti_behavior_debug_auto_disable' );
 wp_clear_scheduled_hook( 'opti_behavior_smart_insights_scheduler_batch' );
@@ -303,6 +316,7 @@ wp_clear_scheduled_hook( 'opti_behavior_spam_tier_run' );
 wp_clear_scheduled_hook( 'opti_behavior_engagement_counters_tick' );
 wp_clear_scheduled_hook( 'opti_behavior_page_type_prune_run' );
 wp_clear_scheduled_hook( 'opti_behavior_page_type_prune_restore' );
+wp_clear_scheduled_hook( 'opti_behavior_geo_db_check' );
 wp_clear_scheduled_hook( 'opti_behavior_page_type_prune_purge' );
 wp_clear_scheduled_hook( 'opti_behavior_spam_few_scrolls_repair' );
 wp_clear_scheduled_hook( 'opti_behavior_spam_referrer_repair' );
@@ -337,6 +351,15 @@ $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_form_interaction
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_form_submissions" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_heatmap_daily" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_insights" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+// Shop events (WooCommerce daily counters) + the Pro rows linked to a session.
+$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_shop_daily" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_shop_session_events" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+delete_option( 'opti_behavior_shop_db_version' );
+delete_option( 'opti_behavior_shop_tracking' );
+delete_option( 'opti_behavior_shop_report' );
+delete_option( 'opti_behavior_shop_report_state' );
+// "Made with Opti-Behavior" box of the reports (OPT-1348).
+delete_option( 'opti_behavior_report_credit' );
 
 // Drop A/B testing tables.
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_ab_daily_stats" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery

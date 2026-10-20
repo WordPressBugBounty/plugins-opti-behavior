@@ -36,15 +36,84 @@ $user_journeys  = $report['sections']['user_journeys'] ?? array();
 $form_analytics = $report['sections']['form_analytics'] ?? array();
 // phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
+// One "What it means / What to do" line per block, from the figures of that block only (OPT-1648).
+$opti_behavior_hint_ctx = array(
+	'days'      => Opti_Behavior_Report_Mailer::period_days( $report ),
+	'pageviews' => (int) ( $kpis['pageviews']['value'] ?? 0 ),
+);
+
 // Header
 echo esc_html( strtoupper( $schedule['name'] ) ) . "\n";
 echo esc_html( str_repeat( '=', strlen( $schedule['name'] ) ) ) . "\n\n";
 echo esc_html( $report['period_label'] ) . ' | ' . esc_html( $report['site_name'] ) . "\n\n";
 
+// Full e-mail (OPT-1647, design OPT-1646): the 3 most costly issues of the PDF site report first, then every block.
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+$opti_behavior_s = ( ! empty( $report['site'] ) && is_array( $report['site'] ) ) ? $report['site'] : null;
+if ( $opti_behavior_s && $opti_behavior_s['visits'] <= 0 ) {
+	/* translators: 1: first day, 2: last day of the period. */
+	echo esc_html( sprintf( __( 'No visit recorded between %1$s and %2$s.', 'opti-behavior' ), Opti_Behavior_Report_Site::day_long( $opti_behavior_s['from'] ), Opti_Behavior_Report_Site::day_long( $opti_behavior_s['to'] ) ) ) . "\n\n";
+} elseif ( $opti_behavior_s ) {
+	echo esc_html( strtoupper( __( 'The 3 most costly issues', 'opti-behavior' ) ) ) . "\n";
+	echo esc_html( str_repeat( '-', 30 ) ) . "\n";
+	if ( empty( $opti_behavior_s['issues'] ) ) {
+		echo esc_html__( 'No costly issue detected for this period.', 'opti-behavior' ) . "\n";
+	}
+	foreach ( $opti_behavior_s['issues'] as $opti_behavior_it ) {
+		echo esc_html( $opti_behavior_it['rank'] . '. [' . $opti_behavior_it['word'] . '] ' . $opti_behavior_it['title'] ) . "\n";
+		if ( '' !== $opti_behavior_it['headline'] ) {
+			echo '   ' . esc_html( $opti_behavior_it['headline'] ) . "\n";
+		}
+		$opti_behavior_parts = array();
+		if ( '' !== $opti_behavior_it['money'] ) {
+			$opti_behavior_parts[] = $opti_behavior_it['money'] . ' ' . __( 'lost, measured', 'opti-behavior' );
+		}
+		if ( null !== $opti_behavior_it['lost'] ) {
+			$opti_behavior_parts[] = number_format_i18n( $opti_behavior_it['lost'] ) . ' ' . _n( 'visit lost', 'visits lost', $opti_behavior_it['lost'], 'opti-behavior' );
+			$opti_behavior_parts[] = number_format_i18n( $opti_behavior_it['share'] ) . ' % ' . __( 'of all visits', 'opti-behavior' );
+		}
+		if ( $opti_behavior_parts ) {
+			echo '   ' . esc_html( implode( ' · ', $opti_behavior_parts ) ) . "\n";
+		}
+		echo '   ' . esc_html( __( 'Where', 'opti-behavior' ) . ': ' . $opti_behavior_it['where'] ) . "\n";
+		if ( '' !== $opti_behavior_it['action'] ) {
+			echo '   ' . esc_html( __( 'What to do', 'opti-behavior' ) . ': ' . $opti_behavior_it['action'] ) . "\n";
+		}
+	}
+	$opti_behavior_n = count( $opti_behavior_s['issues'] );
+	if ( $opti_behavior_n > 0 && $opti_behavior_n < Opti_Behavior_Report_Site::TOP_ISSUES ) {
+		/* translators: %s: number of issues. */
+		echo esc_html( sprintf( _n( 'Only %s open issue over this period.', 'Only %s open issues over this period.', $opti_behavior_n, 'opti-behavior' ), number_format_i18n( $opti_behavior_n ) ) ) . "\n";
+	} elseif ( $opti_behavior_n > 0 && $opti_behavior_s['issues_total'] > $opti_behavior_n ) {
+		$opti_behavior_left = $opti_behavior_s['issues_total'] - $opti_behavior_n;
+		/* translators: %s: number of issues. */
+		echo esc_html( sprintf( _n( '%s other open issue in Smart Insights, with a smaller cost.', '%s other open issues in Smart Insights, with a smaller cost.', $opti_behavior_left, 'opti-behavior' ), number_format_i18n( $opti_behavior_left ) ) ) . "\n";
+	}
+	echo "\n";
+}
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+
+// Key figures first, then Smart Insights (design OPT-1646; the costly issues above already say what to fix).
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+$opti_behavior_si_first = false;
+ob_start();
+
 // KPIs Section
 if ( ! empty( $kpis ) ) {
 	echo esc_html( strtoupper( __( 'Key Performance Indicators', 'opti-behavior' ) ) ) . "\n";
-	echo esc_html( str_repeat( '-', 28 ) ) . "\n\n";
+	echo esc_html( str_repeat( '-', 28 ) ) . "\n";
+	// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+	$opti_behavior_compare_days = Opti_Behavior_Report_Mailer::period_days( $report );
+	if ( $opti_behavior_compare_days > 0 ) {
+		echo esc_html(
+			sprintf(
+				/* translators: %s: number of days of the report period */
+				_n( 'vs previous %s day', 'vs previous %s days', $opti_behavior_compare_days, 'opti-behavior' ),
+				number_format_i18n( $opti_behavior_compare_days )
+			)
+		) . "\n";
+	}
+	echo "\n";
 
 	// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 	$kpi_labels = array(
@@ -78,31 +147,44 @@ if ( ! empty( $kpis ) ) {
 		// Change indicator
 		// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 		$change_str = '';
-		if ( ! empty( $kpi['change']['value'] ) ) {
+		if ( 'new' === ( $kpi['change']['direction'] ?? '' ) ) {
+			$change_str = ' (' . __( 'new', 'opti-behavior' ) . ')';
+		} elseif ( ! empty( $kpi['change']['value'] ) ) {
 			$arrow      = ( $kpi['change']['direction'] ?? '' ) === 'up' ? '^' : 'v';
-			$change_str = ' (' . $arrow . ' ' . $kpi['change']['value'] . '%)';
+			$change_str = ' (' . $arrow . ' ' . Opti_Behavior_Report_Generator::change_amount_text( $kpi['change'] ) . ')';
 			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 		}
 
 		printf( "  %-20s %s%s\n", esc_html( $label ) . ':', esc_html( $value ), esc_html( $change_str ) );
 	}
+	if ( 'anonymous' === ( $report['privacy_mode'] ?? '' ) ) {
+		echo "\n  " . esc_html__( 'Cookieless mode: a returning visitor is counted once per day.', 'opti-behavior' ) . "\n";
+	}
+	echo esc_html( Opti_Behavior_Report_Mailer::hint_text( Opti_Behavior_Report_Mailer::block_hint( 'kpis', $kpis, $opti_behavior_hint_ctx ) ) );
 	echo "\n";
 }
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+$opti_behavior_kpi_text = ob_get_clean();
+ob_start();
 
-// Smart Insights Section
+// Smart Insights Section ("What to fix this week")
 if ( ! empty( $smart_insights ) ) {
-	echo esc_html( strtoupper( __( 'Smart Insights', 'opti-behavior' ) ) ) . "\n";
-	echo esc_html( str_repeat( '-', 14 ) ) . "\n\n";
-	printf(
-		"  %s\n\n",
-		esc_html(
-			sprintf(
-				/* translators: %d: insight count */
-				__( '%d active insight(s) detected for this report period.', 'opti-behavior' ),
-				(int) ( $smart_insights['count'] ?? 0 )
+	// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+	$opti_behavior_si_title = __( 'What to fix this week', 'opti-behavior' );
+	echo esc_html( mb_strtoupper( $opti_behavior_si_title ) ) . "\n";
+	echo esc_html( str_repeat( '-', max( 3, mb_strlen( $opti_behavior_si_title ) ) ) ) . "\n\n";
+	if ( $opti_behavior_si_first ) {
+		printf(
+			"  %s\n\n",
+			esc_html(
+				sprintf(
+					/* translators: %d: insight count */
+					__( '%d active insight(s) detected for this report period.', 'opti-behavior' ),
+					(int) ( $smart_insights['count'] ?? 0 )
+				)
 			)
-		)
-	);
+		);
+	}
 
 	if ( ! empty( $smart_insights['insights'] ) ) {
 		// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
@@ -130,6 +212,10 @@ if ( ! empty( $smart_insights ) ) {
 		echo '  ' . esc_html( $smart_insights['empty_message'] ?? __( 'No active Smart Insights detected for this report period.', 'opti-behavior' ) ) . "\n\n";
 	}
 }
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+$opti_behavior_si_text = ob_get_clean();
+// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- both blocks were escaped while buffered.
+echo $opti_behavior_si_first ? $opti_behavior_si_text . $opti_behavior_kpi_text : $opti_behavior_kpi_text . $opti_behavior_si_text;
 
 // Top Pages Section
 if ( ! empty( $top_pages ) ) {
@@ -151,8 +237,14 @@ if ( ! empty( $top_pages ) ) {
 			esc_html( $time )
 		);
 	}
+	// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+	$opti_behavior_hint = Opti_Behavior_Report_Mailer::hint_text( Opti_Behavior_Report_Mailer::block_hint( 'top_pages', $top_pages, $opti_behavior_hint_ctx ) );
+	if ( '' !== $opti_behavior_hint ) {
+		echo esc_html( $opti_behavior_hint ) . "\n";
+	}
 }
 
+// Sources right after the top pages, then countries (design OPT-1646).
 // Top Referrers Section
 if ( ! empty( $top_referrers ) ) {
 	echo esc_html( strtoupper( __( 'Top Referrers', 'opti-behavior' ) ) ) . "\n";
@@ -166,11 +258,13 @@ if ( ! empty( $top_referrers ) ) {
 
 		printf(
 			/* translators: 1: rank number, 2: referrer source, 3: visit count */
-			esc_html__( '  %1$d. %2$-30s %3$s visits', 'opti-behavior' ) . "\n",
+			esc_html__( '  %1$d. %2$-30s %3$s visits', 'opti-behavior' ),
 			intval( $i + 1 ),
 			esc_html( $source ),
 			esc_html( $visits )
 		);
+		// Share of all visits of the period (OPT-1650).
+		echo isset( $ref['share'] ) ? ' (' . esc_html( number_format_i18n( (int) $ref['share'] ) ) . "%)\n" : "\n";
 	}
 	echo "\n";
 }
@@ -189,9 +283,16 @@ if ( ! empty( $traffic ) && ! empty( $traffic['breakdown'] ) ) {
 
 		printf( "  %-20s %s (%s%%)\n", esc_html( $type ) . ':', esc_html( $count ), esc_html( $pct ) );
 	}
+	// Devices in % (OPT-1650): the Traffic screen device rows, as the PDF prints them.
+	$opti_behavior_devices = isset( $report['site']['devices'] ) && is_array( $report['site']['devices'] ) ? $report['site']['devices'] : array();
+	if ( ! empty( $opti_behavior_devices ) ) {
+		echo "\n  " . esc_html__( 'Device', 'opti-behavior' ) . ":\n";
+		foreach ( array_slice( $opti_behavior_devices, 0, 4 ) as $opti_behavior_device ) {
+			printf( "  %-20s %s (%s%%)\n", esc_html( (string) ( $opti_behavior_device['label'] ?? '' ) ) . ':', esc_html( number_format_i18n( (int) ( $opti_behavior_device['count'] ?? 0 ) ) ), esc_html( number_format_i18n( (int) ( $opti_behavior_device['share'] ?? 0 ) ) ) );
+		}
+	}
 	echo "\n";
 }
-
 // Geographic Distribution Section
 if ( ! empty( $geographic ) ) {
 	echo esc_html( strtoupper( __( 'Geographic Distribution', 'opti-behavior' ) ) ) . "\n";
@@ -221,18 +322,13 @@ if ( ! empty( $heatmap ) ) {
 	echo esc_html( strtoupper( __( 'Click Heatmap Summary', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 21 ) ) . "\n\n";
 
-	/* translators: %s: total click count */
-	printf( '  ' . esc_html__( 'Total Clicks: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $heatmap['total_clicks'] ?? 0 ) ) );
-	/* translators: %s: number of pages tracked */
-	printf( '  ' . esc_html__( 'Pages Tracked: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $heatmap['pages_tracked'] ?? 0 ) ) );
-
+	// Most clicked pages, their most clicked element and their heatmap; total on one line under them (OPT-1515).
 	if ( ! empty( $heatmap['top_clicked'] ) ) {
-		echo "\n  " . esc_html__( 'Most Clicked Pages:', 'opti-behavior' ) . "\n";
+		echo '  ' . esc_html__( 'Most Clicked Pages:', 'opti-behavior' ) . "\n";
 		// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 		foreach ( array_slice( $heatmap['top_clicked'], 0, 3 ) as $i => $clicked ) {
-			$title  = mb_strimwidth( $clicked['title'], 0, 40, '...' );
+			$title  = mb_strimwidth( (string) $clicked['title'], 0, 40, '...' );
 			$clicks = number_format( $clicked['clicks'] );
-			// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 			printf(
 				/* translators: 1: rank number, 2: page title, 3: click count */
 				esc_html__( '    %1$d. %2$s (%3$s clicks)', 'opti-behavior' ) . "\n",
@@ -240,8 +336,21 @@ if ( ! empty( $heatmap ) ) {
 				esc_html( $title ),
 				esc_html( $clicks )
 			);
+			if ( ! empty( $clicked['element'] ) ) {
+				/* translators: %s: short label of the most clicked element of the page, e.g. "Add to cart" */
+				echo '       ' . esc_html( sprintf( __( 'Most clicked: %s', 'opti-behavior' ), $clicked['element'] ) ) . "\n";
+			}
+			if ( ! empty( $clicked['page_id'] ) ) {
+				echo '       ' . esc_url( admin_url( 'admin.php?page=opti-behavior-heatmap-detail&page_id=' . (int) $clicked['page_id'] . '&type=click&device=desktop' ) ) . "\n";
+			}
 		}
+		// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+		echo "\n";
 	}
+
+	/* translators: %s: total click count */
+	printf( '  ' . esc_html__( 'Total Clicks: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $heatmap['total_clicks'] ?? 0 ) ) );
+	echo esc_html( Opti_Behavior_Report_Mailer::hint_text( Opti_Behavior_Report_Mailer::block_hint( 'heatmap_summary', $heatmap, $opti_behavior_hint_ctx ) ) );
 	echo "\n";
 }
 
@@ -272,6 +381,51 @@ if ( ! empty( $funnels ) && ! empty( $funnels['total_funnels'] ) ) {
 			);
 		}
 	}
+	// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+	$opti_behavior_hint = Opti_Behavior_Report_Mailer::hint_text( Opti_Behavior_Report_Mailer::block_hint( 'funnels', $funnels, $opti_behavior_hint_ctx ) );
+	if ( '' !== $opti_behavior_hint ) {
+		echo esc_html( $opti_behavior_hint ) . "\n";
+	}
+}
+
+// A/B Testing (Free, OPT-1650): the block of the report signals engine; no test = no block.
+$opti_behavior_ab = Opti_Behavior_Report_Mailer::signal_block( $report, 'ab_testing' );
+if ( $opti_behavior_ab && 'data' === $opti_behavior_ab['state'] && ! empty( $opti_behavior_ab['figures'] ) ) {
+	echo esc_html( strtoupper( $opti_behavior_ab['title'] ) ) . "\n";
+	echo esc_html( str_repeat( '-', 11 ) ) . "\n\n";
+	foreach ( $opti_behavior_ab['figures'] as $opti_behavior_fig ) {
+		echo '  ' . esc_html( $opti_behavior_fig['label'] ) . ': ' . esc_html( $opti_behavior_fig['value'] ) . "\n";
+	}
+	echo esc_html( Opti_Behavior_Report_Mailer::hint_text( Opti_Behavior_Report_Mailer::block_hint( 'ab_testing', $opti_behavior_ab, $opti_behavior_hint_ctx ) ) );
+	if ( ! empty( $opti_behavior_ab['url'] ) ) {
+		echo '  ' . esc_url( $opti_behavior_ab['url'] ) . "\n";
+	}
+	echo "\n";
+}
+
+// Shop block (OPT-1735), after A/B Testing (design OPT-1645, QA OPT-1651): numbers of this period, Pro "Money at stake" or the Pro line.
+if ( ! empty( $report['sections']['shop']['totals'] ) && class_exists( 'Opti_Behavior_Shop_Report' ) ) {
+	$opti_behavior_shop = $report['sections']['shop'];
+	echo esc_html( Opti_Behavior_Shop_Report::render_block_text( $opti_behavior_shop, $opti_behavior_shop['pro'] ?? null, ! empty( $opti_behavior_shop['pro_line'] ) ) );
+}
+
+// Free: each Pro block = its title + one line + the trial page, never a figure (OPT-1647, design OPT-1646).
+if ( empty( $report['is_pro'] ) ) {
+	// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+	$opti_behavior_locked = array(
+		'recordings'    => __( 'Session Recordings', 'opti-behavior' ),
+		'errors'        => __( 'JavaScript Errors', 'opti-behavior' ),
+		'performance'   => __( 'Web Vitals', 'opti-behavior' ),
+		'friction'      => __( 'Friction Events', 'opti-behavior' ),
+		'broken_links'  => __( 'Broken Links', 'opti-behavior' ),
+		'user_journeys' => __( 'User Journeys', 'opti-behavior' ),
+		'forms'         => __( 'Form Analytics', 'opti-behavior' ),
+	);
+	foreach ( $opti_behavior_locked as $opti_behavior_lk => $opti_behavior_lt ) {
+		echo esc_html( strtoupper( $opti_behavior_lt ) . ' (PRO)' ) . "\n";
+		echo '  ' . esc_html__( 'Available with Opti-Behavior Pro', 'opti-behavior' ) . ' · ' . esc_html__( 'See the Pro trial', 'opti-behavior' ) . ': ' . esc_url( Opti_Behavior_Report_Signals::trial_url( $opti_behavior_lk ) ) . "\n\n";
+	}
+	// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 }
 
 // Session Recordings Stats (Pro)
@@ -300,6 +454,7 @@ if ( $report['is_pro'] && ! empty( $errors ) ) {
 	printf( '  ' . esc_html__( 'Total Errors: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $errors['total'] ) ) );
 	/* translators: %s: number of unresolved errors */
 	printf( '  ' . esc_html__( 'Unresolved: %s', 'opti-behavior' ) . "\n", esc_html( number_format( $errors['unresolved'] ) ) );
+	echo esc_html( Opti_Behavior_Report_Mailer::hint_text( Opti_Behavior_Report_Mailer::block_hint( 'errors', $errors, $opti_behavior_hint_ctx ) ) );
 	echo "\n";
 }
 
@@ -325,6 +480,7 @@ if ( $report['is_pro'] && ! empty( $performance ) ) {
 			printf( "  %-35s %s\n", esc_html( $config['label'] ), esc_html( $value ) );
 		}
 	}
+	echo esc_html( Opti_Behavior_Report_Mailer::hint_text( Opti_Behavior_Report_Mailer::block_hint( 'performance', $performance, $opti_behavior_hint_ctx ) ) );
 	echo "\n";
 }
 
@@ -374,6 +530,7 @@ if ( $report['is_pro'] && ! empty( $broken_links ) ) {
 			);
 		}
 	}
+	echo esc_html( Opti_Behavior_Report_Mailer::hint_text( Opti_Behavior_Report_Mailer::block_hint( 'broken_links', $broken_links, $opti_behavior_hint_ctx ) ) );
 	echo "\n";
 }
 
@@ -476,16 +633,33 @@ if ( $report['is_pro'] && ! empty( $form_analytics ) ) {
 			);
 		}
 	}
+	echo esc_html( Opti_Behavior_Report_Mailer::hint_text( Opti_Behavior_Report_Mailer::block_hint( 'form_analytics', $form_analytics, $opti_behavior_hint_ctx ) ) );
 	echo "\n";
 }
 
-// CTA
+// CTA: the PDF report of these days (when the generator read it) + the dashboard.
 echo esc_html( str_repeat( '=', 50 ) ) . "\n\n";
+if ( $opti_behavior_s && '' !== (string) ( $opti_behavior_s['report_url'] ?? '' ) ) {
+	echo esc_html( __( 'View the full report (PDF)', 'opti-behavior' ) ) . ":\n";
+	echo esc_url( $opti_behavior_s['report_url'] ) . "\n\n";
+}
 echo esc_html( __( 'View Full Dashboard', 'opti-behavior' ) ) . ":\n";
 echo esc_url( admin_url( 'admin.php?page=opti-behavior-analytics' ) ) . "\n\n";
+
+// Pro line, Free only (OPT-1517).
+$opti_behavior_pro_line = Opti_Behavior_Report_Mailer::pro_line( $report );
+if ( '' !== $opti_behavior_pro_line ) {
+	echo esc_html( $opti_behavior_pro_line ) . "\n";
+	echo esc_html( __( 'See what Pro adds', 'opti-behavior' ) ) . ': ' . esc_url( Opti_Behavior_Report_Mailer::PRO_LINE_URL ) . "\n\n";
+}
 
 // Footer
 echo esc_html( str_repeat( '-', 50 ) ) . "\n";
 echo esc_html( __( 'This report was automatically generated by Opti-Behavior', 'opti-behavior' ) ) . "\n";
+// Why this address receives the report: this recipient only (OPT-1517).
+$opti_behavior_recipient_line = Opti_Behavior_Report_Mailer::recipient_line( $report, $schedule );
+if ( '' !== $opti_behavior_recipient_line ) {
+	echo esc_html( $opti_behavior_recipient_line ) . "\n";
+}
 echo esc_html( __( 'Manage report settings', 'opti-behavior' ) ) . ': ' . esc_url( admin_url( 'admin.php?page=opti-behavior-settings&settings_tab=scheduled-reports' ) ) . "\n";
 echo esc_html( $report['site_name'] ) . ' | ' . esc_url( home_url() ) . "\n";

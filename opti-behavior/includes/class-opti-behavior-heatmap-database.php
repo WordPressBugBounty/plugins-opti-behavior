@@ -346,6 +346,13 @@ class Opti_Behavior_Heatmap_Database {
 			Opti_Behavior_Dimension_Aggregates::maybe_schedule_backfill();
 		}
 
+		// Create shop events table (WooCommerce daily counters; created on every
+		// site, filled only when WooCommerce is active).
+		if ( class_exists( 'Opti_Behavior_Shop_Events' ) ) {
+			$debug_manager->log( 'Creating/updating shop events table', 'debug', 'database' );
+			Opti_Behavior_Shop_Events::create_table( $charset_collate );
+		}
+
 		// Create Smart Insights table (for deterministic, aggregated insight storage)
 		$debug_manager->log( 'Creating/updating Smart Insights table', 'debug', 'database' );
 		$this->create_insights_table( $charset_collate );

@@ -174,7 +174,8 @@ class Opti_Behavior_Heatmap_Bot_Tracker {
 		}
 
 		// Get additional data
-		$ip = $this->get_client_ip();
+		// Anonymous Mode never keeps a full address: the bot log gets the network only (OPT-843).
+		$ip = $this->get_storable_ip();
 		// Personal data (email, access_code, token…) out of the bot log (OPT-574).
 		$visited_url = opti_behavior_strip_sensitive_query_args( $this->get_current_url() );
 		$referrer = isset( $_SERVER['HTTP_REFERER'] ) ? opti_behavior_strip_sensitive_query_args( esc_url_raw( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) ) : '';
@@ -240,6 +241,60 @@ class Opti_Behavior_Heatmap_Bot_Tracker {
 		// Validate IP address
 		if ( filter_var( $ip, FILTER_VALIDATE_IP ) ) {
 			return $ip;
+		}
+
+		return '';
+	}
+
+	/**
+	 * IP value a bot log row may store for the current request.
+	 *
+	 * Detection relies on the User-Agent only, so a human whose browser matches a
+	 * pattern (link previews, a wide custom pattern) can land here. A bot has no
+	 * consent to give: the privacy mode alone decides. Full mode keeps the address,
+	 * Anonymous Mode (also the fallback for an unset / unknown value) keeps the
+	 * network part only.
+	 *
+	 * @return string
+	 */
+	private function get_storable_ip() {
+		$ip = $this->get_client_ip();
+
+		$options = $this->core->get_options();
+		$mode    = isset( $options['privacy_mode'] ) ? $options['privacy_mode'] : 'anonymous';
+
+		if ( 'full' === $mode ) {
+			return $ip;
+		}
+
+		return self::truncate_ip( $ip );
+	}
+
+	/**
+	 * Truncate an IP address to its network part.
+	 *
+	 * IPv4: last octet set to 0 (/24). IPv6: everything after the first 48 bits
+	 * set to 0 (/48). Anything that is not a valid address gives an empty string.
+	 *
+	 * @param string $ip IP address.
+	 * @return string Truncated address, or '' when $ip is not a valid address.
+	 */
+	public static function truncate_ip( $ip ) {
+		$ip = is_string( $ip ) ? trim( $ip ) : '';
+
+		if ( false !== filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ) {
+			$octets    = explode( '.', $ip );
+			$octets[3] = '0';
+			return implode( '.', $octets );
+		}
+
+		if ( false !== filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 ) ) {
+			$packed = inet_pton( $ip );
+			if ( false === $packed || 16 !== strlen( $packed ) ) {
+				return '';
+			}
+			$truncated = inet_ntop( substr( $packed, 0, 6 ) . str_repeat( "\0", 10 ) );
+			return false === $truncated ? '' : $truncated;
 		}
 
 		return '';

@@ -330,7 +330,7 @@ if ( ! function_exists( 'opti_behavior_views_render_dashboard_content' ) ) {
 								<span class="visitor-pageblock"><span class="visitor-title"><?php echo esc_html( $visitor['page_title'] ?? '' ); ?></span><a class="visitor-url" href="<?php echo esc_url( $visitor['current_url'] ?? '' ); ?>" target="_blank" rel="noopener"><?php echo esc_html( $visitor['current_url'] ?? '' ); ?></a></span>
 								<span class="visitor-ip-col"><?php
 									$ip_raw = isset( $visitor['ip'] ) ? (string) $visitor['ip'] : '';
-									$ip_raw = trim( $ip_raw );
+									$ip_raw = function_exists( 'opti_behavior_display_ip' ) ? opti_behavior_display_ip( $ip_raw ) : 'Anonymous';
 									if ( '' === $ip_raw ) {
 										echo '<span class="visitor-ip-pill visitor-ip-anon"><i data-lucide="shield-check" style="width:13px;height:13px;display:inline-block;vertical-align:-2px;margin-right:3px;"></i>' . esc_html__( 'Anonymous', 'opti-behavior' ) . '</span>';
 									} elseif ( 'Anonymous' === $ip_raw ) {

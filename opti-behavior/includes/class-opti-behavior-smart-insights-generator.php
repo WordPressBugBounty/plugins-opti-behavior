@@ -52,6 +52,64 @@ class Opti_Behavior_Smart_Insights_Generator {
 	const CRON_HOOK      = 'opti_behavior_smart_insights_generate_daily';
 
 	/**
+	 * Report that answers the card's own action (OPT-1627): signal => report
+	 * type put FIRST in related_reports when the card has none of that type.
+	 * "Clicks with no effect" opened "Review errors"; "Conversion dropped"
+	 * (action: check what changed) opened the errors of the page.
+	 */
+	const PRIMARY_REPORTS = array(
+		'dead_or_rage_click_signal' => array(
+			'type'  => 'heatmap',
+			'label' => 'View heatmap',
+		),
+		'conversion_drop_alert'     => array(
+			'type'  => 'analytics',
+			'label' => 'Compare periods',
+		),
+		'engagement_decay'          => array(
+			'type'  => 'analytics',
+			'label' => 'Compare periods',
+		),
+	);
+
+	/**
+	 * Put the report of PRIMARY_REPORTS first in the card's related reports.
+	 * The JS resolves the link from the type and the card context (page,
+	 * dates, spam scope); the label is translated here.
+	 *
+	 * @param array $insight Insight payload.
+	 * @return array
+	 */
+	public static function add_primary_report( $insight ) {
+		$signal = isset( $insight['signal_id'] ) ? (string) $insight['signal_id'] : '';
+		if ( ! is_array( $insight ) || ! isset( self::PRIMARY_REPORTS[ $signal ] ) ) {
+			return $insight;
+		}
+		$primary = self::PRIMARY_REPORTS[ $signal ];
+		$reports = isset( $insight['related_reports'] ) && is_array( $insight['related_reports'] ) ? $insight['related_reports'] : array();
+		foreach ( $reports as $report ) {
+			if ( is_array( $report ) && isset( $report['type'] ) && $primary['type'] === $report['type'] ) {
+				return $insight;
+			}
+		}
+		$labels = array(
+			'View heatmap'    => __( 'View heatmap', 'opti-behavior' ),
+			'Compare periods' => __( 'Compare periods', 'opti-behavior' ),
+		);
+		array_unshift(
+			$reports,
+			array(
+				'type'    => $primary['type'],
+				'label'   => isset( $labels[ $primary['label'] ] ) ? $labels[ $primary['label'] ] : $primary['label'],
+				'primary' => true,
+			)
+		);
+		$insight['related_reports'] = $reports;
+
+		return $insight;
+	}
+
+	/**
 	 * Insight repository.
 	 *
 	 * @var Opti_Behavior_Smart_Insights_Repository
@@ -441,6 +499,7 @@ class Opti_Behavior_Smart_Insights_Generator {
 				$insight = $this->apply_spam_scope_to_insight( $insight, $args['exclude_spam'] );
 				$insight = $this->apply_historical_persistence_scoring( $insight, $date_range );
 
+				$insight = self::add_primary_report( $insight );
 				if ( isset( $insight['related_reports'] ) ) {
 					$insight['related_reports'] = apply_filters( 'opti_behavior_smart_insights_related_reports', $insight['related_reports'], $insight );
 				}
@@ -494,6 +553,14 @@ class Opti_Behavior_Smart_Insights_Generator {
 					$merged = $this->repository->close_merged_duplicates( $this->merged_group_keys );
 					if ( ! is_wp_error( $merged ) ) {
 						$merged_duplicates += (int) $merged;
+					}
+				}
+				// Cards of suggested template funnels (OPT-1619, not confirmed by
+				// the user): closed as `rule_updated`, never as resolved.
+				if ( class_exists( 'Opti_Behavior_Funnel_Database' ) && method_exists( $this->repository, 'close_suggested_funnel_insights' ) ) {
+					$suggested = $this->repository->close_suggested_funnel_insights( Opti_Behavior_Funnel_Database::suggested_ids() );
+					if ( ! is_wp_error( $suggested ) ) {
+						$rule_updated += (int) $suggested;
 					}
 				}
 				// Then the cards an older rule raised and the current rule no

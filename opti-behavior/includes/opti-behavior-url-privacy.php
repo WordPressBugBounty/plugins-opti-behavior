@@ -93,6 +93,58 @@ if ( ! function_exists( 'opti_behavior_value_looks_like_email' ) ) {
 	}
 }
 
+if ( ! function_exists( 'opti_behavior_param_name_is_secret' ) ) {
+	/**
+	 * Whether a query parameter NAME announces a secret, beyond the exact
+	 * names of {@see opti_behavior_sensitive_query_params()} (OPT-1687:
+	 * `?reset-token=…`, `rp_key`, `password-reset-token` were stored and shown
+	 * in Top Pages). Same rule in the JS trackers (`obNameIsSecret()`, Free +
+	 * Pro): keep both in step.
+	 *
+	 * The name is split into words (separators `- _ .` and camelCase), then:
+	 * - the joined name CONTAINS token, password, passwd, pwd or secret;
+	 * - a word IS key(s), reset, auth, oauth or session(s);
+	 * - the joined name STARTS with reset, session, or auth (not author);
+	 * - the joined name ENDS with key after a known prefix (apikey, rpkey,
+	 *   resetkey, activationkey, accesskey…).
+	 * Kept: utm_*, s, page, paged, ref, p, lang, author, keyword, monkey…
+	 *
+	 * @param string $name Raw (possibly URL-encoded) parameter name.
+	 * @return bool
+	 */
+	function opti_behavior_param_name_is_secret( $name ) {
+		$name = preg_replace( '/\[.*$/', '', trim( urldecode( (string) $name ) ) );
+		$name = preg_replace( '/([a-z0-9])([A-Z])/', '$1_$2', (string) $name );
+		$words = preg_split( '/[^a-z0-9]+/', strtolower( (string) $name ), -1, PREG_SPLIT_NO_EMPTY );
+		if ( empty( $words ) ) {
+			return false;
+		}
+		$joined = implode( '', $words );
+
+		foreach ( array( 'token', 'password', 'passwd', 'pwd', 'secret' ) as $part ) {
+			if ( false !== strpos( $joined, $part ) ) {
+				return true;
+			}
+		}
+		foreach ( $words as $word ) {
+			if ( in_array( $word, array( 'key', 'keys', 'reset', 'auth', 'oauth', 'session', 'sessions' ), true ) ) {
+				return true;
+			}
+		}
+		if ( 0 === strpos( $joined, 'reset' ) || 0 === strpos( $joined, 'session' )
+			|| ( 0 === strpos( $joined, 'auth' ) && 0 !== strpos( $joined, 'author' ) ) ) {
+			return true;
+		}
+		foreach ( array( 'api', 'rp', 'reset', 'activation', 'access', 'auth', 'private', 'license', 'licence', 'login', 'user', 'pass', 'order', 'consumer', 'signing', 'encryption' ) as $prefix ) {
+			if ( $prefix . 'key' === substr( $joined, - strlen( $prefix . 'key' ) ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+}
+
 if ( ! function_exists( 'opti_behavior_strip_sensitive_pairs' ) ) {
 	/**
 	 * Remove the sensitive `name=value` pairs of a query string.
@@ -118,13 +170,102 @@ if ( ! function_exists( 'opti_behavior_strip_sensitive_pairs' ) ) {
 			$base = strtolower( trim( urldecode( $name ) ) );
 			$base = preg_replace( '/\[.*$/', '', $base );
 
-			if ( isset( $sensitive[ $base ] ) || opti_behavior_value_looks_like_email( $value ) ) {
+			if ( isset( $sensitive[ $base ] ) || opti_behavior_param_name_is_secret( $name ) || opti_behavior_value_looks_like_email( $value ) ) {
 				continue;
 			}
 			$kept[] = $pair;
 		}
 
 		return implode( '&', $kept );
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_order_endpoint_slugs' ) ) {
+	/**
+	 * WooCommerce endpoints whose next path segment is an order number
+	 * (OPT-1405): `/checkout/order-received/186/`, `/my-account/view-order/186/`,
+	 * `/checkout/order-pay/186/`. Default names + the names set in
+	 * WooCommerce > Settings > Advanced (translated sites: `commande-recue`…).
+	 * Without WooCommerce the list is empty: nothing is changed.
+	 *
+	 * Filter `opti_behavior_order_endpoint_slugs` adds or removes names.
+	 *
+	 * @return string[] Unique lowercase names, raw and URL-encoded.
+	 */
+	function opti_behavior_order_endpoint_slugs() {
+		$slugs = array();
+		if ( class_exists( 'WooCommerce', false ) ) {
+			$slugs = array( 'order-received', 'view-order', 'order-pay' );
+			if ( function_exists( 'get_option' ) ) {
+				foreach ( array( 'woocommerce_checkout_order_received_endpoint', 'woocommerce_myaccount_view_order_endpoint', 'woocommerce_checkout_pay_endpoint' ) as $option ) {
+					$value = get_option( $option, '' );
+					if ( is_string( $value ) && '' !== $value ) {
+						$slugs[] = $value;
+					}
+				}
+			}
+		}
+		if ( function_exists( 'apply_filters' ) ) {
+			/**
+			 * Filters the endpoint names whose order number is removed from tracked URLs.
+			 *
+			 * @param string[] $slugs Endpoint names (empty without WooCommerce).
+			 */
+			$slugs = apply_filters( 'opti_behavior_order_endpoint_slugs', $slugs );
+		}
+
+		$clean = array();
+		foreach ( (array) $slugs as $slug ) {
+			if ( ! is_scalar( $slug ) ) {
+				continue;
+			}
+			$slug = strtolower( trim( (string) $slug, " \t\n\r\0\x0B/" ) );
+			if ( '' === $slug || false !== strpbrk( $slug, "/?#&= \t" ) ) {
+				continue;
+			}
+			$clean[ $slug ] = true;
+			$clean[ strtolower( rawurlencode( $slug ) ) ] = true;
+		}
+
+		return array_keys( $clean );
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_strip_order_numbers' ) ) {
+	/**
+	 * Remove the WooCommerce order number that follows an order endpoint
+	 * (OPT-1405, Juriste 13/10: never an order number, not even hashed):
+	 * `/checkout/order-received/186/` → `/checkout/order-received/`, and with
+	 * plain permalinks `?order-received=186` → `?order-received=`. The
+	 * endpoint itself stays, so funnels "contains /checkout/order-received/"
+	 * still match. Idempotent.
+	 *
+	 * @param mixed $url URL.
+	 * @return mixed Clean URL; non-strings untouched.
+	 */
+	function opti_behavior_strip_order_numbers( $url ) {
+		if ( ! is_string( $url ) || '' === $url ) {
+			return $url;
+		}
+		$alt = array();
+		foreach ( opti_behavior_order_endpoint_slugs() as $slug ) {
+			if ( false !== stripos( $url, $slug ) ) {
+				$alt[] = preg_quote( $slug, '~' );
+			}
+		}
+		if ( empty( $alt ) ) {
+			return $url;
+		}
+		$alt = implode( '|', $alt );
+
+		$cut  = strcspn( $url, '?#' );
+		$path = preg_replace( '~/(' . $alt . ')/\d+(?=/|$)/?~i', '/$1/', (string) substr( $url, 0, $cut ) );
+		$rest = preg_replace( '~([?&])(' . $alt . ')=\d+(?=&|#|$)~i', '$1$2=', (string) substr( $url, $cut ) );
+		if ( null === $path || null === $rest ) {
+			return $url;
+		}
+
+		return $path . $rest;
 	}
 }
 
@@ -137,7 +278,9 @@ if ( ! function_exists( 'opti_behavior_strip_sensitive_query_args' ) ) {
 	 * - every parameter whose value contains an e-mail address, whatever its
 	 *   name (also `%40`-encoded);
 	 * - the same rules inside the `#fragment` (`#access_token=…`, `#/route?email=…`),
-	 *   and a fragment that is itself an e-mail address.
+	 *   and a fragment that is itself an e-mail address;
+	 * - the WooCommerce order number after an order endpoint
+	 *   ({@see opti_behavior_strip_order_numbers()}, OPT-1405).
 	 *
 	 * Everything else (utm_*, `s`, pagination, A/B parameters…) is kept as it
 	 * was. Works on absolute URLs, paths and protocol-relative URLs.
@@ -146,6 +289,7 @@ if ( ! function_exists( 'opti_behavior_strip_sensitive_query_args' ) ) {
 	 * @return mixed Clean URL; non-string values are returned untouched.
 	 */
 	function opti_behavior_strip_sensitive_query_args( $url ) {
+		$url = opti_behavior_strip_order_numbers( $url );
 		if ( ! is_string( $url ) || '' === $url || false === strpbrk( $url, '?#' ) ) {
 			return $url;
 		}
@@ -192,7 +336,7 @@ if ( ! function_exists( 'opti_behavior_strip_sensitive_urls_deep' ) ) {
 	/**
 	 * Apply {@see opti_behavior_strip_sensitive_query_args()} to every string
 	 * of a decoded tracker payload that looks like an URL (absolute,
-	 * protocol-relative, or a path with a query / fragment).
+	 * protocol-relative, or a path without white space).
 	 *
 	 * @param mixed $value Payload (array / object / scalar).
 	 * @param int   $depth Recursion guard.
@@ -214,7 +358,7 @@ if ( ! function_exists( 'opti_behavior_strip_sensitive_urls_deep' ) ) {
 			}
 			return $value;
 		}
-		if ( ! is_string( $value ) || '' === $value || false === strpbrk( $value, '?#' ) ) {
+		if ( ! is_string( $value ) || '' === $value ) {
 			return $value;
 		}
 		if ( preg_match( '#^\s*(?:https?:)?//#i', $value ) || ( '/' === $value[0] && false === strpbrk( $value, " \t\n" ) ) ) {
@@ -256,7 +400,8 @@ if ( ! function_exists( 'opti_behavior_page_identity_key' ) ) {
 	/**
 	 * THE page identity (OPT-602): one page = one key for Traffic Top Pages,
 	 * the Page X-Ray list and the Page X-Ray dossier. Lowercase host (no
-	 * scheme), no fragment, no trailing slash, personal-data parameters
+	 * scheme, no leading `www.`: www.x.tld and x.tld are one site, OPT-1173),
+	 * no fragment, no trailing slash, personal-data parameters
 	 * removed ({@see opti_behavior_strip_sensitive_query_args()}), then the
 	 * query without {@see opti_behavior_page_identity_strip_params()}, sorted.
 	 * Every other parameter (`s`, pagination, A/B, unknown) keeps the page apart.
@@ -281,7 +426,10 @@ if ( ! function_exists( 'opti_behavior_page_identity_key' ) ) {
 			return strtolower( $url );
 		}
 
-		$key  = isset( $parsed['host'] ) ? strtolower( $parsed['host'] ) : '';
+		$key = isset( $parsed['host'] ) ? strtolower( $parsed['host'] ) : '';
+		if ( 0 === strpos( $key, 'www.' ) && strlen( $key ) > 4 ) {
+			$key = substr( $key, 4 );
+		}
 		$path = isset( $parsed['path'] ) ? rtrim( $parsed['path'], '/' ) : '';
 		$key .= '' === $path ? '/' : $path;
 
@@ -316,9 +464,10 @@ if ( ! function_exists( 'opti_behavior_page_identity_key' ) ) {
 if ( ! function_exists( 'opti_behavior_page_identity_members' ) ) {
 	/**
 	 * Every `optibehavior_pages` row that is the same page as each given id
-	 * (same {@see opti_behavior_page_identity_key()}): http / https, trailing
-	 * slash and every query variant of the same path are read, then kept only
-	 * when their key matches. Batched: 2 queries per 25 ids.
+	 * (same {@see opti_behavior_page_identity_key()}): http / https, host with
+	 * and without `www.` (OPT-1173), trailing slash and every query variant of
+	 * the same path are read, then kept only when their key matches. Batched:
+	 * 2 queries per 25 ids.
 	 *
 	 * @param int[] $page_ids Page ids.
 	 * @return array<int,int[]> page_id => member ids (always contains the id
@@ -360,19 +509,24 @@ if ( ! function_exists( 'opti_behavior_page_identity_members' ) ) {
 					$out[ $id ] = array( $id );
 					continue;
 				}
-				$base = $parts['host'] . ( isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '' ) . rtrim( isset( $parts['path'] ) ? $parts['path'] : '', '/' );
+				$bare = strtolower( $parts['host'] );
+				if ( 0 === strpos( $bare, 'www.' ) && strlen( $bare ) > 4 ) {
+					$bare = substr( $bare, 4 );
+				}
+				$tail = ( isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '' ) . rtrim( isset( $parts['path'] ) ? $parts['path'] : '', '/' );
 				foreach ( array( 'http://', 'https://' ) as $scheme ) {
-					$exact = $wpdb->esc_like( $scheme . $base );
-					foreach ( array( '', '/' ) as $slash ) {
-						$likes[] = 'url LIKE %s';
-						$args[]  = $exact . $slash;
-						$likes[] = 'url LIKE %s';
-						$args[]  = $exact . $slash . '?%';
-						$likes[] = 'url LIKE %s';
-						$args[]  = $exact . $slash . '#%';
+					foreach ( array( $bare, 'www.' . $bare ) as $host ) {
+						$exact = $wpdb->esc_like( $scheme . $host . $tail );
+						foreach ( array( '', '/' ) as $slash ) {
+							// Keyed by pattern: the www and the bare row of one page ask for the same rows.
+							$args[ $exact . $slash ]        = $exact . $slash;
+							$args[ $exact . $slash . '?%' ] = $exact . $slash . '?%';
+							$args[ $exact . $slash . '#%' ] = $exact . $slash . '#%';
+						}
 					}
 				}
 			}
+			$likes = array_fill( 0, count( $args ), 'url LIKE %s' );
 			if ( empty( $likes ) ) {
 				continue;
 			}
@@ -405,11 +559,89 @@ if ( ! function_exists( 'opti_behavior_url_privacy_js_config' ) ) {
 	 * Settings the browser trackers need to apply the same rule before
 	 * sending (wp_localize_script key `urlPrivacy`).
 	 *
-	 * @return array{params:string[]}
+	 * @return array{params:string[],order_endpoints:string[]}
 	 */
 	function opti_behavior_url_privacy_js_config() {
 		return array(
-			'params' => opti_behavior_sensitive_query_params(),
+			'params'          => opti_behavior_sensitive_query_params(),
+			'order_endpoints' => opti_behavior_order_endpoint_slugs(),
 		);
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_visitor_label' ) ) {
+	/**
+	 * Anonymous label of a visitor for the admin screens and exports
+	 * (OPT-1689): "Visitor #a1b2c3" = 6 characters of a keyed hash (site salt)
+	 * of the visitor id. Stable from one screen to the next, the same rule for
+	 * a logged-in account and a guest; never a login, name or e-mail, and the
+	 * visitor id cannot be read back from it.
+	 *
+	 * @param string $visitor_id Stored visitor id.
+	 * @return string Label ('' for an empty id).
+	 */
+	function opti_behavior_visitor_label( $visitor_id ) {
+		$visitor_id = (string) $visitor_id;
+		if ( '' === $visitor_id ) {
+			return '';
+		}
+		$code = function_exists( 'wp_hash' )
+			? substr( wp_hash( 'ob-visitor|' . $visitor_id ), 0, 6 )
+			: substr( hash( 'sha256', 'ob-visitor|' . $visitor_id ), 0, 6 );
+		$word = function_exists( '__' ) ? __( 'Visitor', 'opti-behavior' ) : 'Visitor';
+
+		return $word . ' #' . $code;
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_privacy_mode_is_full' ) ) {
+	/**
+	 * Whether the site runs in Full Tracking mode (OPT-1691). Any other or
+	 * unknown value counts as Anonymous Mode.
+	 *
+	 * @return bool
+	 */
+	function opti_behavior_privacy_mode_is_full() {
+		$options = function_exists( 'get_option' ) ? get_option( 'opti_behavior_heatmap_option', array() ) : array();
+		$options = function_exists( 'maybe_unserialize' ) ? maybe_unserialize( $options ) : $options;
+
+		return is_array( $options ) && isset( $options['privacy_mode'] ) && 'full' === $options['privacy_mode'];
+	}
+}
+
+if ( ! function_exists( 'opti_behavior_display_ip' ) ) {
+	/**
+	 * IP address as an admin screen or an export may show it (OPT-1691):
+	 * never a whole address. Full Tracking mode = the stored address cut to
+	 * its network (IPv4 last octet 0, IPv6 /48; it was stored only with the
+	 * visitor's consent); every other case, an empty value or anything that
+	 * is not an address = "Anonymous".
+	 *
+	 * @param string    $ip   Stored value.
+	 * @param bool|null $full Full Tracking mode (null = read the setting).
+	 * @return string Truncated address or 'Anonymous'.
+	 */
+	function opti_behavior_display_ip( $ip, $full = null ) {
+		$ip = is_string( $ip ) ? trim( $ip ) : '';
+		if ( null === $full ) {
+			$full = opti_behavior_privacy_mode_is_full();
+		}
+		if ( ! $full || '' === $ip || 'Anonymous' === $ip ) {
+			return 'Anonymous';
+		}
+
+		$cut = '';
+		if ( false !== filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ) {
+			$octets    = explode( '.', $ip );
+			$octets[3] = '0';
+			$cut       = implode( '.', $octets );
+		} elseif ( false !== filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 ) ) {
+			$packed = inet_pton( $ip );
+			if ( false !== $packed && 16 === strlen( $packed ) ) {
+				$cut = (string) inet_ntop( substr( $packed, 0, 6 ) . str_repeat( "\0", 10 ) );
+			}
+		}
+
+		return '' === $cut ? 'Anonymous' : $cut;
 	}
 }

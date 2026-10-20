@@ -2579,6 +2579,21 @@
 	color: #92400e;
 }
 
+/* OPT-1619: template funnel not confirmed yet (final look = Designer card). */
+.opti-funnel-status-pill--suggested {
+	background: #eef2ff;
+	color: #3730a3;
+}
+
+/* Printed on the steps line, outside the clipped title (OPT-1619 QA). */
+.opti-funnel-row__title-text > .opti-funnel-status-pill--suggested {
+	margin: 0 8px 0 0;
+}
+
+.opti-funnel-row__actions .opti-funnel-confirm-btn {
+	margin-right: 8px;
+}
+
 /* Dim suspended rows slightly so paused funnels read as inactive. */
 .opti-funnel-row.is-suspended .opti-funnel-row__badges {
 	opacity: 0.7;

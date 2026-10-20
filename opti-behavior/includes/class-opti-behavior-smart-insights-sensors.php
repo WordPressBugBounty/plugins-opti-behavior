@@ -54,6 +54,9 @@ class Opti_Behavior_Smart_Insights_Sensors {
 	 */
 	const CACHE_PREFIX = 'opti_behavior_si_sensors_';
 
+	// User meta: this user has already seen the strip once (OPT-1168).
+	const SEEN_META = 'opti_behavior_si_loop_seen';
+
 	/**
 	 * Sensor definitions: admin page slug, Pro feature gate, insight entity type.
 	 *
@@ -747,8 +750,17 @@ class Opti_Behavior_Smart_Insights_Sensors {
 		}
 
 		$definitions = self::get_definitions();
+
+		// OPT-1168: open on the user's first visit only; it took the whole first
+		// screen at every visit. A fold / unfold made by hand is kept per browser
+		// by the inline script of the assets trait.
+		$user_id = get_current_user_id();
+		$open    = $user_id <= 0 || ! get_user_meta( $user_id, self::SEEN_META, true );
+		if ( $open && $user_id > 0 ) {
+			update_user_meta( $user_id, self::SEEN_META, time() );
+		}
 		?>
-		<details class="ob-si-loop" open data-ob-si-loop>
+		<details class="ob-si-loop"<?php echo $open ? ' open' : ''; ?> data-ob-si-loop>
 			<summary class="ob-si-loop__summary">
 				<span class="ob-si-loop__title"><?php esc_html_e( 'How it works', 'opti-behavior' ); ?></span>
 				<span class="ob-si-loop__lede"><?php esc_html_e( 'Your modules collect. Smart Insights finds what to fix. An A/B test proves the fix.', 'opti-behavior' ); ?></span>

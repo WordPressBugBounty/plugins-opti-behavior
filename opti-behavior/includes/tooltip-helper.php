@@ -583,18 +583,18 @@ function opti_behavior_get_settings_tooltips() {
 		// Privacy & GDPR Settings
 		'privacy_mode' => array(
 			'title'   => __( 'Privacy Mode', 'opti-behavior' ),
-			'content' => __( 'Privacy Mode controls how visitor data is collected, stored, and processed. Anonymous Mode sets no cookies and stores no IP addresses. Full Tracking offers more detailed analytics and waits for visitor consent before setting cookies.', 'opti-behavior' ),
+			'content' => __( 'Privacy Mode controls how visitor data is collected, stored, and processed. Cookieless mode sets no cookies and stores no IP addresses. Full Tracking offers more detailed analytics and waits for visitor consent before setting cookies.', 'opti-behavior' ),
 			'simple'  => __( 'Choose between privacy-first (no cookies, no client-side storage) or full tracking (cookies + consent required).', 'opti-behavior' ),
 		),
 		'anonymous_mode' => array(
-			'title'   => __( 'Anonymous Mode', 'opti-behavior' ),
-			'content' => __( 'In Anonymous Mode, no cookies are set and no client-side storage is used, and no IP addresses are stored. Visitors are identified using a daily rotating hash that cannot be linked back to an individual. No geolocation API calls are made. Visitor data stays on your own server.', 'opti-behavior' ),
+			'title'   => __( 'Cookieless mode (pseudonymised, 24 h)', 'opti-behavior' ),
+			'content' => __( 'In Cookieless mode, no cookies are set and no client-side storage is used, and no IP addresses are stored. Visitors are identified using a daily rotating hash that cannot be linked back to an individual. Country lookup on your server, no external call, IP not stored. Visitor data stays on your own server.', 'opti-behavior' ),
 			'simple'  => __( 'Tracks visitors without cookies, client-side storage, or IP addresses. Check your own legal requirements.', 'opti-behavior' ),
 			'example' => __( 'Great for blogs, news sites, or any site that wants simple, privacy-first analytics.', 'opti-behavior' ),
 		),
 		'full_tracking' => array(
 			'title'   => __( 'Full Tracking Mode', 'opti-behavior' ),
-			'content' => __( 'Full Tracking mode sets persistent cookies to identify returning visitors, stores IP addresses, and may call external geolocation APIs to determine visitor location. This provides more accurate visitor counts and richer data, but requires a cookie consent banner under GDPR, ePrivacy, and similar regulations.', 'opti-behavior' ),
+			'content' => __( 'Full Tracking mode sets persistent cookies to identify returning visitors, stores IP addresses, and looks up the visitor country on your server, with no external call. This provides more accurate visitor counts and richer data, but requires a cookie consent banner under GDPR, ePrivacy, and similar regulations.', 'opti-behavior' ),
 			'simple'  => __( 'More detailed tracking using cookies and IP addresses. Requires a consent banner for GDPR compliance.', 'opti-behavior' ),
 			'example' => __( 'Best for e-commerce or membership sites that need accurate visitor identification.', 'opti-behavior' ),
 		),
@@ -1002,9 +1002,9 @@ function opti_behavior_get_heatmaps_tooltips() {
 			'simple'  => __( 'Update the heatmap with the newest clicks.', 'opti-behavior' ),
 		),
 		'ai_insights' => array(
-			'title'   => __( 'AI Insights', 'opti-behavior' ),
-			'content' => __( 'Smart analysis of your heatmap data. AI identifies the most clicked elements and suggests ways to improve your page based on visitor behavior.', 'opti-behavior' ),
-			'simple'  => __( 'Computer analysis that tells you what\'s working on your page.', 'opti-behavior' ),
+			'title'   => __( 'Top Clicked Elements', 'opti-behavior' ),
+			'content' => __( 'The elements visitors click the most on this page, ranked by number of clicks. Use it to see what gets attention and what is ignored.', 'opti-behavior' ),
+			'simple'  => __( 'A list of the things people click the most on your page.', 'opti-behavior' ),
 		),
 	);
 }

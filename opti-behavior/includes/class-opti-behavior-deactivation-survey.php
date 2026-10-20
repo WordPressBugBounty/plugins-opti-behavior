@@ -225,13 +225,20 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 			true
 		) ? $reason_key : '';
 
+		$feedback = sanitize_textarea_field( $feedback_raw );
+		$feedback = substr( $feedback, 0, self::MAX_FEEDBACK_LENGTH );
+
+		// The reason is optional (OPT-1385): a comment without a reason is sent as "other"
+		// because the API requires a reason key. Nothing at all = nothing is sent.
+		if ( '' === $reason_key && '' !== trim( $feedback ) ) {
+			$reason_key       = 'other';
+			$reason_label_raw = '';
+		}
+
 		$reason_label = sanitize_text_field( $reason_label_raw );
 		if ( '' === $reason_label && '' !== $reason_key ) {
 			$reason_label = ucwords( str_replace( '_', ' ', $reason_key ) );
 		}
-
-		$feedback = sanitize_textarea_field( $feedback_raw );
-		$feedback = substr( $feedback, 0, self::MAX_FEEDBACK_LENGTH );
 
 		$follow_up_email = sanitize_email( $follow_up_raw );
 		if ( ! is_email( $follow_up_email ) ) {
@@ -243,9 +250,9 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 			$domain = '';
 		}
 
+		// No site_url (OPT-1385): the API counts sites by domain and needs nothing more.
 		return array(
-			'site_url'        => esc_url_raw( get_site_url() ),
-			'domain'          => sanitize_text_field( strtolower( $domain ) ),
+			'domain'         => sanitize_text_field( strtolower( $domain ) ),
 			'plugin_slug'     => plugin_basename( OPTI_BEHAVIOR_HEATMAP ),
 			'plugin_version'  => defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '',
 			'wp_version'      => get_bloginfo( 'version' ),
@@ -268,6 +275,10 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 	private function get_survey_reasons() {
 		return array(
 			array(
+				'key'   => 'no_data_showing',
+				'label' => __( 'No data shows up.', 'opti-behavior' ),
+			),
+			array(
 				'key'   => 'missing_feature',
 				'label' => __( 'I need a feature that is missing.', 'opti-behavior' ),
 			),
@@ -288,6 +299,10 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 				'label' => __( 'I hit bugs or technical issues.', 'opti-behavior' ),
 			),
 			array(
+				'key'   => 'slowed_site',
+				'label' => __( 'It slowed down my site.', 'opti-behavior' ),
+			),
+			array(
 				'key'   => 'too_expensive',
 				'label' => __( 'Pricing is not a fit for me.', 'opti-behavior' ),
 			),
@@ -305,11 +320,13 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 	 */
 	private function get_allowed_reason_keys() {
 		return array(
+			'no_data_showing',
 			'missing_feature',
 			'not_user_friendly',
 			'found_better_plugin',
 			'temporary_deactivation',
 			'too_many_bugs',
+			'slowed_site',
 			'too_expensive',
 			'other',
 		);
@@ -324,16 +341,20 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 		return array(
 			'title'            => __( 'Quick feedback before you deactivate Opti-Behavior', 'opti-behavior' ),
 			'intro'            => __( 'Could you tell us why you are deactivating? This helps us improve.', 'opti-behavior' ),
-			'reasonLabel'      => __( 'Reason (required)', 'opti-behavior' ),
+			// Wording validated by the legal review (OPT-1385), keep it whole.
+			'dataNotice'       => __( 'Submitting sends your answer (reason and comment), your site\'s domain and language, and your WordPress, PHP and plugin versions to optiuser.com. Your email is sent only if you type it, so we can reply to you. Skip to deactivate without sending anything.', 'opti-behavior' ),
+			'privacyLink'      => __( 'Privacy policy', 'opti-behavior' ),
+			'privacyUrl'       => 'https://optiuser.com/privacy-policy/',
+			'reasonLabel'      => __( 'Reason', 'opti-behavior' ),
 			'feedbackLabel'    => __( 'Additional details (optional)', 'opti-behavior' ),
 			'feedbackHelp'     => __( 'Share anything that would help us improve your experience.', 'opti-behavior' ),
 			'emailLabel'       => __( 'Email for follow-up (optional)', 'opti-behavior' ),
 			'emailHelp'        => __( 'Leave your email only if you want a reply from our team.', 'opti-behavior' ),
 			'cancel'           => __( 'Cancel', 'opti-behavior' ),
+			'skip'             => __( 'Skip & Deactivate', 'opti-behavior' ),
 			'submit'           => __( 'Submit & Deactivate', 'opti-behavior' ),
 			'submitting'       => __( 'Submitting...', 'opti-behavior' ),
 			'close'            => __( 'Close', 'opti-behavior' ),
-			'reasonRequired'   => __( 'Please choose a reason before deactivating.', 'opti-behavior' ),
 			'invalidEmail'     => __( 'Please enter a valid email address or leave the field empty.', 'opti-behavior' ),
 			'genericError'     => __( 'Submission failed. The plugin will still be deactivated.', 'opti-behavior' ),
 		);

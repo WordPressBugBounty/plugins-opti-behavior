@@ -4393,7 +4393,7 @@
 
 		showConfirmModal({
 			title:       strings.confirm_winner_title || 'Declare Best-Performing Variant',
-			message:     strings.confirm_winner || 'Opti Behavior will declare the variant with the highest conversion rate as the winner based on the current test results.',
+			message:     strings.confirm_winner || 'Opti-Behavior will declare the variant with the highest conversion rate as the winner based on the current test results.',
 			confirmText: strings.confirm_winner_button || 'Declare Best Performer',
 			buttonClass: 'opti-ab-confirm-modal__btn-primary'
 		}, function() {

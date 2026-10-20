@@ -180,7 +180,8 @@ class Opti_Behavior_Heatmap_Page_Type_Prune {
 	/**
 	 * Classify a URL: 'keep' or the archive kind (search, paginated, date,
 	 * author, category, tag, taxonomy, post_type_archive). Structural only — no
-	 * DB query — and anything unknown is 'keep'.
+	 * DB query, except one indexed page lookup per request for addresses under
+	 * the search permalink (/search/<term>/) — and anything unknown is 'keep'.
 	 *
 	 * @param string $url       Absolute URL or path.
 	 * @param bool   $use_query Also look at the query string (beacon path). The
@@ -283,6 +284,15 @@ class Opti_Behavior_Heatmap_Page_Type_Prune {
 		}
 
 		global $wp_rewrite;
+
+		// Search results under the search permalink (/search/<term>/), which is
+		// also what robots hit with addresses like /search/plugins.php (OPT-1158).
+		// A published child page of a page named like the search base wins.
+		$search_base = ( $wp_rewrite && ! empty( $wp_rewrite->search_base ) ) ? (string) $wp_rewrite->search_base : 'search';
+		if ( self::path_is_under( $path, $search_base ) && ! self::is_real_page_path( $path, $search_base ) ) {
+			return 'search';
+		}
+
 		$author_base = ( $wp_rewrite && ! empty( $wp_rewrite->author_base ) ) ? (string) $wp_rewrite->author_base : 'author';
 		if ( self::path_is_under( $path, $author_base ) ) {
 			return 'author';
@@ -351,6 +361,38 @@ class Opti_Behavior_Heatmap_Page_Type_Prune {
 	}
 
 	/**
+	 * Whether a published page lives at this path under the search permalink
+	 * (OPT-1158): a child of a page whose slug is the search base. Never
+	 * url_to_postid() here: it matches the search rule first and runs the
+	 * search itself (a LIKE scan of the posts table per address). One indexed
+	 * read per request tells whether a page is named like the search base;
+	 * without one, no address costs a query. Fails closed.
+	 *
+	 * @param string $path        Lowercase path below the home path, no slashes at the ends.
+	 * @param string $search_base Search base.
+	 * @return bool
+	 */
+	private static function is_real_page_path( $path, $search_base ) {
+		if ( ! function_exists( 'get_page_by_path' ) ) {
+			return false;
+		}
+		try {
+			static $base_is_page = array();
+			$base = strtolower( trim( (string) $search_base, '/' ) );
+			if ( ! isset( $base_is_page[ $base ] ) ) {
+				$base_is_page[ $base ] = get_page_by_path( $base ) instanceof \WP_Post;
+			}
+			if ( ! $base_is_page[ $base ] ) {
+				return false;
+			}
+			$page = get_page_by_path( $path );
+			return $page instanceof \WP_Post && 'publish' === $page->post_status;
+		} catch ( \Throwable $e ) {
+			return false;
+		}
+	}
+
+	/**
 	 * Ingest filter used by Opti_Behavior_Heatmap_Storage::save_heatmap_data().
 	 * Fails open.
 	 *
@@ -385,7 +427,9 @@ class Opti_Behavior_Heatmap_Page_Type_Prune {
 	 */
 	public static function classify_for_prune( $url ) {
 		$reason = self::classify_url( (string) $url, false );
-		if ( 'keep' === $reason || in_array( $reason, array( 'paginated', 'date' ), true ) ) {
+		// 'search': classify_url() already let a real page win, and
+		// url_to_postid() would run the search itself (OPT-1158).
+		if ( 'keep' === $reason || in_array( $reason, array( 'paginated', 'date', 'search' ), true ) ) {
 			return $reason;
 		}
 		$clean = strtok( (string) $url, '?#' );

@@ -46,7 +46,7 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 	 * page reads) and queues ONE regeneration, whose run closes the cards the
 	 * new rules no longer confirm as `rule_updated` (never as wins).
 	 */
-	const RULES_VERSION = '1.9.3.1.1'; // OPT-588: one counting universe, wide entry step, 0-order checkout.
+	const RULES_VERSION = '1.9.3.1.4'; // OPT-1627 / OPT-1637 / OPT-1722: segment floor, source impact, shop low data, other periods closed. (1.9.3.1.3 = OPT-1619, 1.9.3.1.2 = OPT-1617.)
 	const RULES_OPTION  = 'opti_behavior_si_rules_version';
 
 	/**
@@ -118,10 +118,15 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 	 * Cron callback of UPGRADE_REGENERATE_HOOK: regenerate the default period
 	 * exactly like the "Refresh insights" button (forced, site spam scope).
 	 *
-	 * @param object|null $generator Optional generator.
+	 * Then closes the open cards of every OTHER period as `rule_updated`
+	 * (OPT-1722): only this period is regenerated, so they kept the figures
+	 * of the older rules.
+	 *
+	 * @param object|null $generator  Optional generator.
+	 * @param object|null $repository Optional repository (tests).
 	 * @return array|WP_Error Generation summary.
 	 */
-	public static function run_upgrade_regeneration( $generator = null ) {
+	public static function run_upgrade_regeneration( $generator = null, $repository = null ) {
 		$generator = self::get_generator( $generator );
 		if ( ! $generator || ! method_exists( $generator, 'get_date_range_for_period' ) || ! method_exists( $generator, 'generate_for_period' ) ) {
 			return new WP_Error( 'opti_behavior_smart_insights_scheduler_no_generator', __( 'Smart Insights generator is unavailable.', 'opti-behavior' ) );
@@ -134,6 +139,7 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 		}
 
 		$exclude_spam = class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ? Opti_Behavior_Stats_Spam_Filter::is_enabled() : true;
+		$started      = current_time( 'mysql' );
 		try {
 			$result = $generator->generate_for_period(
 				$range['from'],
@@ -155,6 +161,17 @@ class Opti_Behavior_Smart_Insights_Scheduler {
 		}
 		if ( ! is_wp_error( $result ) && method_exists( $generator, 'get_generated_transient_key' ) ) {
 			set_transient( $generator->get_generated_transient_key( $range['from'], $range['to'], $exclude_spam ), time(), DAY_IN_SECONDS );
+		}
+		if ( ! is_wp_error( $result ) ) {
+			if ( null === $repository && class_exists( 'Opti_Behavior_Smart_Insights_Repository' ) ) {
+				$repository = new Opti_Behavior_Smart_Insights_Repository();
+			}
+			if ( $repository && method_exists( $repository, 'close_open_insights_outside_range' ) ) {
+				$closed = $repository->close_open_insights_outside_range( $range['from'], $range['to'], $started );
+				if ( is_array( $result ) && ! is_wp_error( $closed ) ) {
+					$result['other_periods_closed'] = (int) $closed;
+				}
+			}
 		}
 
 		return $result;

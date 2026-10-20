@@ -4204,8 +4204,8 @@ class Opti_Behavior_Heatmap_Ajax {
 	}
 
 	/**
-	 * SQL CASE expression deriving the six Traffic Channel buckets (Direct /
-	 * Organic Search / Paid Ads / Social Media / Email / Referral) from
+	 * SQL CASE expression deriving the seven Traffic Channel buckets (Direct /
+	 * Organic Search / AI Assistants / Paid Ads / Social Media / Email / Referral) from
 	 * s.referrer + s.utm_source + s.utm_medium.
 	 *
 	 * Port of the Analytics Dashboard's build_traffic_channel_case_sql(): the
@@ -4220,7 +4220,9 @@ class Opti_Behavior_Heatmap_Ajax {
 			'google.', 'bing.com', 'duckduckgo.com', 'yahoo.', 'yandex.', 'baidu.', 'naver.com',
 			'ecosia.org', 'startpage.com', 'qwant.com', 'search.brave.com', 'kagi.com',
 			'seznam.cz', 'sogou.com',
-			// AI assistants / answer engines classified as Organic Search.
+		);
+		// AI assistants = their own channel (OPT-1122), same list as get_traffic_channel_domain_maps().
+		$ai_needles = array(
 			'chatgpt.com', 'chat.openai.com', 'perplexity.ai', 'claude.ai', 'copilot.microsoft.com',
 		);
 		$social_needles = array(
@@ -4251,10 +4253,13 @@ class Opti_Behavior_Heatmap_Ajax {
 			return $raw_host . " LIKE '%%" . esc_sql( strtolower( $needle ) ) . "%%'";
 		};
 
+		$ai_likes     = array_map( $needle_likes, $ai_needles );
 		$search_likes = array_map( $needle_likes, $search_needles );
 		$social_likes = array_map( $needle_likes, $social_needles );
 
 		return "CASE
+				WHEN " . $external . " AND (" . implode( ' OR ', $ai_likes ) . ") THEN 'AI Assistants'
+				WHEN " . opti_behavior_ai_assistant_utm_sql() . " THEN 'AI Assistants'
 				WHEN " . $external . " AND (" . implode( ' OR ', $search_likes ) . ") THEN 'Organic Search'
 				WHEN " . $external . " AND (" . implode( ' OR ', $social_likes ) . ") THEN 'Social Media'
 				WHEN " . $external . " THEN 'Referral'
@@ -4801,6 +4806,7 @@ class Opti_Behavior_Heatmap_Ajax {
 					if ( $folder_name === $view_folder ) {
 						$view_sessions[ $session ] = true;
 						if ( $duration > 0 ) {
+							$duration = min( $duration, opti_behavior_time_cap( 'page_view' ) ); // OPT-1623.
 							if ( ! isset( $session_durations[ $session ] ) || $duration > $session_durations[ $session ] ) {
 								$session_durations[ $session ] = $duration;
 							}

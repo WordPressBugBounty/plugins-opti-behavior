@@ -160,11 +160,15 @@
 			return loadingPayload;
 		}
 
+		// OPT-1168: on the Smart Insights screen the launcher starts as the
+		// side point (config.startCompact), from the first paint.
+		var startCompact = !!config.startCompact;
+
 		loadingPayload = {
 			enabled: true,
-			state: 'visible',
-			display_state: 'visible',
-			is_compact: false,
+			state: startCompact ? 'compact' : 'visible',
+			display_state: startCompact ? 'compact' : 'visible',
+			is_compact: startCompact,
 			unread_count: 0,
 			highest_severity: '',
 			items: [],
@@ -176,7 +180,7 @@
 				mark_seen: 'mark_seen'
 			},
 			compact: {
-				enabled: false,
+				enabled: startCompact,
 				restore_action: 'restore',
 				compact_action: 'compact'
 			},

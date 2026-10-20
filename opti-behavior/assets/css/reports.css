@@ -1,0 +1,1385 @@
+/*
+ * OPT-1338 — screen « Reports » (Opti-Behavior menu). Loaded on the « Reports » screen only (OPT-1342). Header = the plugin's own `.dashboard-header` (dashboard_styles.css); everything else is scoped
+ * under `.ob-reports`. No remote file, no framework. Contrast AA, focus visible, targets >= 32 px, 375 px safe.
+ */
+.ob-reports {
+	--obr-ink: #0f172a;
+	--obr-ink-2: #334155;
+	--obr-muted: #475569;
+	--obr-line: #e2e8f0;
+	--obr-line-2: #cbd5e1;
+	--obr-brand: #4f46e5;
+	--obr-brand-dark: #4338ca;
+	--obr-brand-soft: #eef2ff;
+	--obr-tint: #f8fafc;
+	--obr-warn: #92400e;
+	--obr-warn-soft: #fffbeb;
+	max-width: 1180px;
+	color: var(--obr-ink);
+	font-size: 14px;
+}
+
+.ob-reports *,
+.ob-reports *::before,
+.ob-reports *::after {
+	box-sizing: border-box;
+}
+
+/* A shown / hidden part keeps `hidden` even when its class sets a display. */
+.ob-reports [hidden] {
+	display: none !important;
+}
+
+/* A product name never breaks at its hyphen (« Opti- / Behavior »). */
+.ob-reports__name {
+	white-space: nowrap;
+}
+
+/* The form: one white card, one band per question (label left, answer right), full width: no side void. */
+.ob-reports__form {
+	background: #fff;
+	border: 1px solid var(--obr-line);
+	border-radius: 14px;
+	box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.05);
+	overflow: hidden;
+}
+
+.ob-reports__row {
+	display: grid;
+	grid-template-columns: 220px minmax(0, 1fr);
+	gap: 24px;
+	padding: 22px 28px;
+	border: 0;
+	margin: 0;
+	min-width: 0;
+}
+
+.ob-reports__row + .ob-reports__row {
+	border-top: 1px solid var(--obr-line);
+}
+
+.ob-reports__row[hidden] {
+	display: none;
+}
+
+.ob-reports__q {
+	padding-top: 6px;
+	float: none;
+	width: auto;
+	margin: 0;
+}
+
+.ob-reports__q b {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--obr-ink);
+}
+
+.ob-reports__step {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	border-radius: 7px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--obr-ink);
+	color: #fff;
+	font-size: 12px;
+	font-weight: 700;
+}
+
+.ob-reports__q span:not(.ob-reports__step) {
+	display: block;
+	margin: 6px 0 0 34px;
+	font-size: 13px;
+	line-height: 1.45;
+	color: var(--obr-muted);
+}
+
+/* Choice tiles (radio): a big clickable card, the selected one framed in indigo. */
+.ob-reports__choices {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+}
+
+.ob-reports__choice {
+	position: relative;
+	display: block;
+	cursor: pointer;
+	min-height: 32px;
+}
+
+.ob-reports__choice input,
+.ob-reports__pills input {
+	position: absolute;
+	opacity: 0;
+	width: 1px;
+	height: 1px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	clip-path: inset(50%);
+}
+
+.ob-reports__card {
+	display: grid;
+	grid-template-columns: 40px minmax(0, 1fr) auto;
+	gap: 14px;
+	align-items: start;
+	height: 100%;
+	padding: 16px 18px;
+	border: 1.5px solid var(--obr-line-2);
+	border-radius: 12px;
+	background: #fff;
+	transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ob-reports__choice:hover .ob-reports__card {
+	border-color: #a5b4fc;
+}
+
+.ob-reports__choice input:checked + .ob-reports__card {
+	border-color: var(--obr-brand);
+	background: var(--obr-brand-soft);
+	box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+}
+
+.ob-reports__choice input:focus-visible + .ob-reports__card {
+	outline: 2px solid var(--obr-brand);
+	outline-offset: 3px;
+}
+
+.ob-reports__icon {
+	width: 40px;
+	height: 40px;
+	border-radius: 10px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--obr-tint);
+	border: 1px solid var(--obr-line);
+	color: var(--obr-brand);
+}
+
+.ob-reports__icon svg {
+	width: 22px;
+	height: 22px;
+}
+
+.ob-reports__choice input:checked + .ob-reports__card .ob-reports__icon {
+	background: #fff;
+	border-color: #c7d2fe;
+}
+
+.ob-reports__card strong {
+	display: block;
+	font-size: 15px;
+	line-height: 1.3;
+	color: var(--obr-ink);
+}
+
+.ob-reports__card p {
+	margin: 4px 0 0;
+	font-size: 13px;
+	line-height: 1.45;
+	color: var(--obr-ink-2);
+}
+
+/* The radio dot, on the right: the choice reads without colour. */
+.ob-reports__dot {
+	width: 20px;
+	height: 20px;
+	margin-top: 2px;
+	border-radius: 50%;
+	border: 2px solid var(--obr-line-2);
+	background: #fff;
+}
+
+.ob-reports__choice input:checked + .ob-reports__card .ob-reports__dot {
+	border-color: var(--obr-brand);
+	background: radial-gradient(circle, var(--obr-brand) 0 5px, #fff 6px);
+}
+
+/* Locked in Free: same tile, greyed, a lock, and the one sober line (no banner, no colour, no button). */
+.ob-reports__choice.is-locked {
+	cursor: not-allowed;
+}
+
+.ob-reports__choice.is-locked .ob-reports__card {
+	background: var(--obr-tint);
+	border-style: dashed;
+}
+
+.ob-reports__choice.is-locked .ob-reports__icon {
+	color: var(--obr-muted);
+}
+
+.ob-reports__choice.is-locked strong,
+.ob-reports__choice.is-locked p {
+	color: var(--obr-muted);
+}
+
+/* One line of text with an inline lock (block, not flex: the product name inside stays in the sentence). */
+.ob-reports__lock {
+	display: block;
+	margin-top: 8px;
+	font-size: 12.5px;
+	line-height: 1.45;
+	color: var(--obr-muted);
+}
+
+.ob-reports__lock svg {
+	display: inline-block;
+	width: 14px;
+	height: 14px;
+	margin-right: 6px;
+	vertical-align: -2px;
+}
+
+/* Period: quick choices (pills) + two dates. */
+.ob-reports__period {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 14px 22px;
+}
+
+.ob-reports__pills {
+	display: inline-flex;
+	padding: 4px;
+	border-radius: 10px;
+	background: var(--obr-tint);
+	border: 1px solid var(--obr-line);
+}
+
+.ob-reports__pills label {
+	position: relative;
+	cursor: pointer;
+}
+
+.ob-reports__pills input {
+	position: absolute;
+	opacity: 0;
+	width: 1px;
+	height: 1px;
+}
+
+.ob-reports__pills span {
+	display: inline-flex;
+	align-items: center;
+	min-height: 34px;
+	padding: 0 16px;
+	border-radius: 7px;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--obr-ink-2);
+	white-space: nowrap;
+}
+
+.ob-reports__pills input:checked + span {
+	background: #fff;
+	color: var(--obr-brand-dark);
+	box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.ob-reports__pills input:focus-visible + span {
+	outline: 2px solid var(--obr-brand);
+	outline-offset: 1px;
+}
+
+.ob-reports__dates {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+
+.ob-reports__dates label {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--obr-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.ob-reports .ob-reports__dates input[type="date"],
+.ob-reports select {
+	min-height: 40px;
+	padding: 0 12px;
+	border: 1px solid var(--obr-line-2);
+	border-radius: 8px;
+	font-size: 14px;
+	color: var(--obr-ink);
+	background-color: #fff;
+}
+
+.ob-reports select {
+	width: 100%;
+	max-width: 520px;
+	padding-right: 32px;
+}
+
+.ob-reports input[type="date"]:focus,
+.ob-reports select:focus {
+	border-color: var(--obr-brand);
+	box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.25);
+	outline: 2px solid transparent;
+}
+
+.ob-reports__hint {
+	margin: 10px 0 0;
+	font-size: 13px;
+	color: var(--obr-muted);
+}
+
+/* Pages in annex (Pro, full version): a grid of check rows, the counter on top. */
+.ob-reports__annex-top {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px 16px;
+	margin-bottom: 12px;
+	font-size: 13px;
+	color: var(--obr-muted);
+}
+
+.ob-reports__count {
+	font-weight: 600;
+	color: var(--obr-ink);
+}
+
+.ob-reports__pages {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.ob-reports__pages li {
+	margin: 0;
+}
+
+.ob-reports__page {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	gap: 10px;
+	align-items: center;
+	min-height: 44px;
+	padding: 8px 12px;
+	border: 1px solid var(--obr-line);
+	border-radius: 9px;
+	cursor: pointer;
+	font-size: 13px;
+}
+
+.ob-reports__page:hover {
+	border-color: #a5b4fc;
+}
+
+/* A chosen page reads as chosen: framed row (class set by the server and reports.js) + a ticked box. */
+.ob-reports__page.is-checked,
+.ob-reports__page:has(input:checked) {
+	border-color: var(--obr-brand);
+	background: var(--obr-brand-soft);
+}
+
+.ob-reports .ob-reports__page input[type="checkbox"] {
+	margin: 0;
+	accent-color: var(--obr-brand);
+}
+
+.ob-reports .ob-reports__page input[type="checkbox"]:checked {
+	border-color: var(--obr-brand);
+	background: var(--obr-brand);
+}
+
+.ob-reports .ob-reports__page input[type="checkbox"]:checked::before {
+	/* WordPress draws the tick in blue: white on the brand box. */
+	content: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2020%2020%27%3E%3Cpath%20d%3D%27M14.83%204.89l1.34.94-5.81%208.38H9.02L5.78%209.67l1.34-1.25%202.57%202.4z%27%20fill%3D%27%23ffffff%27%2F%3E%3C%2Fsvg%3E");
+}
+
+.ob-reports .ob-reports__page input[type="checkbox"]:disabled {
+	opacity: 0.5;
+}
+
+.ob-reports__page:has(input:disabled) {
+	cursor: not-allowed;
+	color: var(--obr-muted);
+}
+
+.ob-reports__page b {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+	color: var(--obr-ink);
+}
+
+.ob-reports__page span {
+	font-size: 12px;
+	color: var(--obr-muted);
+	white-space: nowrap;
+}
+
+/* OPT-1421 — chosen pages as chips, search of any page, most visited as a compact list. */
+.ob-reports__chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0 0 12px;
+	padding: 0;
+	list-style: none;
+}
+
+.ob-reports__chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	max-width: 100%;
+	margin: 0;
+	padding: 2px 2px 2px 10px;
+	border: 1px solid var(--obr-brand);
+	border-radius: 999px;
+	background: var(--obr-brand-soft);
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--obr-brand-dark);
+}
+
+.ob-reports__chip span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 260px;
+}
+
+.ob-reports .ob-reports__chip button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--obr-brand-dark);
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.ob-reports .ob-reports__chip button:hover {
+	background: #e0e7ff;
+}
+
+.ob-reports .ob-reports__chip button:focus-visible {
+	outline: 2px solid var(--obr-brand);
+	outline-offset: 1px;
+}
+
+.ob-reports__search {
+	position: relative;
+	margin-bottom: 14px;
+}
+
+.ob-reports__search > svg {
+	position: absolute;
+	top: 12px;
+	left: 12px;
+	width: 18px;
+	height: 18px;
+	color: var(--obr-muted);
+	pointer-events: none;
+}
+
+.ob-reports .ob-reports__search input[type="search"] {
+	width: 100%;
+	min-height: 42px;
+	padding: 0 12px 0 38px;
+	border: 1px solid var(--obr-line-2);
+	border-radius: 9px;
+	font-size: 14px;
+}
+
+.ob-reports .ob-reports__search input[type="search"]:focus {
+	border-color: var(--obr-brand);
+	box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.25);
+	outline: 2px solid transparent;
+}
+
+.ob-reports__search .ob-reports__hint {
+	margin-top: 6px;
+	font-size: 12px;
+}
+
+.ob-reports__results {
+	margin: 6px 0 0;
+	padding: 4px;
+	max-height: 300px;
+	overflow-y: auto;
+	border: 1px solid var(--obr-line);
+	border-radius: 9px;
+	background: #fff;
+	box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+	list-style: none;
+}
+
+.ob-reports__results li {
+	margin: 0;
+}
+
+.ob-reports .ob-reports__result {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 0 12px;
+	width: 100%;
+	min-height: 40px;
+	padding: 6px 10px;
+	border: 0;
+	border-radius: 7px;
+	background: transparent;
+	text-align: left;
+	font-size: 13px;
+	color: var(--obr-ink);
+	cursor: pointer;
+}
+
+.ob-reports .ob-reports__result:hover:not(:disabled),
+.ob-reports .ob-reports__result:focus-visible {
+	background: var(--obr-brand-soft);
+	outline: 2px solid transparent;
+}
+
+.ob-reports .ob-reports__result:disabled {
+	cursor: default;
+	color: var(--obr-muted);
+}
+
+.ob-reports__result b {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.ob-reports__result span {
+	font-size: 12px;
+	color: var(--obr-muted);
+	white-space: nowrap;
+}
+
+.ob-reports__result .ob-reports__result-path {
+	grid-column: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.ob-reports__result span:last-child {
+	grid-column: 2;
+	grid-row: 1 / span 2;
+	align-self: center;
+}
+
+.ob-reports__result span.is-none {
+	font-style: italic;
+}
+
+.ob-reports__result-state {
+	padding: 8px 10px;
+	font-size: 13px;
+	color: var(--obr-muted);
+}
+
+.ob-reports__sub {
+	margin: 0 0 6px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--obr-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.ob-reports__pages--compact {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 4px 12px;
+}
+
+.ob-reports__pages--compact .ob-reports__page {
+	min-height: 32px;
+	padding: 4px 8px;
+	border-color: transparent;
+	border-radius: 7px;
+}
+
+.ob-reports__pages--compact .ob-reports__page:hover {
+	border-color: var(--obr-line);
+}
+
+/* Bottom bar: the one action of the screen. */
+.ob-reports__actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px 18px;
+	padding: 20px 28px;
+	background: var(--obr-tint);
+	border-top: 1px solid var(--obr-line);
+}
+
+.ob-reports .ob-reports__go {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 44px;
+	padding: 0 22px;
+	border: 0;
+	border-radius: 10px;
+	background: var(--obr-brand);
+	color: #fff;
+	font-size: 15px;
+	font-weight: 600;
+	cursor: pointer;
+	box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);
+	transition: background-color 0.15s ease;
+}
+
+.ob-reports .ob-reports__go:hover {
+	background: var(--obr-brand-dark);
+}
+
+.ob-reports .ob-reports__go:focus-visible {
+	outline: 2px solid var(--obr-brand);
+	outline-offset: 3px;
+}
+
+.ob-reports .ob-reports__go svg {
+	width: 18px;
+	height: 18px;
+}
+
+.ob-reports .ob-reports__go:disabled {
+	background: #e2e8f0;
+	color: #475569;
+	box-shadow: none;
+	cursor: not-allowed;
+}
+
+.ob-reports__go-note {
+	margin: 0;
+	font-size: 13px;
+	color: var(--obr-muted);
+}
+
+.ob-reports__spin {
+	width: 16px;
+	height: 16px;
+	border: 2px solid rgba(71, 85, 105, 0.3);
+	border-top-color: #475569;
+	border-radius: 50%;
+	animation: ob-reports-spin 0.8s linear infinite;
+}
+
+@keyframes ob-reports-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-reports__spin {
+		animation: none;
+	}
+
+	.ob-reports__card,
+	.ob-reports .ob-reports__go {
+		transition: none;
+	}
+}
+
+/* No data yet: one calm line inside the card, above the questions. */
+.ob-reports__empty {
+	display: flex;
+	gap: 12px;
+	align-items: flex-start;
+	margin: 0;
+	padding: 16px 28px;
+	background: var(--obr-warn-soft);
+	border-bottom: 1px solid #fde68a;
+	color: var(--obr-warn);
+	font-size: 14px;
+	line-height: 1.5;
+}
+
+.ob-reports__empty svg {
+	flex: none;
+	width: 20px;
+	height: 20px;
+	margin-top: 1px;
+}
+
+.ob-reports__empty b {
+	color: #78350f;
+}
+
+@media (max-width: 1100px) {
+	.ob-reports__pages {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@media (max-width: 782px) {
+	.ob-reports__row {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 14px;
+		padding: 18px 16px;
+	}
+
+	.ob-reports__q {
+		padding-top: 0;
+	}
+
+	.ob-reports__choices,
+	.ob-reports__pages {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.ob-reports__card {
+		grid-template-columns: 36px minmax(0, 1fr) auto;
+		padding: 14px;
+	}
+
+	.ob-reports__period,
+	.ob-reports__dates,
+	.ob-reports__dates label {
+		width: 100%;
+	}
+
+	.ob-reports__pills {
+		width: 100%;
+	}
+
+	.ob-reports__pills label {
+		flex: 1;
+	}
+
+	.ob-reports__pills span {
+		justify-content: center;
+		width: 100%;
+		padding: 0 8px;
+	}
+
+	.ob-reports__dates label {
+		flex: 1 1 140px;
+	}
+
+	.ob-reports .ob-reports__dates input[type="date"] {
+		width: 100%;
+	}
+
+	.ob-reports__actions,
+	.ob-reports__empty {
+		padding: 16px;
+	}
+
+	.ob-reports .ob-reports__go {
+		width: 100%;
+		justify-content: center;
+	}
+}
+
+/*
+ * "Made with Opti-Behavior" box under the form (OPT-1348, design OPT-1349): one quiet white band with the
+ * same edges, radius and side padding as the cards above it. The whole sentence ticks the box; Save on the right.
+ */
+.ob-reports__credit {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 16px;
+	max-width: 1180px;
+	margin: 16px 0 0;
+	padding: 14px 28px;
+	background: #fff;
+	border: 1px solid #e2e8f0;
+	border-radius: 14px;
+	box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+	color: #334155;
+	font-size: 14px;
+}
+
+/* Hidden by Pro outside "Agency mode" (OPT-1594). */
+.ob-reports__credit[hidden] {
+	display: none;
+}
+
+.ob-reports__credit label {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	flex: 1 1 320px;
+	min-width: 0;
+	min-height: 32px;
+	cursor: pointer;
+	line-height: 1.45;
+}
+
+.ob-reports__credit label input[type="checkbox"] {
+	flex: none;
+	margin: 0;
+}
+
+.ob-reports__credit label input[type="checkbox"]:focus-visible {
+	outline: 2px solid #4f46e5;
+	outline-offset: 2px;
+}
+
+.ob-reports__credit .button {
+	order: 1;
+	min-height: 36px;
+}
+
+.ob-reports__credit-saved {
+	color: #047857;
+	font-weight: 600;
+}
+
+@media (max-width: 782px) {
+	.ob-reports__credit {
+		padding: 14px 16px;
+	}
+
+	.ob-reports__credit label {
+		flex-basis: 100%;
+		align-items: flex-start;
+	}
+
+	.ob-reports__credit label input[type="checkbox"] {
+		margin-top: 2px;
+	}
+
+	.ob-reports__credit .button {
+		flex: 1;
+		justify-content: center;
+	}
+}
+
+/*
+ * OPT-1346 (design OPT-1345 `agency.css` of Pro): "For a client" under the report form. Pro prints its agency
+ * options there (own POST form: saved for the next reports); Free prints one locked tile with the sober line.
+ */
+.ob-reports--agency {
+	margin-top: 20px;
+}
+
+/* No step number on these rows (own form, after Generate): the line under the question starts under it. */
+.ob-reports--agency .ob-reports__q span:not(.ob-reports__step) {
+	margin-left: 0;
+}
+
+/* Group title across the card: says once that everything below is optional. */
+.ob-reports__group {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 4px 12px;
+	padding: 14px 28px;
+	background: var(--obr-tint);
+}
+
+.ob-reports__group h2 {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--obr-ink-2);
+}
+
+.ob-reports__group p {
+	margin: 0;
+	font-size: 13px;
+	color: var(--obr-muted);
+}
+
+.ob-reports__group + .ob-reports__row {
+	border-top: 1px solid var(--obr-line);
+}
+
+/* Text fields (client name, agency name, notes). */
+.ob-reports__fields {
+	display: grid;
+	gap: 16px;
+	max-width: 640px;
+}
+
+.ob-reports__field {
+	display: grid;
+	gap: 6px;
+}
+
+.ob-reports__field > span:first-child {
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--obr-muted);
+}
+
+.ob-reports .ob-reports__field input[type="text"],
+.ob-reports .ob-reports__field textarea {
+	width: 100%;
+	min-height: 40px;
+	margin: 0;
+	padding: 8px 12px;
+	border: 1px solid var(--obr-line-2);
+	border-radius: 8px;
+	font-size: 14px;
+	line-height: 1.45;
+	color: var(--obr-ink);
+	background: #fff;
+	box-shadow: none;
+}
+
+.ob-reports .ob-reports__field textarea {
+	min-height: 108px;
+	resize: vertical;
+}
+
+.ob-reports .ob-reports__field input[type="text"]:focus,
+.ob-reports .ob-reports__field textarea:focus,
+.ob-reports .ob-reports__hex:focus {
+	border-color: var(--obr-brand);
+	box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.25);
+	outline: 2px solid transparent;
+}
+
+.ob-reports__field .ob-reports__hint {
+	margin: 0;
+	font-size: 12.5px;
+	font-weight: 400;
+	letter-spacing: 0;
+	text-transform: none;
+}
+
+.ob-reports__field-foot {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	font-size: 12.5px;
+	color: var(--obr-muted);
+}
+
+.ob-reports__field-foot b {
+	flex: none;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Brand: fields left, live cover preview right. */
+.ob-reports__brand {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 232px;
+	gap: 28px;
+	align-items: stretch;
+}
+
+/* Logo: thumbnail tile + two buttons. */
+.ob-reports__logo {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+}
+
+.ob-reports__logo-tile {
+	flex: none;
+	width: 112px;
+	height: 56px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 6px;
+	border: 1px solid var(--obr-line-2);
+	border-radius: 10px;
+	background: repeating-conic-gradient(#f1f5f9 0 25%, #fff 0 50%) 0 0 / 12px 12px;
+}
+
+.ob-reports__logo-tile img {
+	max-width: 100%;
+	max-height: 100%;
+	display: block;
+}
+
+.ob-reports__logo-tile.is-empty {
+	border-style: dashed;
+	background: var(--obr-tint);
+	font-size: 12px;
+	color: var(--obr-muted);
+	text-align: center;
+}
+
+.ob-reports .ob-reports__btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 36px;
+	padding: 0 14px;
+	border: 1px solid var(--obr-line-2);
+	border-radius: 8px;
+	background: #fff;
+	color: var(--obr-ink);
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.ob-reports .ob-reports__btn:hover {
+	border-color: var(--obr-brand);
+	color: var(--obr-brand-dark);
+}
+
+.ob-reports .ob-reports__btn:focus-visible {
+	outline: 2px solid var(--obr-brand);
+	outline-offset: 2px;
+}
+
+.ob-reports .ob-reports__btn--quiet {
+	border-color: transparent;
+	color: var(--obr-muted);
+}
+
+.ob-reports .ob-reports__btn svg {
+	width: 16px;
+	height: 16px;
+}
+
+/* Colour: native picker (swatch) + hex field + the contrast line. */
+.ob-reports__colour {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+}
+
+.ob-reports .ob-reports__swatch {
+	width: 44px;
+	height: 40px;
+	padding: 3px;
+	border: 1px solid var(--obr-line-2);
+	border-radius: 8px;
+	background: #fff;
+	cursor: pointer;
+}
+
+.ob-reports .ob-reports__swatch:focus-visible {
+	outline: 2px solid var(--obr-brand);
+	outline-offset: 2px;
+}
+
+.ob-reports .ob-reports__colour input.ob-reports__hex[type="text"] {
+	width: 112px;
+	min-height: 40px;
+	margin: 0;
+	padding: 0 12px;
+	border: 1px solid var(--obr-line-2);
+	border-radius: 8px;
+	font: 600 14px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+	color: var(--obr-ink);
+	text-transform: lowercase;
+}
+
+/* Contrast line: the word says it (never the colour alone). */
+.ob-reports__contrast {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 10px 0 0;
+	padding: 8px 12px;
+	border-radius: 8px;
+	font-size: 13px;
+	line-height: 1.45;
+	background: #f0fdf4;
+	color: #166534;
+}
+
+.ob-reports__contrast.is-dark {
+	background: var(--obr-warn-soft);
+	color: var(--obr-warn);
+}
+
+.ob-reports__contrast svg {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	margin-top: 2px;
+}
+
+/* Live preview: the top of the A4 cover, drawn with the report's own proportions. */
+.ob-reports__preview {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 0;
+}
+
+.ob-reports__sheet {
+	--pv-brand: #4f46e5;
+	flex: 1;
+	aspect-ratio: 210 / 297;
+	padding: 14px 14px 10px;
+	border: 1px solid var(--obr-line);
+	border-radius: 6px;
+	background: #fff;
+	box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 24px rgba(15, 23, 42, 0.08);
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	font-size: 7px;
+	line-height: 1.35;
+	color: var(--obr-ink);
+	overflow: hidden;
+}
+
+.ob-reports__sheet-band {
+	height: 3px;
+	border-radius: 2px;
+	background: linear-gradient(90deg, #0ea5e9, #4f46e5 50%, #9333ea);
+}
+
+.ob-reports__sheet.is-brand .ob-reports__sheet-band {
+	background: var(--pv-brand);
+}
+
+.ob-reports__sheet-head {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	min-height: 16px;
+}
+
+.ob-reports__sheet-head img {
+	height: 16px;
+	max-width: 48px;
+	object-fit: contain;
+}
+
+.ob-reports__sheet-head b {
+	display: block;
+	font-size: 8.5px;
+	overflow-wrap: anywhere;
+}
+
+.ob-reports__sheet-kicker {
+	margin-top: 4px;
+	font-size: 5.5px;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--pv-brand);
+}
+
+.ob-reports__sheet-h1 {
+	font-size: 13px;
+	font-weight: 700;
+	line-height: 1.1;
+}
+
+.ob-reports__sheet-client {
+	color: var(--obr-ink-2);
+}
+
+.ob-reports__sheet-meta {
+	height: 12px;
+	border-top: 1.5px solid var(--obr-ink);
+	border-bottom: 1px solid var(--obr-line-2);
+}
+
+.ob-reports__sheet.is-brand .ob-reports__sheet-meta {
+	border-top-color: var(--pv-brand);
+}
+
+.ob-reports__sheet-notes {
+	/* Three lines at most: top and bottom space are borders, so the clip falls between two lines. */
+	max-height: calc(3 * 1.35em + 8px);
+	padding: 0 6px;
+	border-top: 4px solid var(--obr-tint);
+	border-bottom: 4px solid var(--obr-tint);
+	border-left: 2px solid var(--pv-brand);
+	background: var(--obr-tint);
+	color: var(--obr-ink-2);
+	overflow: hidden;
+	white-space: pre-line;
+}
+
+.ob-reports__sheet-h2 {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding-bottom: 2px;
+	border-bottom: 1.5px solid var(--obr-ink);
+	font-size: 8.5px;
+	font-weight: 700;
+}
+
+.ob-reports__sheet-h2 i {
+	width: 9px;
+	height: 9px;
+	border-radius: 2px;
+	background: var(--obr-ink);
+}
+
+.ob-reports__sheet.is-brand .ob-reports__sheet-h2 {
+	color: var(--pv-brand);
+	border-bottom-color: var(--pv-brand);
+}
+
+.ob-reports__sheet.is-brand .ob-reports__sheet-h2 i {
+	background: var(--pv-brand);
+}
+
+.ob-reports__sheet-tiles {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 3px;
+}
+
+.ob-reports__sheet-tiles span {
+	height: 18px;
+	border: 1px solid var(--obr-line);
+	border-radius: 2px;
+}
+
+.ob-reports__sheet-lines {
+	display: grid;
+	gap: 3px;
+}
+
+.ob-reports__sheet-lines span {
+	height: 3px;
+	border-radius: 2px;
+	background: var(--obr-line);
+}
+
+/* An issue card of the report: severity border on the left (red, as printed: not the agency colour). */
+.ob-reports__sheet-issue {
+	height: 22px;
+	border: 1px solid var(--obr-line);
+	border-left: 2px solid #b91c1c;
+	border-radius: 2px;
+}
+
+.ob-reports__sheet-foot {
+	margin-top: auto;
+	display: flex;
+	justify-content: space-between;
+	gap: 6px;
+	padding-top: 4px;
+	font-size: 5.5px;
+	font-weight: 600;
+	color: var(--obr-muted);
+}
+
+.ob-reports__sheet-foot span:first-child {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.ob-reports__preview figcaption {
+	font-size: 12.5px;
+	color: var(--obr-muted);
+	text-align: center;
+}
+
+/* Hidden sections: the check rows of « Pages in annex », a little wider. */
+.ob-reports__pages--sections {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	max-width: 640px;
+}
+
+.ob-reports__pages--sections .ob-reports__page span {
+	white-space: normal;
+}
+
+/* Pro "Agency mode" switch (OPT-1594): one full-width tile, title on top, sentence below it. */
+.ob-reports__pages--switch {
+	grid-template-columns: minmax(0, 1fr);
+	max-width: 640px;
+}
+
+.ob-reports__page--switch {
+	grid-template-columns: auto minmax(0, 1fr);
+	row-gap: 2px;
+}
+
+.ob-reports__page--switch input {
+	grid-row: 1 / span 2;
+}
+
+.ob-reports__page--switch b,
+.ob-reports__page--switch span {
+	grid-column: 2;
+}
+
+.ob-reports__page--switch span {
+	white-space: normal;
+}
+
+/* Free: the whole group is one locked tile with the one sober line (no banner, no colour, no button). */
+.ob-reports__locked {
+	display: flex;
+	align-items: flex-start;
+	gap: 14px;
+	padding: 16px 18px;
+	border: 1px dashed var(--obr-line-2);
+	border-radius: 12px;
+	background: var(--obr-tint);
+}
+
+.ob-reports__locked strong {
+	display: block;
+	font-size: 14.5px;
+	color: var(--obr-muted);
+}
+
+.ob-reports__locked .ob-reports__icon {
+	color: var(--obr-muted);
+}
+
+.ob-reports__agency-saved {
+	color: #047857;
+	font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+	.ob-reports__brand {
+		grid-template-columns: minmax(0, 1fr) 200px;
+		gap: 20px;
+	}
+}
+
+@media (max-width: 782px) {
+	.ob-reports__group {
+		padding: 12px 16px;
+	}
+
+	.ob-reports__brand {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.ob-reports__preview {
+		max-width: 260px;
+		width: 100%;
+		margin: 0 auto;
+	}
+
+	.ob-reports__pages--sections {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}

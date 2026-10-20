@@ -69,8 +69,9 @@ $opti_behavior_pp_image = ( '' !== $opti_behavior_pp['image'] && defined( 'OPTI_
 	<div class="recordings-header">
 		<div class="recordings-header-content">
 			<div class="recordings-title-section">
-				<div class="recordings-icon"><i data-lucide="<?php echo esc_attr( $opti_behavior_pp['icon'] ); ?>"></i></div>
+				<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 				<div class="recordings-title-text">
+					<?php Opti_Behavior_Admin_Brand::render_name(); ?>
 					<h1 class="recordings-title"><?php echo esc_html( $opti_behavior_pp['title'] ); ?></h1>
 					<div class="recordings-subtitle"><?php echo esc_html( $opti_behavior_pp['promise'] ); ?></div>
 				</div>

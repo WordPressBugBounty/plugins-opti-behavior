@@ -61,6 +61,49 @@
         }
     }
 
+    // OPT-1687: a name that announces a secret (reset-token, rp_key,
+    // password-reset-token…), beyond the exact list. Twin of PHP
+    // opti_behavior_param_name_is_secret() (same block in the 3 Pro trackers).
+    var OB_SECRET_PARTS = [ 'token', 'password', 'passwd', 'pwd', 'secret' ];
+    var OB_SECRET_WORDS = [ 'key', 'keys', 'reset', 'auth', 'oauth', 'session', 'sessions' ];
+    var OB_SECRET_KEY_PREFIXES = [ 'api', 'rp', 'reset', 'activation', 'access', 'auth', 'private', 'license', 'licence', 'login', 'user', 'pass', 'order', 'consumer', 'signing', 'encryption' ];
+
+    function obNameIsSecret( name ) {
+        var raw = obDecode( name ).trim().replace( /\[.*$/, '' ).replace( /([a-z0-9])([A-Z])/g, '$1_$2' );
+        var parts = raw.toLowerCase().split( /[^a-z0-9]+/ );
+        var words = [];
+        var i;
+        for ( i = 0; i < parts.length; i++ ) {
+            if ( parts[ i ] ) {
+                words.push( parts[ i ] );
+            }
+        }
+        if ( ! words.length ) {
+            return false;
+        }
+        var joined = words.join( '' );
+        for ( i = 0; i < OB_SECRET_PARTS.length; i++ ) {
+            if ( joined.indexOf( OB_SECRET_PARTS[ i ] ) !== -1 ) {
+                return true;
+            }
+        }
+        for ( i = 0; i < words.length; i++ ) {
+            if ( OB_SECRET_WORDS.indexOf( words[ i ] ) !== -1 ) {
+                return true;
+            }
+        }
+        if ( joined.indexOf( 'reset' ) === 0 || joined.indexOf( 'session' ) === 0 || ( joined.indexOf( 'auth' ) === 0 && joined.indexOf( 'author' ) !== 0 ) ) {
+            return true;
+        }
+        for ( i = 0; i < OB_SECRET_KEY_PREFIXES.length; i++ ) {
+            var end = OB_SECRET_KEY_PREFIXES[ i ] + 'key';
+            if ( joined.length >= end.length && joined.slice( -end.length ) === end ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     function obStripPairs( query, set ) {
         var kept = [];
         var pairs = query.split( '&' );
@@ -73,7 +116,7 @@
             var name = eq === -1 ? pair : pair.slice( 0, eq );
             var value = eq === -1 ? '' : pair.slice( eq + 1 );
             var base = obDecode( name ).trim().toLowerCase().replace( /\[.*$/, '' );
-            if ( set[ base ] || OB_EMAIL_RE.test( obDecode( value ) ) ) {
+            if ( set[ base ] || obNameIsSecret( name ) || OB_EMAIL_RE.test( obDecode( value ) ) ) {
                 continue;
             }
             kept.push( pair );
@@ -81,7 +124,37 @@
         return kept.join( '&' );
     }
 
+    // OPT-1405: the WooCommerce order number after an order endpoint
+    // (/checkout/order-received/186/ → /checkout/order-received/, plain
+    // permalinks ?order-received=186 → ?order-received=). Endpoint names come
+    // from PHP opti_behavior_order_endpoint_slugs() (empty without WooCommerce).
+    function obStripOrderNumber( url ) {
+        var cfg = window.optiBehaviorHeatmapConfig;
+        var slugs = cfg && cfg.url_privacy && cfg.url_privacy.order_endpoints;
+        if ( typeof url !== 'string' || '' === url || ! Array.isArray( slugs ) ) {
+            return url;
+        }
+        var lower = url.toLowerCase();
+        var alt = [];
+        for ( var i = 0; i < slugs.length; i++ ) {
+            var slug = String( slugs[ i ] ).toLowerCase();
+            if ( slug && lower.indexOf( slug ) !== -1 ) {
+                alt.push( slug.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) );
+            }
+        }
+        if ( ! alt.length ) {
+            return url;
+        }
+        var cut = url.search( /[?#]/ );
+        var path = cut === -1 ? url : url.slice( 0, cut );
+        var rest = cut === -1 ? '' : url.slice( cut );
+        path = path.replace( new RegExp( '/(' + alt.join( '|' ) + ')/\\d+(?=/|$)/?', 'gi' ), '/$1/' );
+        rest = rest.replace( new RegExp( '([?&])(' + alt.join( '|' ) + ')=\\d+(?=&|#|$)', 'gi' ), '$1$2=' );
+        return path + rest;
+    }
+
     function obStripSensitiveUrl( url ) {
+        url = obStripOrderNumber( url );
         if ( typeof url !== 'string' || '' === url || ( url.indexOf( '?' ) === -1 && url.indexOf( '#' ) === -1 ) ) {
             return url;
         }
@@ -1063,6 +1136,11 @@
         // scroll, mouse move, key, touch, focus). Time beyond it - a tab left
         // open or hidden - is not part of the visit duration (OPT-590).
         this.activityGraceMs = 30 * 1000;
+        // Active time (OPT-1623): each gap between two activities counts up to
+        // activityGraceMs, and nothing while the tab is hidden (a tab opened in
+        // the background starts hidden).
+        this.activeMs = 0;
+        this.hiddenSince = (typeof document !== 'undefined' && document.visibilityState === 'hidden') ? this.lastActivityTime : 0;
         // Heartbeat adaptive backoff (perf fix: a fixed 5s interval hammered
         // admin-ajax.php with up to 720 full-WP-bootstrap requests per session
         // and slowed down whole sites). Start at 15s, double after each send,
@@ -1133,9 +1211,12 @@
         document.addEventListener('keydown', markActivity, { passive: true });
         document.addEventListener('touchstart', markActivity, { passive: true });
         window.addEventListener('focus', markActivity);
+        var tracker = this;
         document.addEventListener('visibilitychange', function() {
             if (document.visibilityState === 'visible') {
-                markActivity();
+                tracker.onShown(Date.now());
+            } else {
+                tracker.onHidden(Date.now());
             }
         });
 
@@ -1217,7 +1298,7 @@
         this.lastMoveTime = now;
         this.lastMoveX = x;
         this.lastMoveY = y;
-        this.lastActivityTime = now;
+        this.markActivity(now);
         try {
             // Skip localStorage writes in anonymous mode (no storage persistence allowed)
             if ( window.optiBehaviorHeatmapConfig && window.optiBehaviorHeatmapConfig.privacy_mode === 'full' ) {
@@ -1256,7 +1337,7 @@
         if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('Click detected!', 'heatmap-simple', event);
 
         // Update activity timestamp (in memory; localStorage only in full tracking mode)
-        this.lastActivityTime = Date.now();
+        this.markActivity();
         try {
             // Skip localStorage writes in anonymous mode (no storage persistence allowed)
             if ( window.optiBehaviorHeatmapConfig && window.optiBehaviorHeatmapConfig.privacy_mode === 'full' ) {
@@ -1450,7 +1531,7 @@
 
     HeatmapTracker.prototype.handleScroll = function() {
         // Update activity timestamp (in memory; localStorage only in full tracking mode)
-        this.lastActivityTime = Date.now();
+        this.markActivity();
         try {
             // Skip localStorage writes in anonymous mode (no storage persistence allowed)
             if ( window.optiBehaviorHeatmapConfig && window.optiBehaviorHeatmapConfig.privacy_mode === 'full' ) {
@@ -1574,18 +1655,41 @@
         }.bind(this), this.heartbeatDelay);
     };
 
-    HeatmapTracker.prototype.markActivity = function() {
-        this.lastActivityTime = Date.now();
+    HeatmapTracker.prototype.markActivity = function(now) {
+        now = (typeof now === 'number') ? now : Date.now();
+        if (this.hiddenSince) {
+            return; // Hidden tab: no active time (OPT-1623).
+        }
+        this.activeMs += Math.min(Math.max(0, now - this.lastActivityTime), this.activityGraceMs);
+        this.lastActivityTime = now;
+    };
+
+    // Tab hidden: close the running stretch (at most the grace after the last activity).
+    HeatmapTracker.prototype.onHidden = function(now) {
+        if (this.hiddenSince) {
+            return;
+        }
+        this.activeMs += Math.min(Math.max(0, now - this.lastActivityTime), this.activityGraceMs);
+        this.lastActivityTime = now;
+        this.hiddenSince = now;
+    };
+
+    // Tab back: a new stretch starts now, the hidden time is never counted.
+    HeatmapTracker.prototype.onShown = function(now) {
+        this.hiddenSince = 0;
+        this.lastActivityTime = now;
     };
 
     /**
-     * Visit duration on this page in seconds: up to the last real activity
-     * plus a short reading grace, never the wall-clock time of a tab left
-     * open or hidden (OPT-590). Same field and unit as before.
+     * Visit duration on this page in seconds = ACTIVE time (OPT-1623): the
+     * gaps between activities, each at most activityGraceMs, plus the running
+     * stretch; never the time the tab was hidden or left idle (OPT-590 counted
+     * the whole span up to the last activity, so a tab hidden 2 h then shown
+     * again counted 2 h). Same field and unit as before.
      */
     HeatmapTracker.prototype.activeDurationSeconds = function(now) {
-        var end = Math.min(now, this.lastActivityTime + this.activityGraceMs);
-        return Math.max(0, Math.round((end - this.sessionStartTime) / 1000));
+        var tail = this.hiddenSince ? 0 : Math.min(Math.max(0, now - this.lastActivityTime), this.activityGraceMs);
+        return Math.max(0, Math.round((this.activeMs + tail) / 1000));
     };
 
     HeatmapTracker.prototype.sendHeartbeat = function() {
@@ -1604,6 +1708,12 @@
         if (totalSessionTime > this.maxSessionDuration) {
             if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('Session exceeded 1 hour max, stopping heartbeat', 'heatmap-simple');
             this.heartbeatStopped = true;
+            return;
+        }
+
+        // Hidden tab, or no activity in the last grace window: nothing to add
+        // (OPT-1623). The unload beacon still sends the final active time.
+        if (this.hiddenSince || timeSinceLastActivity > this.activityGraceMs) {
             return;
         }
 
@@ -2311,8 +2421,12 @@
             url: obPageUrl(),
             title: document.title,
             userAgent: userAgent,
-            language: navigator.language || navigator.userLanguage || '',
-            timezone: (typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || '') : '',
+            // Browser language and time zone are read from the device only in
+            // Full mode with consent (isAnonymous is also true while consent is
+            // pending or rejected). Otherwise both stay empty: the server takes
+            // the language from the Accept-Language header and stores no time zone.
+            language: isAnonymous ? '' : (navigator.language || navigator.userLanguage || ''),
+            timezone: (!isAnonymous && typeof Intl !== 'undefined' && Intl.DateTimeFormat) ? (Intl.DateTimeFormat().resolvedOptions().timeZone || '') : '',
             screen_width: screenWidth,
             screen_height: window.screen.height,
             // Browser driven by an automation tool (Selenium, Puppeteer, Playwright…).
@@ -2441,9 +2555,53 @@
                     window.OptiBehaviorAnonBroker.setSessionId( serverSessionId );
                 }
             }
+            // Shop page (WooCommerce product page / checkout): one counter event
+            // per page load, after the session exists.
+            if ( responseData.success ) {
+                self.sendShopEvent();
+            }
         }).catch(function(error) {
             if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.error('Session start error:', 'heatmap-simple', error);
         });
+    };
+
+    /**
+     * Shop event of this page (product view or checkout start), sent ONCE per
+     * page load. The page type and product id come from the tracker config,
+     * which depends on the page only (true under a page cache). Reads and writes
+     * nothing in the browser: a counter on the server, no visitor data.
+     */
+    HeatmapTracker.prototype.sendShopEvent = function() {
+        if ( this._shopEventSent ) {
+            return;
+        }
+        var trackingConfig = window.optiBehaviorHeatmapConfig || this.config || {};
+        var shop = trackingConfig.shop;
+        if ( !shop || ( shop.t !== 'product_view' && shop.t !== 'checkout_start' ) ) {
+            return;
+        }
+        this._shopEventSent = true;
+
+        var formData = new FormData();
+        formData.append('action', 'opti_behavior_heatmap_record');
+        formData.append('nonce', this.config.nonce);
+        formData.append('data', JSON.stringify({
+            action: 'shop_event',
+            sessionId: this.sessionId,
+            event: shop.t,
+            product: shop.t === 'product_view' ? ( parseInt( shop.p, 10 ) || 0 ) : 0
+        }));
+        try {
+            fetch(this.config.ajax_url, {
+                method: 'POST',
+                body: formData,
+                mode: 'same-origin',
+                cache: 'no-cache'
+            }).then(function(response) {
+                // Read the answer: an unread body keeps the request open in the browser.
+                return response.text();
+            }).catch(function() {});
+        } catch (e) {}
     };
 
     // Test hook (part 2) — exposed AFTER the HeatmapTracker prototype methods

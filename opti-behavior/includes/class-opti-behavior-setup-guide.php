@@ -35,6 +35,12 @@ class Opti_Behavior_Setup_Guide {
 	/** Option: plugin version the guide last saw (tells a fresh install from an update). */
 	const OPTION_SEEN_VERSION = 'opti_behavior_guide_seen_version';
 
+	/** Option: time the "Visits are received" line of the first-day box was shown (it is shown once). */
+	const OPTION_FIRST_VISIT_SEEN = 'opti_behavior_first_visit_seen';
+
+	/** The first-day box follows a site that has visits only during its first days. */
+	const FIRST_DAYS = 7 * DAY_IN_SECONDS;
+
 	/** Delay before the "own visits" message: time to test the plugin first. */
 	const ADMIN_VISITS_DELAY = 2 * DAY_IN_SECONDS;
 
@@ -400,18 +406,18 @@ class Opti_Behavior_Setup_Guide {
 	}
 
 	/**
-	 * The three checks.
+	 * The "visits received" check: one row, same shape as get_checks().
 	 *
-	 * Each row: state (ok / info / warn / bad), title, text, link url, link label.
-	 *
-	 * @return array[]
+	 * @param string|null $last Last page view time when the caller already read it, null to read it here.
+	 * @return array State (ok / info / warn / bad), title, text, link url, link label.
 	 */
-	public static function get_checks() {
+	public static function get_tracker_check( $last = null ) {
 		$now_local = current_time( 'timestamp' ); // phpcs:ignore WordPress.DateTime.CurrentTimeTimestamp.Requested -- Compared with site-local `view_time` values.
 		$rows      = array();
 
-		// 1. Visits received.
-		$last       = self::last_visit();
+		if ( null === $last ) {
+			$last = self::last_visit();
+		}
 		$mismatches = class_exists( 'Opti_Behavior_Tracker_Heartbeat' ) ? Opti_Behavior_Tracker_Heartbeat::instance()->get_cached_mismatches() : array();
 		if ( ! class_exists( 'Opti_Behavior_Tracker_Heartbeat' ) ) {
 			require_once __DIR__ . '/class-opti-behavior-tracker-heartbeat.php';
@@ -456,6 +462,23 @@ class Opti_Behavior_Setup_Guide {
 			}
 		}
 
+		return $rows['tracker'];
+	}
+
+	/**
+	 * The checks.
+	 *
+	 * Each row: state (ok / info / warn / bad), title, text, link url, link label.
+	 *
+	 * @return array[]
+	 */
+	public static function get_checks() {
+		$rows = array();
+
+		// 1. Visits received.
+		$rows['tracker'] = self::get_tracker_check();
+		$doc_url         = Opti_Behavior_Tracker_Heartbeat::DOC_URL;
+
 		// 2. Own visits.
 		if ( ! self::admin_visits_tracked() ) {
 			$rows['admin'] = array( 'ok', __( 'Your own visits are excluded', 'opti-behavior' ), __( 'Your numbers show real visitors only.', 'opti-behavior' ), '', '' );
@@ -485,7 +508,41 @@ class Opti_Behavior_Setup_Guide {
 			$rows['cron'] = array( 'ok', __( 'Background tasks run on time', 'opti-behavior' ), __( 'Smart Insights and reports are up to date.', 'opti-behavior' ), '', '' );
 		}
 
-		// 4. Data folder: listed only while files cannot be written, so the
+		// 4. Country database: OK from the install (the file ships with the
+		// plugin), or when Cloudflare gives the country. A download is only the
+		// rescue of a missing or damaged file, and waits for this click.
+		if ( class_exists( 'Opti_Behavior_Geo_Country' ) ) {
+			$geo = Opti_Behavior_Geo_Country::status();
+			if ( 'bundled' === $geo['state'] ) {
+				$rows['geo'] = array(
+					'ok',
+					__( 'Country database', 'opti-behavior' ),
+					'' !== $geo['month']
+						/* translators: %s: month of the database file, for example 2026-10 */
+						? sprintf( __( 'Included with the plugin (month %s)', 'opti-behavior' ), $geo['month'] )
+						: __( 'Included with the plugin', 'opti-behavior' ),
+					'',
+					'',
+				);
+			} elseif ( Opti_Behavior_Geo_Country::is_ready() ) {
+				$rows['geo'] = array(
+					'ok',
+					__( 'Country database', 'opti-behavior' ),
+					'' !== $geo['month']
+						/* translators: %s: month of the database file, for example 2026-10 */
+						? sprintf( __( 'Installed (month %s)', 'opti-behavior' ), $geo['month'] )
+						: __( 'Installed', 'opti-behavior' ),
+					'',
+					'',
+				);
+			} elseif ( ! empty( $_SERVER['HTTP_CF_IPCOUNTRY'] ) ) {
+				$rows['geo'] = array( 'ok', __( 'Country database', 'opti-behavior' ), __( 'Not installed. Cloudflare gives the country of your visitors.', 'opti-behavior' ), '', '' );
+			} else {
+				$rows['geo'] = array( 'warn', __( 'Country database', 'opti-behavior' ), __( 'Not installed. Countries show "Unknown".', 'opti-behavior' ), Opti_Behavior_Geo_Country::action_url( 'download' ), __( 'Download now', 'opti-behavior' ) );
+			}
+		}
+
+		// 5. Data folder: listed only while files cannot be written, so the
 		// all-OK line above stays true.
 		$storage = class_exists( 'Opti_Behavior_Storage_Health' ) ? Opti_Behavior_Storage_Health::setup_check_row() : null;
 		if ( null !== $storage ) {
@@ -493,6 +550,88 @@ class Opti_Behavior_Setup_Guide {
 		}
 
 		return $rows;
+	}
+
+	// ---------------------------------------------------------------------
+	// First-day box (empty Traffic screen and Heatmaps list)
+	// ---------------------------------------------------------------------
+
+	/**
+	 * The row the first-day box shows now, null when there is no box.
+	 *
+	 * No visit yet: always the "waiting" row. Once visits exist, the box only
+	 * follows a site during its first days: "Visits are received" is shown
+	 * once, then the box is closed for good; a warning stays until then.
+	 * A site installed for longer has data on these screens and gets no box.
+	 *
+	 * @return array|null Same shape as get_tracker_check().
+	 */
+	public static function get_first_day_row() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return null;
+		}
+
+		$last = self::last_visit();
+		if ( '' === $last ) {
+			return self::get_tracker_check( $last );
+		}
+		if ( '' !== (string) get_option( self::OPTION_FIRST_VISIT_SEEN, '' ) ) {
+			return null;
+		}
+
+		$installed_at = self::installed_at();
+		if ( $installed_at <= 0 || time() > $installed_at + self::FIRST_DAYS ) {
+			add_option( self::OPTION_FIRST_VISIT_SEEN, (string) time(), '', false );
+			return null;
+		}
+
+		$row = self::get_tracker_check( $last );
+		if ( 'ok' === $row[0] ) {
+			add_option( self::OPTION_FIRST_VISIT_SEEN, (string) time(), '', false );
+		}
+
+		return $row;
+	}
+
+	/**
+	 * Print the first-day box: the "visits received" check as one band.
+	 *
+	 * @param string $screen 'traffic' or 'heatmaps'.
+	 * @return void
+	 */
+	public static function render_first_day_box( $screen ) {
+		$row = self::get_first_day_row();
+		if ( null === $row ) {
+			return;
+		}
+
+		$marks = array(
+			'ok'   => '✓',
+			'info' => 'i',
+			'warn' => '!',
+			'bad'  => '!',
+		);
+		$state = isset( $marks[ $row[0] ] ) ? $row[0] : 'info';
+		$is_ok = 'ok' === $state;
+		// The "received" line links to Traffic: no link on Traffic itself, the numbers are just below.
+		$has_link = '' !== $row[3] && ! ( $is_ok && 'traffic' === $screen );
+		?>
+		<section class="ob-firstday is-<?php echo esc_attr( $state ); ?>" data-check="tracker" aria-labelledby="ob-firstday-title">
+			<span class="ob-firstday__mark" aria-hidden="true"><?php echo esc_html( $marks[ $state ] ); ?></span>
+			<div class="ob-firstday__body">
+				<?php if ( ! $is_ok ) : ?>
+					<p class="ob-firstday__kicker"><?php esc_html_e( 'Setup check', 'opti-behavior' ); ?></p>
+				<?php endif; ?>
+				<h2 class="ob-firstday__title" id="ob-firstday-title"><?php echo esc_html( $row[1] ); ?></h2>
+				<p class="ob-firstday__text"><?php echo esc_html( $row[2] ); ?></p>
+			</div>
+			<?php if ( $has_link && $is_ok ) : ?>
+				<a class="ob-firstday__link" href="<?php echo esc_url( $row[3] ); ?>"><?php echo esc_html( $row[4] ); ?> →</a>
+			<?php elseif ( $has_link ) : ?>
+				<a class="ob-firstday__btn" href="<?php echo esc_url( $row[3] ); ?>" target="_blank" rel="noopener"><?php echo esc_html( $row[4] ); ?><span class="screen-reader-text"> <?php esc_html_e( '(opens in a new tab)', 'opti-behavior' ); ?></span></a>
+			<?php endif; ?>
+		</section>
+		<?php
 	}
 
 	/**

@@ -598,7 +598,12 @@
 	margin-top: 28px;
 }
 
-/* ---------- Setup check (Opti_Behavior_Setup_Guide::render_card) ---------- */
+/* ---------- Setup check (Opti_Behavior_Setup_Guide::render_card) ----------
+ * Same language as the first-day box (.ob-firstday, admin-utilities.css).
+ * A check that needs something = one full-width band: accent, big mark, the
+ * action as a button. The checks that pass = slim tiles sharing one row.
+ * The state is said by the title; the colour and the mark only repeat it.
+ */
 .ob-hiw-setup {
 	margin-top: 28px;
 	padding: 20px 24px;
@@ -606,7 +611,7 @@
 
 .ob-hiw-setup-head {
 	display: flex;
-	align-items: baseline;
+	align-items: center;
 	flex-wrap: wrap;
 	column-gap: 12px;
 }
@@ -622,71 +627,190 @@
 
 .ob-hiw-setup-sum {
 	margin-left: auto;
-	font-size: 14px;
+	padding: 4px 12px;
+	border-radius: 999px;
+	background: #f1f5f9;
+	font-size: 13px;
+	line-height: 1.4;
+	white-space: nowrap;
 	color: var(--ink-2);
+}
+
+/* The count takes the colour of the worst check. */
+.ob-hiw-setup:has(li.is-warn) .ob-hiw-setup-sum {
+	background: #fef3c7;
+	color: #92400e;
+}
+
+.ob-hiw-setup:has(li.is-bad) .ob-hiw-setup-sum {
+	background: #fee2e2;
+	color: #991b1b;
 }
 
 .ob-hiw-setup-list {
 	list-style: none;
 	margin: 14px 0 0;
 	padding: 0;
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-	gap: 12px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
 }
 
 .ob-hiw-setup-list li {
 	margin: 0;
-	display: grid;
-	grid-template-columns: 28px 1fr;
-	gap: 10px;
-	align-content: start;
-	padding: 12px 14px;
+	flex: 1 1 100%;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 14px 18px;
 	background: #fff;
-	border: 1px solid #eef2f7;
+	border: 1px solid #e5e7eb;
+	border-inline-start: 4px solid #7c3aed;
 	border-radius: 12px;
+	box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+/* Title + text on the left, the action on the right. */
+.ob-hiw-setup-list li > span:last-child {
+	flex: 1 1 0;
+	min-width: 0;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	column-gap: 18px;
 }
 
 .ob-hiw-setup-list b {
 	display: block;
-	font-size: 14px;
+	grid-column: 1;
+	font-size: 16px;
+	line-height: 1.3;
 	color: var(--ink);
+	overflow-wrap: anywhere;
 }
 
 .ob-hiw-setup-list small {
 	display: block;
+	grid-column: 1;
+	max-width: 96ch;
 	margin-top: 2px;
 	font-size: 13px;
-	line-height: 1.45;
+	line-height: 1.5;
 	color: var(--ink-3);
 }
 
 .ob-hiw-setup .ob-hiw-go {
+	grid-column: 1;
+	justify-self: start;
 	min-height: 32px;
 	font-size: 13px;
 }
 
+/* The action of a check that needs something: a button, not a text link. */
+.ob-hiw-setup-list li:not(.is-ok) .ob-hiw-go,
+.ob-hiw-setup-list li:not(.is-ok) .ob-hiw-go:visited {
+	grid-column: 2;
+	grid-row: 1 / span 2;
+	justify-content: center;
+	min-height: 40px;
+	padding: 0 18px;
+	border: 1px solid transparent;
+	border-radius: 10px;
+	background: linear-gradient(135deg, #4f46e5, #7c3aed);
+	color: #fff;
+	font-size: 14px;
+	text-decoration: none;
+	white-space: nowrap;
+	transition: filter 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ob-hiw-setup-list li:not(.is-ok) .ob-hiw-go:hover,
+.ob-hiw-setup-list li:not(.is-ok) .ob-hiw-go:focus {
+	color: #fff;
+	text-decoration: none;
+	filter: brightness(1.08);
+	box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+}
+
+.ob-hiw-setup-list li.is-warn .ob-hiw-go,
+.ob-hiw-setup-list li.is-warn .ob-hiw-go:visited,
+.ob-hiw-setup-list li.is-bad .ob-hiw-go,
+.ob-hiw-setup-list li.is-bad .ob-hiw-go:visited {
+	background: #fff;
+	border-color: #cbd5e1;
+	color: #0f172a;
+}
+
+.ob-hiw-setup-list li.is-warn .ob-hiw-go:hover,
+.ob-hiw-setup-list li.is-warn .ob-hiw-go:focus,
+.ob-hiw-setup-list li.is-bad .ob-hiw-go:hover,
+.ob-hiw-setup-list li.is-bad .ob-hiw-go:focus {
+	color: #0f172a;
+	border-color: #94a3b8;
+	filter: none;
+	box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+}
+
 .ob-hiw-setup .ob-hiw-mk {
-	width: 24px;
-	height: 24px;
-	border-radius: 50%;
+	flex: none;
+	width: 40px;
+	height: 40px;
+	border-radius: 12px;
 	display: grid;
 	place-items: center;
 	font-weight: 800;
-	font-size: 13px;
+	font-size: 18px;
+	line-height: 1;
 	background: #f1f5f9;
 	color: #64748b;
 }
 
+/* A check that passes: a slim tile; the tiles share the row. */
+.ob-hiw-setup-list li.is-ok {
+	flex: 1 1 240px;
+	gap: 10px;
+	padding: 10px 14px;
+	border-inline-start-color: #16a34a;
+	box-shadow: none;
+}
+
+.ob-hiw-setup-list li.is-ok b {
+	font-size: 14px;
+}
+
 .ob-hiw-setup .is-ok .ob-hiw-mk,
 .ob-hiw-setup.is-all-ok .ob-hiw-mk {
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	font-size: 13px;
 	background: #dcfce7;
 	color: #15803d;
 }
 
+/* Waiting for the first visit: the mark breathes, the row reads as "listening". */
 .ob-hiw-setup .is-info .ob-hiw-mk {
 	background: #ede9fe;
 	color: var(--brand);
+	animation: ob-hiw-setup-wait 2.4s ease-out infinite;
+}
+
+@keyframes ob-hiw-setup-wait {
+	0% {
+		box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.35);
+	}
+
+	70%,
+	100% {
+		box-shadow: 0 0 0 10px rgba(124, 58, 237, 0);
+	}
+}
+
+.ob-hiw-setup-list li.is-warn {
+	background: #fffbeb;
+	border-color: #fde68a;
+	border-inline-start-color: #d97706;
 }
 
 .ob-hiw-setup .is-warn .ob-hiw-mk {
@@ -694,18 +818,59 @@
 	color: #b45309;
 }
 
+.ob-hiw-setup-list li.is-bad {
+	background: #fef2f2;
+	border-color: #fecaca;
+	border-inline-start-color: #dc2626;
+}
+
 .ob-hiw-setup .is-bad .ob-hiw-mk {
 	background: #fee2e2;
 	color: #b91c1c;
 }
 
+/* Everything passes: one slim line. */
 .ob-hiw-setup.is-all-ok {
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	padding: 14px 20px;
+	padding: 12px 18px;
+	border-inline-start: 4px solid #16a34a;
 	font-weight: 600;
 	color: var(--ink-2);
+}
+
+@media (max-width: 600px) {
+	.ob-hiw-setup {
+		padding: 16px;
+	}
+
+	.ob-hiw-setup-list li {
+		align-items: flex-start;
+		gap: 12px;
+		padding: 14px;
+	}
+
+	.ob-hiw-setup-list li > span:last-child {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.ob-hiw-setup-list li:not(.is-ok) .ob-hiw-mk {
+		width: 32px;
+		height: 32px;
+		border-radius: 10px;
+		font-size: 15px;
+	}
+
+	.ob-hiw-setup-list li:not(.is-ok) .ob-hiw-go,
+	.ob-hiw-setup-list li:not(.is-ok) .ob-hiw-go:visited {
+		grid-column: 1;
+		grid-row: auto;
+		min-height: 44px;
+		margin-top: 10px;
+		white-space: normal;
+		text-align: center;
+	}
 }
 
 /* "no insight yet": a tooltip says when the first one comes. */

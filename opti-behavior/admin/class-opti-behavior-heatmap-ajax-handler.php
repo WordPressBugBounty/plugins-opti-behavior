@@ -1048,8 +1048,8 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		//   after a consent-transition (the pre-consent anonymous ID is promoted to full
 		//   mode, keeping its prefix).  Relying on the prefix would incorrectly mark
 		//   consented visitors as anonymous and hide their real IP.
-		$is_effectively_anonymous = ( 'anonymous' === $this->get_privacy_mode() )
-			|| ( 'full' === $this->get_privacy_mode() && ! $this->visitor_has_consent() );
+		// OPT-1691: the real IP only in Full mode with consent; any other or unknown mode = Anonymous.
+		$is_effectively_anonymous = ! ( 'full' === $this->get_privacy_mode() && $this->visitor_has_consent() );
 
 		$session_data = array(
 			'id'           => $session_id,
@@ -1647,26 +1647,6 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	}
 
 	/**
-	 * Handle session start data
-	 *
-	 * @param array $data Request data.
-	 */
-	private function handle_session_start( $data ) {
-		$session = $this->core->get_session();
-
-		$session_data = $data['session_start'];
-		// Returns true when a new session row was inserted, false when an existing one was updated.
-		$is_new_session = $session->track_session_start( $session_data );
-
-		// Also track visitor if provided.
-		// Only pass $is_new_session = true on the first page load so that visit_count
-		// is not incremented on every subsequent page view within the same session.
-		if ( isset( $data['visitor'] ) ) {
-			$session->track_visitor( $data['visitor'], $is_new_session );
-		}
-	}
-
-	/**
 	 * AJAX handler for session recording
 	 */
 	public function ajax_session_record() {
@@ -1766,6 +1746,12 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 				break;
 			case 'outbound_click':
 				$this->handle_outbound_click( $data, $session_id );
+				break;
+			case 'shop_event':
+				// Product view / checkout start of a WooCommerce page (counter only).
+				if ( class_exists( 'Opti_Behavior_Shop_Events' ) ) {
+					Opti_Behavior_Shop_Events::handle_tracker_event( $data, $session_id );
+				}
 				break;
 			default:
 				// Legacy recording data format
@@ -2002,17 +1988,11 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- SQL built from whitelisted period values only, custom dates use $wpdb->prepare(), no user input interpolated
 		$results = $wpdb->get_results( $sql );
 
-		// Debug: Check sessions table for user_id values
 		$debug_manager = $this->core->get_debug_manager();
 		if ( $debug_manager ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Debug query with hardcoded values.
-			$debug_sessions = $wpdb->get_results( "SELECT visitor_id, user_id, start_time FROM {$wpdb->prefix}optibehavior_sessions WHERE visitor_id LIKE 'visitor_1764698224486%' ORDER BY start_time DESC LIMIT 3" );
-			$debug_manager->log( 'Sessions for hamdo visitor: ' . wp_json_encode( $debug_sessions ), 'debug', 'top-users' );
-
 			// Debug: Log the SQL query and first result
 			$debug_manager->log( 'Top Users SQL: ' . $sql, 'debug', 'top-users' );
 			if ( ! empty( $results ) ) {
-				$debug_manager->log( 'First result username: ' . ( isset( $results[0]->username ) ? $results[0]->username : 'NULL' ), 'debug', 'top-users' );
 				$debug_manager->log( 'First result visitor_id: ' . $results[0]->visitor_id, 'debug', 'top-users' );
 			}
 		}
@@ -2045,24 +2025,13 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 				}
 			}
 
-			// Create visitor display - show username for logged-in users, visitor ID otherwise
-			// Get username for logged-in users
-		$username = null;
-		if ( ! empty( $row->user_id ) && $row->user_id > 0 ) {
-			$user = get_user_by( 'id', $row->user_id );
-			if ( $user ) {
-				$username = $user->display_name;
-			}
-		}
-		$visitor_short = ! empty( $username ) ? $username : substr( $row->visitor_id, 0, 8 ) . '...';
-
+			// OPT-1689: anonymous label for every visitor, never a login / name / account id.
 			$formatted_results[] = array(
 				'rank'              => $index + 1,
 				'visitor_id'        => $row->visitor_id,
-				'visitor_short'     => $visitor_short,
-				'display_name'      => $username,
-				'user_id'           => ! empty( $row->user_id ) ? intval( $row->user_id ) : null,
-				'profile_url'       => ! empty( $username ) ? admin_url( 'user-edit.php?user_id=' . $row->user_id ) : '',
+				'visitor_short'     => substr( $row->visitor_id, 0, 8 ) . '...',
+				'visitor_label'     => opti_behavior_visitor_label( $row->visitor_id ),
+				'logged_in'         => ! empty( $row->user_id ) && (int) $row->user_id > 0,
 				'country'           => ( $row->country_name ?: ( ( $row->country && strtoupper($row->country) !== 'UN' ) ? $this->get_country_name( strtoupper($row->country) ) : __( 'Unknown', 'opti-behavior' ) ) ),
 				'country_name'      => ( $row->country_name ?: ( ( $row->country && strtoupper($row->country) !== 'UN' ) ? $this->get_country_name( strtoupper($row->country) ) : __( 'Unknown', 'opti-behavior' ) ) ),
 				'country_code'      => ( $row->country ? strtoupper($row->country) : 'UN' ),
@@ -2087,8 +2056,6 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			$debug_manager->log( 'Formatted results count: ' . count( $formatted_results ), 'debug', 'top-users' );
 			if ( ! empty( $formatted_results ) ) {
 				$debug_manager->log( 'First formatted result visitor_short: ' . $formatted_results[0]['visitor_short'], 'debug', 'top-users' );
-				$debug_manager->log( 'First formatted result display_name: ' . ( $formatted_results[0]['display_name'] ?? 'NULL' ), 'debug', 'top-users' );
-				$debug_manager->log( 'First formatted result user_id: ' . ( $formatted_results[0]['user_id'] ?? 'NULL' ), 'debug', 'top-users' );
 			}
 		}
 		wp_send_json_success(
@@ -2196,6 +2163,61 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	}
 
 	/**
+	 * Whether values read on the visitor's device (time zone, browser language)
+	 * may be used: Full mode AND the visitor's consent. Anonymous Mode, or Full
+	 * mode without consent, never uses them.
+	 *
+	 * @return bool
+	 */
+	private function device_signals_allowed() {
+		return 'full' === $this->get_privacy_mode() && $this->visitor_has_consent();
+	}
+
+	/**
+	 * Language stored for the visitor.
+	 *
+	 * The value sent by the tracker is used when given (Full mode with consent
+	 * only, the caller passes '' otherwise); else the first language of the
+	 * Accept-Language request header.
+	 *
+	 * @param string $client_language Language sent by the tracker, '' when not allowed.
+	 * @return string Language tag (max 10 characters), '' when unknown.
+	 */
+	private function resolve_visitor_language( $client_language = '' ) {
+		$language = self::clean_language_tag( $client_language );
+		if ( '' === $language && isset( $_SERVER['HTTP_ACCEPT_LANGUAGE'] ) ) {
+			$language = self::first_accept_language( sanitize_text_field( wp_unslash( $_SERVER['HTTP_ACCEPT_LANGUAGE'] ) ) );
+		}
+		return $language;
+	}
+
+	/**
+	 * First language of an Accept-Language header ("de-DE,de;q=0.9" → "de-DE").
+	 *
+	 * @param string $header Accept-Language header value.
+	 * @return string Language tag (max 10 characters), '' when none.
+	 */
+	public static function first_accept_language( $header ) {
+		$parts = explode( ',', (string) $header );
+		$first = explode( ';', $parts[0] );
+		return self::clean_language_tag( $first[0] );
+	}
+
+	/**
+	 * Keep a language tag only when it looks like one ("fr", "de-DE", "zh-Hant").
+	 *
+	 * @param mixed $tag Raw value.
+	 * @return string Language tag (max 10 characters), '' when invalid.
+	 */
+	public static function clean_language_tag( $tag ) {
+		$tag = is_string( $tag ) ? trim( $tag ) : '';
+		if ( ! preg_match( '/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/', $tag ) ) {
+			return '';
+		}
+		return substr( $tag, 0, 10 );
+	}
+
+	/**
 	 * Resolve the canonical visitor_id for an "effectively anonymous" request.
 	 *
 	 * Cache-safe identity (decision D1): ALWAYS recompute the server daily hash
@@ -2253,18 +2275,29 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	/**
 	 * Geolocate IP address
 	 *
-	 * @param string $ip IP address.
+	 * Order: Cloudflare header, then the local DB-IP Lite country database
+	 * (Opti_Behavior_Geo_Country), then nothing (the screens show "Unknown").
+	 * Same in every privacy mode: the IP address is read in memory only, it is
+	 * never sent to an external service. Region and city are no longer filled,
+	 * and the time zone is never turned into a country.
+	 *
+	 * @since 1.10.0.1 Local database instead of the external lookup services.
+	 * @param string $ip              IP address.
+	 * @param string $client_timezone Time zone sent by the tracker.
 	 * @return array
 	 */
 	private function geolocate_ip( $ip, $client_timezone = '' ) {
-		// Determine privacy mode once up-front.
-		// In anonymous mode, Layers 3 and 3.5 (ip-api.com / ipwho.is) are skipped
-		// entirely so that no visitor IP is ever sent to a third-party service.
 		// Full mode without the visitor's consent counts as anonymous here too,
-		// like every other tracking path (WordPress.org security review of
-		// 1.9.2: the IP reached ip-api.com / ipwho.is before consent).
+		// like every other tracking path.
 		$privacy_mode      = $this->get_privacy_mode();
 		$is_anonymous_mode = ( 'full' !== $privacy_mode ) || ! $this->visitor_has_consent();
+
+		// The time zone is read on the visitor's device: it is used only in Full
+		// mode with consent. A tracker script still cached from an older version
+		// may send it in Anonymous Mode: it is ignored here, for every caller.
+		if ( $is_anonymous_mode ) {
+			$client_timezone = '';
+		}
 
 		// === Layer 1: CloudFlare CF-IPCountry header (instant, free) ===
 		if ( isset( $_SERVER['HTTP_CF_IPCOUNTRY'] ) && ! empty( $_SERVER['HTTP_CF_IPCOUNTRY'] ) ) {
@@ -2281,20 +2314,9 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			}
 		}
 
-		// For local/private IPs, try timezone and browser language fallbacks
+		// Local / private addresses have no country. Neither the browser language
+		// nor the time zone is turned into one: the screens show "Unknown".
 		if ( $this->is_private_ip( $ip ) ) {
-			// Try timezone-based detection for local IPs
-			if ( ! empty( $client_timezone ) ) {
-				$tz_result = $this->get_country_from_timezone( $client_timezone );
-				if ( ! empty( $tz_result['country'] ) ) {
-					return $tz_result;
-				}
-			}
-			// Try browser language as last resort for local IPs
-			$browser_result = $this->detect_country_from_browser();
-			if ( ! empty( $browser_result['country'] ) ) {
-				return $browser_result;
-			}
 			return array(
 				'country'      => null,
 				'country_name' => null,
@@ -2306,234 +2328,54 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		}
 
 		// === Layer 2: WordPress transient cache (1 hour TTL) ===
-		$cache_key = 'opti_geo_' . md5( $ip );
-		$cached = get_transient( $cache_key );
-		if ( $cached !== false ) {
-			// Return successful cached result (has country)
-			if ( ! empty( $cached['country'] ) ) {
-				return $cached;
-			}
-			// Previously failed result is cached — skip the API call to avoid
-			// blocking a PHP worker for 3s on every request. Fall through to
-			// instant timezone/browser fallbacks only.
-			$api_failed_recently = true;
-		} else {
-			$api_failed_recently = false;
+		// Key salted with the daily random salt: never a plain md5 of the IP.
+		// Only a country found in the local database is served: an entry written
+		// by an older version (external service, time zone, browser language) is
+		// ignored in every mode. The entry holds the country alone, so nothing
+		// of one visitor (time zone) is ever served to another one.
+		$cache_key = Opti_Behavior_Heatmap_Session::geo_cache_key( $ip );
+		$cached    = get_transient( $cache_key );
+		$country   = '';
+		if ( is_array( $cached ) && isset( $cached['source'] ) && 'dbip' === $cached['source'] && ! empty( $cached['country'] ) ) {
+			$country = strtoupper( (string) $cached['country'] );
 		}
 
-		// === Layer 3: ip-api.com API call (rate-limited: 45 req/min) ===
-		// Free for non-commercial use, no API key required
-		// IMPORTANT: Free tier only supports HTTP (not HTTPS)
-		// Server-side call so no mixed content issues
-		// Skip if a recent attempt already failed (error cached) to protect PHP workers.
-		// Also skip entirely in anonymous mode to avoid sending visitor IPs externally.
-		if ( $is_anonymous_mode ) {
-			$api_failed_recently = true;
-		}
-		// Site-wide budget for outbound lookups (both providers): a flood of
-		// uncached IPs can never tie up PHP workers on 3 s remote calls.
-		// Filter 0 = no limit.
-		if ( ! $is_anonymous_mode && class_exists( 'Opti_Behavior_Ingest_Gate' ) ) {
-			$lookup_budget = (int) apply_filters( 'opti_behavior_geo_lookups_per_minute', 40 );
-			if ( ! Opti_Behavior_Ingest_Gate::allow_hit( 'geo_lookup', $lookup_budget, MINUTE_IN_SECONDS, 'site' ) ) {
-				$is_anonymous_mode   = true; // Skips Layer 3.5 below as well.
-				$api_failed_recently = true;
-			}
-		}
-		if ( ! $api_failed_recently ) {
-			$api_url = 'http://ip-api.com/json/' . $ip . '?fields=status,message,countryCode,country,regionName,city,timezone';
-
-			$response = wp_remote_get( $api_url, array(
-				'timeout' => 3,
-				'headers' => array(
-					'Accept' => 'application/json',
-				),
-			) );
-
-			if ( ! is_wp_error( $response ) ) {
-				$body = wp_remote_retrieve_body( $response );
-				$data = json_decode( $body, true );
-
-				// Log the API response for debugging
-				if ( $this->core ) {
-					$debug_manager = $this->core->get_debug_manager();
-					if ( $debug_manager ) {
-						$debug_manager->log( 'Geolocation API response for IP ' . $ip . ': ' . wp_json_encode( $data ), 'debug', 'geolocation' );
-					}
-				}
-
-				if ( isset( $data['status'] ) && $data['status'] === 'success' ) {
-					$result = array(
-						'country'      => isset( $data['countryCode'] ) ? strtoupper( sanitize_text_field( $data['countryCode'] ) ) : null,
-						'country_name' => isset( $data['country'] ) ? sanitize_text_field( $data['country'] ) : null,
-						'region'       => isset( $data['regionName'] ) ? sanitize_text_field( $data['regionName'] ) : null,
-						'city'         => isset( $data['city'] ) ? sanitize_text_field( $data['city'] ) : null,
-						'timezone'     => isset( $data['timezone'] ) ? sanitize_text_field( $data['timezone'] ) : ( $client_timezone ?: '' ),
-						'source'       => 'ip-api',
-					);
-					// Cache for 1 hour
-					set_transient( $cache_key, $result, HOUR_IN_SECONDS );
-					return $result;
-				}
-
-				// Log API error
-				if ( $this->core ) {
-					$debug_manager = $this->core->get_debug_manager();
-					if ( $debug_manager ) {
-						$debug_manager->log( 'Geolocation API failed for IP ' . $ip . ': ' . ( isset( $data['message'] ) ? $data['message'] : 'Unknown error' ), 'error', 'geolocation' );
-					}
-				}
-			} else {
-				// Log WP error
-				if ( $this->core ) {
-					$debug_manager = $this->core->get_debug_manager();
-					if ( $debug_manager ) {
-						$debug_manager->log( 'Geolocation API request error for IP ' . $ip . ': ' . $response->get_error_message(), 'error', 'geolocation' );
-					}
-				}
+		// === Layer 3: local DB-IP Lite country database (no HTTP call) ===
+		if ( '' === $country && class_exists( 'Opti_Behavior_Geo_Country' ) ) {
+			$country = Opti_Behavior_Geo_Country::lookup( $ip );
+			if ( '' !== $country ) {
+				set_transient(
+					$cache_key,
+					array(
+						'country' => $country,
+						'source'  => 'dbip',
+					),
+					HOUR_IN_SECONDS
+				);
 			}
 		}
 
-		// === Layer 3.5: ipwho.is secondary API (free, HTTPS, no rate limit) ===
-		// Fallback when ip-api.com is rate-limited (45 req/min on free tier).
-		// ipwho.is has no rate limit and supports HTTPS.
-		// Note: intentionally NOT guarded by $api_failed_recently — if ip-api.com
-		// cached a failure, ipwho.is (with no rate limit) may still resolve it.
-		// On success, the transient cache is updated with the correct country.
-		// Skipped entirely in anonymous mode (no visitor IP sent to third parties).
-		if ( ! $is_anonymous_mode ) {
-			$ipwho_url = 'https://ipwho.is/' . $ip;
-
-			$ipwho_response = wp_remote_get( $ipwho_url, array(
-				'timeout' => 3,
-				'headers' => array(
-					'Accept' => 'application/json',
-				),
-			) );
-
-			if ( ! is_wp_error( $ipwho_response ) ) {
-				$ipwho_body = wp_remote_retrieve_body( $ipwho_response );
-				$ipwho_data = json_decode( $ipwho_body, true );
-
-				if ( $this->core ) {
-					$debug_manager = $this->core->get_debug_manager();
-					if ( $debug_manager ) {
-						$debug_manager->log( 'ipwho.is API response for IP ' . $ip . ': ' . wp_json_encode( $ipwho_data ), 'debug', 'geolocation' );
-					}
-				}
-
-				if ( isset( $ipwho_data['success'] ) && $ipwho_data['success'] === true && ! empty( $ipwho_data['country_code'] ) ) {
-					$result = array(
-						'country'      => strtoupper( sanitize_text_field( $ipwho_data['country_code'] ) ),
-						'country_name' => isset( $ipwho_data['country'] ) ? sanitize_text_field( $ipwho_data['country'] ) : null,
-						'region'       => isset( $ipwho_data['region'] ) ? sanitize_text_field( $ipwho_data['region'] ) : null,
-						'city'         => isset( $ipwho_data['city'] ) ? sanitize_text_field( $ipwho_data['city'] ) : null,
-						'timezone'     => isset( $ipwho_data['timezone'], $ipwho_data['timezone']['id'] ) ? sanitize_text_field( $ipwho_data['timezone']['id'] ) : ( $client_timezone ?: '' ),
-						'source'       => 'ipwho',
-					);
-					// Cache for 1 hour
-					set_transient( $cache_key, $result, HOUR_IN_SECONDS );
-					return $result;
-				}
-			} else {
-				if ( $this->core ) {
-					$debug_manager = $this->core->get_debug_manager();
-					if ( $debug_manager ) {
-						$debug_manager->log( 'ipwho.is request error for IP ' . $ip . ': ' . $ipwho_response->get_error_message(), 'error', 'geolocation' );
-					}
-				}
-			}
+		if ( 1 === preg_match( '/^[A-Z]{2}$/', $country ) ) {
+			return array(
+				'country'      => $country,
+				'country_name' => $this->get_country_name( $country ),
+				'region'       => '',
+				'city'         => '',
+				'timezone'     => $client_timezone ?: '',
+				'source'       => 'dbip',
+			);
 		}
 
-		// === Layer 4: Timezone → Country mapping (instant, local, no API) ===
-		if ( ! empty( $client_timezone ) ) {
-			$tz_result = $this->get_country_from_timezone( $client_timezone );
-			if ( ! empty( $tz_result['country'] ) ) {
-				// Cache the timezone-based result for 1 hour (replaces failed cache entry)
-				set_transient( $cache_key, $tz_result, HOUR_IN_SECONDS );
-				return $tz_result;
-			}
-		}
-
-		// === Layer 5: Browser Accept-Language header fallback ===
-		$browser_result = $this->detect_country_from_browser();
-		if ( ! empty( $browser_result['country'] ) ) {
-			// Cache browser-based result for 1 hour (replaces failed cache entry)
-			set_transient( $cache_key, $browser_result, HOUR_IN_SECONDS );
-			return $browser_result;
-		}
-
-		// All methods failed — cache failure for 30 minutes to prevent
-		// re-hitting the API on every request (protects PHP worker pool)
-		$result = array(
+		// No database installed, or address not in it: the country stays empty
+		// and the screens show "Unknown". Nothing is cached: the lookup is local
+		// and the country must appear as soon as the database is installed.
+		return array(
 			'country'      => null,
 			'country_name' => null,
 			'region'       => null,
 			'city'         => null,
 			'timezone'     => $client_timezone ?: '',
 			'source'       => 'failed',
-		);
-		set_transient( $cache_key, $result, 30 * MINUTE_IN_SECONDS );
-		return $result;
-	}
-
-	/**
-	 * Get country from IANA timezone using PHP's built-in DateTimeZone
-	 *
-	 * Maps timezone strings like 'Europe/Paris' → 'FR', 'Asia/Tokyo' → 'JP'.
-	 * Uses PHP's DateTimeZone::getLocation() — no external API needed.
-	 *
-	 * @param string $timezone IANA timezone string (e.g., 'Europe/Paris').
-	 * @return array Country data array.
-	 */
-	private function get_country_from_timezone( $timezone ) {
-		$timezone = sanitize_text_field( $timezone );
-
-		if ( empty( $timezone ) ) {
-			return array(
-				'country'      => null,
-				'country_name' => null,
-				'region'       => null,
-				'city'         => null,
-				'timezone'     => '',
-				'source'       => 'timezone_empty',
-			);
-		}
-
-		try {
-			$dtz = new \DateTimeZone( $timezone );
-			$location = $dtz->getLocation();
-
-			if ( $location && ! empty( $location['country_code'] ) && $location['country_code'] !== '??' ) {
-				$country_code = strtoupper( $location['country_code'] );
-				$country_name = $this->get_country_name( $country_code );
-
-				return array(
-					'country'      => $country_code,
-					'country_name' => $country_name,
-					'region'       => null,
-					'city'         => null,
-					'timezone'     => $timezone,
-					'source'       => 'timezone',
-				);
-			}
-		} catch ( \Exception $e ) {
-			// Invalid timezone string — fall through
-			if ( $this->core ) {
-				$debug_manager = $this->core->get_debug_manager();
-				if ( $debug_manager ) {
-					$debug_manager->log( 'Invalid timezone for geo lookup: ' . $timezone . ' — ' . $e->getMessage(), 'debug', 'geolocation' );
-				}
-			}
-		}
-
-		return array(
-			'country'      => null,
-			'country_name' => null,
-			'region'       => null,
-			'city'         => null,
-			'timezone'     => $timezone,
-			'source'       => 'timezone_failed',
 		);
 	}
 
@@ -2598,62 +2440,6 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		$mask_long = -1 << ( 32 - (int) $mask );
 		$subnet_long &= $mask_long;
 		return ( $ip_long & $mask_long ) === $subnet_long;
-	}
-
-	/**
-	 * Get country from browser Accept-Language header
-	 *
-	 * @return array
-	 */
-	private function get_country_from_browser_language() {
-		$country = null;
-		$country_name = null;
-
-		// Get Accept-Language header
-		if ( isset( $_SERVER['HTTP_ACCEPT_LANGUAGE'] ) ) {
-			$accept_language = sanitize_text_field( wp_unslash( $_SERVER['HTTP_ACCEPT_LANGUAGE'] ) );
-
-			// Parse Accept-Language header (e.g., "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7")
-			// Extract the first language code
-			if ( preg_match( '/^([a-z]{2})-([A-Z]{2})/', $accept_language, $matches ) ) {
-				// Full locale format (e.g., "fr-FR")
-				$country = strtoupper( $matches[2] );
-				$country_name = $this->get_country_name( $country );
-			} elseif ( preg_match( '/^([a-z]{2})/', $accept_language, $matches ) ) {
-				// Language code only (e.g., "fr")
-				// Map common language codes to countries
-				$lang_to_country = array(
-					'fr' => 'FR',
-					'de' => 'DE',
-					'es' => 'ES',
-					'it' => 'IT',
-					'pt' => 'PT',
-					'nl' => 'NL',
-					'pl' => 'PL',
-					'ru' => 'RU',
-					'ja' => 'JP',
-					'zh' => 'CN',
-					'ko' => 'KR',
-					'ar' => 'SA',
-					'en' => 'US',
-				);
-
-				$lang = $matches[1];
-				if ( isset( $lang_to_country[ $lang ] ) ) {
-					$country = $lang_to_country[ $lang ];
-					$country_name = $this->get_country_name( $country );
-				}
-			}
-		}
-
-		return array(
-			'country'      => $country,
-			'country_name' => $country_name,
-			'region'       => null,
-			'city'         => null,
-			'timezone'     => null,
-			'source'       => 'browser_language',
-		);
 	}
 
 	/**
@@ -2749,6 +2535,17 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			$timezone = $client_timezone;
 		}
 
+		// Time zone and browser language are read on the visitor's device: kept
+		// only in Full mode with consent. Otherwise the time zone is dropped (an
+		// older cached tracker may still send it) and the language comes from
+		// the Accept-Language request header.
+		$device_signals_allowed = $this->device_signals_allowed();
+		if ( ! $device_signals_allowed ) {
+			$timezone        = null;
+			$client_timezone = '';
+		}
+		$language = $this->resolve_visitor_language( $device_signals_allowed && isset( $data['language'] ) ? $data['language'] : '' );
+
 		// Try server-side IP geolocation only if client didn't provide valid country data.
 		// GDPR: IP is used for geolocation only, then discarded — never stored in anonymous mode.
 		// The IP itself is stored as 'Anonymous' in the session record (see ensure_session_exists).
@@ -2817,6 +2614,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			'region'       => $region,
 			'city'         => $city,
 			'timezone'     => $timezone,
+			'language'     => '' !== $language ? $language : null,
 		);
 
 		// Check if visitor exists
@@ -2872,6 +2670,11 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 				$update_format = array_merge( $update_format, array( '%s', '%s', '%s', '%s', '%s' ) );
 			}
 
+			if ( '' !== $language ) {
+				$update_data['language'] = $language;
+				$update_format[]         = '%s';
+			}
+
 			$wpdb->update(
 				"{$wpdb->prefix}optibehavior_visitors",
 				$update_data,
@@ -2884,7 +2687,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			$visitor_inserted = $wpdb->insert(
 				"{$wpdb->prefix}optibehavior_visitors",
 				$visitor_data,
-				array( '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s' )
+				array( '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' )
 			);
 
 			// Concurrent session_start requests (multi-tab first hit, tracker +
@@ -2951,8 +2754,8 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			// visitor_id prefix (anon_) for this check — that prefix is preserved by the
 			// consent-transition migration and would incorrectly mark consented visitors
 			// as anonymous.
-			$is_effectively_anonymous = ( 'anonymous' === $this->get_privacy_mode() )
-				|| ( 'full' === $this->get_privacy_mode() && ! $this->visitor_has_consent() );
+			// OPT-1691: the real IP only in Full mode with consent; any other or unknown mode = Anonymous.
+			$is_effectively_anonymous = ! ( 'full' === $this->get_privacy_mode() && $this->visitor_has_consent() );
 
 			$session_data = array(
 				'id'         => $session_id,
@@ -3638,44 +3441,6 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	}
 
 	/**
-	 * Detect country from browser Accept-Language header
-	 * Used as fallback for local/private IPs when client-side detection fails
-	 *
-	 * @return array Country data array
-	 */
-	private function detect_country_from_browser() {
-		$country = null;
-		$country_name = null;
-
-		// Try to get country from Accept-Language header
-		if ( isset( $_SERVER['HTTP_ACCEPT_LANGUAGE'] ) ) {
-			$accept_lang = sanitize_text_field( wp_unslash( $_SERVER['HTTP_ACCEPT_LANGUAGE'] ) );
-
-			// Parse Accept-Language header (e.g., "en-US,en;q=0.9,fr;q=0.8")
-			// Extract the first locale with country code
-			if ( preg_match( '/([a-z]{2})-([A-Z]{2})/', $accept_lang, $matches ) ) {
-				$detected_country = strtoupper( $matches[2] );
-
-				// Validate it's a real country code
-				$detected_name = $this->get_country_name( $detected_country );
-				if ( $detected_name !== 'Unknown' ) {
-					$country = $detected_country;
-					$country_name = $detected_name;
-				}
-			}
-		}
-
-		return array(
-			'country'      => $country,
-			'country_name' => $country_name,
-			'region'       => null,
-			'city'         => null,
-			'timezone'     => null,
-			'source'       => 'browser',
-		);
-	}
-
-	/**
 	 * Recursively sanitize data from json_decode
 	 *
 	 * Sanitizes all string values in a decoded JSON array/object structure.
@@ -4070,9 +3835,11 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 	/**
 	 * AJAX handler for backfilling country data on visitors with NULL country.
 	 *
-	 * Uses timezone and browser language fallbacks to resolve countries
-	 * for visitors where ip-api.com previously failed (rate limiting, etc.).
-	 * Processes in batches to avoid timeouts.
+	 * Kept for older admin scripts that still call it: it updates nothing any
+	 * more. Neither the stored time zone (1.10.0.1) nor the stored browser
+	 * language (OPT-904) is turned into a country, and no IP address is stored
+	 * to look up afterwards: new visits get their country from the local
+	 * database (Opti_Behavior_Geo_Country).
 	 *
 	 * @since 1.1.2
 	 */
@@ -4093,7 +3860,7 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		// Get visitors with NULL country that have a timezone stored
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics backfill query; table name from $wpdb->prefix.
 		$visitors = $wpdb->get_results( $wpdb->prepare(
-			"SELECT id, timezone, language FROM {$visitors_table}
+			"SELECT id, timezone FROM {$visitors_table}
 			WHERE (country IS NULL OR country = '' OR country = 'UN')
 			ORDER BY last_visit DESC
 			LIMIT %d",
@@ -4108,30 +3875,8 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			$country_name = null;
 			$source = '';
 
-			// Try timezone-based detection first
-			if ( ! empty( $visitor->timezone ) ) {
-				$tz_result = $this->get_country_from_timezone( $visitor->timezone );
-				if ( ! empty( $tz_result['country'] ) ) {
-					$country = $tz_result['country'];
-					$country_name = $tz_result['country_name'];
-					$source = 'timezone_backfill';
-				}
-			}
-
-			// Try language-based detection as fallback
-			if ( empty( $country ) && ! empty( $visitor->language ) ) {
-				$lang = sanitize_text_field( $visitor->language );
-				// Parse language string (e.g., "fr-FR" or "fr")
-				if ( preg_match( '/^([a-z]{2})-([A-Z]{2})/', $lang, $matches ) ) {
-					$lang_country = strtoupper( $matches[2] );
-					$lang_name = $this->get_country_name( $lang_country );
-					if ( $lang_name && $lang_name !== 'Unknown' && $lang_name !== $lang_country ) {
-						$country = $lang_country;
-						$country_name = $lang_name;
-						$source = 'language_backfill';
-					}
-				}
-			}
+			// No source left for a visitor of the past: a stored time zone or
+			// browser language is not a location, and the IP address is not kept.
 
 			if ( ! empty( $country ) ) {
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics backfill update; table name from $wpdb->prefix.

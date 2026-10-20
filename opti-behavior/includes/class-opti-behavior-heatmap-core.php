@@ -670,6 +670,10 @@ class Opti_Behavior_Heatmap_Core {
 		// Smart Insights rules changed since the last admin visit: flush the
 		// dossiers built by the older rules and regenerate once.
 		if ( class_exists( 'Opti_Behavior_Smart_Insights_Scheduler' ) ) {
+			// The locked Page X-Ray preview (Free) drops its cache on the same signal.
+			if ( class_exists( 'Opti_Behavior_Smart_Insights_Page_Preview' ) ) {
+				Opti_Behavior_Smart_Insights_Page_Preview::register_hooks();
+			}
 			Opti_Behavior_Smart_Insights_Scheduler::maybe_apply_rules_upgrade();
 			Opti_Behavior_Smart_Insights_Scheduler::maybe_repair_story_parent_loops();
 		}
@@ -684,6 +688,10 @@ class Opti_Behavior_Heatmap_Core {
 		$activated_ver = $this->options['activated_ver'] ? $this->options['activated_ver'] : '';
 		if ( version_compare( $activated_ver, OPTI_BEHAVIOR_HEATMAP_VERSION, '<' ) || self::PLAN !== $this->options['activated_plan'] ) {
 			$this->database->setup();
+			// The weekly shop e-mail stopped: its numbers are in the scheduled report (OPT-1735).
+			if ( class_exists( 'Opti_Behavior_Shop_Report' ) && method_exists( 'Opti_Behavior_Shop_Report', 'stop_weekly_email' ) ) {
+				Opti_Behavior_Shop_Report::stop_weekly_email();
+			}
 		}
 
 			// Safety check: ensure analytics tables exist (self-healing on admin).
@@ -1285,6 +1293,16 @@ class Opti_Behavior_Heatmap_Core {
 			if ( method_exists( $service, 'prune_error_performance_rows' ) ) {
 				$summary['error_performance_rows_pruned'] = array_sum( $service->prune_error_performance_rows() );
 			}
+		}
+
+		// --- 2d. Anonymous daily salts: none older than today stays in the database. ---
+		if ( method_exists( 'Opti_Behavior_Heatmap_Session', 'purge_stale_anon_salts' ) ) {
+			Opti_Behavior_Heatmap_Session::purge_stale_anon_salts();
+		}
+
+		// --- 2e. Shop events: same window as the raw data (0 = kept). ---
+		if ( class_exists( 'Opti_Behavior_Shop_Events' ) ) {
+			$summary['shop_event_rows_pruned'] = Opti_Behavior_Shop_Events::prune( Opti_Behavior_Retention_Policy::get_raw_retention_days() );
 		}
 
 		// --- 3. Aggregates cap (default 12 months; 0 = kept FOREVER). ---
@@ -2211,6 +2229,9 @@ class Opti_Behavior_Heatmap_Core {
 	public static function activation() {
 		$instance = self::get_instance();
 		$instance->database->activation();
+		if ( class_exists( 'Opti_Behavior_Shop_Report' ) && method_exists( 'Opti_Behavior_Shop_Report', 'stop_weekly_email' ) ) {
+			Opti_Behavior_Shop_Report::stop_weekly_email(); // OPT-1735.
+		}
 	}
 
 	/**
@@ -2249,6 +2270,7 @@ class Opti_Behavior_Heatmap_Core {
 			'opti_behavior_db_size_cap_run',             // 'opti_behavior_db_size_cap_run' (one-off, run-now + continuation).
 			'opti_behavior_db_schema_migration_run',     // 'opti_behavior_db_schema_migration_run' (one-off).
 			'opti_behavior_daily_heartbeat',                 // Free tracker daily heartbeat.
+			'opti_behavior_shop_weekly_report',              // Opti_Behavior_Shop_Report::CRON_HOOK (weekly shop e-mail, OPT-1229; stopped OPT-1735, kept for a clean uninstall).
 			// --- One-off events ---------------------------------------------------
 			'opti_behavior_debug_auto_disable',              // Opti_Behavior_Heatmap_Debug_Manager::AUTO_DISABLE_CRON_HOOK.
 			'opti_behavior_smart_insights_scheduler_batch',  // Opti_Behavior_Smart_Insights_Scheduler::BATCH_HOOK.
@@ -2273,6 +2295,7 @@ class Opti_Behavior_Heatmap_Core {
 			'opti_behavior_spam_referrer_repair',            // Opti_Behavior_Stats_Spam_Filter::REFERRER_REPAIR_HOOK (one-time repair, OPT-562).
 			'opti_behavior_page_type_prune_restore',         // 1.9.5 archive-page prune restore pass.
 			'opti_behavior_page_type_prune_purge',           // 1.9.5 archive-page prune purge pass.
+			'opti_behavior_geo_db_check',                    // 1.10.0.1 monthly update of the local country database.
 			'opti_behavior_heatmap_migration_batch',         // Heatmap file-storage migration batch worker.
 			'opti_behavior_recording_orphan_sweep',          // Orphaned recording-file sweep (scheduled by Pro, cleared by Free).
 		);

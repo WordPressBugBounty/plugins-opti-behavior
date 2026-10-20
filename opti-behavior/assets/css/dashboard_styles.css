@@ -189,6 +189,14 @@
     border-color: rgba(255, 255, 255, 0.5);
 }
 
+/* « Site report » link of the Traffic / Smart Insights headers (OPT-1342): a link styled as the header buttons. */
+a.ob-site-report-link,
+a.ob-site-report-link:hover,
+a.ob-site-report-link:focus {
+    color: #fff;
+    text-decoration: none;
+}
+
 .period-selector:focus-visible,
 .dashboard-controls input[type="date"]:focus-visible,
 .refresh-btn:focus-visible,
@@ -2557,6 +2565,10 @@
 
 .top-pages .metric-views .metric-icon {
     color: #f97316; /* flame */
+}
+
+.top-pages .metric-pageviews .metric-icon {
+    color: #2563eb; /* page views (OPT-1604) */
 }
 
 .top-pages .metric-clicks .metric-icon {
@@ -8129,10 +8141,11 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 
 .opti-behavior-dashboard-page .pages-widget .top-pages .page-metrics {
 	display: flex;
-	/* Three badges (sessions, clicks, avg time) must stay on one line; wide
-	   values ("1m 52s" + trend) used to push the clock badge onto a second
-	   row. Badges are compacted below instead of wrapping. */
-	flex-wrap: nowrap;
+	/* Four badges (visits, page views, clicks, avg time; OPT-1604), compacted
+	   below. When the widget is too narrow for one line, the last badge goes
+	   to a second line instead of being cut (a cut figure reads as another
+	   number). */
+	flex-wrap: wrap;
 	align-items: center;
 	justify-content: flex-start;
 	gap: 6px;

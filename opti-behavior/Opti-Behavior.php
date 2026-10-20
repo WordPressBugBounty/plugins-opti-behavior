@@ -3,7 +3,7 @@
  * Plugin Name: Opti-Behavior – Self-Hosted Heatmaps, Funnels, A/B Testing & Smart Insights
  * Plugin URI:  https://optiuser.com/
  * Description: Self-hosted heatmaps, funnels, A/B WooCommerce testing, behavior analytics & Smart Insights for WordPress. Own your data and optimize what users do.
- * Version:     1.10.0
+ * Version:     1.10.1
  * Author:      OptiUser
  * Author URI:  https://optiuser.com/
  * License:     GPLv2 or later
@@ -81,7 +81,7 @@ if ( defined( 'OPTI_BEHAVIOR_HEATMAP' ) ) {
 }
 
 // Define plugin constants.
-define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.10.0' );
+define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.10.1' );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR', OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'includes/' );
@@ -110,6 +110,68 @@ function opti_behavior_page_xray_available() {
 	} catch ( Throwable $e ) {
 		return false;
 	}
+}
+
+/**
+ * Highest time counted for one page view / one visit, in seconds (OPT-1623):
+ * 30 min a page view, 4 h a visit. Applied when the figures are READ (old rows
+ * above it are shown capped, never rewritten); the tracker sends active time
+ * only since OPT-1623. THE rule of every average time (heatmap, Traffic, reports).
+ *
+ * @param string $kind 'page_view' or 'session'.
+ * @return int
+ */
+function opti_behavior_time_cap( $kind ) {
+	$caps = array(
+		'page_view' => 30 * MINUTE_IN_SECONDS,
+		'session'   => 4 * HOUR_IN_SECONDS,
+	);
+	$cap  = isset( $caps[ $kind ] ) ? $caps[ $kind ] : $caps['session'];
+
+	return max( 1, (int) apply_filters( 'opti_behavior_time_cap', $cap, $kind ) );
+}
+
+/**
+ * SQL of a time in seconds capped by opti_behavior_time_cap() (OPT-1623).
+ * Negative / NULL stay as they are (NULLIF / AVG callers keep their meaning).
+ *
+ * @param string $expr SQL expression in seconds (column or computed, never user input).
+ * @param string $kind 'page_view' or 'session'.
+ * @return string
+ */
+function opti_behavior_capped_seconds_sql( $expr, $kind ) {
+	return 'LEAST( ' . $expr . ', ' . opti_behavior_time_cap( $kind ) . ' )';
+}
+
+/**
+ * utm_source values of the Traffic Channel "AI Assistants" (OPT-1132), lower
+ * case. ChatGPT adds `utm_source=chatgpt.com` to its links and the browser
+ * often sends no referrer: such a visit is an AI assistant visit, with or
+ * without a referrer, unless its utm_medium says paid (cpc, ppc, paid,
+ * paid_search). THE list, written once: read by the dashboard classifier, the
+ * shared filter SQL, the heatmap filter SQL (Free + Pro) and the Pro
+ * recordings list. The referrer hosts are in
+ * Opti_Behavior_Advanced_Filters_Trait::get_traffic_channel_domain_maps().
+ *
+ * @return string[]
+ */
+function opti_behavior_ai_assistant_utm_sources() {
+	return array( 'chatgpt.com', 'chat.openai.com', 'perplexity', 'perplexity.ai', 'claude.ai', 'copilot.microsoft.com' );
+}
+
+/**
+ * SQL condition "this session row carries an AI assistant utm_source and is
+ * not a paid visit" (OPT-1132), the SQL twin of the rule above. No "%" inside:
+ * safe before and after $wpdb->prepare().
+ *
+ * @param string $source_expr SQL expression of utm_source.
+ * @param string $medium_expr SQL expression of utm_medium.
+ * @return string SQL condition in parentheses.
+ */
+function opti_behavior_ai_assistant_utm_sql( $source_expr = 's.utm_source', $medium_expr = 's.utm_medium' ) {
+	$sources = array_map( 'esc_sql', opti_behavior_ai_assistant_utm_sources() );
+	return '(LOWER(TRIM(COALESCE(' . $source_expr . ", ''))) IN ('" . implode( "','", $sources ) . "')"
+		. ' AND LOWER(TRIM(COALESCE(' . $medium_expr . ", ''))) NOT IN ('cpc','ppc','paid','paid_search'))";
 }
 
 /**
@@ -174,10 +236,41 @@ add_action( 'init', array( 'Opti_Behavior_Filter_Profiles', 'init' ) );
 // storage write path (front-end ingest included), so it is loaded everywhere.
 require_once __DIR__ . '/includes/class-opti-behavior-storage-health.php';
 
+// Country of a visitor from the local DB-IP Lite database (no external service
+// per visit). Read by the tracking endpoints, so it is loaded everywhere; the
+// file is downloaded only after the administrator asked for it.
+require_once __DIR__ . '/includes/class-opti-behavior-mmdb-reader.php';
+require_once __DIR__ . '/includes/class-opti-behavior-geo-country.php';
+Opti_Behavior_Geo_Country::init();
+
+// Shop events (WooCommerce): daily counters per product and event type, filled
+// by the WooCommerce hooks and the tracker. Nothing is hooked without WooCommerce.
+require_once __DIR__ . '/includes/class-opti-behavior-shop-events.php';
+Opti_Behavior_Shop_Events::init();
+// "Shop" screen (OPT-1228): lost visits per product page, WooCommerce only.
+require_once __DIR__ . '/includes/class-opti-behavior-shop-screen.php';
+Opti_Behavior_Shop_Screen::init();
+// Weekly "Shop" e-mail to the administrator (OPT-1229): totals of the week, WooCommerce only.
+require_once __DIR__ . '/includes/class-opti-behavior-shop-report.php';
+Opti_Behavior_Shop_Report::init();
+// Report engine (OPT-1300 / OPT-1336): one A4 HTML document per report, the
+// sections come from the providers (Pro = report of one page).
+require_once __DIR__ . '/includes/class-opti-behavior-report.php';
+Opti_Behavior_Report::init();
+// Site report, short version (OPT-1340, Free): provider of type=site.
+require_once __DIR__ . '/includes/class-opti-behavior-report-site.php';
+Opti_Behavior_Report_Site::init();
+// "Reports" screen (OPT-1342): the form that opens a report in a new tab.
+require_once __DIR__ . '/includes/class-opti-behavior-reports-screen.php';
+Opti_Behavior_Reports_Screen::init();
+
 // Admin numbers / dates in the WordPress language, not the browser's (admin
 // scripts + the front-end stats bar shown to admins; never the trackers).
 require_once __DIR__ . '/includes/class-opti-behavior-admin-locale.php';
 Opti_Behavior_Admin_Locale::init();
+
+// Brand mark of the screen headers (logo tile + "Opti-Behavior"), also used by Pro.
+require_once __DIR__ . '/includes/class-opti-behavior-admin-brand.php';
 
 // Register plugin hooks.
 register_activation_hook( __FILE__, 'Opti_Behavior_Heatmap_Core::activation' );
@@ -187,6 +280,7 @@ register_activation_hook( __FILE__, array( 'Opti_Behavior_Storage_Health', 'on_a
 // Seed the FREE-owned filter-profiles option on activation (no-op if present).
 register_activation_hook( __FILE__, array( 'Opti_Behavior_Filter_Profiles', 'seed' ) );
 register_deactivation_hook( __FILE__, 'Opti_Behavior_Heatmap_Core::deactivation' );
+register_deactivation_hook( __FILE__, array( 'Opti_Behavior_Geo_Country', 'on_deactivation' ) );
 
 if ( ! function_exists( 'opti_behavior_purge_all_page_caches' ) ) {
 	/**
@@ -299,6 +393,8 @@ function opti_behavior_is_plugin_admin_context() {
 		'opti-behavior-funnels',
 		'opti-behavior-ab-testing',
 		'opti-behavior-smart-insights',
+		'opti-behavior-shop',
+		'opti-behavior-reports',
 	);
 
 	// Add PRO pages if PRO version is active
@@ -441,6 +537,70 @@ add_action( 'admin_init', 'opti_behavior_migrate_admin_language_option' );
 // Guarantees the row exists on sites that upgraded (no re-activation) without
 // ever clobbering saved profiles — add_option() is a no-op when the row exists.
 add_action( 'admin_init', array( 'Opti_Behavior_Filter_Profiles', 'seed' ) );
+
+/**
+ * Suggested privacy policy text shown in the WordPress privacy guide
+ * (Settings → Privacy → Policy Guide): data collected, storage on the site,
+ * default retention, cookies, and how the country is found on the server
+ * itself (local DB-IP Lite database, the IP is sent to no third party).
+ *
+ * @return string HTML.
+ */
+function opti_behavior_privacy_policy_content() {
+	$raw_days   = class_exists( 'Opti_Behavior_Retention_Policy' ) ? (int) Opti_Behavior_Retention_Policy::DEFAULT_RAW_RETENTION_DAYS : 365;
+	$files_days = class_exists( 'Opti_Behavior_Retention_Policy' ) ? (int) Opti_Behavior_Retention_Policy::DEFAULT_FILES_RETENTION_DAYS : 90;
+
+	$content  = '<p class="privacy-policy-tutorial">' . esc_html__( 'Opti-Behavior records how visitors use this site. The text below is a suggestion: adapt it to your settings (tracking mode, retention, consent banner) and to your own legal requirements.', 'opti-behavior' ) . '</p>';
+	$content .= '<strong class="privacy-policy-tutorial">' . esc_html__( 'Suggested text:', 'opti-behavior' ) . '</strong> ';
+	$content .= '<p>' . esc_html__( 'This site uses Opti-Behavior to understand how visitors use its pages. It records the pages viewed, clicks, mouse movements, scroll depth, the time of the visit, the referring page, the browser and device type, and an approximate location (the country only). In Full Tracking mode, after the visitor accepts the consent banner, the time zone set in the browser is also recorded.', 'opti-behavior' ) . '</p>';
+	$content .= '<p>' . esc_html__( 'This data is stored on the server of this website, in its WordPress database and files. It is not sold and it is not sent to an analytics platform.', 'opti-behavior' ) . '</p>';
+	$content .= '<p>' . esc_html(
+		sprintf(
+			/* translators: 1: number of days detailed visit data is kept, 2: number of days data files are kept. */
+			__( 'By default, detailed visit data is deleted after %1$d days and data files (such as heatmap files) after %2$d days.', 'opti-behavior' ),
+			$raw_days,
+			$files_days
+		)
+	) . '</p>';
+	$content .= '<p>' . esc_html(
+		sprintf(
+			/* translators: %d: number of days the consent choice is remembered. */
+			__( 'In Anonymous mode (the default), Opti-Behavior sets no tracking cookie. In Full Tracking mode, cookies are used only after the visitor accepts the consent banner: a session cookie (30 minutes) and a visitor identifier (browser local storage, or a cookie of up to one year). The choice of the visitor, accept or refuse, is remembered for %d days.', 'opti-behavior' ),
+			180
+		)
+	) . '</p>';
+	$content .= '<p>' . esc_html(
+		sprintf(
+			/* translators: %d: number of days the IP address is kept in Full Tracking mode. */
+			__( 'We use the visitor\'s IP address to determine their country, on our own server, with the DB-IP Lite database. The IP address is not sent to any third party. In Anonymous mode, it is not stored. In Full Tracking mode, after the visitor accepts the consent banner, it is stored for %d days. Only the country is kept from this lookup.', 'opti-behavior' ),
+			$raw_days
+		)
+	) . '</p>';
+	// Shop sites only (legal review OPT-1187, 2026-10-14: exact sentence of the Juriste).
+	if ( class_exists( 'WooCommerce' ) ) {
+		$content .= '<p>' . esc_html(
+			sprintf(
+				/* translators: %d: number of days detailed visit data is kept by default. */
+				__( 'Store events collected by Opti-Behavior (such as product views, add-to-cart and checkout steps) are kept for the same period as the raw session data, %d days by default and configurable by the site owner, and are deleted when the related session or recording is deleted.', 'opti-behavior' ),
+				$raw_days
+			)
+		) . '</p>';
+	}
+
+	return $content;
+}
+
+/**
+ * Register the suggested privacy policy text with WordPress.
+ */
+function opti_behavior_add_privacy_policy_content() {
+	if ( ! function_exists( 'wp_add_privacy_policy_content' ) ) {
+		return;
+	}
+
+	wp_add_privacy_policy_content( 'Opti-Behavior', wp_kses_post( opti_behavior_privacy_policy_content() ) );
+}
+add_action( 'admin_init', 'opti_behavior_add_privacy_policy_content' );
 
 /**
  * Initialize plugin core and performance optimizer.

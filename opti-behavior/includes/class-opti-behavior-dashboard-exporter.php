@@ -115,9 +115,10 @@ class Opti_Behavior_Dashboard_Exporter {
 			'summary'                => array( 'metric', 'label', 'current_value', 'previous_value', 'change_percent', 'unit' ),
 			'daily_history'          => array( 'date', 'sessions', 'visitors', 'pageviews', 'bounce_sessions', 'bounce_rate', 'avg_session_time_seconds', 'avg_scroll_depth_percent', 'human_sessions', 'spam_sessions', 'automated_sessions', 'new_visitors', 'returning_visitors' ),
 			'top_pages'              => array( 'rank', 'page_id', 'title', 'url', 'sessions', 'pageviews', 'visitors', 'clicks', 'scroll_events', 'avg_scroll_depth_percent', 'avg_time_on_page_seconds', 'bounce_rate_percent', 'last_seen_at' ),
-			'top_users'              => array( 'rank', 'visitor_id', 'user_id', 'display_name', 'daily_frequency', 'avg_session_seconds', 'total_time_seconds', 'sessions', 'pages_per_session', 'country', 'country_name', 'last_seen_at' ),
+			'top_users'              => array( 'rank', 'visitor_id', 'visitor_label', 'daily_frequency', 'avg_session_seconds', 'total_time_seconds', 'sessions', 'pages_per_session', 'country', 'country_name', 'last_seen_at' ),
 			'referrers'              => array( 'rank', 'referrer_type', 'referrer_url', 'utm_source', 'utm_medium', 'utm_campaign', 'sessions', 'percentage' ),
-			'countries'              => array( 'rank', 'country_code', 'country_name', 'sessions', 'visitors', 'percentage' ),
+			'campaigns'              => array( 'rank', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'sessions', 'visitors', 'percentage' ),
+			'countries'            => array( 'rank', 'country_code', 'country_name', 'sessions', 'visitors', 'percentage' ),
 			'browsers'               => array( 'rank', 'browser', 'sessions', 'percentage' ),
 			'device_types'           => array( 'device_type', 'sessions', 'percentage' ),
 			'operating_systems'      => array( 'rank', 'os', 'sessions', 'percentage' ),
@@ -251,7 +252,9 @@ class Opti_Behavior_Dashboard_Exporter {
 				'pro_gate_valid'     => $raw_gate_valid,
 				'available_sections' => array_keys( $datasets ),
 			),
-			'datasets'    => $datasets,
+			// OPT-1687: URLs stored before a secret parameter joined the rule
+			// leave the export without it.
+			'datasets'    => function_exists( 'opti_behavior_strip_sensitive_urls_deep' ) ? opti_behavior_strip_sensitive_urls_deep( $datasets ) : $datasets,
 		);
 	}
 
@@ -296,6 +299,7 @@ class Opti_Behavior_Dashboard_Exporter {
 			'top_pages'              => $this->top_pages_rows( $filters ),
 			'top_users'              => $this->top_users_rows( $filters ),
 			'referrers'              => $this->referrer_rows( $filters ),
+			'campaigns'              => $this->campaign_rows( $filters ),
 			'countries'              => $this->visitor_dimension_rows( $filters, 'countries', 'v.country', 'country_code', 'v.country_name', 'country_name' ),
 			'browsers'               => $this->visitor_dimension_rows( $filters, 'browsers', 'v.browser', 'browser' ),
 			'device_types'           => $this->device_type_rows( $filters ),
@@ -1018,7 +1022,7 @@ class Opti_Behavior_Dashboard_Exporter {
 		$spam = $this->spam_clause( 's', $filters['exclude_spam'] );
 		$rows = $this->wpdb->get_results(
 			$this->wpdb->prepare(
-				"SELECT s.visitor_id, MAX(s.user_id) user_id, COUNT(*) sessions, SUM(s.duration) total_time_seconds, AVG(NULLIF(s.duration,0)) avg_session_seconds, AVG(s.page_views) pages_per_session, MAX(s.start_time) last_seen_at, {$country_sql} country, {$country_name_sql} country_name FROM {$s} s {$join} WHERE s.start_time BETWEEN %s AND %s {$spam} GROUP BY s.visitor_id ORDER BY total_time_seconds DESC LIMIT %d",
+				"SELECT s.visitor_id, COUNT(*) sessions, SUM(s.duration) total_time_seconds, AVG(NULLIF(s.duration,0)) avg_session_seconds, AVG(s.page_views) pages_per_session, MAX(s.start_time) last_seen_at, {$country_sql} country, {$country_name_sql} country_name FROM {$s} s {$join} WHERE s.start_time BETWEEN %s AND %s {$spam} GROUP BY s.visitor_id ORDER BY total_time_seconds DESC LIMIT %d",
 				$filters['start_date'],
 				$filters['end_date'],
 				$this->row_limit + 1
@@ -1031,13 +1035,11 @@ class Opti_Behavior_Dashboard_Exporter {
 		$out  = array();
 		$rank = 1;
 		foreach ( $rows as $row ) {
-			$user_id = (int) $row['user_id'];
-			$user    = $user_id > 0 ? get_userdata( $user_id ) : false;
-			$out[]   = array(
+			// OPT-1689: anonymous label, never the account id / name.
+			$out[] = array(
 				'rank'                => $rank++,
 				'visitor_id'          => $row['visitor_id'],
-				'user_id'             => $user_id,
-				'display_name'        => $user ? $user->display_name : '',
+				'visitor_label'       => opti_behavior_visitor_label( $row['visitor_id'] ),
 				'daily_frequency'     => round( (int) $row['sessions'] / $days, 2 ),
 				'avg_session_seconds' => round( (float) $row['avg_session_seconds'], 2 ),
 				'total_time_seconds'  => (int) $row['total_time_seconds'],
@@ -1087,6 +1089,55 @@ class Opti_Behavior_Dashboard_Exporter {
 				'utm_medium'   => $row['utm_medium'],
 				'utm_campaign' => $row['utm_campaign'],
 				'sessions'     => (int) $row['sessions'],
+				'percentage'   => $this->percent( $row['sessions'], $total ),
+			);
+		}
+		return $out;
+	}
+
+	/**
+	 * Campaign rows (OPT-1582): visits per utm_source / utm_medium /
+	 * utm_campaign / utm_content, only sessions with at least one UTM value.
+	 * Same period, spam rule and row limit as referrer_rows(); percentage =
+	 * share of every session of the period. No IP, visitor, session id or
+	 * referrer URL.
+	 *
+	 * @param array $filters Filters.
+	 * @return array
+	 */
+	private function campaign_rows( $filters ) {
+		if ( ! $this->table_exists( 'optibehavior_sessions' ) ) {
+			return array();
+		}
+		$s    = $this->table( 'optibehavior_sessions' );
+		$cols = array();
+		foreach ( array( 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content' ) as $col ) {
+			$cols[ $col ] = $this->column_exists( 'optibehavior_sessions', $col ) ? "COALESCE({$col}, '')" : "''";
+		}
+		$spam  = $this->spam_clause( '', $filters['exclude_spam'] );
+		$total = (int) $this->wpdb->get_var( $this->wpdb->prepare( "SELECT COUNT(*) FROM {$s} WHERE start_time BETWEEN %s AND %s {$spam}", $filters['start_date'], $filters['end_date'] ) );
+		$any   = '(' . implode( " <> '' OR ", $cols ) . " <> '')";
+		$rows  = $this->wpdb->get_results(
+			$this->wpdb->prepare(
+				"SELECT {$cols['utm_source']} utm_source, {$cols['utm_medium']} utm_medium, {$cols['utm_campaign']} utm_campaign, {$cols['utm_content']} utm_content, COUNT(*) sessions, COUNT(DISTINCT NULLIF(visitor_id, '')) visitors FROM {$s} WHERE start_time BETWEEN %s AND %s AND {$any} {$spam} GROUP BY 1, 2, 3, 4 ORDER BY sessions DESC, visitors DESC LIMIT %d",
+				$filters['start_date'],
+				$filters['end_date'],
+				$this->row_limit + 1
+			),
+			ARRAY_A
+		);
+		$rows  = $this->limit_rows( 'campaigns', $rows );
+		$out   = array();
+		$rank  = 1;
+		foreach ( $rows as $row ) {
+			$out[] = array(
+				'rank'         => $rank++,
+				'utm_source'   => $row['utm_source'],
+				'utm_medium'   => $row['utm_medium'],
+				'utm_campaign' => $row['utm_campaign'],
+				'utm_content'  => $row['utm_content'],
+				'sessions'     => (int) $row['sessions'],
+				'visitors'     => (int) $row['visitors'],
 				'percentage'   => $this->percent( $row['sessions'], $total ),
 			);
 		}
@@ -1746,6 +1797,14 @@ class Opti_Behavior_Dashboard_Exporter {
 	 */
 	private function limit_rows( $dataset, $rows ) {
 		$rows = is_array( $rows ) ? $rows : array();
+		// OPT-1691: an exported IP is never a whole address.
+		$full = null;
+		foreach ( $rows as $i => $row ) {
+			if ( is_array( $row ) && array_key_exists( 'ip', $row ) ) {
+				$full            = null === $full ? opti_behavior_privacy_mode_is_full() : $full;
+				$rows[ $i ]['ip'] = opti_behavior_display_ip( (string) $row['ip'], $full );
+			}
+		}
 		if ( count( $rows ) > $this->row_limit ) {
 			$this->truncated[ $dataset ] = array(
 				'dataset'   => $dataset,

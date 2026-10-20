@@ -68,7 +68,7 @@ trait Opti_Behavior_Assets_Trait {
                 'opti-behavior-smart-insights-notifications',
                 OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/smart-insights-notifications.js',
                 array(),
-                OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-notifications-v10',
+                OPTI_BEHAVIOR_HEATMAP_VERSION . '-smart-insights-notifications-v10.' . (int) @filemtime( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/smart-insights-notifications.js' ), // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- A missing file only drops the cache buster.
                 true
             );
 
@@ -81,6 +81,8 @@ trait Opti_Behavior_Assets_Trait {
                     'payloadAction' => 'optibehavior_smart_insights_notifications',
                     'stateAction' => 'optibehavior_smart_insights_notification_state',
                     'requestContext' => $this->get_smart_insights_notification_request_context_impl( $hook_suffix ),
+                    // OPT-1168: side point from the first paint on the Smart Insights screen.
+                    'startCompact' => false !== strpos( (string) $hook_suffix, 'opti-behavior-smart-insights' ) && ! get_user_meta( get_current_user_id(), 'opti_behavior_si_notification_center_open', true ),
                     'i18n'        => array(
                         'label'          => __( 'Smart Insights', 'opti-behavior' ),
                         'shortLabel'     => __( 'Insights', 'opti-behavior' ),
@@ -159,7 +161,8 @@ trait Opti_Behavior_Assets_Trait {
             'opti-behavior-dashboard',
             OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/dashboard.css',
             array(),
-            OPTI_BEHAVIOR_HEATMAP_VERSION // Plugin version bump busts asset caches on update.
+            // Plugin version bump busts asset caches on update; filemtime too, so a CSS fix shipped without a bump is not hidden by the browser cache.
+            OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . (int) @filemtime( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/dashboard.css' ) // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- A missing file only drops the cache buster.
         );
 
         // Enqueue main plugin styles (includes toggle switches, etc.)
@@ -175,7 +178,8 @@ trait Opti_Behavior_Assets_Trait {
             'opti-behavior-admin-utilities',
             OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/admin-utilities.css',
             array(),
-            OPTI_BEHAVIOR_HEATMAP_VERSION
+            // File time in the version: a style added between two releases (first-day box) is never served from the browser cache.
+            OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . (int) filemtime( OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/admin-utilities.css' )
         );
 
         // Enqueue tooltip styles (user-friendly help tooltips across all pages)
@@ -308,6 +312,8 @@ trait Opti_Behavior_Assets_Trait {
                 array(
                     'strings' => array(
                         'desyncTooltip' => __( 'Interaction files and detected sessions are out of sync for this page. Click Repair to refresh.', 'opti-behavior' ),
+                        'noMobileData' => __( 'No mobile data yet', 'opti-behavior' ),
+                        'openMobileHeatmap' => __( 'Open mobile heatmap', 'opti-behavior' ),
                         'repair'        => __( 'Repair', 'opti-behavior' ),
                         'retry'         => __( 'Retry', 'opti-behavior' ),
                         'tableError'    => __( 'The heatmap list could not be loaded (the server took too long or returned an error).', 'opti-behavior' ),
@@ -1180,6 +1186,7 @@ trait Opti_Behavior_Assets_Trait {
                         'journeyFormContextDescription'    => __( 'Journey filters need page or visitor context before this form can be isolated.', 'opti-behavior' ),
                         'journeyFormFilterUnsupported'     => __( 'Journeys cannot be filtered by this form yet. Use form analytics to inspect the abandonment path.', 'opti-behavior' ),
                         'loadingSummary'                   => __( 'Loading Weekly CRO Summary...', 'opti-behavior' ),
+                        'moreIssue'                        => _x( 'more issue', 'after +1 in a list', 'opti-behavior' ),
                         'moreIssues'                       => __( 'more issues', 'opti-behavior' ),
                         'movement'                         => __( 'Trend watch', 'opti-behavior' ),
                         'noClearMover'                     => __( 'No clear movement detected.', 'opti-behavior' ),
@@ -1290,12 +1297,15 @@ trait Opti_Behavior_Assets_Trait {
 					: OPTI_BEHAVIOR_HEATMAP_VERSION
 			);
 
-			// "How it works" strip (Opti_Behavior_Smart_Insights_Sensors): remember,
-			// per browser, that the viewer folded it.
+			// "How it works" strip (Opti_Behavior_Smart_Insights_Sensors): the server
+			// prints it open on the user's first visit only (OPT-1168); a fold or an
+			// unfold made by hand is remembered per browser ("obSiLoopState"; the
+			// older "obSiLoopFolded" = 1 still folds). Only a real click / key press
+			// is stored: browsers also fire "toggle" for the printed state.
 			if ( wp_script_is( 'opti-behavior-smart-insights', 'enqueued' ) ) {
 				wp_add_inline_script(
 					'opti-behavior-smart-insights',
-					'(function(){function run(){var d=document.querySelector("[data-ob-si-loop]");if(!d){return;}var k="obSiLoopFolded";try{if("1"===window.localStorage.getItem(k)){d.removeAttribute("open");}}catch(e){}d.addEventListener("toggle",function(){try{window.localStorage.setItem(k,d.open?"0":"1");}catch(e){}});}if("loading"===document.readyState){document.addEventListener("DOMContentLoaded",run);}else{run();}})();'
+					'(function(){function run(){var d=document.querySelector("[data-ob-si-loop]");if(!d){return;}var k="obSiLoopState",u=false,s=d.querySelector("summary");try{var v=window.localStorage.getItem(k);if("open"===v){d.setAttribute("open","");}else if("closed"===v||(null===v&&"1"===window.localStorage.getItem("obSiLoopFolded"))){d.removeAttribute("open");}}catch(e){}function mark(){u=true;}if(s){s.addEventListener("click",mark);s.addEventListener("keydown",mark);}d.addEventListener("toggle",function(){if(!u){return;}try{window.localStorage.setItem(k,d.open?"open":"closed");}catch(e){}});}if("loading"===document.readyState){document.addEventListener("DOMContentLoaded",run);}else{run();}})();'
 				);
 			}
 		}
@@ -1411,6 +1421,9 @@ trait Opti_Behavior_Assets_Trait {
                         'tablet'                  => __( 'Tablet', 'opti-behavior' ),
                         'vsLastPeriod'            => __( '% vs last period', 'opti-behavior' ),
                         'noPreviousData'          => __( 'No data for the previous period', 'opti-behavior' ),
+                        // OPT-1624: rates change in points; incomplete previous period.
+                        'ptsVsLastPeriod'         => __( ' pts vs last period', 'opti-behavior' ),
+                        'notComparable'           => __( 'Not comparable: previous period incomplete', 'opti-behavior' ),
                         'mapUnavailable'          => __( 'Map unavailable', 'opti-behavior' ),
                         'mapUnavailableOffline'   => __( 'Map unavailable (offline)', 'opti-behavior' ),
                         'noScreenResolutionData'  => __( 'No screen resolution data available', 'opti-behavior' ),
@@ -1425,6 +1438,8 @@ trait Opti_Behavior_Assets_Trait {
                         'excludeSpam'             => __( 'Exclude Spam', 'opti-behavior' ),
                         'includeSpam'             => __( 'Include Spam', 'opti-behavior' ),
                         'interactions'            => __( 'Heatmap sessions', 'opti-behavior' ),
+                        'topPagesVisits'          => __( 'Visits', 'opti-behavior' ),
+                        'topPagesViews'           => __( 'Page views', 'opti-behavior' ),
                         'clicks'                  => __( 'Clicks', 'opti-behavior' ),
                         'avgTimeSpent'            => __( 'Average time spent', 'opti-behavior' ),
                         'editPage'                => __( 'Edit this page', 'opti-behavior' ),
@@ -1547,7 +1562,19 @@ trait Opti_Behavior_Assets_Trait {
             // v8: the third-party "upgrade" notice suppressor no longer matches
             // this plugin's own `ob-*-upgrade-*` elements, so cached copies of v7
             // must not survive — they hide every Pro teaser in the modal.
-            OPTI_BEHAVIOR_HEATMAP_VERSION . '-admin-notices-v9'
+            // v11: panel "Pro installed but licence not confirmed" (OPT-927).
+            // v13: the catch-alls spare the wp.media modal (root, thumbnails,
+            // upload zone): Reports logo picker (OPT-1346).
+            OPTI_BEHAVIOR_HEATMAP_VERSION . '-admin-notices-v13'
+        );
+
+        // Brand mark of the screen headers (OPT-1504), Free and Pro screens.
+        $brand_css = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/css/brand-header.css';
+        wp_enqueue_style(
+            'opti-behavior-brand-header',
+            OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/brand-header.css',
+            array(),
+            OPTI_BEHAVIOR_HEATMAP_VERSION . '-' . ( file_exists( $brand_css ) ? filemtime( $brand_css ) : '1' )
         );
 
         // TECHNIQUE 3: JavaScript cleanup for dynamically added notices

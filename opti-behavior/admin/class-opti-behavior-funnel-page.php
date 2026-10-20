@@ -96,6 +96,7 @@ class Opti_Behavior_Funnel_Page {
 		add_action( 'wp_ajax_optibehavior_save_funnel', array( $this, 'ajax_save_funnel' ) );
 		add_action( 'wp_ajax_optibehavior_delete_funnel', array( $this, 'ajax_delete_funnel' ) );
 		add_action( 'wp_ajax_optibehavior_set_funnel_status', array( $this, 'ajax_set_funnel_status' ) );
+		add_action( 'wp_ajax_optibehavior_confirm_funnel', array( $this, 'ajax_confirm_funnel' ) );
 		add_action( 'wp_ajax_optibehavior_reset_funnel_data', array( $this, 'ajax_reset_funnel_data' ) );
 		add_action( 'wp_ajax_optibehavior_get_funnel_countries', array( $this, 'ajax_get_funnel_countries' ) );
 
@@ -343,6 +344,11 @@ class Opti_Behavior_Funnel_Page {
 					'suspend'               => __( 'Suspend', 'opti-behavior' ),
 					'activate'              => __( 'Activate', 'opti-behavior' ),
 					'suspended'             => __( 'Suspended', 'opti-behavior' ),
+					// OPT-1619: template funnel created for you, not confirmed yet.
+					'suggestedFunnel'       => _x( 'Suggested', 'funnel created from a template, not confirmed', 'opti-behavior' ),
+					'suggestedFunnelHint'   => __( 'Created from a template for your site. It is tracked, but it does not count in Smart Insights, Page X-Ray or the reports until you confirm it.', 'opti-behavior' ),
+					'confirmFunnel'         => _x( 'Confirm', 'confirm a suggested funnel', 'opti-behavior' ),
+					'confirmFunnelError'    => __( 'The funnel could not be confirmed. Please try again.', 'opti-behavior' ),
 					'statusUpdateSuccess'   => __( 'Funnel status updated successfully.', 'opti-behavior' ),
 					'statusUpdateError'     => __( 'Error updating funnel status. Please try again.', 'opti-behavior' ),
 					'resetDataSuccess'      => __( 'Funnel data has been reset successfully. The funnel configuration (steps and URLs) has been preserved.', 'opti-behavior' ),
@@ -673,6 +679,11 @@ class Opti_Behavior_Funnel_Page {
 			}
 		}
 
+		// Review reminder: a funnel report with entries means the administrator has seen the plugin work.
+		if ( class_exists( 'Opti_Behavior_Review_Banner' ) && is_array( $funnel_data ) && ! empty( $funnel_data['total_entries'] ) && 0 < (int) $funnel_data['total_entries'] ) {
+			Opti_Behavior_Review_Banner::mark_value_seen();
+		}
+
 		wp_send_json_success( $funnel_data );
 	}
 
@@ -990,10 +1001,10 @@ class Opti_Behavior_Funnel_Page {
 		$has_advanced    = ( '' !== $advanced_where );
 
 		$exclude_spam  = $this->resolve_spam_exclusion_from_request();
-		// Any active filter forces the sessions/visitors JOIN; an unconditional
-		// INNER JOIN would silently drop funnel records whose session has no row
-		// in optibehavior_sessions (anonymous/pre-consent hits).
-		$needs_join    = ( $filter !== 'all' || ! empty( $country_codes ) || $exclude_spam || $has_advanced );
+		// Device / country / advanced filters force the sessions/visitors JOIN.
+		// Spam and "is a real visit" are THE shared rule of Smart Insights and the
+		// report (OPT-1617): Funnel_Aggregator visit scope, appended below.
+		$needs_join    = ( $filter !== 'all' || ! empty( $country_codes ) || $has_advanced );
 		$filter_join   = $needs_join
 			? "INNER JOIN {$table_sessions} s ON t.session_id = s.id
 			   INNER JOIN {$table_visitors} v ON s.visitor_id = v.id"
@@ -1015,15 +1026,15 @@ class Opti_Behavior_Funnel_Page {
 			}
 		}
 
-		if ( $exclude_spam ) {
-			$spam_condition = $this->get_spam_session_condition( 's' );
-			if ( '' !== $spam_condition ) {
-				$filters_applied[] = $spam_condition;
-			}
-		}
-
 		if ( ! empty( $filters_applied ) ) {
 			$filter_where = 'AND ' . implode( ' AND ', $filters_applied );
+		}
+
+		if ( class_exists( 'Opti_Behavior_Smart_Insights_Funnel_Aggregator' ) ) {
+			$filter_where .= ( new Opti_Behavior_Smart_Insights_Funnel_Aggregator() )->get_tracking_spam_exclusion_clause( 't', $table_sessions, $exclude_spam );
+		} elseif ( $exclude_spam ) {
+			$spam_condition = $this->get_spam_session_condition( 's2' );
+			$filter_where  .= " AND t.session_id IN (SELECT s2.id FROM {$table_sessions} s2" . ( '' !== $spam_condition ? " WHERE {$spam_condition}" : '' ) . ')';
 		}
 
 		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
@@ -1606,6 +1617,7 @@ class Opti_Behavior_Funnel_Page {
 		$total_entries      = 0;
 		$total_completions  = 0;
 		$funnel_count       = 0;
+		$suggested_ids      = class_exists( 'Opti_Behavior_Funnel_Database' ) ? Opti_Behavior_Funnel_Database::suggested_ids() : array();
 
 		if ( ! empty( $funnels ) ) {
 			foreach ( $funnels as $funnel ) {
@@ -1639,6 +1651,8 @@ class Opti_Behavior_Funnel_Page {
 					'conversion_rate' => $conversion,
 					'dropoff_rate'    => $dropoff,
 					'status'          => $status,
+					// OPT-1619: template funnel not confirmed = not counted elsewhere.
+					'suggested'       => in_array( $funnel_id, $suggested_ids, true ),
 				);
 
 				$total_entries     += $entries;
@@ -1832,6 +1846,8 @@ class Opti_Behavior_Funnel_Page {
 				'description' => $description,
 				'steps'       => $steps_array,
 				'status'      => $status,
+				// OPT-1619: a funnel the user saves in the builder is theirs.
+				'confirmed'   => 1,
 			),
 			$funnel_id
 		);
@@ -2050,6 +2066,13 @@ class Opti_Behavior_Funnel_Page {
 
 			$row['recipe_id'] = $recipe_id;
 			$formats[]        = '%s';
+		}
+
+		// OPT-1619: 0 = suggested template funnel (not counted until confirmed).
+		// Same rule as provenance: always on insert, opt-in on update.
+		if ( ( $is_insert || array_key_exists( 'confirmed', $data ) ) && class_exists( 'Opti_Behavior_Funnel_Database' ) && Opti_Behavior_Funnel_Database::has_confirmed_column() ) {
+			$row['confirmed'] = ( ! array_key_exists( 'confirmed', $data ) || ! empty( $data['confirmed'] ) ) ? 1 : 0;
+			$formats[]        = '%d';
 		}
 
 		if ( $funnel_id > 0 ) {
@@ -2482,6 +2505,54 @@ class Opti_Behavior_Funnel_Page {
 				'funnel_id' => $funnel_id,
 				'status'    => $status,
 				'message'   => __( 'Funnel status updated successfully', 'opti-behavior' ),
+			)
+		);
+	}
+
+	/**
+	 * AJAX: confirm a suggested funnel (OPT-1619). A template funnel the
+	 * auto-builder created counts in Smart Insights, Page X-Ray and the reports
+	 * only once the user confirmed it (this button, or an edit in the builder).
+	 * Tracking never stopped: its data shows at once.
+	 *
+	 * @return void
+	 */
+	public function ajax_confirm_funnel() {
+		check_ajax_referer( 'opti_behavior_funnels', 'nonce' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Permission denied', 'opti-behavior' ) ) );
+		}
+
+		$funnel_id = isset( $_POST['funnel_id'] ) ? intval( $_POST['funnel_id'] ) : 0;
+		if ( $funnel_id <= 0 ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid funnel ID', 'opti-behavior' ) ) );
+		}
+
+		global $wpdb;
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Custom table, id bound via prepare(); real-time read.
+		$current_status = $wpdb->get_var( $wpdb->prepare( "SELECT status FROM {$wpdb->prefix}opti_behavior_funnels WHERE id = %d", $funnel_id ) );
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		if ( null === $current_status || 'deleted' === $current_status ) {
+			wp_send_json_error( array( 'message' => __( 'Funnel not found', 'opti-behavior' ) ) );
+		}
+
+		if ( ! Opti_Behavior_Funnel_Database::confirm( $funnel_id ) ) {
+			wp_send_json_error( array( 'message' => __( 'Error updating funnel status', 'opti-behavior' ) ) );
+		}
+
+		// The Smart Insights menu colour and the Page X-Ray caches read the
+		// funnels that count: let them see this one.
+		if ( class_exists( 'Opti_Behavior_Smart_Insights_Repository' ) && method_exists( 'Opti_Behavior_Smart_Insights_Repository', 'flush_menu_severity' ) ) {
+			Opti_Behavior_Smart_Insights_Repository::flush_menu_severity();
+		}
+		do_action( 'opti_behavior_funnel_confirmed', $funnel_id );
+
+		wp_send_json_success(
+			array(
+				'funnel_id' => $funnel_id,
+				'suggested' => false,
+				'message'   => __( 'Funnel confirmed. It now counts in Smart Insights and Page X-Ray.', 'opti-behavior' ),
 			)
 		);
 	}

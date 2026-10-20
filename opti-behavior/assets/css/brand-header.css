@@ -1,0 +1,145 @@
+/*
+ * Opti-Behavior brand mark of the screen headers (design OPT-1501 / OPT-1499).
+ *
+ * Final CSS, ready to ship as assets/css/brand-header.css (Free), enqueued on
+ * every Opti-Behavior screen (same hook as admin-notices.css; Pro screens get
+ * it from Free). Two pieces, the same on every screen:
+ *
+ *   1. .ob-brand-mark  = REPLACES the screen icon tile (.dashboard-icon,
+ *      .heatmaps-icon, .opti-ab-page-header__icon, .recordings-icon,
+ *      .settings-icon, .errors-icon, .journey-icon, .form-analytics-icon …).
+ *   2. .ob-brand-name  = first child of the title text block, right above
+ *      the <h1>. Free screens: "Opti-Behavior". Pro screens: "Opti-Behavior"
+ *      + .ob-brand-name__pro "Pro" (owner of the screen, no licence read).
+ *
+ * Nothing else of the header changes (band, title, subtitle, controls).
+ */
+
+.ob-brand-mark {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	border-radius: 12px;
+	background: #fff;
+	box-shadow: 0 1px 2px rgba(15, 23, 42, 0.16), 0 6px 16px rgba(30, 27, 75, 0.22);
+	box-sizing: border-box;
+	align-self: flex-start; /* Top of the text block: same place with a 1-line or a 3-line title. */
+	margin-top: 2px;
+}
+
+.ob-brand-mark img {
+	display: block;
+	width: 28px;
+	height: 28px;
+	max-width: none;
+}
+
+.ob-brand-name {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0 0 4px;
+	padding: 0;
+	font-size: 12px;
+	line-height: 16px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	color: rgba(255, 255, 255, 0.92);
+}
+
+.ob-brand-name__pro {
+	display: inline-block;
+	padding: 0 7px;
+	border: 1px solid rgba(255, 255, 255, 0.7);
+	border-radius: 999px;
+	font-size: 10px;
+	line-height: 14px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: #fff;
+}
+
+/* Headers without an icon tile (A/B builder / results): mark beside the name + title. */
+.ob-brand-title {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	min-width: 0;
+}
+
+/* A long title wraps under itself, never "…". */
+.ob-brand-name + h1 {
+	overflow-wrap: anywhere;
+}
+
+/* Pro screens: the brand line already says "Pro", so the old PRO badge of the title is not repeated (OPT-1505). */
+.ob-brand-name:has(> .ob-brand-name__pro) + h1 .opti-pro-badge {
+	display: none;
+}
+
+/* Phone (WordPress admin breakpoint). */
+@media screen and (max-width: 782px) {
+	.ob-brand-mark {
+		width: 40px;
+		height: 40px;
+		border-radius: 11px;
+	}
+
+	.ob-brand-mark img {
+		width: 24px;
+		height: 24px;
+	}
+
+	.ob-brand-name {
+		margin-bottom: 2px;
+		font-size: 11px;
+	}
+
+	/* A/B Testing stacks its title block on phones: keep the mark beside the text like the other screens. */
+	.opti-ab-page-header__title-section:has(> .ob-brand-mark) {
+		flex-direction: row;
+		align-items: flex-start;
+		gap: 12px;
+		text-align: left;
+	}
+
+	.opti-ab-page-header__title-section:has(> .ob-brand-mark) .opti-ab-page-header__title {
+		justify-content: flex-start;
+	}
+
+	/* Heatmap detail: back button, mark and title stay on one row (the title no longer drops under the mark). */
+	.opti-heatmap-hero-main:has(> .ob-brand-mark) {
+		flex-wrap: nowrap;
+		align-items: flex-start;
+		gap: 12px;
+	}
+
+	.opti-heatmap-hero-main:has(> .ob-brand-mark) > .opti-heatmap-title {
+		flex: 1 1 0;
+		min-width: 0;
+		margin-bottom: 0;
+	}
+}
+
+/* Windows high contrast: keep the tile visible. */
+@media (forced-colors: active) {
+	.ob-brand-mark {
+		border: 1px solid CanvasText;
+	}
+
+	.ob-brand-name__pro {
+		border-color: CanvasText;
+	}
+}
+
+@media print {
+	.ob-brand-mark {
+		box-shadow: none;
+		border: 1px solid #cbd5e1;
+	}
+}

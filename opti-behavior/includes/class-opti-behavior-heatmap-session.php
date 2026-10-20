@@ -48,6 +48,22 @@ class Opti_Behavior_Heatmap_Session {
 	protected $visitor_id = null;
 
 	/**
+	 * Option name prefix of the anonymous daily salt (one option per UTC day, + 'Ymd').
+	 *
+	 * @since 1.10.0.1
+	 * @var string
+	 */
+	const ANON_SALT_OPTION_PREFIX = 'opti_behavior_anon_salt_';
+
+	/**
+	 * Salts already read in this request, by UTC day.
+	 *
+	 * @since 1.10.0.1
+	 * @var array
+	 */
+	private static $anon_salt_memo = array();
+
+	/**
 	 * Constructor.
 	 *
 	 * @since 1.0.0
@@ -149,6 +165,26 @@ class Opti_Behavior_Heatmap_Session {
 	}
 
 	/**
+	 * IP value a session row may store for the current request.
+	 *
+	 * Same rule as the session-start ingest path of the AJAX handler: the real IP
+	 * only in Full mode once the visitor granted consent, 'Anonymous' otherwise
+	 * (Anonymous Mode, or Full mode before / without consent).
+	 *
+	 * @return string
+	 */
+	private function get_storable_ip() {
+		$has_consent = isset( $_COOKIE['optibehavior_consent'] )
+			&& 'granted' === sanitize_text_field( wp_unslash( $_COOKIE['optibehavior_consent'] ) );
+
+		if ( 'full' === $this->get_privacy_mode() && $has_consent ) {
+			return $this->get_client_ip();
+		}
+
+		return 'Anonymous';
+	}
+
+	/**
 	 * Return the anonymous daily hash for the current request.
 	 *
 	 * Public wrapper around get_anonymous_daily_hash() so that AJAX handlers
@@ -216,7 +252,7 @@ class Opti_Behavior_Heatmap_Session {
 	 * Single source of truth for the multi-tab / multi-bucket canonicalization the
 	 * session-start ingest path performs. Extracted so that every satellite ingest
 	 * endpoint (Pro forms, Pro errors, ...) resolves the SAME id that
-	 * {@see Opti_Behavior_Heatmap_Ajax_Handler::handle_session_start()} persisted in
+	 * {@see Opti_Behavior_Heatmap_Ajax_Handler::handle_recorder_session_start()} persisted in
 	 * {prefix}optibehavior_sessions, instead of re-deriving a seed that drifts.
 	 *
 	 * Bug 2 — why this exists. `get_anonymous_identity()` returns a *seed*:
@@ -302,49 +338,172 @@ class Opti_Behavior_Heatmap_Session {
 	}
 
 	/**
-	 * Get (or regenerate) the daily salt used for anonymous visitor hashing.
+	 * Get the daily salt used for anonymous visitor hashing.
 	 *
-	 * The salt rotates once per UTC day so anonymous hashes cannot be correlated
-	 * across calendar days.
-	 *
-	 * Implementation note — race-free salt generation:
-	 * The previous implementation used wp_generate_password() (random) and then
-	 * persisted the result.  If two AJAX requests arrived simultaneously before
-	 * any salt was stored (fresh install or midnight rotation), each request
-	 * generated a DIFFERENT random salt → identical visitors received different
-	 * hashes → inflated unique-visitor counts for a brief window each day.
-	 *
-	 * Fix: derive the salt deterministically from (date + AUTH_KEY) via SHA-256.
-	 * AUTH_KEY is defined once in wp-config.php, is site-specific and secret, and
-	 * never changes, so all simultaneous requests compute exactly the same salt
-	 * for the same calendar day without any shared-state coordination.
-	 *
-	 * @since 1.0.4 (race-free since 1.0.6)
-	 * @return string 32-character deterministic salt for today.
+	 * @since 1.0.4
+	 * @return string 32-character random salt of the current UTC day.
 	 */
 	private function get_daily_salt() {
-		$today = gmdate( 'Y-m-d' );
+		return self::get_anon_daily_salt();
+	}
 
-		// Check cached value in options table first — avoids recomputing on every call.
-		$salt_option = get_option( 'opti_behavior_daily_salt', '' );
-		$salt_date   = get_option( 'opti_behavior_daily_salt_date', '' );
+	/**
+	 * Random salt of the current UTC day (anonymous visitor hash, geolocation cache key).
+	 *
+	 * The salt is a random value, never derived from the date or from a site
+	 * secret: nothing on the site (wp-config.php included) can rebuild the salt
+	 * of a past day. One option per UTC day (ANON_SALT_OPTION_PREFIX . Ymd, not
+	 * autoloaded); the first call of a new day creates today's salt and DELETES
+	 * every older one, so yesterday's anonymous hashes can no longer be matched
+	 * against an IP address + user agent.
+	 *
+	 * @since 1.10.0.1
+	 * @return string 32-character random salt for today.
+	 */
+	public static function get_anon_daily_salt() {
+		return self::anon_salt_for_day( gmdate( 'Ymd' ) );
+	}
 
-		if ( $salt_date === $today && ! empty( $salt_option ) ) {
-			return $salt_option;
+	/**
+	 * Salt of one UTC day, created on first use.
+	 *
+	 * @since 1.10.0.1
+	 * @param string $day UTC day, 'Ymd'.
+	 * @return string 32-character salt.
+	 */
+	private static function anon_salt_for_day( $day ) {
+		if ( isset( self::$anon_salt_memo[ $day ] ) ) {
+			return self::$anon_salt_memo[ $day ];
 		}
 
-		// Derive a deterministic, site-secret-seeded salt for today.
-		// Using AUTH_KEY (unique per site, defined in wp-config.php) as the HMAC
-		// key ensures the salt cannot be guessed from public information (IP, UA, date)
-		// while guaranteeing every PHP process on the same host computes the same value.
-		$site_secret = defined( 'AUTH_KEY' ) ? AUTH_KEY : wp_salt( 'auth' );
-		$salt_option = substr( hash( 'sha256', $today . $site_secret . 'opti_behavior_anon_salt_v2' ), 0, 32 );
+		$option = self::ANON_SALT_OPTION_PREFIX . $day;
+		$salt   = get_option( $option, '' );
 
-		// Persist so it can be quickly read by subsequent AJAX calls without recomputing.
-		update_option( 'opti_behavior_daily_salt', $salt_option, false );
-		update_option( 'opti_behavior_daily_salt_date', $today, false );
+		if ( ! is_string( $salt ) || 32 !== strlen( $salt ) ) {
+			$salt = self::create_anon_salt( $option );
+			self::purge_stale_anon_salts( $day );
+		}
 
-		return $salt_option;
+		self::$anon_salt_memo[ $day ] = $salt;
+
+		return $salt;
+	}
+
+	/**
+	 * Create the salt option of a day, race-free.
+	 *
+	 * add_option() is not enough here: it writes with ON DUPLICATE KEY UPDATE,
+	 * so two simultaneous first requests of a day would each keep their own
+	 * random value for a moment (same visitor, two hashes). INSERT IGNORE keeps
+	 * the first row and every request then reads that winning value.
+	 *
+	 * @since 1.10.0.1
+	 * @param string $option Option name of the day.
+	 * @return string 32-character salt stored for that day.
+	 */
+	private static function create_anon_salt( $option ) {
+		global $wpdb;
+
+		try {
+			$candidate = bin2hex( random_bytes( 16 ) );
+		} catch ( Exception $e ) {
+			$candidate = wp_generate_password( 32, false );
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Atomic create: add_option() overwrites on a duplicate key.
+		$wpdb->query(
+			$wpdb->prepare(
+				"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+				$option,
+				$candidate
+			)
+		);
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Reads the winning row, never a cached copy.
+		$stored = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+				$option
+			)
+		);
+
+		if ( ! is_string( $stored ) || 32 !== strlen( $stored ) ) {
+			// Database not writable: this request still gets a random salt.
+			return $candidate;
+		}
+
+		// The row was written without the options API: bring its cache in line.
+		$notoptions = wp_cache_get( 'notoptions', 'options' );
+		if ( is_array( $notoptions ) && isset( $notoptions[ $option ] ) ) {
+			unset( $notoptions[ $option ] );
+			wp_cache_set( 'notoptions', $notoptions, 'options' );
+		}
+		wp_cache_set( $option, $stored, 'options' );
+
+		return $stored;
+	}
+
+	/**
+	 * Delete every anonymous salt older than a UTC day, and the two options of
+	 * the former date-derived salt.
+	 *
+	 * Runs on the first anonymous hit of a new day and from the daily retention
+	 * pass (a site without visitors must not keep an old salt either). Only
+	 * older days are deleted: a request still finishing the previous day never
+	 * removes the salt the new day has just created.
+	 *
+	 * @since 1.10.0.1
+	 * @param string|null $keep_day UTC day to keep ('Ymd'); today when null.
+	 * @return int Number of salt options deleted.
+	 */
+	public static function purge_stale_anon_salts( $keep_day = null ) {
+		global $wpdb;
+
+		if ( null === $keep_day ) {
+			$keep_day = gmdate( 'Ymd' );
+		}
+		$keep_day = (string) $keep_day;
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- One prefix lookup per day.
+		$names = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
+				$wpdb->esc_like( self::ANON_SALT_OPTION_PREFIX ) . '%'
+			)
+		);
+
+		$deleted    = 0;
+		$prefix_len = strlen( self::ANON_SALT_OPTION_PREFIX );
+		foreach ( (array) $names as $name ) {
+			$day = substr( (string) $name, $prefix_len );
+			if ( ! preg_match( '/^\d{8}$/', $day ) || strcmp( $day, $keep_day ) >= 0 ) {
+				continue;
+			}
+			if ( delete_option( $name ) ) {
+				$deleted++;
+			}
+			unset( self::$anon_salt_memo[ $day ] );
+		}
+
+		// Former salt, derived from the date and AUTH_KEY (before 1.10.0.1).
+		delete_option( 'opti_behavior_daily_salt' );
+		delete_option( 'opti_behavior_daily_salt_date' );
+
+		return $deleted;
+	}
+
+	/**
+	 * Transient name of the geolocation cache entry of an IP address.
+	 *
+	 * Salted with the daily random salt: a plain md5 of an IPv4 address is
+	 * reversed in seconds, and the entry is written in Anonymous Mode too.
+	 *
+	 * @since 1.10.0.1
+	 * @param string $ip IP address (used in memory only).
+	 * @return string Transient name ('opti_geo_' + 32 hex characters).
+	 */
+	public static function geo_cache_key( $ip ) {
+		return 'opti_geo_' . substr( hash( 'sha256', (string) $ip . '|' . self::get_anon_daily_salt() ), 0, 32 );
 	}
 
 	/**
@@ -483,7 +642,8 @@ class Opti_Behavior_Heatmap_Session {
 				// page IS the exit page. Later pageviews overwrite it via
 				// sync_session_exit_page() in the AJAX handler.
 				'exit_page'    => isset( $data['entry_page'] ) ? $data['entry_page'] : '',
-				'ip'           => $this->get_client_ip(),
+				// In anonymous/non-consented mode, store 'Anonymous' instead of real IP.
+				'ip'           => $this->get_storable_ip(),
 				'is_bounce'    => 1,
 			);
 

@@ -81,6 +81,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 	private $smart_insights_page = null;
 
 	/**
+	 * Per-request memo of pro_locked_state() (null = not computed yet).
+	 *
+	 * @var array|false|null
+	 */
+	private $pro_locked_state = null;
+
+	/**
 	 * Request-scoped memo caches for the heatmap file-scan helpers.
 	 *
 	 * The Heatmaps list/stats path resolves the same page directories, spam
@@ -622,20 +629,22 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// building the menu costs no query and the public site nothing.
 		$smart_insights_severity = $this->get_smart_insights_menu_severity_impl();
 		$smart_insights_level    = sanitize_html_class( $smart_insights_severity['level'] );
+		// OPT-1618: "N problems to review" = every open problem = the "Active"
+		// figure of the Smart Insights screen; red adds the Critical count first.
+		$smart_insights_state = __( 'No open problem', 'opti-behavior' );
+		if ( ! empty( $smart_insights_severity['active'] ) ) {
+			$smart_insights_state = sprintf(
+				/* translators: %d: number of open Smart Insights. */
+				_n( '%d problem to review', '%d problems to review', $smart_insights_severity['active'], 'opti-behavior' ),
+				$smart_insights_severity['active']
+			);
+		}
 		if ( 'red' === $smart_insights_level ) {
 			$smart_insights_state = sprintf(
 				/* translators: %d: number of open Critical Smart Insights. */
 				_n( '%d critical problem to fix', '%d critical problems to fix', $smart_insights_severity['critical'], 'opti-behavior' ),
 				$smart_insights_severity['critical']
-			);
-		} elseif ( 'yellow' === $smart_insights_level ) {
-			$smart_insights_state = sprintf(
-				/* translators: %d: number of open High or Medium priority Smart Insights. */
-				_n( '%d problem to review', '%d problems to review', $smart_insights_severity['warning'], 'opti-behavior' ),
-				$smart_insights_severity['warning']
-			);
-		} else {
-			$smart_insights_state = __( 'No open problem', 'opti-behavior' );
+			) . ( ! empty( $smart_insights_severity['active'] ) ? ' · ' . $smart_insights_state : '' );
 		}
 		$smart_insights_icon = '<span class="opti-menu-insights-bulb is-' . $smart_insights_level . '" style="display:inline-flex;align-items:center;margin-right:6px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5A4.8 4.8 0 0 0 18 8 6 6 0 0 0 6 8c0 1.3.5 2.5 1.5 3.5.8.8 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg></span>';
 		// Product name, kept as is in every locale (short enough for the 160px menu).
@@ -689,9 +698,14 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		// Lucide "video" icon for Recordings (20x20) — placed before Funnels for logical flow
 		$recordings_icon = '<span style="display:inline-flex;align-items:center;margin-right:6px;"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg></span>';
+		// Pro installed, licence not ended, gate closed: "!" instead of "PRO" (OPT-924).
+		$pro_menu_badge = '<span class="opti-menu-pro-badge">PRO</span>';
+		if ( false !== $this->pro_locked_state() ) {
+			$pro_menu_badge = '<span class="opti-menu-pro-badge opti-menu-locked-badge" title="' . esc_attr__( 'Pro is installed but locked: the licence could not be confirmed.', 'opti-behavior' ) . '">!</span>';
+		}
 		$recordings_pro_badge = '';
 		if ( ! $this->pro_feature_pages_available() ) {
-			$recordings_pro_badge = '<span class="opti-menu-pro-badge">PRO</span>';
+			$recordings_pro_badge = $pro_menu_badge;
 		}
 		// Session Recordings menu - always visible
 		// If PRO is not active, shows upgrade page
@@ -732,7 +746,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			add_submenu_page(
 				'opti-behavior-analytics',
 				__( 'User Journeys', 'opti-behavior' ),
-				$journey_icon . __( 'User Journeys', 'opti-behavior' ) . '<span class="opti-menu-pro-badge">PRO</span>',
+				$journey_icon . __( 'User Journeys', 'opti-behavior' ) . $pro_menu_badge,
 				'manage_options',
 				'opti-behavior-user-journey',
 				array( $this, 'render_user_journey_upgrade' )
@@ -742,7 +756,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			add_submenu_page(
 				'opti-behavior-analytics',
 				__( 'Errors Tracking', 'opti-behavior' ),
-				$errors_icon . __( 'Errors Tracking', 'opti-behavior' ) . '<span class="opti-menu-pro-badge">PRO</span>',
+				$errors_icon . __( 'Errors Tracking', 'opti-behavior' ) . $pro_menu_badge,
 				'manage_options',
 				'opti-behavior-errors',
 				array( $this, 'render_errors_upgrade' )
@@ -753,7 +767,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			add_submenu_page(
 				'opti-behavior-analytics',
 				__( 'Form Analytics', 'opti-behavior' ),
-				$form_icon . __( 'Forms', 'opti-behavior' ) . '<span class="opti-menu-pro-badge">PRO</span>',
+				$form_icon . __( 'Forms', 'opti-behavior' ) . $pro_menu_badge,
 				'manage_options',
 				'opti-behavior-form-analytics',
 				array( $this, 'render_form_analytics_upgrade' )
@@ -811,6 +825,106 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Pro is installed but did not open its pages: what to tell the user (OPT-924).
+	 *
+	 * Pro answers through the filter `opti_behavior_pro_locked_reason`:
+	 * an array { reason, code, recheck_url, settings_url } when the licence is
+	 * not ended but could not be confirmed, false when the upgrade page is the
+	 * right screen (no licence yet, trial or licence ended). An older Pro does
+	 * not answer: generic text, and the "Re-check" action when it has one.
+	 *
+	 * @return array|false Panel data, or false = Free alone, Pro pages open, or
+	 *                     the upgrade page applies.
+	 */
+	private function pro_locked_state() {
+		if ( null !== $this->pro_locked_state ) {
+			return $this->pro_locked_state;
+		}
+		$this->pro_locked_state = false;
+
+		if ( ! function_exists( 'opti_behavior_pro_active' ) || ! opti_behavior_pro_active() || $this->pro_feature_pages_available() ) {
+			return false;
+		}
+
+		try {
+			$answer = apply_filters( 'opti_behavior_pro_locked_reason', null );
+		} catch ( Throwable $e ) {
+			$answer = null;
+		}
+		if ( false === $answer ) {
+			return false;
+		}
+
+		$state = array(
+			'reason'       => '',
+			'code'         => '',
+			'recheck_url'  => '',
+			'settings_url' => admin_url( 'admin.php?page=opti-behavior-settings&settings_tab=license' ),
+		);
+		if ( is_array( $answer ) ) {
+			$state['reason'] = isset( $answer['reason'] ) && is_string( $answer['reason'] ) ? $answer['reason'] : '';
+			$state['code']   = isset( $answer['code'] ) && is_string( $answer['code'] ) ? $answer['code'] : '';
+			foreach ( array( 'recheck_url', 'settings_url' ) as $key ) {
+				if ( ! empty( $answer[ $key ] ) && is_string( $answer[ $key ] ) ) {
+					$state[ $key ] = $answer[ $key ];
+				}
+			}
+		} elseif ( class_exists( 'OptiBehavior_Pro_Core' ) && defined( 'OptiBehavior_Pro_Core::TOKEN_RECHECK_ACTION' ) ) {
+			// Older Pro: no reason, but its "Re-check" action exists.
+			$action               = constant( 'OptiBehavior_Pro_Core::TOKEN_RECHECK_ACTION' );
+			$state['recheck_url'] = wp_nonce_url( admin_url( 'admin-post.php?action=' . $action ), $action );
+		}
+
+		$this->pro_locked_state = $state;
+		return $state;
+	}
+
+	/**
+	 * The page printed instead of a Pro screen when Pro is installed but locked
+	 * (OPT-924): the reason, "Re-check licence" and the licence tab. Never an
+	 * upgrade offer, never a price.
+	 *
+	 * @param string $page_title Title of the screen.
+	 * @param array  $state      Result of pro_locked_state().
+	 * @return void
+	 */
+	private function render_pro_locked_panel( $page_title, $state ) {
+		$reason = '' !== $state['reason']
+			? $state['reason']
+			: __( 'The licence check did not succeed. Click "Re-check licence", or open License & Quota to see the details.', 'opti-behavior' );
+		?>
+		<div class="wrap opti-behavior-pro-locked-page">
+			<h1><?php echo esc_html( $page_title ); ?></h1>
+			<?php // Styled in assets/css/admin-notices.css (OPT-927); class names avoid the words that file hides. ?>
+			<div class="opti-behavior-pro-locked-panel" role="alert">
+				<span class="ob-lock-icon dashicons dashicons-lock" aria-hidden="true"></span>
+				<div class="ob-lock-body">
+					<p class="ob-lock-title">
+						<?php esc_html_e( 'Opti-Behavior Pro is installed but could not confirm your licence right now.', 'opti-behavior' ); ?>
+					</p>
+					<p class="opti-behavior-pro-locked-reason">
+						<?php echo esc_html( $reason ); ?>
+					</p>
+					<p class="ob-lock-actions">
+						<?php if ( '' !== $state['recheck_url'] ) : ?>
+							<a href="<?php echo esc_url( $state['recheck_url'] ); ?>" class="button button-primary opti-behavior-pro-recheck">
+								<?php esc_html_e( 'Re-check licence', 'opti-behavior' ); ?>
+							</a>
+						<?php endif; ?>
+						<a href="<?php echo esc_url( $state['settings_url'] ); ?>" class="button ob-lock-secondary">
+							<?php esc_html_e( 'Open License & Quota', 'opti-behavior' ); ?>
+						</a>
+						<a href="https://optiuser.com/contact-support/" class="ob-lock-link" target="_blank" rel="noopener">
+							<?php esc_html_e( 'Contact support', 'opti-behavior' ); ?><span class="screen-reader-text"> <?php esc_html_e( '(opens in a new tab)', 'opti-behavior' ); ?></span>
+						</a>
+					</p>
+				</div>
+			</div>
+		</div>
+		<?php
 	}
 
 	/**
@@ -899,6 +1013,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 					'opti-behavior-heatmaps',        // Heatmaps
 					'opti-behavior-recordings',      // Recordings
 					'opti-behavior-funnels',         // Funnels
+					'opti-behavior-shop',            // Shop (WooCommerce only, OPT-1228)
 					'opti-behavior-user-journey',    // User Journeys
 					'opti-behavior-errors',          // Errors Tracking
 					'opti-behavior-form-analytics',  // Forms
@@ -909,6 +1024,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				'slugs' => array(
 					'opti-behavior-smart-insights',  // Smart Insights
 					'opti-behavior-ab-testing',      // A/B Testing
+					'opti-behavior-reports',         // Reports (OPT-1342)
 				),
 			),
 			'system' => array(
@@ -1394,7 +1510,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 								<span class="visitor-flag-country"><span class="visitor-flag"><?php echo $visitor['flag']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></span> <span class="visitor-location"><?php echo esc_html($visitor['country']); ?></span></span>
 								<span class="visitor-pageblock"><span class="visitor-title"><?php echo esc_html($visitor['page_title'] ?? ''); ?></span><a class="visitor-url" href="<?php echo esc_url($visitor['current_url'] ?? ''); ?>" target="_blank" rel="noopener"><?php echo esc_html($visitor['current_url'] ?? ''); ?></a></span>
 								<span class="visitor-ip-col"><?php
-								$ip_raw = isset( $visitor['ip'] ) ? trim( (string) $visitor['ip'] ) : '';
+								$ip_raw = opti_behavior_display_ip( isset( $visitor['ip'] ) ? (string) $visitor['ip'] : '' );
 								if ( '' === $ip_raw ) {
 									echo '<span class="visitor-ip-pill">-</span>';
 								} elseif ( 'Anonymous' === $ip_raw ) {
@@ -1566,9 +1682,22 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * If PRO is active, this will be overridden by the PRO plugin
 	 */
 	public function render_recordings_upgrade() {
-		// If PRO is active, this shouldn't be called (PRO plugin overrides the menu).
-		// To avoid duplicate headers when both callbacks are attached, bail out silently.
-		if ( opti_behavior_pro_active() ) {
+		// Pro took the page: its callback prints it (Pro removes this one; if both
+		// are still attached, stay silent to avoid duplicate headers).
+		if ( opti_behavior_pro_active() && class_exists( 'Opti_Behavior_Pro_Feature_Guard' ) ) {
+			try {
+				if ( Opti_Behavior_Pro_Feature_Guard::can_access( 'recordings' ) ) {
+					return;
+				}
+			} catch ( Throwable $e ) {
+				unset( $e );
+			}
+		}
+
+		// Pro installed but locked: never an empty page (OPT-924).
+		$locked = $this->pro_locked_state();
+		if ( false !== $locked ) {
+			$this->render_pro_locked_panel( __( 'Session Recordings', 'opti-behavior' ), $locked );
 			return;
 		}
 
@@ -1594,6 +1723,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * If PRO is active, PRO plugin registers its own errors page
 	 */
 	public function render_errors_upgrade() {
+		$locked = $this->pro_locked_state();
+		if ( false !== $locked ) {
+			$this->render_pro_locked_panel( __( 'Errors Tracking', 'opti-behavior' ), $locked );
+			return;
+		}
+
 		$template_path = plugin_dir_path( dirname( __FILE__ ) ) . 'admin/errors-upgrade-page.php';
 
 		if ( file_exists( $template_path ) ) {
@@ -1610,6 +1745,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * If PRO is active, PRO plugin registers its own user journey page
 	 */
 	public function render_user_journey_upgrade() {
+		$locked = $this->pro_locked_state();
+		if ( false !== $locked ) {
+			$this->render_pro_locked_panel( __( 'User Journeys', 'opti-behavior' ), $locked );
+			return;
+		}
+
 		$template_path = plugin_dir_path( dirname( __FILE__ ) ) . 'admin/user-journey-upgrade-page.php';
 
 		if ( file_exists( $template_path ) ) {
@@ -1624,6 +1765,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * Render Form Analytics upgrade page (placeholder when PRO is not active).
 	 */
 	public function render_form_analytics_upgrade() {
+		$locked = $this->pro_locked_state();
+		if ( false !== $locked ) {
+			$this->render_pro_locked_panel( __( 'Form Analytics', 'opti-behavior' ), $locked );
+			return;
+		}
+
 		$template_path = plugin_dir_path( dirname( __FILE__ ) ) . 'admin/form-analytics-upgrade-page.php';
 
 		if ( file_exists( $template_path ) ) {
@@ -1795,8 +1942,15 @@ class Opti_Behavior_Heatmap_Dashboard {
 								</a>
 								<a href="<?php echo esc_url($heatmap['url']); ?>" target="_blank" rel="noopener noreferrer" class="page-url heatmap-page-url" title="<?php echo esc_attr($heatmap['url']); ?>"><?php echo esc_html($heatmap['url']); ?></a>
 								<?php if ( isset( $files_expired_flags[ (int) $heatmap['id'] ] ) ) : ?>
-								<span class="heatmap-files-expired-badge" style="display:inline-block;margin-top:4px;padding:1px 8px;font-size:11px;line-height:18px;border-radius:9999px;background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;" title="<?php echo esc_attr__( 'Raw interaction files for this page were archived by the heavy-files retention tier. Historical stats remain; detailed replay data is no longer available.', 'opti-behavior' ); ?>">
-									<i data-lucide="archive" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i><?php esc_html_e( 'Files archived', 'opti-behavior' ); ?>
+								<?php
+								$fx_days = class_exists( 'Opti_Behavior_Retention_Policy' ) ? (int) Opti_Behavior_Retention_Policy::get_effective_files_retention_days() : 0;
+								$fx_tip  = $fx_days > 0
+									/* translators: %d: number of days the detailed click files are kept */
+									? sprintf( _n( 'The detailed click files of this page older than %d day were archived to save disk space. Totals and stats stay; the heatmap draws the newer clicks only.', 'The detailed click files of this page older than %d days were archived to save disk space. Totals and stats stay; the heatmap draws the newer clicks only.', $fx_days, 'opti-behavior' ), $fx_days )
+									: __( 'Raw interaction files for this page were archived by the heavy-files retention tier. Historical stats remain; detailed replay data is no longer available.', 'opti-behavior' );
+								?>
+								<span class="heatmap-files-expired-badge" tabindex="0" role="note" aria-label="<?php echo esc_attr( $fx_tip ); ?>" style="display:inline-block;margin-top:4px;padding:1px 8px;font-size:11px;line-height:18px;border-radius:9999px;background:#f3f4f6;color:#4b5563;border:1px solid #e5e7eb;cursor:help;" title="<?php echo esc_attr( $fx_tip ); ?>">
+									<i data-lucide="archive" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i><?php esc_html_e( 'Files archived', 'opti-behavior' ); ?><i data-lucide="info" aria-hidden="true" style="width:11px;height:11px;vertical-align:middle;margin-left:4px;"></i>
 								</span>
 								<?php endif; ?>
 							</td>
@@ -1807,7 +1961,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 							// scroll layers under the word "Interactions".
 							$hm_clicks = isset( $heatmap['clicks'] ) ? (int) $heatmap['clicks'] : ( (int) ( $heatmap['click_pc'] ?? 0 ) + (int) ( $heatmap['click_mobile'] ?? 0 ) );
 							?>
-							<td class="interactions-count clicks-count"><strong><?php echo esc_html( $hm_clicks ); ?></strong></td>
+							<td class="interactions-count clicks-count"><strong><?php echo esc_html( number_format_i18n( $hm_clicks ) ); ?></strong></td>
 							<?php
 							// Unified session metric (plan step "Unify session
 							// metric"): the cell shows the SAME pair as the detail
@@ -1856,9 +2010,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 							}
 							?>
 							<td class="sessions-count" data-page-id="<?php echo intval($heatmap['id']); ?>" data-sessions="<?php echo intval($hm_first); ?>"<?php if ( '' !== $hm_reset_tooltip ) : ?> title="<?php echo esc_attr( $hm_reset_tooltip ); ?>"<?php endif; ?>>
-								<strong><?php echo esc_html($hm_first); ?></strong>
+								<strong><?php echo esc_html( number_format_i18n( (int) $hm_first ) ); ?></strong>
 								<?php if ( $hm_show_dual ) : ?>
-								<span class="<?php echo ( null !== $hm_reset_all_time ) ? 'sessions-all-time' : 'sessions-interactions'; ?>"><?php echo esc_html( '/ ' . (int) $hm_second ); ?></span>
+								<span class="<?php echo ( null !== $hm_reset_all_time ) ? 'sessions-all-time' : 'sessions-interactions'; ?>"><?php echo esc_html( '/ ' . number_format_i18n( (int) $hm_second ) ); ?></span>
 								<?php endif; ?>
 								<?php if ( $hm_desynced ) : ?>
 								<span class="sessions-desync-badge" title="<?php echo esc_attr__( 'Interaction files and detected sessions are out of sync for this page. Click Repair to refresh.', 'opti-behavior' ); ?>">
@@ -1873,13 +2027,19 @@ class Opti_Behavior_Heatmap_Dashboard {
 								<a href="<?php echo esc_url($heatmap['view_pc_url']); ?>" class="button button-primary button-small optibehavior-btn optibehavior-btn-desktop heatmap-action-btn" target="_blank" title="<?php echo esc_attr__('Open desktop heatmap', 'opti-behavior'); ?>"><i data-lucide="monitor" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> <?php
 									// translators: %s: number of desktop sessions
 									printf( esc_html__('Desktop (%s)', 'opti-behavior'), esc_html(number_format_i18n($heatmap['sessions_desktop'])) ); ?></a>
-								<a href="<?php echo esc_url($heatmap['view_mobile_url']); ?>" class="button button-secondary button-small optibehavior-btn optibehavior-btn-mobile heatmap-action-btn" target="_blank" title="<?php echo esc_attr__('Open mobile heatmap', 'opti-behavior'); ?>"><i data-lucide="smartphone" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> <?php
+								<?php
+								// No mobile session yet (OPT-1630 D23): the button stays in place
+								// (same link for the row contract) but reads as disabled; the click
+								// is cancelled in heatmaps.js while aria-disabled is "true".
+								$hm_mobile_off = 0 === (int) $heatmap['sessions_mobile'];
+								?>
+								<a href="<?php echo esc_url($heatmap['view_mobile_url']); ?>" class="button button-secondary button-small optibehavior-btn optibehavior-btn-mobile heatmap-action-btn<?php echo $hm_mobile_off ? ' is-disabled' : ''; ?>" target="_blank" title="<?php echo $hm_mobile_off ? esc_attr__( 'No mobile data yet', 'opti-behavior' ) : esc_attr__( 'Open mobile heatmap', 'opti-behavior' ); ?>"<?php echo $hm_mobile_off ? ' aria-disabled="true"' : ''; ?>><i data-lucide="smartphone" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> <?php
 									// translators: %s: number of mobile sessions
 									printf( esc_html__('Mobile (%s)', 'opti-behavior'), esc_html(number_format_i18n($heatmap['sessions_mobile'])) ); ?></a>
 								<?php if ( class_exists( 'Opti_Behavior_Smart_Insights_Page' ) ) : ?>
 									<?php // Page X-Ray is Pro: without it the button carries a lock + PRO and opens the locked view. ?>
 									<?php $opti_behavior_xray_open = opti_behavior_page_xray_available(); ?>
-								<a href="<?php echo esc_url( Opti_Behavior_Smart_Insights_Page::xray_url( (int) $heatmap['id'] ) ); ?>" class="button button-secondary button-small optibehavior-btn heatmap-action-btn heatmap-action-xray<?php echo $opti_behavior_xray_open ? '' : ' is-locked'; ?>" title="<?php echo esc_attr__( 'Open the page dossier: every problem found on this page, in one place', 'opti-behavior' ); ?>"><i data-lucide="<?php echo $opti_behavior_xray_open ? 'stethoscope' : 'lock'; ?>" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> <?php esc_html_e( 'Dossier', 'opti-behavior' ); ?><?php if ( ! $opti_behavior_xray_open ) : ?><span class="opti-menu-pro-badge">PRO</span><?php endif; ?></a>
+								<a href="<?php echo esc_url( Opti_Behavior_Smart_Insights_Page::xray_url( (int) $heatmap['id'] ) ); ?>" class="button button-secondary button-small optibehavior-btn heatmap-action-btn heatmap-action-xray<?php echo $opti_behavior_xray_open ? '' : ' is-locked'; ?>" title="<?php echo esc_attr__( 'Open the page dossier: every problem found on this page, in one place', 'opti-behavior' ); ?>"><i data-lucide="<?php echo $opti_behavior_xray_open ? 'stethoscope' : 'lock'; ?>" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> <?php esc_html_e( 'Folder', 'opti-behavior' ); ?><?php if ( ! $opti_behavior_xray_open ) : ?><span class="opti-menu-pro-badge">PRO</span><?php endif; ?></a>
 								<?php endif; ?>
 							</td>
 							<?php echo apply_filters( 'opti_behavior_heatmap_list_row_after', '', $heatmap ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Output escaped by the filter callback ?>
@@ -6716,7 +6876,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				esc_html(
 					sprintf(
 						/* translators: 1: directories scanned so far, 2: total directories, 3: pages restored so far. */
-						__( 'Opti Behavior: heatmap registry rebuild in progress (%1$d of %2$d directories scanned, %3$d pages restored). Heatmap listings grow as it completes.', 'opti-behavior' ),
+						__( 'Opti-Behavior: heatmap registry rebuild in progress (%1$d of %2$d directories scanned, %3$d pages restored). Heatmap listings grow as it completes.', 'opti-behavior' ),
 						(int) ( $progress['scanned'] ?? 0 ),
 						(int) ( $progress['total_dirs'] ?? 0 ),
 						(int) ( $progress['inserted'] ?? 0 )
@@ -6732,7 +6892,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 				esc_html(
 					sprintf(
 						/* translators: %d: number of heatmap pages restored by the rebuild. */
-						__( 'Opti Behavior: heatmap registry rebuild done — %d pages restored from files.', 'opti-behavior' ),
+						__( 'Opti-Behavior: heatmap registry rebuild done — %d pages restored from files.', 'opti-behavior' ),
 						(int) $progress['inserted']
 					)
 				)
@@ -12062,6 +12222,188 @@ class Opti_Behavior_Heatmap_Dashboard {
 	}
 
 	/**
+	 * Data of the short site report (OPT-1340), read through the screens' own
+	 * code so the report prints what the screens show for the same period:
+	 * Traffic = get_dashboard_stats_only() + the `top_pages`, `device_types`
+	 * and `referrers` widgets (same calls, caches and spam rule as the Traffic
+	 * AJAX); Smart Insights = the active cards of the period, read and collapsed
+	 * like the Smart Insights list (decoded rows, not shaped: the report ranks
+	 * them, then shapes only what it prints with shape_report_insights()).
+	 * No advanced filter. Writes nothing.
+	 *
+	 * @param array $args `period` (screen key, '' = dates), `from`, `to` (Y-m-d), `exclude_spam`.
+	 * @return array { traffic: { stats, changes, date_range, top_pages, device_types, referrers }, insights: { range, rows } }
+	 */
+	public function get_report_site_data( $args ) {
+		$args   = is_array( $args ) ? $args : array();
+		$period = ! empty( $args['period'] ) ? sanitize_key( (string) $args['period'] ) : 'custom';
+		$from   = isset( $args['from'] ) ? sanitize_text_field( (string) $args['from'] ) : '';
+		$to     = isset( $args['to'] ) ? sanitize_text_field( (string) $args['to'] ) : '';
+		$start  = 'custom' === $period ? $from : null;
+		$end    = 'custom' === $period ? $to : null;
+		$spam   = ! empty( $args['exclude_spam'] );
+
+		$had_spam  = array_key_exists( 'opti_behavior_exclude_spam', $GLOBALS );
+		$old_spam  = $had_spam ? $GLOBALS['opti_behavior_exclude_spam'] : null;
+		$GLOBALS['opti_behavior_exclude_spam'] = $spam;
+		try {
+			$stats   = $this->get_dashboard_stats_only( $period, $start, $end );
+			$traffic = array(
+				'stats'      => isset( $stats['stats'] ) ? $stats['stats'] : array(),
+				'changes'    => isset( $stats['changes'] ) ? $stats['changes'] : array(),
+				// OPT-1624: rates in points, previous period incomplete = no change.
+				'changes_not_comparable' => ! empty( $stats['changes_not_comparable'] ),
+				'date_range' => isset( $stats['date_range'] ) ? $stats['date_range'] : array(),
+			);
+			foreach ( array( 'top_pages', 'device_types', 'referrers', 'sessions_chart', 'new_vs_returning' ) as $widget ) {
+				$data                = $this->get_widget_data( $widget, $period, $start, $end );
+				$traffic[ $widget ] = isset( $data[ $widget ] ) && is_array( $data[ $widget ] ) ? $data[ $widget ] : array();
+			}
+			// OPT-1680: the kind of each source (one table "Source · Kind"), from the
+			// same name lists as the Referrers widget and the Traffic Channel filter.
+			foreach ( $traffic['referrers'] as $i => $row ) {
+				if ( is_array( $row ) ) {
+					$traffic['referrers'][ $i ]['kind'] = $this->get_report_source_kind( isset( $row['referrer'] ) ? (string) $row['referrer'] : '' );
+				}
+			}
+
+			$insights  = array(
+				'range' => array(),
+				'rows'  => array(),
+			);
+			$generator = $this->get_smart_insights_generator_impl();
+			$range     = $generator ? $generator->get_date_range_for_period( $period, $from, $to ) : null;
+			if ( $generator && is_array( $range ) ) {
+				$repository        = $generator->get_repository();
+				$query             = array(
+					'limit'      => 500,
+					'offset'     => 0,
+					'date_from'  => $range['from'],
+					'date_to'    => $range['to'],
+					'spam_scope' => $this->get_smart_insights_spam_scope_key_impl( $spam ),
+					'orderby'    => 'last_seen_at',
+					'order'      => 'DESC',
+					'status__in' => array(
+						Opti_Behavior_Smart_Insights_Repository::STATUS_NEW,
+						Opti_Behavior_Smart_Insights_Repository::STATUS_VIEWED,
+						Opti_Behavior_Smart_Insights_Repository::STATUS_IN_PROGRESS,
+					),
+				);
+				$rows              = $this->get_smart_insights_all_rows_impl( $repository, $query );
+				// OPT-1727: a report period rarely matches a Smart Insights run
+				// day for day. No card inside it = the open cards of the latest
+				// run overlapping it (the e-mail's "What to fix this week" rule),
+				// never "No costly issue" while that block lists problems.
+				if ( ! $rows && class_exists( 'Opti_Behavior_Report_Site' ) && method_exists( 'Opti_Behavior_Report_Site', 'latest_run_rows' ) ) {
+					unset( $query['date_from'], $query['date_to'] );
+					$query['date_overlap_from'] = $range['from'];
+					$query['date_overlap_to']   = $range['to'];
+					$rows                       = Opti_Behavior_Report_Site::latest_run_rows( $this->get_smart_insights_all_rows_impl( $repository, $query ) );
+				}
+				$insights['range'] = $range;
+				$insights['rows']  = method_exists( $repository, 'collapse_open_insights_by_group' ) ? $repository->collapse_open_insights_by_group( $rows ) : $rows;
+			}
+		} finally {
+			if ( $had_spam ) {
+				$GLOBALS['opti_behavior_exclude_spam'] = $old_spam;
+			} else {
+				unset( $GLOBALS['opti_behavior_exclude_spam'] );
+			}
+		}
+
+		return array(
+			'traffic'  => $traffic,
+			'insights' => $insights,
+		);
+	}
+
+	/**
+	 * Kind of a Referrers widget row (OPT-1680), from its printed name: the
+	 * names come from get_referrers_data() and its domain maps, so a row is
+	 * never classified twice in two ways.
+	 *
+	 * @param string $label Row name as the widget prints it.
+	 * @return string search | ai | social | direct | paid | email | referral | campaign | '' (other / unclassified).
+	 */
+	private function get_report_source_kind( $label ) {
+		$label = trim( (string) $label );
+		if ( '' === $label || __( 'Other', 'opti-behavior' ) === $label || __( 'Unclassified', 'opti-behavior' ) === $label ) {
+			return '';
+		}
+		if ( __( 'Direct / None', 'opti-behavior' ) === $label ) {
+			return 'direct';
+		}
+		if ( in_array( $label, array( 'Google Ads', 'Microsoft Ads', 'Facebook Ads', 'Twitter Ads', 'TikTok Ads', 'Paid Ads', 'Paid Search' ), true ) ) {
+			return 'paid';
+		}
+		if ( 'Email' === $label ) {
+			return 'email';
+		}
+		if ( 'Social' === $label ) {
+			return 'social';
+		}
+		list( $search_map, $social_map, $ai_map ) = $this->get_traffic_channel_domain_maps();
+		if ( in_array( $label, $ai_map, true ) ) {
+			return 'ai';
+		}
+		if ( in_array( $label, $search_map, true ) ) {
+			return 'search';
+		}
+		if ( in_array( $label, $social_map, true ) ) {
+			return 'social';
+		}
+
+		// A host is a referring site; any other name is a utm_source.
+		return false !== strpos( $label, '.' ) ? 'referral' : 'campaign';
+	}
+
+	/**
+	 * Figures of the scheduled report e-mail read through the Traffic screen's
+	 * own code (OPT-1549): Avg. Scroll Depth of the KPI card (scroll_depth > 0,
+	 * daily_stats rollup for pre-raw days) and the Referrers widget rows (same
+	 * labels and grouping). Spam global set for the call, restored after.
+	 *
+	 * @param string $start        Start date-time (Y-m-d H:i:s).
+	 * @param string $end          End date-time (Y-m-d H:i:s).
+	 * @param bool   $exclude_spam Exclude spam like the screen toggle.
+	 * @param array  $parts        Any of 'scroll', 'referrers'.
+	 * @return array { scroll?: float, referrers?: array }
+	 */
+	public function get_report_email_figures( $start, $end, $exclude_spam, array $parts = array( 'scroll', 'referrers' ) ) {
+		$had_spam = array_key_exists( 'opti_behavior_exclude_spam', $GLOBALS );
+		$old_spam = $had_spam ? $GLOBALS['opti_behavior_exclude_spam'] : null;
+		$GLOBALS['opti_behavior_exclude_spam'] = (bool) $exclude_spam;
+		$out = array();
+		try {
+			if ( in_array( 'scroll', $parts, true ) ) {
+				$out['scroll'] = (float) $this->get_avg_scroll_depth( $start, $end );
+			}
+			if ( in_array( 'referrers', $parts, true ) ) {
+				$out['referrers'] = (array) $this->get_referrers_data( $start, $end );
+			}
+		} finally {
+			if ( $had_spam ) {
+				$GLOBALS['opti_behavior_exclude_spam'] = $old_spam;
+			} else {
+				unset( $GLOBALS['opti_behavior_exclude_spam'] );
+			}
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Shape Smart Insights rows for the site report exactly as the list shapes
+	 * its cards (viewer tier, card copy, short action, localized names).
+	 *
+	 * @param array $rows Decoded rows.
+	 * @return array
+	 */
+	public function shape_report_insights( $rows ) {
+		return $this->shape_smart_insights_list_rows_impl( $this->get_smart_insights_capabilities_impl(), is_array( $rows ) ? $rows : array(), 'list' );
+	}
+
+	/**
 	 * AJAX handler for the FREE dashboard advanced-filters panel's dropdown data.
 	 *
 	 * @since 1.0.4
@@ -13531,7 +13873,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$filter_sql  = $this->build_advanced_filters_sql( $filters );
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
 			$avg_duration = $wpdb->get_var( $wpdb->prepare(
-				"SELECT AVG(duration) FROM (
+				"SELECT AVG(" . opti_behavior_capped_seconds_sql( 'duration', 'session' ) . ") FROM (
 					SELECT s.duration FROM " . $wpdb->prefix . "optibehavior_sessions s
 					LEFT JOIN " . $wpdb->prefix . "optibehavior_visitors v ON s.visitor_id = v.id
 					WHERE s.start_time BETWEEN %s AND %s AND s.duration > 0" . $spam_clause . $filter_sql['where'] . "
@@ -13550,7 +13892,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// the canonical session_sql() predicate. So only take the fast pre-aggregate
 		// path when spam is NOT being excluded; otherwise compute from the sessions
 		// table with the same resolved exclusion clause as the count tiles.
-		$exclude_spam = $this->is_spam_excluded();
+		// OPT-1623: the daily_stats rollup holds raw SUM(duration) (old visits of
+		// 2 h+ included), so it can never give the capped average: the sessions
+		// table is always read (sampled, 10 000 rows at most).
+		$use_rollup = false;
 
 		// Try to use pre-aggregated daily_stats for performance
 		$daily_stats_table = $wpdb->prefix . 'optibehavior_daily_stats';
@@ -13559,7 +13904,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$table_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $daily_stats_table ) );
 		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-		if ( $table_exists && ! $exclude_spam ) {
+		if ( $use_rollup && $table_exists && ! $this->is_spam_excluded() ) {
 			$start_d = substr( $start_date, 0, 10 );
 			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$end_d = substr( $end_date, 0, 10 );
@@ -13585,7 +13930,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$avg_duration = $wpdb->get_var( $wpdb->prepare(
-			"SELECT AVG(duration) FROM (
+			"SELECT AVG(" . opti_behavior_capped_seconds_sql( 'duration', 'session' ) . ") FROM (
 				SELECT s.duration FROM " . $wpdb->prefix . "optibehavior_sessions s
 				WHERE s.start_time BETWEEN %s AND %s AND s.duration > 0" . $spam_clause . "
 				LIMIT 10000
@@ -14240,7 +14585,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 	private function merge_top_pages_rows( array $rows ) {
 		$groups = array();
 		foreach ( $rows as $row ) {
-			$url   = isset( $row['url'] ) ? (string) $row['url'] : '';
+			// Rows stored before a secret parameter joined the rule (OPT-1687,
+			// `?reset-token=…`) are shown without it.
+			$url   = isset( $row['url'] ) ? (string) opti_behavior_strip_sensitive_query_args( (string) $row['url'] ) : '';
 			$views = absint( $row['pageviews'] ?? 0 );
 			$key   = $this->get_traffic_page_key( $url );
 			if ( '' === $key ) {
@@ -15411,7 +15758,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$site_host_clean = $site_host ? preg_replace( '/^www\./i', '', $site_host ) : '';
 
 		// Known classifiers (shared with the Traffic Channel filter).
-		list( $search_map, $social_map ) = $this->get_traffic_channel_domain_maps();
+		list( $search_map, $social_map, $ai_map ) = $this->get_traffic_channel_domain_maps();
+		// The widget names a source, whatever its channel: AI assistants are named like search engines.
+		$search_map     = $ai_map + $search_map;
 		$paid_click_ids = array('gclid','msclkid','fbclid','twclid','ttclid','yclid','gbraid','wbraid','mc_eid');
 
 		foreach ( (array)$rows as $r ) {
@@ -15591,7 +15940,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 
 		$site_host_clean = $site_host ? preg_replace( '/^www\./i', '', $site_host ) : '';
 
-		list( $search_map, $social_map ) = $this->get_traffic_channel_domain_maps();
+		list( $search_map, $social_map, $ai_map ) = $this->get_traffic_channel_domain_maps();
+		$search_map     = $ai_map + $search_map;
 		$paid_click_ids = array( 'gclid', 'msclkid', 'fbclid', 'twclid', 'ttclid', 'yclid', 'gbraid', 'wbraid', 'mc_eid' );
 
 		foreach ( (array) $rows as $r ) {
@@ -15678,9 +16028,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 	}
 
 	/**
-	 * Classify a session's referrer/UTM values into one of the six FREE
-	 * dashboard "Traffic Channel" buckets: Direct, Organic Search, Paid Ads,
-	 * Social Media, Email, Referral.
+	 * Classify a session's referrer/UTM values into one of the seven FREE
+	 * dashboard "Traffic Channel" buckets: Direct, Organic Search, AI
+	 * Assistants, Paid Ads, Social Media, Email, Referral.
 	 *
 	 * Extracted/simplified from the ad-hoc classification logic in
 	 * get_referrers_data() (search/social domain maps + UTM keyword rules).
@@ -15693,14 +16043,21 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * @param string|null $referrer   Raw session referrer URL.
 	 * @param string|null $utm_source Raw session utm_source value.
 	 * @param string|null $utm_medium Raw session utm_medium value.
-	 * @return string One of: 'Direct', 'Organic Search', 'Paid Ads', 'Social Media', 'Email', 'Referral'.
+	 * @return string One of: 'Direct', 'Organic Search', 'AI Assistants', 'Paid Ads', 'Social Media', 'Email', 'Referral'.
 	 */
 	private function classify_traffic_channel( $referrer, $utm_source, $utm_medium ) {
 		$referrer   = is_string( $referrer ) ? trim( $referrer ) : '';
 		$utm_source = is_string( $utm_source ) ? trim( $utm_source ) : '';
 		$utm_medium = is_string( $utm_medium ) ? trim( $utm_medium ) : '';
 
-		list( $search_map, $social_map ) = $this->get_traffic_channel_domain_maps();
+		list( $search_map, $social_map, $ai_map ) = $this->get_traffic_channel_domain_maps();
+
+		// A link tagged by an AI assistant (utm_source=chatgpt.com…), with or
+		// without a referrer, unless the medium says paid (OPT-1132).
+		if ( in_array( strtolower( $utm_source ), opti_behavior_ai_assistant_utm_sources(), true )
+			&& ! in_array( strtolower( $utm_medium ), array( 'cpc', 'ppc', 'paid', 'paid_search' ), true ) ) {
+			return 'AI Assistants';
+		}
 
 		$host = '';
 		if ( '' !== $referrer ) {
@@ -15727,6 +16084,11 @@ class Opti_Behavior_Heatmap_Dashboard {
 				}
 				return false !== stripos( $host, $needle );
 			};
+			foreach ( array_keys( $ai_map ) as $needle ) {
+				if ( $matches( $needle ) ) {
+					return 'AI Assistants';
+				}
+			}
 			foreach ( array_keys( $search_map ) as $needle ) {
 				if ( $matches( $needle ) ) {
 					return 'Organic Search';
@@ -16130,6 +16492,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 			return '🌍';
 		};
 
+		// OPT-1691: never a whole IP in the answer (Full mode = truncated, else "Anonymous").
+		$full_mode = opti_behavior_privacy_mode_is_full();
+
 		$visitors = array();
 		foreach ( $results as $row ) {
 			// The stored value is site-local (current_time( 'mysql' )); WordPress runs
@@ -16146,11 +16511,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			// Get page title with proper fallback logic
 			$page_title = $row->page_title;
 			$current_page = (string) $row->current_page;
-			$visitor_ip = (string) ($row->ip ?? '');
-			// Normalize empty/null IP to 'Anonymous' -- semantically equivalent: no IP was stored (GDPR-safe)
-			if ( '' === $visitor_ip ) {
-				$visitor_ip = 'Anonymous';
-			}
+			$visitor_ip = opti_behavior_display_ip( (string) ( $row->ip ?? '' ), $full_mode );
 
 			// Skip visitors without both a valid URL and IP address
 			if ( empty( $current_page ) && empty( $visitor_ip ) ) {

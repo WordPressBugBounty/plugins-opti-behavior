@@ -115,8 +115,9 @@ trait Opti_Behavior_Funnels_Views_Trait {
 			<div class="heatmaps-header">
 				<div class="heatmaps-header-content">
 					<div class="heatmaps-title-section">
-						<div class="heatmaps-icon"><i data-lucide="filter"></i></div>
+						<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 						<div class="heatmaps-title-text">
+							<?php Opti_Behavior_Admin_Brand::render_name(); ?>
 							<h1 class="heatmaps-title"><?php esc_html_e( 'Funnels', 'opti-behavior' ); ?><?php opti_behavior_tooltip_e( $tooltips['what_is_funnel']['title'], $tooltips['what_is_funnel']['content'], $tooltips['what_is_funnel']['simple'], $tooltips['what_is_funnel']['example'], array( 'position' => 'bottom' ) ); ?></h1>
 							<div class="heatmaps-subtitle"><?php esc_html_e( 'Track user journeys and conversion paths', 'opti-behavior' ); ?></div>
 						</div>
@@ -482,8 +483,9 @@ trait Opti_Behavior_Funnels_Views_Trait {
 				</a>
 				<div class="heatmaps-header-content">
 					<div class="heatmaps-title-section">
-						<div class="heatmaps-icon"><i data-lucide="filter"></i></div>
+						<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 						<div class="heatmaps-title-text">
+							<?php Opti_Behavior_Admin_Brand::render_name(); ?>
 							<h1 class="heatmaps-title"><?php echo esc_html( $funnel->name ); ?></h1>
 							<div class="heatmaps-subtitle">
 								<?php

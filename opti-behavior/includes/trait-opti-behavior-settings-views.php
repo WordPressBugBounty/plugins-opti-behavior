@@ -206,8 +206,9 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             <div class="settings-header">
                 <div class="settings-header-content">
                     <div class="settings-title-section">
-                        <div class="settings-icon"><i data-lucide="settings"></i></div>
+                        <?php Opti_Behavior_Admin_Brand::render_mark(); ?>
                         <div class="settings-title-text">
+                            <?php Opti_Behavior_Admin_Brand::render_name(); ?>
                             <h1 class="settings-title"><?php esc_html_e( 'Settings', 'opti-behavior' ); ?></h1>
                             <div class="settings-subtitle"><?php esc_html_e( 'Configure opti-behavior: Heatmap, tracking, Data and display options', 'opti-behavior' ); ?></div>
                         </div>
@@ -719,6 +720,8 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
          * (e.g. feature manifest validation failed)
          */
         private function render_license_fallback_tab() {
+            // Pro files loaded but not initialized, or no Pro at all (removed, never installed).
+            $ob_pro_loaded = defined( 'OPTI_BEHAVIOR_PRO_VERSION' ) || class_exists( 'Opti_Behavior_Gate', false );
             ?>
             <div class="opti-behavior-settings-form">
                 <div class="settings-section">
@@ -729,6 +732,17 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         </h3>
                         <p class="section-description"><?php esc_html_e( 'Your current license and registration status', 'opti-behavior' ); ?></p>
                     </div>
+                    <?php // A plain link: nothing is sent, no address shown, no parameter in the URL (OPT-934). ?>
+                    <?php // Styled in assets/css/settings.css "My account block" (OPT-935). Spans only: the test reads the block up to its first closing div. ?>
+                    <div id="ob-license-my-account" class="ob-license-account">
+                        <span class="ob-license-account__icon dashicons dashicons-admin-users" aria-hidden="true"></span>
+                        <span class="ob-license-account__body">
+                            <strong class="ob-license-account__title"><?php esc_html_e( 'Already have a Pro trial or license?', 'opti-behavior' ); ?></strong>
+                            <span class="ob-license-account__hint"><?php esc_html_e( 'Find your license, its end date and the Pro download. First visit: click "Lost your password?" and enter the email used for your trial.', 'opti-behavior' ); ?></span>
+                        </span>
+                        <a id="ob-license-my-account-link" href="<?php echo esc_url( 'https://optiuser.com/my-account/' ); ?>" target="_blank" rel="noopener noreferrer" class="button button-secondary ob-license-account__btn"><?php esc_html_e( 'Open My account', 'opti-behavior' ); ?></a>
+                    </div>
+                    <?php if ( $ob_pro_loaded ) : ?>
                     <div class="recordings-upgrade-content" style="margin-top: 20px;">
                         <div class="upgrade-card">
                             <div class="upgrade-icon">
@@ -748,6 +762,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             </div>
                         </div>
                     </div>
+                    <?php endif; ?>
                 </div>
             </div>
             <?php
@@ -1289,7 +1304,14 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <span class="condition-unit"><?php esc_html_e( 'days (0 = same as detailed data)', 'opti-behavior' ); ?></span>
                     </label>
                     <label class="condition-row">
-                        <span class="condition-label"><?php esc_html_e( 'Detailed data (sessions, events, per-visitor rows) after', 'opti-behavior' ); ?></span>
+                        <span class="condition-label"><?php
+                        // Shop sites: store events follow this window too (OPT-1259).
+                        if ( class_exists( 'Opti_Behavior_Shop_Events' ) && Opti_Behavior_Shop_Events::woocommerce_active() ) {
+                            esc_html_e( 'Detailed data (sessions, events, store events, per-visitor rows) after', 'opti-behavior' );
+                        } else {
+                            esc_html_e( 'Detailed data (sessions, events, per-visitor rows) after', 'opti-behavior' );
+                        }
+                        ?></span>
                         <input type="number" id="sc-data-retention-days" class="condition-input condition-input-small" min="0" max="3650" value="<?php echo esc_attr( (string) $retention_days_value ); ?>">
                         <span class="condition-unit"><?php esc_html_e( 'days (0 = never)', 'opti-behavior' ); ?></span>
                     </label>
@@ -2682,7 +2704,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <div class="ob-privacy-comparison-wrap">
                         <div class="ob-privacy-comparison-table" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:0; border:1px solid #ddd; border-radius:4px; overflow:hidden; color:#333;">
                             <div style="padding:8px 10px; background:#f1f1f1; border-bottom:1px solid #ddd; font-weight:600;"><?php esc_html_e( 'Feature', 'opti-behavior' ); ?></div>
-                            <div style="padding:8px 10px; background:#f1f1f1; border-bottom:1px solid #ddd; border-left:1px solid #ddd; font-weight:600; text-align:center;"><?php esc_html_e( 'Anonymous Mode', 'opti-behavior' ); ?></div>
+                            <div style="padding:8px 10px; background:#f1f1f1; border-bottom:1px solid #ddd; border-left:1px solid #ddd; font-weight:600; text-align:center;"><?php esc_html_e( 'Cookieless mode (pseudonymised, 24 h)', 'opti-behavior' ); ?></div>
                             <div style="padding:8px 10px; background:#f1f1f1; border-bottom:1px solid #ddd; border-left:1px solid #ddd; font-weight:600; text-align:center;"><?php esc_html_e( 'Full Tracking', 'opti-behavior' ); ?></div>
 
                             <div style="padding:8px 10px; border-bottom:1px solid #eee;"><?php esc_html_e( 'Cookies set', 'opti-behavior' ); ?></div>
@@ -2693,9 +2715,9 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center; background:#fafafa;"><span style="<?php echo esc_attr( $opti_behavior_pill_no ); ?>"><?php esc_html_e( 'Disabled', 'opti-behavior' ); ?></span></div>
                             <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center; background:#fafafa;"><span style="<?php echo esc_attr( $opti_behavior_pill_yes ); ?>"><?php esc_html_e( 'Enabled', 'opti-behavior' ); ?></span></div>
 
-                            <div style="padding:8px 10px; border-bottom:1px solid #eee;"><?php esc_html_e( 'Geolocation API calls', 'opti-behavior' ); ?></div>
-                            <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center;"><span style="<?php echo esc_attr( $opti_behavior_pill_no ); ?>"><?php esc_html_e( 'Disabled', 'opti-behavior' ); ?></span></div>
-                            <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center;"><span style="<?php echo esc_attr( $opti_behavior_pill_yes ); ?>"><?php esc_html_e( 'Enabled', 'opti-behavior' ); ?></span></div>
+                            <div style="padding:8px 10px; border-bottom:1px solid #eee;"><?php esc_html_e( 'External geolocation calls', 'opti-behavior' ); ?></div>
+                            <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center;"><span style="<?php echo esc_attr( $opti_behavior_pill_no ); ?>"><?php esc_html_e( 'None (local database)', 'opti-behavior' ); ?></span></div>
+                            <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center;"><span style="<?php echo esc_attr( $opti_behavior_pill_no ); ?>"><?php esc_html_e( 'None (local database)', 'opti-behavior' ); ?></span></div>
 
                             <div style="padding:8px 10px; border-bottom:1px solid #eee; background:#fafafa;"><?php esc_html_e( 'Visitor identification', 'opti-behavior' ); ?></div>
                             <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px;"><?php esc_html_e( 'Daily hash (non-personal)', 'opti-behavior' ); ?></div>
@@ -2718,8 +2740,8 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Precise (cookie-based)', 'opti-behavior' ); ?></div>
 
                             <div style="padding:6px 10px; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'Visitor location', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#999;"><?php esc_html_e( 'Not available', 'opti-behavior' ); ?></div>
-                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Country & city level', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Country', 'opti-behavior' ); ?></div>
+                            <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; font-size:12px; color:#2e7d32;"><?php esc_html_e( 'Country', 'opti-behavior' ); ?></div>
 
                             <div style="padding:6px 10px; background:#fafafa; font-size:12px; color:#666; border-top:1px solid #eee;"><?php esc_html_e( 'User journey tracking', 'opti-behavior' ); ?></div>
                             <div style="padding:6px 10px; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px; color:#999;"><?php esc_html_e( 'Single session only', 'opti-behavior' ); ?></div>
@@ -2745,11 +2767,12 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                 <div style="display:flex; align-items:center; gap:10px;">
                                     <input type="radio" name="privacy_mode" value="anonymous" <?php checked( $privacy_mode, 'anonymous' ); ?>>
                                     <span class="radio-label">
-                                        <?php esc_html_e( 'Anonymous Mode', 'opti-behavior' ); ?>
+                                        <?php esc_html_e( 'Cookieless mode (pseudonymised, 24 h)', 'opti-behavior' ); ?>
                                         <?php opti_behavior_tooltip_e( $tooltips['anonymous_mode']['title'], $tooltips['anonymous_mode']['content'], $tooltips['anonymous_mode']['simple'], $tooltips['anonymous_mode']['example'], array( 'position' => 'right' ) ); ?>
                                     </span>
                                 </div>
-                                <span class="radio-description" style="margin-top:8px; padding-left:28px; font-size:12px;"><?php esc_html_e( 'Recommended. No cookies, no client-side storage, no IP storage, no geolocation.', 'opti-behavior' ); ?></span>
+                                <span class="radio-description" style="margin-top:8px; padding-left:28px; font-size:12px;"><?php esc_html_e( 'Recommended. No cookies, no client-side storage, no IP storage. Country is looked up on your server from the IP address, which is then discarded.', 'opti-behavior' ); ?></span>
+                                <span class="radio-description ob-privacy-mode-legal-note" style="margin-top:6px; padding-left:28px; font-size:12px;"><?php esc_html_e( 'No cookies or browser storage. Visitor ID = salted hash rotated daily; IP not stored. This is pseudonymisation, not anonymisation: GDPR still applies.', 'opti-behavior' ); ?></span>
                             </label>
                             <label class="radio-option ob-privacy-mode-option" style="margin:0; border-radius:0 6px 6px 0; flex-direction:column;">
                                 <div style="display:flex; align-items:center; gap:10px;">
@@ -2759,7 +2782,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                         <?php opti_behavior_tooltip_e( $tooltips['full_tracking']['title'], $tooltips['full_tracking']['content'], $tooltips['full_tracking']['simple'], $tooltips['full_tracking']['example'], array( 'position' => 'right' ) ); ?>
                                     </span>
                                 </div>
-                                <span class="radio-description" style="margin-top:8px; padding-left:28px; font-size:12px;"><?php esc_html_e( 'Cookies, IP addresses, geolocation. More accurate tracking. Consent banner required.', 'opti-behavior' ); ?></span>
+                                <span class="radio-description" style="margin-top:8px; padding-left:28px; font-size:12px;"><?php esc_html_e( 'Cookies, stored IP addresses, country geolocation. More accurate tracking. Consent banner required.', 'opti-behavior' ); ?></span>
                             </label>
                         </div>
                         </div>
@@ -2823,7 +2846,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                             </span>
                                             <?php else : ?>
                                             <span class="radio-description" style="color:#b26200;">
-                                                &#9888; <?php esc_html_e( 'No third-party consent plugin detected — the built-in Opti-Behavior banner will be displayed. To disable the banner, switch to Anonymous Mode.', 'opti-behavior' ); ?>
+                                                &#9888; <?php esc_html_e( 'No third-party consent plugin detected — the built-in Opti-Behavior banner will be displayed. To disable the banner, switch to Cookieless mode.', 'opti-behavior' ); ?>
                                             </span>
                                             <?php endif; ?>
                                         </div>
@@ -5133,6 +5156,19 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <?php $this->render_user_intent_rules_category(); ?>
                     </div>
                 </div>
+
+                <?php
+                // Shop events switch (WooCommerce sites only). Own admin-post form, outside every settings form of this tab.
+                if ( class_exists( 'Opti_Behavior_Shop_Events' ) ) {
+                    Opti_Behavior_Shop_Events::render_settings_block();
+                }
+
+                // Country database (DB-IP Lite, shipped with the plugin; a newer file only after the admin asks for it).
+                // Own admin-post links, outside every settings form of this tab.
+                if ( class_exists( 'Opti_Behavior_Geo_Country' ) ) {
+                    Opti_Behavior_Geo_Country::render_settings_block();
+                }
+                ?>
             </div>
             <?php
         }

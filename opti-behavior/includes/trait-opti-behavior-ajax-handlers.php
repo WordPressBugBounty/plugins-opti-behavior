@@ -659,7 +659,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 
             // Transient cache for Top Users per date-range (include spam filter and visitor cap basis in key).
             // Default TTL: 30s (filterable) - was 15 min before 1.2.9, which hid new visitor activity.
-            $cache_key = opti_behavior_dashboard_cache_key( 'optibehavior_top_users_' . md5( 'v4|' . $start_date . '|' . $end_date . '|' . ( $exclude_spam ? '1' : '0' ) . '|' . $visitor_total . '|' . $row_limit ) );
+            $cache_key = opti_behavior_dashboard_cache_key( 'optibehavior_top_users_' . md5( 'v5-anon|' . $start_date . '|' . $end_date . '|' . ( $exclude_spam ? '1' : '0' ) . '|' . $visitor_total . '|' . $row_limit ) );
             $default_ttl = function_exists( 'opti_behavior_dashboard_cache_ttl' ) ? opti_behavior_dashboard_cache_ttl() : 30;
             $cache_ttl = apply_filters('opti_behavior_top_users_cache_ttl', $default_ttl);
 
@@ -706,7 +706,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             $summary_table = esc_sql( $wpdb->prefix . 'optibehavior_visitor_daily_stats' );
             $pageviews_table = esc_sql( $wpdb->prefix . 'optibehavior_pageviews' );
             $visitors_table = esc_sql( $wpdb->prefix . 'optibehavior_visitors' );
-            $users_table = esc_sql( $wpdb->users );
+            // OPT-1689: no read of the WordPress users table (no login / name in this widget).
 
             /*
              * Keep Top Engaged Users aligned with the dashboard summary cards.
@@ -752,9 +752,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                         agg.avg_session_time,
                         agg.last_seen,
                         UPPER(COALESCE(NULLIF(TRIM(v.country),''), '')) AS country_code,
-                        v.country_name,
-                        u.user_login,
-                        u.display_name
+                        v.country_name
                      FROM (
                         SELECT
                             ds.visitor_id,
@@ -783,8 +781,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                           AND visitor_id IS NOT NULL
                           AND visitor_id != ''
                         GROUP BY visitor_id
-                     ) pv ON pv.visitor_id = agg.visitor_id
-                     LEFT JOIN " . $users_table . " u ON u.ID = agg.user_id",
+                     ) pv ON pv.visitor_id = agg.visitor_id",
                      substr($start_date, 0, 10), substr($end_date, 0, 10), $row_limit, $start_date, $end_date
                 ) );
                 // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
@@ -804,9 +801,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                         agg.avg_session_time,
                         agg.last_seen,
                         UPPER(COALESCE(NULLIF(TRIM(v.country),''), '')) AS country_code,
-                        v.country_name,
-                        u.user_login,
-                        u.display_name
+                        v.country_name
                      FROM (
                         SELECT
                             s.visitor_id,
@@ -844,8 +839,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                         ORDER BY total_time DESC
                         LIMIT %d
                      ) agg
-                     LEFT JOIN " . $visitors_table . " v ON v.id = agg.visitor_id
-                     LEFT JOIN " . $users_table . " u ON u.ID = agg.user_id",
+                     LEFT JOIN " . $visitors_table . " v ON v.id = agg.visitor_id",
                      array_merge(
                          array( $start_date, $end_date, $start_date, $end_date ),
                          $filter_sql['params'],
@@ -886,19 +880,14 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                     }
                 }
 
-                // Check if this visitor is a WordPress user
-                $user_id = !empty($r->user_id) ? (int)$r->user_id : 0;
-                $user_login = !empty($r->user_login) ? (string)$r->user_login : '';
-                $display_name = !empty($r->display_name) ? (string)$r->display_name : '';
-                $profile_url = $user_id > 0 ? admin_url('user-edit.php?user_id=' . $user_id) : '';
+                // OPT-1689: an account shows only "Logged in", never its login / name / id.
+                $logged_in = !empty($r->user_id) && (int)$r->user_id > 0;
 
                 $items[] = array(
                     'visitor_id'       => $vid,
                     'visitor_short'    => $short,
-                    'user_id'          => $user_id,
-                    'user_login'       => $user_login,
-                    'display_name'     => $display_name,
-                    'profile_url'      => $profile_url,
+                    'visitor_label'    => opti_behavior_visitor_label( $vid ),
+                    'logged_in'        => $logged_in,
                     'sessions'         => (int)$r->sessions,
                     'pages_per_session'=> (float)$r->pages_per_session,
                     'total_time'       => (int)$r->total_time,
@@ -1504,6 +1493,8 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 array( 'name' => 'optibehavior_daily_dimension_stats', 'category' => 'sessions',    'label' => __( 'Daily Dimension Stats', 'opti-behavior' ), 'date_column' => 'stat_date', 'range_delete' => true ),
                 array( 'name' => 'optibehavior_visitors',            'category' => 'visitors',       'label' => __( 'Visitors', 'opti-behavior' ),              'date_column' => 'first_visit' ),
                 array( 'name' => 'optibehavior_bot_visits',          'category' => 'visitors',       'label' => __( 'Bot Visits', 'opti-behavior' ),            'date_column' => 'visit_time', 'range_delete' => true ),
+                array( 'name' => 'optibehavior_shop_daily',          'category' => 'events',         'label' => __( 'Shop Events', 'opti-behavior' ),           'date_column' => 'day', 'range_delete' => true ),
+                array( 'name' => 'optibehavior_shop_session_events', 'category' => 'events',         'label' => __( 'Shop Session Events', 'opti-behavior' ),   'date_column' => 'event_time', 'range_delete' => true ),
                 array( 'name' => 'optibehavior_events',              'category' => 'events',         'label' => __( 'Events & Interactions', 'opti-behavior' ), 'date_column' => 'insert_at', 'range_delete' => true ),
                 array( 'name' => 'optibehavior_heatmap_pages',       'category' => 'heatmaps',       'label' => __( 'Heatmap Pages', 'opti-behavior' ),         'date_columns' => array( 'last_data_at', 'updated_at', 'created_at' ) ),
                 array( 'name' => 'optibehavior_heatmap_daily',       'category' => 'heatmaps',       'label' => __( 'Heatmap Daily Index', 'opti-behavior' ),   'date_column' => 'day', 'range_delete' => true ),
@@ -3967,6 +3958,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				'level'    => 'green',
 				'critical' => 0,
 				'warning'  => 0,
+				'active'   => 0,
 			);
 
 			if ( ! is_user_logged_in() || ! current_user_can( 'manage_options' ) ) {
@@ -3979,12 +3971,24 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				return $severity;
 			}
 
-			$stored = $repository->get_menu_severity();
+			// OPT-1618: the period and spam scope the Smart Insights screen opens
+			// with, so the menu number = the screen's "Active" figure.
+			$range = method_exists( $generator, 'get_date_range_for_period' ) ? $generator->get_date_range_for_period( Opti_Behavior_Smart_Insights_Generator::DEFAULT_PERIOD ) : null;
+			$range = is_array( $range ) && ! empty( $range['from'] ) && ! empty( $range['to'] )
+				? array(
+					'from'  => $range['from'],
+					'to'    => $range['to'],
+					'scope' => $this->get_smart_insights_spam_scope_key_impl(),
+				)
+				: array();
+
+			$stored = $repository->get_menu_severity( $range );
 			if ( is_array( $stored ) && in_array( $stored['level'] ?? '', array( 'green', 'yellow', 'red' ), true ) ) {
 				$severity = array(
 					'level'    => $stored['level'],
 					'critical' => max( 0, (int) ( $stored['critical'] ?? 0 ) ),
 					'warning'  => max( 0, (int) ( $stored['warning'] ?? 0 ) ),
+					'active'   => max( 0, (int) ( $stored['active'] ?? 0 ) ),
 				);
 			}
 
@@ -4257,20 +4261,33 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			$user_id = get_current_user_id();
 			// phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified by smart_insights_notifications_ajax_check() above.
 			$action  = isset( $_POST['state_action'] ) ? sanitize_key( wp_unslash( $_POST['state_action'] ) ) : '';
+			// OPT-1168: the Smart Insights screen has its own default (side point).
+			// Folding there only gives that default back; reopening there is kept.
+			// phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified by smart_insights_notifications_ajax_check() above.
+			$on_center = isset( $_POST['context'] ) && 'center' === sanitize_key( wp_unslash( $_POST['context'] ) );
 
 			switch ( $action ) {
 				case 'compact':
 				case 'minimize':
+					if ( $on_center && get_user_meta( $user_id, 'opti_behavior_si_notification_center_open', true ) ) {
+						delete_user_meta( $user_id, 'opti_behavior_si_notification_center_open' );
+						break;
+					}
+					delete_user_meta( $user_id, 'opti_behavior_si_notification_center_open' );
 					update_user_meta( $user_id, 'opti_behavior_si_notification_minimized', 1 );
 					delete_user_meta( $user_id, 'opti_behavior_si_notification_hidden' );
 					break;
 				case 'hide':
 				case 'hide_to_side':
+					delete_user_meta( $user_id, 'opti_behavior_si_notification_center_open' );
 					update_user_meta( $user_id, 'opti_behavior_si_notification_hidden', 1 );
 					delete_user_meta( $user_id, 'opti_behavior_si_notification_minimized' );
 					break;
 				case 'show':
 				case 'restore':
+					if ( $on_center ) {
+						update_user_meta( $user_id, 'opti_behavior_si_notification_center_open', 1 );
+					}
 					delete_user_meta( $user_id, 'opti_behavior_si_notification_hidden' );
 					delete_user_meta( $user_id, 'opti_behavior_si_notification_minimized' );
 					break;
@@ -4295,6 +4312,18 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 			$settings   = $this->get_smart_insights_notification_settings_impl();
 			$user_state = $this->get_smart_insights_notification_user_state_impl();
 			$scope      = $this->resolve_smart_insights_notification_scope_impl( $settings, $request );
+
+			// OPT-1168: on the Smart Insights screen the launcher covers buttons and
+			// text while scrolling, so it starts as the side point there until this
+			// user reopens it on that screen (their choice is kept in user meta).
+			if ( 'center' === $scope['context'] && 'visible' === $user_state['state'] && ! get_user_meta( get_current_user_id(), 'opti_behavior_si_notification_center_open', true ) ) {
+				$user_state['state']          = 'compact';
+				$user_state['display_state']  = 'compact';
+				$user_state['legacy_state']   = 'compact';
+				$user_state['is_compact']     = true;
+				$user_state['can_restore']    = true;
+				$user_state['compact_reason'] = 'center_default';
+			}
 
 			$payload = array(
 				'enabled'          => ! empty( $settings['enabled'] ),

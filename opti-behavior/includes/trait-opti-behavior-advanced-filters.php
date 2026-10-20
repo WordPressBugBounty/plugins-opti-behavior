@@ -330,7 +330,7 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 	 * @return string SQL CASE expression (no trailing alias).
 	 */
 	private function build_traffic_channel_case_sql() {
-		list( $search_map, $social_map ) = $this->get_traffic_channel_domain_maps();
+		list( $search_map, $social_map, $ai_map ) = $this->get_traffic_channel_domain_maps();
 
 		/*
 		 * This fragment is always appended to a larger query string that gets
@@ -366,6 +366,10 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 			return $raw_host . " LIKE '%%" . esc_sql( strtolower( $needle ) ) . "%%'";
 		};
 
+		$ai_likes = array();
+		foreach ( array_keys( $ai_map ) as $needle ) {
+			$ai_likes[] = $needle_likes( $needle );
+		}
 		$search_likes = array();
 		foreach ( array_keys( $search_map ) as $needle ) {
 			$search_likes[] = $needle_likes( $needle );
@@ -376,6 +380,8 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 		}
 
 		return "CASE
+				WHEN " . $external . " AND (" . implode( ' OR ', $ai_likes ) . ") THEN 'AI Assistants'
+				WHEN " . opti_behavior_ai_assistant_utm_sql() . " THEN 'AI Assistants'
 				WHEN " . $external . " AND (" . implode( ' OR ', $search_likes ) . ") THEN 'Organic Search'
 				WHEN " . $external . " AND (" . implode( ' OR ', $social_likes ) . ") THEN 'Social Media'
 				WHEN " . $external . " THEN 'Referral'
@@ -394,7 +400,7 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 	 * build_advanced_filters_sql(), so the two stay in sync.
 	 *
 	 * @since 1.0.4
-	 * @return array{0: array<string,string>, 1: array<string,string>} [ $search_map, $social_map ]
+	 * @return array{0: array<string,string>, 1: array<string,string>, 2: array<string,string>} [ $search_map, $social_map, $ai_map ]
 	 */
 	private function get_traffic_channel_domain_maps() {
 		/*
@@ -407,10 +413,15 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 		 *    would false-positive inside unrelated hosts ("x.com" is inside
 		 *    gmx.com/fedex.com, "t.co" is inside every *t.com domain).
 		 *
-		 * 2026 landscape: AI assistants (ChatGPT, Perplexity, Claude,
-		 * Copilot) are classified as Organic Search — they answer queries
-		 * and refer clicks the same way search engines do. Gemini arrives
-		 * via gemini.google.com (covered by "google.").
+		 * AI assistants (ChatGPT, Perplexity, Claude, Copilot) have their own
+		 * channel, "AI Assistants" (OPT-1122): the third map, tested before
+		 * the search map. Gemini has no referrer of its own: it arrives via
+		 * gemini.google.com and stays under "google." (Organic Search). The
+		 * Referrers widget still names them (ChatGPT, Perplexity…). Same list in
+		 * Heatmap_Ajax::get_traffic_channel_case_sql() (Free + Pro). A visit
+		 * tagged utm_source=chatgpt.com (…) is an AI assistant visit too, with
+		 * or without a referrer: opti_behavior_ai_assistant_utm_sources()
+		 * (OPT-1132).
 		 */
 		$search_map = array(
 			'google.' => 'Google', 'bing.com' => 'Bing', 'duckduckgo.com' => 'DuckDuckGo',
@@ -418,7 +429,8 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 			'ecosia.org' => 'Ecosia', 'startpage.com' => 'Startpage', 'qwant.com' => 'Qwant',
 			'search.brave.com' => 'Brave Search', 'kagi.com' => 'Kagi',
 			'seznam.cz' => 'Seznam', 'sogou.com' => 'Sogou',
-			// AI assistants / answer engines.
+		);
+		$ai_map = array(
 			'chatgpt.com' => 'ChatGPT', 'chat.openai.com' => 'ChatGPT',
 			'perplexity.ai' => 'Perplexity', 'claude.ai' => 'Claude',
 			'copilot.microsoft.com' => 'Copilot',
@@ -441,7 +453,7 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 			'quora.com' => 'Quora', 'nextdoor.com' => 'Nextdoor',
 		);
 
-		return array( $search_map, $social_map );
+		return array( $search_map, $social_map, $ai_map );
 	}
 
 	/**
@@ -566,6 +578,7 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 							<option value=""><?php esc_html_e( 'All Channels', 'opti-behavior' ); ?></option>
 							<option value="Direct"><?php esc_html_e( 'Direct', 'opti-behavior' ); ?></option>
 							<option value="Organic Search"><?php esc_html_e( 'Organic Search', 'opti-behavior' ); ?></option>
+							<option value="AI Assistants"><?php esc_html_e( 'AI Assistants', 'opti-behavior' ); ?></option>
 							<option value="Paid Ads"><?php esc_html_e( 'Paid Ads', 'opti-behavior' ); ?></option>
 							<option value="Social Media"><?php esc_html_e( 'Social Media', 'opti-behavior' ); ?></option>
 							<option value="Email"><?php esc_html_e( 'Email', 'opti-behavior' ); ?></option>

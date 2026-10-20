@@ -988,8 +988,10 @@
 			// Backward-compat: a missing status is treated as 'active'.
 			const status = (funnel.status === 'suspended') ? 'suspended' : 'active';
 			const isSuspended = status === 'suspended';
+			// OPT-1619: template funnel created for the user, not confirmed yet.
+			const isSuggested = funnel.suggested === true;
 
-			html += '<div class="funnel-card opti-funnel-row' + (isSuspended ? ' is-suspended' : '') + '" data-funnel-id="' + funnel.id + '" data-status="' + status + '">';
+			html += '<div class="funnel-card opti-funnel-row' + (isSuspended ? ' is-suspended' : '') + (isSuggested ? ' is-suggested' : '') + '" data-funnel-id="' + funnel.id + '" data-status="' + status + '">';
 			html += '  <div class="opti-funnel-row__summary">';
 			html += '    <div class="opti-funnel-row__title">';
 			html += '      <span class="opti-funnel-row__chevron"><i data-lucide="chevron-right"></i></span>';
@@ -1001,6 +1003,11 @@
 			html += '</h3>';
 			if (funnel.description) {
 				html += '      <p class="funnel-description">' + escapeHtml(funnel.description) + '</p>';
+			}
+			// Outside the h3: its ellipsis swallowed the pill at 1280 px and on
+			// mobile, and the pill is the only reason shown for "Confirm".
+			if (isSuggested) {
+				html += '        <span class="opti-funnel-status-pill opti-funnel-status-pill--suggested" title="' + escapeHtml(_s.suggestedFunnelHint || '') + '"><i data-lucide="sparkles"></i>' + escapeHtml(_s.suggestedFunnel || 'Suggested') + '</span>';
 			}
 			html += '        <span class="opti-funnel-row__steps">' + stepCount + ' ' + (_s.stepCount || 'Steps') + '</span>';
 			html += '      </div>';
@@ -1018,6 +1025,9 @@
 			html += '    </div>';
 
 			html += '    <div class="opti-funnel-row__actions">';
+			if (isSuggested) {
+				html += '      <button type="button" class="button button-small opti-funnel-confirm-btn" data-funnel-id="' + funnel.id + '" title="' + escapeHtml(_s.suggestedFunnelHint || '') + '">' + escapeHtml(_s.confirmFunnel || 'Confirm') + '</button>';
+			}
 			html += '      <a class="opti-funnel-row__toggle" href="' + escapeHtml(funnelDetailUrl(funnel.id)) + '">' + (_s.viewDetails || 'View details') + '</a>';
 			html += '      <div class="funnel-more-container">';
 			html += '        <button class="funnel-control-btn funnel-more-btn" data-funnel-id="' + funnel.id + '"><span class="dashicons dashicons-ellipsis"></span></button>';
@@ -1913,6 +1923,46 @@
 			const newStatus = current === 'suspended' ? 'active' : 'suspended';
 			$('.funnel-more-dropdown').removeClass('show');
 			setFunnelStatus(funnelId, newStatus);
+		});
+
+		// OPT-1619: "Confirm" on a suggested template funnel.
+		$(document).on('click', '.opti-funnel-confirm-btn', function(e) {
+			e.preventDefault();
+			e.stopPropagation();
+			confirmFunnel($(this).data('funnel-id'), $(this));
+		});
+	}
+
+	function confirmFunnel(funnelId, $btn) {
+		$btn.prop('disabled', true);
+		$.ajax({
+			url: optiBehaviorFunnels.ajaxUrl,
+			type: 'POST',
+			data: {
+				action: 'optibehavior_confirm_funnel',
+				nonce: optiBehaviorFunnels.nonce,
+				funnel_id: funnelId
+			},
+			success: function(response) {
+				if (response.success) {
+					summaryRows.forEach(function(r) {
+						if (String(r.id) === String(funnelId)) {
+							r.suggested = false;
+						}
+					});
+					const $card = $('.funnel-card[data-funnel-id="' + funnelId + '"]');
+					$card.removeClass('is-suggested');
+					$card.find('.opti-funnel-status-pill--suggested, .opti-funnel-confirm-btn').remove();
+					showFunnelToast((response.data && response.data.message) || '', 'success');
+				} else {
+					$btn.prop('disabled', false);
+					showFunnelToast((response.data && response.data.message) || _s.confirmFunnelError || 'The funnel could not be confirmed. Please try again.', 'error');
+				}
+			},
+			error: function() {
+				$btn.prop('disabled', false);
+				showFunnelToast(_s.confirmFunnelError || 'The funnel could not be confirmed. Please try again.', 'error');
+			}
 		});
 	}
 

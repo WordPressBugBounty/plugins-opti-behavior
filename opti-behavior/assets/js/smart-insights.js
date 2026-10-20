@@ -413,7 +413,24 @@
 		if (!list) {
 			return;
 		}
-		list.innerHTML = '<div class="ob-smart-insights-loading"><span class="ob-smart-insights-spinner" aria-hidden="true"></span><span>' + escapeHtml(message || i18n.loading || 'Loading Smart Insights...') + '</span></div>';
+		list.innerHTML = renderLoadingMarkup(message || i18n.loading || 'Loading Smart Insights...', section.closest('.ob-smart-insights-center-page') ? 3 : 0);
+	}
+
+	// Loading state. On the Smart Insights screen (blocks > 0) grey blocks the
+	// size of the real ones stand in, so nothing jumps when the data arrives;
+	// the sentence stays for screen readers (OPT-1168). Styles: section
+	// "Loading skeleton" of smart-insights-center.css.
+	function renderLoadingMarkup(message, blocks) {
+		var skeleton = '';
+		var i;
+		for (i = 0; i < blocks; i++) {
+			skeleton += '<i></i>';
+		}
+		return '<div class="ob-smart-insights-loading' + (blocks ? ' has-skeleton' : '') + '" role="status">' +
+			'<span class="ob-smart-insights-spinner" aria-hidden="true"></span>' +
+			'<span class="ob-smart-insights-loading-text">' + escapeHtml(message) + '</span>' +
+			(blocks ? '<span class="ob-si-skel" aria-hidden="true">' + skeleton + '</span>' : '') +
+			'</div>';
 	}
 
 	function hasCompleteCustomRange(contextData) {
@@ -2191,6 +2208,11 @@
 		} else if (context.funnelId && (type === 'funnel' || type === 'funnel_analytics')) {
 			contextual.label = i18n.openFunnelContext || 'Open this funnel report';
 		}
+		// OPT-1627: the report the generator chose for the card's own action
+		// carries its translated label ("View heatmap", "Compare periods").
+		if (report && typeof report === 'object' && report.primary && report.label) {
+			contextual.label = String(report.label);
+		}
 
 		return contextual;
 	}
@@ -2234,12 +2256,12 @@
 			form_error_friction: ['form_analytics', 'error_tracking', 'session_recordings', 'user_journey'],
 			field_level_friction: ['form_analytics', 'error_tracking', 'session_recordings'],
 			cta_low_performance: ['heatmap', 'session_recordings', 'ab_testing', 'analytics'],
-			dead_or_rage_click_signal: ['errors_friction', 'error_tracking', 'session_recordings', 'heatmap'],
+			dead_or_rage_click_signal: ['heatmap', 'session_recordings', 'errors_friction', 'error_tracking'],
 			error_impact_on_conversion: ['error_tracking', 'session_recordings', 'user_journey'],
 			visitor_confusion_pattern: ['session_recordings', 'user_journey', 'heatmap', 'ab_testing'],
 			quick_exit_pattern: ['session_recordings', 'user_journey', 'analytics', 'heatmap'],
 			ab_test_opportunity: ['ab_testing', 'session_recordings', 'heatmap', 'analytics'],
-			conversion_drop_alert: ['error_tracking', 'form_analytics', 'user_journey', 'session_recordings', 'analytics'],
+			conversion_drop_alert: ['analytics', 'session_recordings', 'user_journey', 'error_tracking', 'form_analytics'],
 			engagement_decay: ['analytics', 'heatmap', 'session_recordings', 'user_journey'],
 			session_recording_opportunity: ['session_recordings', 'user_journey', 'heatmap'],
 			returning_visitor_opportunity: ['user_journey', 'session_recordings', 'analytics'],
@@ -3815,7 +3837,8 @@
 		}
 
 		var visible = candidates.slice(0, max);
-		var more = candidates.length > visible.length ? '<p class="ob-smart-insights-summary-more">+' + escapeHtml(candidates.length - visible.length) + ' ' + escapeHtml(i18n.moreIssues || 'more issues') + '</p>' : '';
+		var moreCount = candidates.length - visible.length;
+		var more = moreCount > 0 ? '<p class="ob-smart-insights-summary-more">+' + escapeHtml(moreCount) + ' ' + escapeHtml(1 === moreCount ? (i18n.moreIssue || 'more issue') : (i18n.moreIssues || 'more issues')) + '</p>' : '';
 		var listClass = options.compact ? ' is-compact' : '';
 		return '<div class="ob-smart-insights-summary-list' + listClass + '">' + visible.map(function(item) {
 			var label = item.label || item.entity_label || item.signal_name || '';
@@ -4133,7 +4156,7 @@
 
 		var content = summaryWidget.querySelector('.widget-content');
 		if (content) {
-			content.innerHTML = '<div class="ob-smart-insights-loading"><span class="ob-smart-insights-spinner" aria-hidden="true"></span><span>' + escapeHtml(i18n.loadingSummary || 'Loading Weekly CRO Summary...') + '</span></div>';
+			content.innerHTML = renderLoadingMarkup(i18n.loadingSummary || 'Loading Weekly CRO Summary...', summaryWidget.closest('.ob-smart-insights-center-page') ? 1 : 0);
 		}
 
 		if (!hasProAccess) {

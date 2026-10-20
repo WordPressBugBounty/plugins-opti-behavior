@@ -3378,6 +3378,300 @@ body.opti-behavior_page_opti-behavior-settings #wpfooter {
 	color: #64748b;
 }
 
+/* Country database card (Traffic & Behavior, OPT-912): head (icon, title, status pill), text, actions band. */
+.ob-geo-db-card {
+	padding: 20px 24px;
+	background: #fff;
+	border: 1px solid #e5e7eb;
+	border-radius: 12px;
+	box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.ob-geo-db-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 12px;
+	margin: 0 0 14px;
+}
+
+.ob-geo-db-icon {
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	border-radius: 10px;
+	background: #f1effe;
+	color: #6c5ce7;
+}
+
+.ob-geo-db-icon svg,
+.ob-geo-db-icon i {
+	width: 18px;
+	height: 18px;
+}
+
+.ob-geo-db-card h3.ob-geo-db-title {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+	font-size: 16px;
+	line-height: 1.3;
+	font-weight: 600;
+	color: #111827;
+}
+
+.ob-geo-db-card p.ob-geo-db-state {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	padding: 5px 12px;
+	border: 1px solid #a7f3d0;
+	border-radius: 999px;
+	background: #ecfdf5;
+	color: #065f46;
+	font-size: 13px;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.ob-geo-db-state::before {
+	content: "";
+	flex: none;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: currentColor;
+}
+
+.ob-geo-db-state b {
+	margin-left: -4px;
+	font-weight: 600;
+}
+
+.ob-geo-db-card.is-warn p.ob-geo-db-state {
+	border-color: #fde68a;
+	background: #fffbeb;
+	color: #92400e;
+}
+
+.ob-geo-db-card.is-bad p.ob-geo-db-state {
+	border-color: #fecaca;
+	background: #fef2f2;
+	color: #991b1b;
+}
+
+.ob-geo-db-card p.ob-geo-db-result {
+	margin: 0 0 12px;
+	padding: 10px 14px;
+	border-left: 3px solid #059669;
+	border-radius: 6px;
+	background: #ecfdf5;
+	color: #065f46;
+	font-size: 13px;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+
+.ob-geo-db-card p.ob-geo-db-result.is-bad {
+	border-left-color: #dc2626;
+	background: #fef2f2;
+	color: #991b1b;
+}
+
+/* The technical reason: a plain line, so a failed download is not two red boxes. */
+.ob-geo-db-card p.ob-geo-db-error {
+	margin: 0 0 12px;
+	font-size: 13px;
+	line-height: 1.5;
+	color: #991b1b;
+	overflow-wrap: anywhere;
+}
+
+.ob-geo-db-card p.ob-geo-db-text {
+	max-width: 780px;
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.6;
+	color: #4b5563;
+}
+
+.ob-geo-db-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 14px 24px;
+	margin: 16px 0 0;
+	padding: 16px 0 0;
+	border-top: 1px solid #eef0f3;
+}
+
+#ob-geo-db-setting .ob-geo-db-actions .button {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	min-height: 40px;
+	margin: 0;
+	padding: 0 18px;
+	border: 1px solid #6c5ce7;
+	border-radius: 6px;
+	background: #fff;
+	color: #5a4bd1;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1.2;
+	box-shadow: none;
+	transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+#ob-geo-db-setting .ob-geo-db-actions .button:hover {
+	background: #f5f3ff;
+	border-color: #5a4bd1;
+	color: #4c3fb8;
+}
+
+#ob-geo-db-setting .ob-geo-db-actions .button-primary {
+	background: #6c5ce7;
+	color: #fff;
+}
+
+#ob-geo-db-setting .ob-geo-db-actions .button-primary:hover {
+	background: #5a4bd1;
+	border-color: #5a4bd1;
+	color: #fff;
+}
+
+#ob-geo-db-setting .ob-geo-db-actions .button:focus-visible {
+	outline: 2px solid #6c5ce7;
+	outline-offset: 2px;
+	box-shadow: none;
+}
+
+/* The monthly update: a real checkbox (role="switch") drawn as a switch; settings.js runs its action. */
+.ob-geo-db-monthly {
+	position: relative;
+	display: flex;
+	flex: 1 1 320px;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+	min-height: 40px;
+	margin: 0;
+	color: #374151;
+	font-size: 13px;
+	line-height: 1.45;
+	cursor: pointer;
+}
+
+/* Plain checkbox rows (Shop events): never squeezed by a long label on a phone. */
+.ob-geo-db-monthly > input[type="checkbox"] {
+	flex: none;
+}
+
+#ob-geo-db-setting input.ob-geo-db-switch-input {
+	position: absolute;
+	top: 50%;
+	left: 0;
+	width: 40px;
+	height: 22px;
+	margin: -11px 0 0;
+	opacity: 0;
+	cursor: pointer;
+}
+
+.ob-geo-db-switch {
+	position: relative;
+	flex: none;
+	width: 40px;
+	height: 22px;
+	border-radius: 11px;
+	background: #7b8494;
+	transition: background 0.2s ease;
+}
+
+.ob-geo-db-switch::before {
+	content: "";
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+	transition: transform 0.2s ease;
+}
+
+.ob-geo-db-switch-input:checked + .ob-geo-db-switch {
+	background: #6c5ce7;
+}
+
+.ob-geo-db-switch-input:checked + .ob-geo-db-switch::before {
+	transform: translateX(18px);
+}
+
+.ob-geo-db-switch-input:focus-visible + .ob-geo-db-switch {
+	outline: 2px solid #6c5ce7;
+	outline-offset: 2px;
+}
+
+.ob-geo-db-monthly.is-busy {
+	opacity: 0.6;
+	cursor: progress;
+}
+
+.ob-geo-db-monthly-text {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.ob-geo-db-card p.ob-geo-db-attribution {
+	margin: 14px 0 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: #6b7280;
+}
+
+.ob-geo-db-attribution a {
+	color: inherit;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+.ob-geo-db-attribution a:hover,
+.ob-geo-db-attribution a:focus-visible {
+	color: #6c5ce7;
+}
+
+.ob-geo-db-attribution a:focus-visible {
+	outline: 2px solid #6c5ce7;
+	outline-offset: 2px;
+	border-radius: 2px;
+	box-shadow: none;
+}
+
+@media (max-width: 600px) {
+	.ob-geo-db-card {
+		padding: 16px;
+	}
+
+	#ob-geo-db-setting .ob-geo-db-actions .button {
+		width: 100%;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-geo-db-switch,
+	.ob-geo-db-switch::before,
+	#ob-geo-db-setting .ob-geo-db-actions .button {
+		transition: none;
+	}
+}
+
 .ob-color-pickers {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -5121,5 +5415,532 @@ body.opti-behavior_page_opti-behavior-settings #wpfooter {
 	.cleanup-tasks-table td {
 		border-bottom: none;
 		padding: 4px 0;
+	}
+}
+
+/* My account block (License & Quota without Pro, OPT-935): icon tile, question + help sentence, one outline button.
+   No class with notice / warning / error / message (admin-notices.css hides such blocks). */
+.ob-license-account {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px 16px;
+	margin-top: 20px;
+	padding: 16px 20px;
+	background: #fff;
+	border: 1px solid #e2e4e7;
+	border-radius: 12px;
+	box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+	color: #1d2327;
+}
+
+.ob-license-account__icon.dashicons {
+	flex: none;
+	width: 40px;
+	height: 40px;
+	border-radius: 10px;
+	background: #f0eeff;
+	color: #5b4bd6;
+	font-size: 22px;
+	line-height: 40px;
+	text-align: center;
+}
+
+.ob-license-account__body {
+	display: block;
+	flex: 1 1 280px;
+	min-width: 0;
+}
+
+.ob-license-account__title {
+	display: block;
+	margin-bottom: 2px;
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1.4;
+	color: #1d2327;
+}
+
+.ob-license-account__hint {
+	display: block;
+	font-size: 13px;
+	line-height: 1.55;
+	color: #50575e;
+}
+
+#ob-license-my-account .ob-license-account__btn {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	min-height: 40px;
+	margin: 0;
+	padding: 0 16px;
+	border: 1px solid #6c5ce7;
+	border-radius: 8px;
+	background: #fff;
+	color: #5b4bd6;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1.2;
+	box-shadow: none;
+	text-decoration: none;
+}
+
+/* "Opens in a new tab" sign. */
+#ob-license-my-account .ob-license-account__btn::after {
+	content: "\f504";
+	font: normal 16px/1 dashicons;
+}
+
+#ob-license-my-account .ob-license-account__btn:hover {
+	border-color: #5b4bd6;
+	background: #f0eeff;
+	color: #4a3cc0;
+}
+
+#ob-license-my-account .ob-license-account__btn:focus-visible {
+	outline: 2px solid #6c5ce7;
+	outline-offset: 2px;
+	box-shadow: none;
+}
+
+@media (max-width: 600px) {
+	.ob-license-account {
+		align-items: flex-start;
+		padding: 14px;
+	}
+
+	.ob-license-account__body {
+		flex-basis: calc(100% - 56px);
+	}
+
+	#ob-license-my-account .ob-license-account__btn {
+		flex: 1 1 100%;
+	}
+}
+
+/**
+ * Danger Zone tab on the card of the Pro "Reset Installation" box (.ob-pro-reset,
+ * OPT-992): white cards, the sensitive action shows through a soft red icon chip
+ * and a secondary red button, not through pink frames (OPT-1136). Looks only:
+ * same markup, same texts, same behaviour. The confirmation windows keep their
+ * solid red button.
+ */
+
+/* Sub-tabs: one segmented bar. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tabs {
+	gap: 4px;
+	margin-bottom: 20px;
+	padding: 4px;
+	border: 1px solid #e2e4e7;
+	border-radius: 12px;
+	background: #f6f7f7;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tab {
+	flex: 1 1 auto;
+	justify-content: center;
+	bottom: 0;
+	min-height: 36px;
+	padding: 6px 14px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: #50575e;
+	line-height: 1.3;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tab:hover {
+	background: #fff;
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tab.active {
+	border: 0;
+	background: #fff;
+	color: #b42318;
+	box-shadow: 0 1px 2px rgba(16, 24, 40, 0.1);
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tab:focus-visible {
+	outline: 2px solid #b42318;
+	outline-offset: 2px;
+	box-shadow: none;
+}
+
+/* One card per action. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .settings-section-danger {
+	margin-bottom: 20px;
+	padding: 24px;
+	border: 1px solid #e2e4e7;
+	border-radius: 12px;
+	background: #fff;
+	box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .settings-section-danger:last-child {
+	margin-bottom: 0;
+}
+
+/* A section that only holds action cards is not a card itself. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .settings-section-danger:has(> .smart-cleanup-subsection) {
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	box-shadow: none;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .section-title-danger {
+	align-items: center;
+	margin: 0 0 6px;
+	font-size: 18px;
+	line-height: 1.35;
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .section-title-danger .section-icon {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	border-radius: 10px;
+	background: #fdeceb;
+	color: #b42318;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .section-title-danger .section-icon svg {
+	width: 20px;
+	height: 20px;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .section-header .section-description {
+	padding-left: 52px;
+	font-size: 13px;
+	line-height: 1.6;
+	color: #50575e;
+}
+
+/* "What it deletes": a quiet band, the word "Warning" carries the red. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-warning-box {
+	margin-bottom: 20px;
+	padding: 16px 20px;
+	border: 1px solid #eef0f2;
+	border-radius: 10px;
+	background: #fafafa;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-warning-text {
+	font-size: 13px;
+	line-height: 1.6;
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-warning-text strong {
+	color: #b42318;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-warning-text strong svg {
+	width: 16px;
+	height: 16px;
+	vertical-align: -3px;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-warning-list {
+	font-size: 13px;
+	line-height: 1.6;
+	color: #50575e;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-warning-list li strong {
+	color: #1d2327;
+}
+
+/* Full Reset: one line per category, its size at the end of the line. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-categories-toggle {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 12px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid #e2e4e7;
+	font-size: 13px;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-total-size {
+	margin-left: auto;
+	color: #1d2327;
+	font-variant-numeric: tabular-nums;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-row {
+	align-items: flex-start;
+	gap: 12px;
+	min-height: 32px;
+	margin: 0;
+	padding: 10px 0;
+	border-bottom: 1px solid #eef0f2;
+	box-sizing: border-box;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-row:last-child {
+	padding-bottom: 0;
+	border-bottom: 0;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-row .danger-category-check {
+	flex-shrink: 0;
+	margin-top: 1px;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-row .condition-label {
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
+	line-height: 1.55;
+	color: #50575e;
+	overflow-wrap: anywhere;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-row .condition-label strong {
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-count {
+	color: #646970;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-size {
+	float: right;
+	margin-left: 12px;
+	padding: 2px 10px;
+	border-radius: 999px;
+	background: #fdeceb;
+	color: #b42318;
+	line-height: 1.45;
+	font-variant-numeric: tabular-nums;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-size.is-loading {
+	background: #f0f0f1;
+	color: #646970;
+}
+
+/* Date range. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-range-label {
+	font-size: 13px;
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-date-input {
+	min-height: 40px;
+	padding: 6px 12px;
+	border: 1px solid #8c8f94;
+	font-size: 14px;
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-date-input:focus {
+	border-color: #b42318;
+	box-shadow: 0 0 0 3px rgba(180, 35, 24, 0.15);
+}
+
+/* Danger button, secondary: red outline on white. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .btn-danger:not(.opti-behavior-modal-actions .btn-danger) {
+	min-height: 40px;
+	padding: 8px 16px;
+	border: 1px solid #d92d20;
+	background: #fff;
+	color: #b42318;
+	font-weight: 600;
+	line-height: 1.2;
+	box-shadow: none;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .btn-danger:not(.opti-behavior-modal-actions .btn-danger):hover {
+	border-color: #b42318;
+	background: #fdeceb;
+	color: #912018;
+	box-shadow: none;
+	transform: none;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .btn-danger:not(.opti-behavior-modal-actions .btn-danger):focus-visible {
+	outline: 2px solid #b42318;
+	outline-offset: 2px;
+	box-shadow: none;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .btn-danger:not(.opti-behavior-modal-actions .btn-danger):disabled {
+	border-color: #dcdcde;
+	background: #f6f7f7;
+	color: #646970;
+	cursor: default;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-action-group {
+	margin-bottom: 0;
+}
+
+/* Smart Cleanup / Auto Schedule: every block is the same white card. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .smart-cleanup-subsection {
+	margin-top: 20px;
+	border: 1px solid #e2e4e7;
+	border-radius: 12px;
+	background: #fff;
+	box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .settings-section-danger > .smart-cleanup-subsection:first-child {
+	margin-top: 0;
+}
+
+/* A block inside a block is a quiet band, not a second card. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .smart-cleanup-subsection .smart-cleanup-subsection {
+	border-color: #eef0f2;
+	border-radius: 10px;
+	background: #fafafa;
+	box-shadow: none;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .smart-cleanup-subsection h4,
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-subtitle {
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .smart-cleanup-subsection h4 svg {
+	flex-shrink: 0;
+	color: #50575e;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .smart-cleanup-description {
+	font-size: 13px;
+	color: #50575e;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .smart-cleanup-bot-count {
+	border-color: #eef0f2;
+	background: #fafafa;
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .bot-count-value {
+	color: #b42318;
+	font-variant-numeric: tabular-nums;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .conditions-group {
+	border-color: #e2e4e7;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .conditions-group-title {
+	border-bottom-color: #eef0f2;
+	color: #50575e;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .conditions-group-options {
+	border-color: #eef0f2;
+	background: #fafafa;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .preview-count {
+	color: #b42318;
+}
+
+/* Uninstall. */
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .uninstall-settings-form {
+	margin-top: 20px;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .uninstall-option {
+	margin-bottom: 20px;
+	padding: 16px 20px;
+	border: 1px solid #e2e4e7;
+	border-radius: 10px;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .uninstall-checkbox-text {
+	font-size: 14px;
+	color: #1d2327;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .uninstall-checkbox-text strong {
+	color: #b42318;
+}
+
+.opti-behavior-settings-page .opti-behavior-settings-form-danger .uninstall-option-description {
+	font-size: 13px;
+	color: #50575e;
+}
+
+@media (max-width: 782px) {
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tabs {
+		gap: 4px;
+		padding: 4px;
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tab,
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tab.active {
+		min-height: 40px;
+		padding: 8px 10px;
+		border: 0;
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .settings-section-danger:not(:has(> .smart-cleanup-subsection)) {
+		padding: 16px;
+	}
+
+	/* Phone: the lead and the size take the full width under the title. */
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .section-header .section-description {
+		padding-left: 0;
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-warning-box {
+		padding: 14px;
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-total-size {
+		flex-basis: 100%;
+		margin-left: 0;
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-size {
+		display: table;
+		float: none;
+		margin: 4px 0 0;
+		white-space: normal;
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-category-size:empty {
+		display: none;
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .btn-danger:not(.opti-behavior-modal-actions .btn-danger) {
+		width: 100%;
+		white-space: normal;
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .uninstall-option {
+		padding: 14px;
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .uninstall-option-description {
+		margin-left: 0;
+	}
+}
+
+@media (max-width: 600px) {
+	/* Phone: sub-tabs two by two, the last one closes the bar on the full width. */
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tabs {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.opti-behavior-settings-page .opti-behavior-settings-form-danger .danger-zone-tab:last-child:nth-child(odd) {
+		grid-column: 1 / -1;
 	}
 }

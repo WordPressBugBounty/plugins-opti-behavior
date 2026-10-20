@@ -11,9 +11,12 @@ window.optiBehaviorCurrentForceRefreshFlag = window.optiBehaviorCurrentForceRefr
 };
 // A change of null = the previous period has no data: no percentage, a dash
 // with a tooltip instead of "+100%" (OPT-590). baseClass resets the classes.
-window.optiBehaviorSetNoPreviousChange = window.optiBehaviorSetNoPreviousChange || function(el, baseClass) {
+// notComparable (OPT-1624) = the previous period is incomplete: own tooltip.
+window.optiBehaviorSetNoPreviousChange = window.optiBehaviorSetNoPreviousChange || function(el, baseClass, notComparable) {
 	const i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
-	const tip = i18n.noPreviousData || 'No data for the previous period';
+	const tip = notComparable
+		? (i18n.notComparable || 'Not comparable: previous period incomplete')
+		: (i18n.noPreviousData || 'No data for the previous period');
 	el.textContent = '—';
 	el.setAttribute('title', tip);
 	if (baseClass) {
@@ -22,6 +25,39 @@ window.optiBehaviorSetNoPreviousChange = window.optiBehaviorSetNoPreviousChange 
 		el.classList.remove('positive', 'negative');
 		el.classList.add('neutral');
 	}
+};
+// KPI change text (OPT-1624): a count in % ("+12% vs last period"), a rate
+// in points ("+18.4 pts vs last period", unit 'pts' sent by the server).
+window.optiBehaviorChangeText = window.optiBehaviorChangeText || function(change, unit) {
+	const i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
+	const c = Number(change) || 0;
+	const sign = c > 0 ? '+' : '';
+	if (unit === 'pts') {
+		const v = Math.round(c * 10) / 10;
+		const num = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(v, { maximumFractionDigits: 1 }) : String(v));
+		return sign + num + (i18n.ptsVsLastPeriod || ' pts vs last period');
+	}
+	return sign + Math.round(c) + (i18n.vsLastPeriod || '% vs last period');
+};
+// Trend chip of a widget row (Referrers, Countries, Browsers, Devices, OS).
+// No previous figure (absent or 0) = a dash with a tooltip, never "+100%"
+// (OPT-1636: every row showed "↑100%" because the server sends no previous count).
+window.optiBehaviorRowTrendHTML = window.optiBehaviorRowTrendHTML || function(currentCount, previousCount) {
+	const cur = Number(currentCount) || 0;
+	const prev = Number(previousCount) || 0;
+	if (prev <= 0) {
+		const i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
+		const tip = String(i18n.noPreviousData || 'No data for the previous period').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+		return '<span class="visitor-trend trend-neutral" title="' + tip + '">—</span>';
+	}
+	const change = Math.round(((cur - prev) / prev) * 100);
+	if (change > 0) {
+		return '<span class="visitor-trend trend-up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>' + change + '%</span>';
+	}
+	if (change < 0) {
+		return '<span class="visitor-trend trend-down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' + Math.abs(change) + '%</span>';
+	}
+	return '<span class="visitor-trend trend-neutral"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg>0%</span>';
 };
 
 
@@ -287,11 +323,10 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 						}
 
 						if (targetChange && mapping.change === null) {
-							window.optiBehaviorSetNoPreviousChange(targetChange, 'stat-change');
+							window.optiBehaviorSetNoPreviousChange(targetChange, 'stat-change', data.changes_not_comparable === true);
 						} else if (targetChange && mapping.change !== undefined) {
-							const sign = mapping.change > 0 ? '+' : '';
 							const _i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
-							targetChange.textContent = sign + Math.round(mapping.change) + (_i18n.vsLastPeriod || '% vs last period');
+							targetChange.textContent = window.optiBehaviorChangeText(mapping.change, (data.change_units || {})[mapping.id]);
 							// Bounce rate is an inverted metric: an increase is bad (red), a decrease is good (green).
 							const isGood = mapping.id === 'bounce_rate' ? mapping.change <= 0 : mapping.change >= 0;
 							targetChange.className = 'stat-change ' + (isGood ? 'positive' : 'negative');
@@ -328,12 +363,9 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 						}
 
 						if (statKey && changeEl && changes[statKey] === null) {
-							window.optiBehaviorSetNoPreviousChange(changeEl, null);
+							window.optiBehaviorSetNoPreviousChange(changeEl, null, data.changes_not_comparable === true);
 						} else if (statKey && changeEl && changes[statKey] !== undefined) {
-							const change = changes[statKey];
-							const sign = change > 0 ? '+' : '';
-							const _i18n2 = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
-							changeEl.textContent = sign + Math.round(change) + (_i18n2.vsLastPeriod || '% vs last period');
+							changeEl.textContent = window.optiBehaviorChangeText(changes[statKey], (data.change_units || {})[statKey]);
 							changeEl.removeAttribute('title');
 						}
 					});
@@ -922,23 +954,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 
 		// Global helper function to get trend HTML with chevron icons
 		function getTrendHTML(currentCount, previousCount) {
-		  if (!previousCount || previousCount === 0) {
-		    if (currentCount > 0) {
-		      return '<span class="visitor-trend trend-up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>100%</span>';
-		    }
-		    return '<span class="visitor-trend trend-neutral">0%</span>';
-		  }
-
-		  const change = ((currentCount - previousCount) / previousCount) * 100;
-		  const changeAbs = Math.abs(change).toFixed(0);
-
-		  if (change > 0) {
-		    return `<span class="visitor-trend trend-up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>${changeAbs}%</span>`;
-		  } else if (change < 0) {
-		    return `<span class="visitor-trend trend-down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>${changeAbs}%</span>`;
-		  } else {
-		    return '<span class="visitor-trend trend-neutral">0%</span>';
-		  }
+		  return window.optiBehaviorRowTrendHTML(currentCount, previousCount);
 		}
 
 		// Device Types Widget with Donut Chart + Styled Legend Table
@@ -4080,12 +4096,12 @@ x = Math.min(x, maxX);
 					const card = document.querySelector('.stat-card[data-stat="' + key + '"]') || Array.from(document.querySelectorAll('.stat-card')).find(c => (c.querySelector('.stat-label')?.textContent||'').toLowerCase().includes(key.replace(/_/g,'')) );
 					if (!card) return;
 					const el = card.querySelector('.stat-change'); if (!el) return;
-					if (delta === null) { window.optiBehaviorSetNoPreviousChange(el, 'stat-change'); return; }
+					if (delta === null) { window.optiBehaviorSetNoPreviousChange(el, 'stat-change', data.changes_not_comparable === true); return; }
 					el.removeAttribute('title');
 					const d = Math.round(delta||0);
 					const i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
 					const vsLastPeriod = i18n.vsLastPeriod || '% vs last period';
-					el.textContent = (d>0?'+':'') + d + vsLastPeriod;
+					el.textContent = window.optiBehaviorChangeText(delta, (data.change_units || {})[key]);
 					el.classList.remove('positive','negative','neutral');
 					// Bounce rate is an inverted metric: an increase is bad (red), a decrease is good (green).
 					const goodDir = key === 'bounce_rate' ? -d : d;
@@ -4202,7 +4218,8 @@ x = Math.min(x, maxX);
 				}
 
 				const i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
-				const interactionsLabel = i18n.interactions || 'Heatmap sessions';
+				const visitsLabel = i18n.topPagesVisits || 'Visits';
+				const viewsLabel = i18n.topPagesViews || 'Page views';
 				const clicksLabel = i18n.clicks || 'Clicks';
 				const avgTimeLabel = i18n.avgTimeSpent || 'Average time spent';
 
@@ -4214,10 +4231,28 @@ x = Math.min(x, maxX);
 					return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
 				}
 
+				// Rows with the same title show their short path under it (OPT-1635).
+				const titleCounts = {};
+				topPages.forEach(p => {
+					const t = String((p && p.title) || '').trim();
+					titleCounts[t] = (titleCounts[t] || 0) + 1;
+				});
+				const shortPath = function(raw) {
+					try {
+						const u = new URL(String(raw || ''), window.location.origin);
+						return (u.pathname || '/') + (u.search || '');
+					} catch (e) {
+						return String(raw || '');
+					}
+				};
+
 				let html = '';
 				topPages.forEach((page, pageIndex) => {
 					const rank = pageIndex + 1;
 					const title = escapeHtml(page.title || '');
+					const urlText = (titleCounts[String(page.title || '').trim()] || 0) > 1
+						? escapeHtml(shortPath(page.url))
+						: escapeHtml(page.url || '#');
 					// Only http(s) URLs become links (a stored javascript: URL must never be clickable).
 					const url = escapeHtml(page.url || '#');
 					const urlHref = /^javascript:|^data:|^vbscript:/i.test(String(page.url || '').trim()) ? '#' : url;
@@ -4227,6 +4262,11 @@ x = Math.min(x, maxX);
 					const views = typeof viewsRaw === 'number' ? viewsRaw : parseInt(viewsRaw, 10) || 0;
 					const sessions = typeof sessionsRaw === 'number' ? sessionsRaw : parseInt(sessionsRaw, 10) || 0;
 					const clicks = typeof clicksRaw === 'number' ? clicksRaw : parseInt(clicksRaw, 10) || 0;
+					// Visits and page views side by side (OPT-1604): page views = the KPI
+					// "Page Views" counted for this page, same figure as the site report.
+					const formatCount = n => (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(n) : String(n));
+					const sessionsText = formatCount(sessions);
+					const viewsText = formatCount(views);
 
 					const viewsChangeRaw = page.views_change || 0;
 					const clicksChangeRaw = page.clicks_change || 0;
@@ -4309,11 +4349,15 @@ x = Math.min(x, maxX);
 								${editLinkHtml}
 								${hotBadgeHtml}
 							</div>
-							<a class="page-url" href="${urlHref}" target="_blank" rel="noopener noreferrer" title="${url}">${url}</a>
+							<a class="page-url" href="${urlHref}" target="_blank" rel="noopener noreferrer" title="${url}">${urlText}</a>
 							<div class="page-metrics">
-								<div class="metric metric-views" title="${interactionsLabel}">
-									<i class="metric-icon" data-lucide="flame"></i>
-									<span class="metric-value">${(typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(sessions) : String(sessions))}</span>
+								<div class="metric metric-views" title="${escapeHtml(visitsLabel)}" aria-label="${escapeHtml(visitsLabel + ': ' + sessionsText)}">
+									<i class="metric-icon" data-lucide="users"></i>
+									<span class="metric-value">${sessionsText}</span>
+								</div>
+								<div class="metric metric-pageviews" title="${escapeHtml(viewsLabel)}" aria-label="${escapeHtml(viewsLabel + ': ' + viewsText)}">
+									<i class="metric-icon" data-lucide="eye"></i>
+									<span class="metric-value">${viewsText}</span>
 									${changeHtml(viewsTrend, viewsTrendClass, viewsArrow, viewsChangeDisplay)}
 								</div>
 								<div class="metric metric-clicks" title="${clicksLabel}">
@@ -4521,10 +4565,8 @@ x = Math.min(x, maxX);
 					const percentage = totalCount > 0 ? Math.round((count / totalCount) * 100) : 0;
 					const browserIconSVG = getBrowserIconSVG(browser);
 
-					// Calculate trend (for now, show as new since we don't have previous data)
-					const trendValue = 100;
-					const trendClass = 'trend-up';
-					const trendIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+					// No previous figure from the server = a dash (OPT-1636)
+					const trendHTML = window.optiBehaviorRowTrendHTML(count, 0);
 
 					const row = document.createElement('tr');
 					row.className = 'ob-metric-row';
@@ -4539,10 +4581,7 @@ x = Math.min(x, maxX);
 							<span class="ob-metric-values">
 								<span class="visitor-count">${count}</span>
 								<span class="visitor-percentage">${percentage}%</span>
-								<span class="visitor-trend ${trendClass}">
-									${trendIcon}
-									${Math.abs(trendValue)}%
-								</span>
+								${trendHTML}
 							</span>
 						</td>
 					`;
@@ -4956,29 +4995,8 @@ x = Math.min(x, maxX);
 					// Use flagcdn.com for professional flag icons
 					const flagUrl = `https://flagcdn.com/w40/${isoCode}.png`;
 
-					// Calculate trend (random for demo - replace with actual comparison logic)
-					const previousCount = item.previous_count || 0;
-					let trendClass = 'trend-neutral';
-					let trendIcon = '';
-					let trendValue = 0;
-
-					if (previousCount > 0) {
-						trendValue = Math.round(((count - previousCount) / previousCount) * 100);
-						if (trendValue > 0) {
-							trendClass = 'trend-up';
-							trendIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>';
-						} else if (trendValue < 0) {
-							trendClass = 'trend-down';
-							trendIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
-						} else {
-							trendIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
-						}
-					} else {
-						// New country - show as positive trend
-						trendValue = 100;
-						trendClass = 'trend-up';
-						trendIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>';
-					}
+					// Trend vs previous period; no previous figure = a dash (OPT-1636)
+					const trendHTML = window.optiBehaviorRowTrendHTML(count, item.previous_count);
 
 					const row = document.createElement('tr');
 					row.className = 'ob-metric-row';
@@ -4993,10 +5011,7 @@ x = Math.min(x, maxX);
 							<div class="ob-metric-values">
 								<span class="visitor-count">${(typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(count) : String(count))}</span>
 								<span class="visitor-percentage">${percentage}%</span>
-								<span class="visitor-trend ${trendClass}">
-									${trendIcon}
-									${Math.abs(trendValue)}%
-								</span>
+								${trendHTML}
 							</div>
 						</td>
 					`;
@@ -5278,32 +5293,8 @@ x = Math.min(x, maxX);
 					const faviconUrl = item.favicon_url || '';
 					const domain = item.domain || '';
 
-					// Calculate trend (for now, show as new since we don't have previous data)
-					const previousCount = item.previous_count || 0;
-					let trendClass = 'trend-neutral';
-					let trendIcon = '';
-					let trendValue = 0;
-
-					if (previousCount > 0) {
-						trendValue = Math.round(((count - previousCount) / previousCount) * 100);
-						if (trendValue > 0) {
-							trendClass = 'trend-up';
-
-
-
-							trendIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>';
-						} else if (trendValue < 0) {
-							trendClass = 'trend-down';
-							trendIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
-						} else {
-							trendIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
-						}
-					} else {
-						// New referrer - show as positive trend
-						trendValue = 100;
-						trendClass = 'trend-up';
-						trendIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>';
-					}
+					// Trend vs previous period; no previous figure = a dash (OPT-1636)
+					const trendHTML = window.optiBehaviorRowTrendHTML(count, item.previous_count);
 
 					const row = document.createElement('tr');
 					row.className = 'ob-metric-row';
@@ -5325,10 +5316,7 @@ x = Math.min(x, maxX);
 							<span class="ob-metric-values">
 								<span class="visitor-count">${count}</span>
 								<span class="visitor-percentage">${percentage}%</span>
-								<span class="visitor-trend ${trendClass}">
-									${trendIcon}
-									${Math.abs(trendValue)}%
-								</span>
+								${trendHTML}
 							</span>
 						</td>
 					`;
@@ -5513,12 +5501,22 @@ x = Math.min(x, maxX);
 						});
 						var ids = Object.keys(markers);
 						try { map.invalidateSize(false); } catch(e){}
-						if(ids.length){
+						// Frame every live country (OPT-1630 D19): refit each time the set
+						// of countries changes, not only on the first update; one point =
+						// capped zoom (country level), none = back to the world view.
+						var fitKey = ids.slice().sort().join('|');
+						var mapSize = map.getSize();
+						if(fitKey !== window.rtMapFitKey && mapSize.x > 0 && mapSize.y > 0){
 							try {
-								var bounds = L.latLngBounds(ids.map(function(id){ return markers[id].getLatLng(); }));
-								if(bounds.isValid()){
-									if(!window.rtMapDidAutoFit){ map.fitBounds(bounds, { padding:[20,20], animate:false }); window.rtMapDidAutoFit = true; }
+								if(!ids.length){
+									map.setView([20,0], 2, { animate:false });
+								} else if(ids.length === 1){
+									map.setView(markers[ids[0]].getLatLng(), 4, { animate:false });
+								} else {
+									var bounds = L.latLngBounds(ids.map(function(id){ return markers[id].getLatLng(); }));
+									if(bounds.isValid()){ map.fitBounds(bounds, { padding:[36,36], maxZoom:4, animate:false }); }
 								}
+								window.rtMapFitKey = fitKey;
 							} catch(e){}
 						}
 					});
@@ -5548,7 +5546,9 @@ x = Math.min(x, maxX);
 				var mapEl = document.getElementById('realtime-map');
 				if(mapEl && window.L && typeof window.realtimeMap === 'undefined'){
 					try {
-						window.realtimeMap = L.map(mapEl, { worldCopyJump:false, attributionControl:false, minZoom:1, zoomAnimation:false, markerZoomAnimation:false, zoomSnap:1, maxBounds:[[-85,-180],[85,180]], maxBoundsViscosity:0.0 });
+						// minZoom 0 + quarter zoom steps (OPT-1630 D19): the widget is ~270 px wide,
+						// so visitors on several continents only fit below zoom 1.
+						window.realtimeMap = L.map(mapEl, { worldCopyJump:false, attributionControl:false, minZoom:0, zoomAnimation:false, markerZoomAnimation:false, zoomSnap:0.25, maxBounds:[[-85,-180],[85,180]], maxBoundsViscosity:0.0 });
 						L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 5, attribution: '', noWrap:true, continuousWorld:false }).addTo(window.realtimeMap);
 						window.rtMapMarkers = {};
 						window.realtimeMap.setView([20,0], 2);
@@ -5674,17 +5674,9 @@ x = Math.min(x, maxX);
 				}
 
 				var rows = resp.data.items.map(function(it,idx){
-					// Display username with profile link if available, otherwise show visitor ID
-					var isLoggedIn = it.user_id && it.user_id > 0 && it.display_name;
-					var visitorDisplay = '';
-					if (isLoggedIn) {
-						// User is a logged-in WordPress user - show display name with profile link
-						visitorDisplay = '<a href="' + esc(it.profile_url||'') + '" target="_blank" rel="noopener" title="' + ((window.opti_behaviorDashboard&&window.opti_behaviorDashboard.i18n&&window.opti_behaviorDashboard.i18n.viewUserProfile)||'View user profile') + '">' +
-							esc(it.display_name) + '</a>';
-					} else {
-						// Anonymous visitor - show visitor ID
-						visitorDisplay = esc(it.visitor_id||'');
-					}
+					// OPT-1689: same anonymous label for every visitor, never a login / name / profile link.
+					var isLoggedIn = !!it.logged_in;
+					var visitorDisplay = esc(it.visitor_label||'');
 
 					return '<tr'+ (isLoggedIn ? ' class="tu-logged-in-user"' : '') +'>'+
 						'<td class="tu-rank">'+ (idx+1) +'</td>'+
@@ -6693,6 +6685,11 @@ x = Math.min(x, maxX);
 			value.textContent = hasData ? chip.value : EMPTY;
 			if (hasData) {
 				value.setAttribute('title', chip.value);
+			}
+			// Optional explanation of the figure (OPT-1633: Bot Traffic chip).
+			if (hasData && chip.tip) {
+				el.setAttribute('title', chip.tip);
+				value.setAttribute('title', chip.value + ' — ' + chip.tip);
 			}
 
 			body.appendChild(label);

@@ -99,6 +99,24 @@
 		keepActiveSettingsTabVisible();
 	});
 
+	// "Country database" block: the monthly switch runs its nonce-protected action (data-url).
+	document.addEventListener('change', function(e) {
+		var box = e.target;
+		if (!box || box.id !== 'ob-geo-db-monthly') {
+			return;
+		}
+		var url = box.getAttribute('data-url');
+		if (!url) {
+			return;
+		}
+		// One click, one request: the page reloads with the saved state.
+		box.disabled = true;
+		if (box.parentNode && box.parentNode.classList) {
+			box.parentNode.classList.add('is-busy');
+		}
+		window.location.href = url;
+	});
+
 	window.addEventListener('resize', function() {
 		window.clearTimeout(window.optiBehaviorSettingsTabTimer);
 		window.optiBehaviorSettingsTabTimer = window.setTimeout(keepActiveSettingsTabVisible, 120);

@@ -79,6 +79,8 @@ class Opti_Behavior_Welcome {
 		'opti-behavior-user-journey',
 		'opti-behavior-errors',
 		'opti-behavior-form-analytics',
+		'opti-behavior-shop',
+		'opti-behavior-reports',
 	);
 
 	/** Singleton instance. @var self|null */

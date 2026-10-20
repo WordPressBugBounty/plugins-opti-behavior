@@ -154,6 +154,9 @@ class Opti_Behavior_Funnel_Auto_Builder {
 	 *
 	 * @param string     $recipe_id Recipe id.
 	 * @param array|null $context   Site context; detected when null.
+	 * @param bool       $confirmed False = suggested funnel (OPT-1619: created in
+	 *                              bulk, not counted until the user confirms it).
+	 *                              A card the user clicked one by one = true.
 	 * @return array|WP_Error {
 	 *     Success shape (spec.md §4.2):
 	 *
@@ -171,7 +174,7 @@ class Opti_Behavior_Funnel_Auto_Builder {
 	 *     @type int  $existing_funnel_id The funnel that already covers it.
 	 * }
 	 */
-	public function create_from_recipe( $recipe_id, $context = null ) {
+	public function create_from_recipe( $recipe_id, $context = null, $confirmed = true ) {
 		$recipe_id = $this->sanitize_recipe_id( $recipe_id );
 		if ( '' === $recipe_id ) {
 			return new WP_Error( 'opti_behavior_funnel_recipe_invalid', __( 'Invalid recipe.', 'opti-behavior' ) );
@@ -235,6 +238,7 @@ class Opti_Behavior_Funnel_Auto_Builder {
 				'status'      => 'active',
 				'source'      => 'auto',
 				'recipe_id'   => $recipe_id,
+				'confirmed'   => $confirmed ? 1 : 0,
 			)
 		);
 
@@ -366,7 +370,8 @@ class Opti_Behavior_Funnel_Auto_Builder {
 				continue;
 			}
 
-			$result = $this->create_from_recipe( $recipe_id, $context );
+			// OPT-1619: the bulk set is a suggestion until the user confirms it.
+			$result = $this->create_from_recipe( $recipe_id, $context, false );
 
 			if ( is_wp_error( $result ) ) {
 				$skipped[] = array(

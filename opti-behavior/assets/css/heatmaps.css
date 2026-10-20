@@ -1683,3 +1683,21 @@
 	font-size: 10px;
 	background: #4338ca;
 }
+
+/* OPT-1630 D23: one sort arrow. The active column already prints its arrow
+   in .opti-heatmap-sort-direction; the dashboard.css ::after arrow stays
+   only as the faded "sortable" hint of the other columns. */
+.simplified-heatmap-table thead a.opti-heatmap-sort-link[data-active="1"]::after {
+	content: none;
+}
+
+/* OPT-1630 D23: "Mobile (0)" = disabled look (aria-disabled, click cancelled
+   in heatmaps.js). Dashed border + grey fill so it never reads like the
+   white "Folder" button; #4b5563 on #f3f4f6 = 6.9:1, tooltip kept. */
+.heatmaps-modern-table .optibehavior-btn-mobile.button.is-disabled,
+.heatmaps-modern-table .optibehavior-btn-mobile.button.is-disabled:hover {
+	background: #f3f4f6 !important;
+	border: 1px dashed #9ca3af !important;
+	color: #4b5563 !important;
+	cursor: not-allowed;
+}

@@ -993,7 +993,7 @@ final class Opti_Behavior_Page_Analytics_Repository {
 				COUNT(DISTINCT pv.visitor_id) AS visitors,
 				COUNT(DISTINCT pv.session_id) AS sessions,
 				COUNT(pv.id) AS pageviews,
-				COALESCE(AVG(NULLIF(pv.time_on_page, 0)), 0) AS avg_time_seconds,
+				COALESCE(AVG(NULLIF(" . opti_behavior_capped_seconds_sql( 'pv.time_on_page', 'page_view' ) . ", 0)), 0) AS avg_time_seconds,
 				COALESCE(AVG(NULLIF(pv.scroll_depth, 0)), 0) AS scroll_depth_percent
 			FROM {$this->tables['pageviews']} pv
 			LEFT JOIN {$this->tables['sessions']} s ON s.id = pv.session_id

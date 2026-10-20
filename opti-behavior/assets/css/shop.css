@@ -1,0 +1,1082 @@
+/**
+ * Shop screen — lost sales per product page + payment errors (OPT-1228,
+ * designs OPT-1190 / OPT-1191 in qa/design-opt1187-shop/).
+ *
+ * Enqueued on the "Shop" screen only (version = filemtime). The Pro tile,
+ * column and "Payment errors" block are styled here too: Pro prints markup only.
+ * Tokens = smart-insights-center.css §1 (same names, same values).
+ *
+ * Privacy (Legal, 13/10 and 14/10): the payment block shows the gateway, the
+ * error TYPE and the technical CODE only, never a message, an order, a customer.
+ *
+ * @package Opti_Behavior
+ */
+
+.ob-shop-page {
+	--ob-si-radius-sm: 6px;
+	--ob-si-radius-md: 10px;
+	--ob-si-radius-lg: 14px;
+	--ob-si-radius-pill: 999px;
+	--ob-si-shadow-rest: 0 1px 2px rgba(15, 23, 42, 0.06);
+	--ob-si-surface: #ffffff;
+	--ob-si-surface-muted: #f8fafc;
+	--ob-si-surface-sunken: #f1f5f9;
+	--ob-si-border: #e2e8f0;
+	--ob-si-border-strong: #cbd5e1;
+	--ob-si-text: #0f172a;
+	--ob-si-text-muted: #475569;
+	--ob-si-text-faint: #64748b;
+	--ob-si-accent: #4f46e5;
+	--ob-si-accent-strong: #4338ca;
+	--ob-si-accent-soft: #eef2ff;
+	--ob-si-accent-border: #c7d2fe;
+	--ob-si-critical: #b91c1c;
+	--ob-si-critical-soft: #fef2f2;
+	--ob-si-critical-border: #fecaca;
+	--ob-si-medium: #a16207;
+	--ob-si-medium-soft: #fefce8;
+	--ob-si-medium-border: #fde68a;
+	--ob-si-better: #047857;
+	--ob-si-better-soft: #ecfdf5;
+	--ob-si-better-border: #a7f3d0;
+	--ob-si-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.ob-shop {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	font-family: var(--ob-si-font);
+	color: var(--ob-si-text);
+}
+
+.ob-shop p {
+	margin: 0;
+}
+
+/* Period form in the purple header (same as the Page X-Ray header). */
+.ob-shop-page .ob-shop__controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.ob-shop-page .ob-shop__controls select {
+	min-height: 36px;
+	border-radius: 8px;
+}
+
+.ob-shop-page .ob-shop__controls .button {
+	min-height: 36px;
+	padding: 0 16px;
+	border: 1px solid #ffffff;
+	border-radius: 8px;
+	background: #ffffff;
+	font-weight: 600;
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop-page .ob-shop__controls .button:hover,
+.ob-shop-page .ob-shop__controls .button:focus {
+	background: var(--ob-si-accent-soft);
+	border-color: var(--ob-si-accent-soft);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop-page .ob-shop__controls .button:focus-visible,
+.ob-shop-page .ob-shop__controls select:focus-visible {
+	outline: 2px solid #ffffff;
+	outline-offset: 2px;
+	box-shadow: none;
+}
+
+/* Cookieless strip: one short line, only in Cookieless mode. */
+.ob-shop__mode {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 10px;
+	padding: 8px 14px;
+	border: 1px solid var(--ob-si-accent-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-accent-soft);
+	font-size: 13px;
+	line-height: 1.45;
+	color: #3730a3;
+}
+
+.ob-shop__mode svg {
+	flex: 0 0 auto;
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__mode strong {
+	font-weight: 700;
+	color: var(--ob-si-accent-strong);
+}
+
+/* Totals of the period: tiles that fill the width. Lost visits = lead tile. */
+.ob-shop__tiles {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+	gap: 12px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.ob-shop__tiles.has-pro {
+	grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.6fr);
+}
+
+.ob-shop__tile {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	margin: 0;
+	padding: 14px 16px;
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-surface);
+	box-shadow: var(--ob-si-shadow-rest);
+}
+
+.ob-shop__tile-label {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-shop__tile-value {
+	font-size: 24px;
+	font-weight: 800;
+	line-height: 1.15;
+	letter-spacing: -0.01em;
+	font-variant-numeric: tabular-nums;
+	color: var(--ob-si-text);
+}
+
+.ob-shop__tile-note {
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-shop__tile.is-lead {
+	border-left: 4px solid var(--ob-si-critical);
+	background: var(--ob-si-critical-soft);
+	border-color: var(--ob-si-critical-border);
+	border-left-color: var(--ob-si-critical);
+}
+
+.ob-shop__tile.is-lead .ob-shop__tile-value {
+	color: var(--ob-si-critical);
+}
+
+/* Pro tile: the estimated range, the word "Estimate", the formula link. */
+.ob-shop__tile.is-pro {
+	position: relative;
+	border-left: 4px solid var(--ob-si-accent);
+}
+
+.ob-shop__tile.is-pro .ob-shop__tile-value {
+	font-size: 22px;
+	white-space: nowrap;
+}
+
+.ob-shop__tile.is-pro.is-thin .ob-shop__tile-value {
+	font-size: 15px;
+	font-weight: 700;
+	white-space: normal;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-shop__tile-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+}
+
+/* Small labels: "Estimate", "Pro". Text always present (never colour only). */
+.ob-shop__chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 1px 8px;
+	border: 1px solid var(--ob-si-accent-border);
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-accent-soft);
+	font-size: 11px;
+	font-style: normal;
+	font-weight: 700;
+	line-height: 18px;
+	letter-spacing: 0.02em;
+	text-transform: none;
+	white-space: nowrap;
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__chip.is-estimate {
+	border-color: var(--ob-si-medium-border);
+	background: var(--ob-si-medium-soft);
+	color: #854d0e;
+}
+
+/* "How is this calculated?" — opens as a layer under the tile. */
+.ob-shop__how {
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-shop__how > summary {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-height: 32px;
+	cursor: pointer;
+	list-style: none;
+	font-weight: 600;
+	color: var(--ob-si-accent-strong);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+.ob-shop__how > summary::-webkit-details-marker {
+	display: none;
+}
+
+.ob-shop__how > summary:focus-visible,
+.ob-shop__sort:focus-visible,
+.ob-shop__product-name:focus-visible,
+.ob-shop__pro-band a:focus-visible {
+	outline: 2px solid #6366f1;
+	outline-offset: 2px;
+	border-radius: 4px;
+}
+
+.ob-shop__how-body {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	left: 0;
+	z-index: 20;
+	box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+	padding: 12px 14px;
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-sm);
+	background: var(--ob-si-surface);
+	color: var(--ob-si-text-muted);
+}
+
+.ob-shop__how-body p + p {
+	margin-top: 6px;
+}
+
+.ob-shop__how-formula {
+	display: block;
+	font-weight: 700;
+	color: var(--ob-si-text);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The product table, in one white card. */
+.ob-shop__panel {
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-lg);
+	background: var(--ob-si-surface);
+	box-shadow: var(--ob-si-shadow-rest);
+	overflow: hidden;
+}
+
+.ob-shop__panel-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 4px 16px;
+	padding: 16px 20px 12px;
+}
+
+.ob-shop .ob-shop__panel-title {
+	margin: 0;
+	padding: 0;
+	font-size: 16px;
+	font-weight: 700;
+	line-height: 1.35;
+	color: var(--ob-si-text);
+}
+
+.ob-shop__panel-sub {
+	font-size: 12px;
+	color: var(--ob-si-text-muted);
+}
+
+/* Sideways scroll when the card is narrower than its columns; product pinned. */
+.ob-shop__scroll {
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
+}
+
+.ob-shop__scroll:focus-visible {
+	outline: 2px solid var(--ob-si-accent, #6b46c1);
+	outline-offset: -2px;
+}
+
+.ob-shop__table th:first-child,
+.ob-shop__table td:first-child {
+	position: sticky;
+	left: 0;
+	z-index: 1;
+	background: var(--ob-si-surface);
+	box-shadow: 1px 0 0 var(--ob-si-border);
+}
+
+.ob-shop__table th:first-child {
+	background: var(--ob-si-surface-muted);
+}
+
+.ob-shop__table {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	table-layout: auto;
+}
+
+.ob-shop__table th {
+	padding: 10px 16px;
+	background: var(--ob-si-surface-muted);
+	border-top: 1px solid var(--ob-si-border);
+	border-bottom: 1px solid var(--ob-si-border);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	text-align: left;
+	white-space: nowrap;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-shop__table th.ob-shop__th-num {
+	text-align: right;
+}
+
+.ob-shop__table td {
+	padding: 12px 16px;
+	border-top: 1px solid var(--ob-si-border);
+	vertical-align: middle;
+	font-size: 13px;
+}
+
+.ob-shop__table tbody tr:first-child td {
+	border-top: 0;
+}
+
+.ob-shop__table tbody tr:hover td {
+	background: var(--ob-si-surface-muted);
+}
+
+/* Sortable headers: same look as the Page X-Ray list. */
+.ob-shop__sort {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-height: 32px;
+	padding: 0;
+	margin: 0;
+	border: 0;
+	background: none;
+	font: inherit;
+	letter-spacing: inherit;
+	text-transform: inherit;
+	color: inherit;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.ob-shop__sort:hover {
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__sort-arrow::after {
+	content: "\2195";
+	font-size: 12px;
+	opacity: 0.45;
+}
+
+.ob-shop__table th[aria-sort="ascending"] .ob-shop__sort-arrow::after {
+	content: "\25B2";
+	font-size: 9px;
+	opacity: 1;
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__table th[aria-sort="descending"] .ob-shop__sort-arrow::after {
+	content: "\25BC";
+	font-size: 9px;
+	opacity: 1;
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__table th[aria-sort] {
+	color: var(--ob-si-accent-strong);
+}
+
+/* Product: thumbnail (WooCommerce) or a neutral square, title, address. */
+.ob-shop__product {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 220px;
+}
+
+.ob-shop__thumb {
+	flex: 0 0 40px;
+	width: 40px;
+	height: 40px;
+	border-radius: 8px;
+	border: 1px solid var(--ob-si-border);
+	background: var(--ob-si-surface-sunken);
+	object-fit: cover;
+	display: grid;
+	place-items: center;
+	color: var(--ob-si-text-faint);
+}
+
+.ob-shop__product-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.ob-shop__product-name {
+	font-size: 14px;
+	font-weight: 650;
+	line-height: 1.35;
+	color: var(--ob-si-text);
+	text-decoration: none;
+	overflow-wrap: anywhere;
+}
+
+.ob-shop__product-name:hover {
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__product-url {
+	font-size: 12px;
+	color: var(--ob-si-text-faint);
+	overflow-wrap: anywhere;
+}
+
+.ob-shop__num {
+	text-align: right;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+	color: var(--ob-si-text);
+}
+
+/* Lost visits: the sort key, bold, with its share of the biggest. */
+.ob-shop__lost {
+	text-align: right;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+.ob-shop__lost strong {
+	font-size: 14px;
+	font-weight: 800;
+	color: var(--ob-si-critical);
+}
+
+.ob-shop__bar {
+	display: block;
+	width: 96px;
+	height: 4px;
+	margin: 6px 0 0 auto;
+	overflow: hidden;
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-surface-sunken);
+}
+
+.ob-shop__bar i {
+	display: block;
+	height: 100%;
+	border-radius: inherit;
+	background: var(--ob-si-critical);
+}
+
+/* Add-to-cart rate: pill with the number (tone = help, never alone). */
+.ob-shop__rate {
+	text-align: right;
+	white-space: nowrap;
+}
+
+.ob-shop__rate span {
+	display: inline-block;
+	min-width: 52px;
+	padding: 2px 10px;
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-surface-sunken);
+	font-size: 12px;
+	font-weight: 700;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-shop__rate span.is-fix {
+	border-color: var(--ob-si-critical-border);
+	background: var(--ob-si-critical-soft);
+	color: var(--ob-si-critical);
+}
+
+.ob-shop__rate span.is-watch {
+	border-color: var(--ob-si-medium-border);
+	background: var(--ob-si-medium-soft);
+	color: var(--ob-si-medium);
+}
+
+.ob-shop__rate span.is-good {
+	border-color: var(--ob-si-better-border);
+	background: var(--ob-si-better-soft);
+	color: var(--ob-si-better);
+}
+
+/* Pro column: the range, never one figure. */
+.ob-shop__est {
+	text-align: right;
+	white-space: nowrap;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__table th.ob-shop__th-est {
+	background: var(--ob-si-accent-soft);
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__table td.ob-shop__est {
+	background: #f8f8ff;
+}
+
+/* Free without Pro: one band under the table, once (no locked cell per row). */
+.ob-shop__pro-band {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+	padding: 12px 20px;
+	border-top: 1px dashed var(--ob-si-border-strong);
+	background: var(--ob-si-surface-muted);
+	font-size: 13px;
+	line-height: 1.45;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-shop__pro-band strong {
+	color: var(--ob-si-text);
+}
+
+.ob-shop__pro-band a {
+	font-weight: 600;
+	color: var(--ob-si-accent-strong);
+	text-underline-offset: 2px;
+}
+
+/* Place of the "Payment errors" block (hidden while empty). */
+.ob-shop__slot:empty {
+	display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Payment errors (OPT-1191): totals strip, one row per gateway + code.
+   -------------------------------------------------------------------------- */
+.ob-shop__pay-stats {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	margin: 0 20px 16px;
+	padding: 0;
+	list-style: none;
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-surface-muted);
+}
+
+.ob-shop__pay-stat {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	margin: 0;
+	padding: 12px 16px;
+	border-left: 1px solid var(--ob-si-border);
+}
+
+.ob-shop__pay-stat:first-child {
+	border-left: 0;
+}
+
+.ob-shop__pay-stat-value {
+	font-size: 22px;
+	font-weight: 800;
+	line-height: 1.2;
+	letter-spacing: -0.01em;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	color: var(--ob-si-text);
+}
+
+.ob-shop__pay-stat-note {
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--ob-si-text-muted);
+}
+
+.ob-shop__pay-stat.is-fail .ob-shop__pay-stat-value {
+	color: var(--ob-si-critical);
+}
+
+.ob-shop__pay-stat.is-paid .ob-shop__pay-stat-value {
+	color: var(--ob-si-better);
+}
+
+.ob-shop__pay-stat.is-cost .ob-shop__pay-stat-value {
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__pay-stat .ob-shop__how-body {
+	left: auto;
+	width: min(420px, calc(100vw - 48px));
+}
+
+.ob-shop__pay-err {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 240px;
+}
+
+.ob-shop__thumb.is-pay {
+	border-color: var(--ob-si-critical-border);
+	background: var(--ob-si-critical-soft);
+	color: var(--ob-si-critical);
+}
+
+.ob-shop__pay-err-text {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+
+.ob-shop__pay-err-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+}
+
+.ob-shop__pay-gw {
+	font-size: 14px;
+	font-weight: 650;
+	line-height: 1.35;
+	color: var(--ob-si-text);
+}
+
+/* The technical code, as the gateway sends it (never its message text). */
+.ob-shop__pay-code {
+	padding: 1px 6px;
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-sm);
+	background: var(--ob-si-surface-sunken);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	font-size: 12px;
+	line-height: 18px;
+	overflow-wrap: anywhere;
+	color: var(--ob-si-text);
+}
+
+.ob-shop__pay-type {
+	font-size: 12px;
+	color: var(--ob-si-text-faint);
+}
+
+.ob-shop__pay-share {
+	margin-left: 6px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--ob-si-better);
+}
+
+.ob-shop__pay-unknown {
+	color: var(--ob-si-text-faint);
+}
+
+.ob-shop__table th.ob-shop__pay-th-rec,
+.ob-shop__table td.ob-shop__pay-rec-cell {
+	text-align: right;
+}
+
+.ob-shop__pay-rec {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 32px;
+	padding: 0 12px;
+	border: 1px solid var(--ob-si-accent-border);
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-accent-soft);
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+	text-decoration: none;
+	color: var(--ob-si-accent-strong);
+	transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.ob-shop__pay-rec:hover {
+	border-color: var(--ob-si-accent);
+	background: #e0e7ff;
+	color: var(--ob-si-accent-strong);
+}
+
+.ob-shop__pay-rec svg {
+	flex: 0 0 auto;
+}
+
+.ob-shop__pay .ob-shop__table tr[hidden] {
+	display: none;
+}
+
+.ob-shop__pay-foot {
+	display: flex;
+	justify-content: center;
+	padding: 6px 20px;
+	border-top: 1px solid var(--ob-si-border);
+	background: var(--ob-si-surface-muted);
+}
+
+.ob-shop .ob-shop__pay-note {
+	margin: 0;
+	padding: 12px 20px 16px;
+}
+
+.ob-shop__pay-more {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 36px;
+	padding: 0 12px;
+	border: 0;
+	border-radius: var(--ob-si-radius-sm);
+	background: none;
+	font: inherit;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--ob-si-accent-strong);
+	cursor: pointer;
+}
+
+.ob-shop__pay-more:hover {
+	background: var(--ob-si-accent-soft);
+}
+
+.ob-shop__pay-more svg {
+	transition: transform 0.15s ease;
+}
+
+.ob-shop__pay-more[aria-expanded="true"] svg {
+	transform: rotate(180deg);
+}
+
+.ob-shop__pay-rec:focus-visible,
+.ob-shop__pay-more:focus-visible {
+	outline: 2px solid #6366f1;
+	outline-offset: 2px;
+}
+
+.ob-shop__pay-ok {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 14px;
+	border: 1px solid var(--ob-si-better-border);
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-better-soft);
+	font-size: 14px;
+	line-height: 1.45;
+	color: var(--ob-si-better);
+}
+
+.ob-shop .ob-shop__pay-ok {
+	margin: 0 20px 16px;
+}
+
+.ob-shop__pay-ok svg {
+	flex: 0 0 auto;
+}
+
+.ob-shop__pay-ok strong {
+	font-weight: 700;
+}
+
+.ob-shop__pay-title-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 10px;
+}
+
+/* Tablet: Pro tiles wrap (range tile on its own row). */
+@media screen and (max-width: 1180px) {
+	.ob-shop__tiles.has-pro {
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
+
+	.ob-shop__tiles.has-pro .ob-shop__tile.is-pro {
+		grid-column: 1 / -1;
+	}
+}
+
+/* Phone (WordPress admin breakpoint): tiles 3 a row, one card per row. */
+@media screen and (max-width: 782px) {
+	.ob-shop__tiles,
+	.ob-shop__tiles.has-pro {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 8px;
+	}
+
+	.ob-shop__tile:not(.is-lead):not(.is-pro) {
+		padding: 10px;
+	}
+
+	.ob-shop__tile:not(.is-lead):not(.is-pro) .ob-shop__tile-label {
+		font-size: 10px;
+		letter-spacing: 0.04em;
+	}
+
+	.ob-shop__tile:not(.is-lead):not(.is-pro) .ob-shop__tile-value {
+		font-size: 18px;
+	}
+
+	.ob-shop__tile.is-lead,
+	.ob-shop__tiles.has-pro .ob-shop__tile.is-pro {
+		grid-column: 1 / -1;
+	}
+
+	.ob-shop__tile {
+		padding: 12px 14px;
+	}
+
+	.ob-shop__tile-value {
+		font-size: 20px;
+	}
+
+	.ob-shop__panel-head {
+		padding: 14px 14px 10px;
+	}
+
+	.ob-shop__table,
+	.ob-shop__table tbody,
+	.ob-shop__table tr,
+	.ob-shop__table td {
+		display: block;
+		width: auto;
+	}
+
+	.ob-shop__scroll {
+		overflow-x: visible;
+	}
+
+	.ob-shop__table th:first-child,
+	.ob-shop__table td:first-child {
+		position: static;
+		background: none;
+		box-shadow: none;
+	}
+
+	.ob-shop__table thead {
+		display: block;
+		border-top: 1px solid var(--ob-si-border);
+		border-bottom: 1px solid var(--ob-si-border);
+		background: var(--ob-si-surface-muted);
+	}
+
+	.ob-shop__table thead tr {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 14px;
+		padding: 8px 14px;
+	}
+
+	.ob-shop__table th {
+		padding: 0;
+		border: 0;
+		background: none;
+	}
+
+	.ob-shop__table th:not([data-sortable]) {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+	}
+
+	.ob-shop__table th.ob-shop__th-est {
+		background: none;
+	}
+
+	.ob-shop__table tbody tr {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 10px 8px;
+		padding: 14px;
+		border-top: 1px solid var(--ob-si-border);
+	}
+
+	.ob-shop__table tbody tr:first-child {
+		border-top: 0;
+	}
+
+	.ob-shop__table td {
+		padding: 0;
+		border: 0;
+		text-align: left;
+	}
+
+	.ob-shop__table tbody tr:hover td,
+	.ob-shop__table td.ob-shop__est {
+		background: none;
+	}
+
+	.ob-shop__table td.ob-shop__product-cell {
+		grid-column: 1 / -1;
+	}
+
+	.ob-shop__table td.ob-shop__rate {
+		grid-column: span 2;
+	}
+
+	.ob-shop__product {
+		min-width: 0;
+	}
+
+	.ob-shop__table td[data-label]::before {
+		content: attr(data-label);
+		display: block;
+		margin-bottom: 2px;
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		white-space: normal;
+		color: var(--ob-si-text-muted);
+	}
+
+	.ob-shop__bar {
+		margin-left: 0;
+		width: 100%;
+		max-width: 96px;
+	}
+
+	.ob-shop__table td.ob-shop__est {
+		grid-column: 1 / -1;
+		padding: 8px 10px;
+		border-radius: var(--ob-si-radius-sm);
+		background: var(--ob-si-accent-soft);
+	}
+
+	.ob-shop__pro-band {
+		padding: 12px 14px;
+	}
+
+	.ob-shop__pay-stats {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		margin: 0 14px 14px;
+	}
+
+	.ob-shop__pay-stat {
+		padding: 10px 12px;
+	}
+
+	.ob-shop__pay-stat-value {
+		font-size: 20px;
+	}
+
+	.ob-shop__pay-stat.is-cost {
+		grid-column: 1 / -1;
+		border-left: 0;
+		border-top: 1px solid var(--ob-si-border);
+	}
+
+	.ob-shop__pay-stat .ob-shop__how-body {
+		right: 0;
+		left: 0;
+		width: auto;
+	}
+
+	.ob-shop__pay .ob-shop__table tbody tr {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.ob-shop__pay .ob-shop__table td.ob-shop__est {
+		grid-column: auto;
+		padding: 0;
+		border-radius: 0;
+		background: none;
+		white-space: normal;
+	}
+
+	.ob-shop__pay .ob-shop__table tbody tr[hidden] {
+		display: none;
+	}
+
+	.ob-shop__table td.ob-shop__pay-err-cell,
+	.ob-shop__table td.ob-shop__pay-rec-cell {
+		grid-column: 1 / -1;
+	}
+
+	.ob-shop__pay-err {
+		min-width: 0;
+	}
+
+	.ob-shop__table td.ob-shop__pay-rec-cell {
+		text-align: left;
+	}
+
+	.ob-shop__pay-rec {
+		justify-content: center;
+		width: 100%;
+		min-height: 36px;
+		box-sizing: border-box;
+	}
+
+	.ob-shop .ob-shop__pay-ok {
+		margin: 0 14px 14px;
+	}
+
+	.ob-shop__pay-foot {
+		padding: 6px 14px;
+	}
+
+	.ob-shop .ob-shop__pay-note {
+		padding: 10px 14px 14px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-shop * {
+		transition: none !important;
+	}
+}

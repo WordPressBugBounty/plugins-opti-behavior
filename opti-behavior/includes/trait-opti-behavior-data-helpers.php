@@ -633,22 +633,9 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				'bounce_rate'      => $this->get_bounce_rate( $prev_start, $prev_end, $filters ),
 			);
 
-			$pct = function ( $cur, $prev ) {
-				return $this->get_period_change_pct( $cur, $prev );
-			};
-
-			$changes = array(
-				'visitors'         => $pct( $stats['visitors'], $prev_stats['visitors'] ),
-				'sessions'         => $pct( $stats['sessions'], $prev_stats['sessions'] ),
-				'pageviews'        => $pct( $stats['pageviews'], $prev_stats['pageviews'] ),
-				'avg_session_time' => $pct( $stats['avg_session_time'], $prev_stats['avg_session_time'] ),
-				'avg_scroll_depth' => $pct( $stats['avg_scroll_depth'], $prev_stats['avg_scroll_depth'] ),
-				'bounce_rate'      => $pct( $stats['bounce_rate'], $prev_stats['bounce_rate'] ),
-			);
-
-			foreach ( $changes as $k => $v ) {
-				$changes[ $k ] = $this->round_period_change( $v );
-			}
+			// Counts in %, rates in points, previous period checked (OPT-1624).
+			$changes     = $this->build_period_changes( $stats, $prev_stats, $prev_start, $prev_end );
+			$change_meta = $this->get_period_change_meta( $prev_start, $prev_end );
 
 			$user_intent = method_exists( $this, 'get_user_intent_data' ) ? $this->get_user_intent_data( $start_date, $end_date ) : array();
 
@@ -680,6 +667,8 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				'period'                 => $period,
 				'date_range'             => $date_range,
 				'changes'                => $changes,
+				'change_units'           => $change_meta['units'],
+				'changes_not_comparable' => $change_meta['not_comparable'],
 			);
 		}
 
@@ -736,22 +725,9 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				'bounce_rate'      => $this->get_bounce_rate( $prev_start, $prev_end, $filters ),
 			);
 
-			$pct = function ( $cur, $prev ) {
-				return $this->get_period_change_pct( $cur, $prev );
-			};
-
-			$changes = array(
-				'visitors'         => $pct( $stats['visitors'], $prev_stats['visitors'] ),
-				'sessions'         => $pct( $stats['sessions'], $prev_stats['sessions'] ),
-				'pageviews'        => $pct( $stats['pageviews'], $prev_stats['pageviews'] ),
-				'avg_session_time' => $pct( $stats['avg_session_time'], $prev_stats['avg_session_time'] ),
-				'avg_scroll_depth' => $pct( $stats['avg_scroll_depth'], $prev_stats['avg_scroll_depth'] ),
-				'bounce_rate'      => $pct( $stats['bounce_rate'], $prev_stats['bounce_rate'] ),
-			);
-
-			foreach ( $changes as $k => $v ) {
-				$changes[ $k ] = $this->round_period_change( $v );
-			}
+			// Counts in %, rates in points, previous period checked (OPT-1624).
+			$changes     = $this->build_period_changes( $stats, $prev_stats, $prev_start, $prev_end );
+			$change_meta = $this->get_period_change_meta( $prev_start, $prev_end );
 
 			// Skip slow queries in stats-only mode - they will be loaded via AJAX
 			// Get daily history data for stats cards (fast - uses pre-aggregated data).
@@ -793,6 +769,8 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				'period'     => $period,
 				'date_range' => $date_range,
 				'changes'    => $changes,
+				'change_units'           => $change_meta['units'],
+				'changes_not_comparable' => $change_meta['not_comparable'],
 				'daily_history' => $daily_history,
 				// Empty arrays/structures for widgets - will be loaded async
 				'charts'                 => array(
@@ -888,18 +866,9 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 					'bounce_rate'      => $prev_bounce_rate,
 				);
 
-				$pct = function ( $cur, $prev ) {
-					return $this->get_period_change_pct( $cur, $prev );
-				};
-
-				$changes = array(
-					'visitors'         => $this->round_period_change( $pct( $stats['visitors'], $prev_stats['visitors'] ) ),
-					'sessions'         => $this->round_period_change( $pct( $stats['sessions'], $prev_stats['sessions'] ) ),
-					'pageviews'        => $this->round_period_change( $pct( $stats['pageviews'], $prev_stats['pageviews'] ) ),
-					'avg_session_time' => $this->round_period_change( $pct( $stats['avg_session_time'], $prev_stats['avg_session_time'] ) ),
-					'avg_scroll_depth' => $this->round_period_change( $pct( $stats['avg_scroll_depth'], $prev_stats['avg_scroll_depth'] ) ),
-					'bounce_rate'      => $this->round_period_change( $pct( $stats['bounce_rate'], $prev_stats['bounce_rate'] ) ),
-				);
+				// Counts in %, rates in points, previous period checked (OPT-1624).
+				$changes     = $this->build_period_changes( $stats, $prev_stats, $prev_start, $prev_end );
+				$change_meta = $this->get_period_change_meta( $prev_start, $prev_end );
 
 				// Traffic per-day series comes live from the filtered timeseries so the
 				// Traffic Overview chart matches the filtered KPI totals. The remaining
@@ -927,6 +896,8 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				return array(
 					'stats'         => $stats,
 					'changes'       => $changes,
+					'change_units'           => $change_meta['units'],
+					'changes_not_comparable' => $change_meta['not_comparable'],
 					'daily_history' => array(
 						'dates'             => $filtered_daily['dates'],
 						'visitors'          => $filtered_daily['visitors'],
@@ -944,7 +915,7 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			// to stay stale for up to 15 min after new visitor activity.
 			$exclude_spam = $this->is_spam_excluded();
 			$spam_policy  = class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ? Opti_Behavior_Stats_Spam_Filter::cache_key( $exclude_spam ) : ( $exclude_spam ? 'exclude' : 'include' );
-			$cache_key = opti_behavior_dashboard_cache_key( 'opti_behavior_summary_stats_' . md5( 'u590|' . $start_date . $end_date . ( $exclude_spam ? '1' : '0' ) . '|' . $spam_policy ) );
+			$cache_key = opti_behavior_dashboard_cache_key( 'opti_behavior_summary_stats_' . md5( 'u1624|' . $start_date . $end_date . ( $exclude_spam ? '1' : '0' ) . '|' . $spam_policy ) );
 
 			// Honour a force-refresh request (Refresh button) by bypassing the cache.
 			if ( function_exists( 'opti_behavior_is_force_refresh_requested' ) && opti_behavior_is_force_refresh_requested() ) {
@@ -1052,19 +1023,9 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				'bounce_rate'      => $prev_bounce_rate,
 			);
 
-			// Calculate percentage changes
-			$pct = function ( $cur, $prev ) {
-				return $this->get_period_change_pct( $cur, $prev );
-			};
-
-			$changes = array(
-				'visitors'         => $this->round_period_change( $pct( $stats['visitors'], $prev_stats['visitors'] ) ),
-				'sessions'         => $this->round_period_change( $pct( $stats['sessions'], $prev_stats['sessions'] ) ),
-				'pageviews'        => $this->round_period_change( $pct( $stats['pageviews'], $prev_stats['pageviews'] ) ),
-				'avg_session_time' => $this->round_period_change( $pct( $stats['avg_session_time'], $prev_stats['avg_session_time'] ) ),
-				'avg_scroll_depth' => $this->round_period_change( $pct( $stats['avg_scroll_depth'], $prev_stats['avg_scroll_depth'] ) ),
-				'bounce_rate'      => $this->round_period_change( $pct( $stats['bounce_rate'], $prev_stats['bounce_rate'] ) ),
-			);
+			// Counts in %, rates in points, previous period checked (OPT-1624).
+			$changes     = $this->build_period_changes( $stats, $prev_stats, $prev_start, $prev_end );
+			$change_meta = $this->get_period_change_meta( $prev_start, $prev_end );
 
 			// Get daily history data for stat card mini-charts, then override the three
 			// core traffic metrics with the canonical Dashboard traffic series so KPI
@@ -1104,6 +1065,8 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			$result = array(
 				'stats'         => $stats,
 				'changes'       => $changes,
+				'change_units'           => $change_meta['units'],
+				'changes_not_comparable' => $change_meta['not_comparable'],
 				'daily_history' => $daily_history,
 			);
 
@@ -2299,7 +2262,7 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			// safe, large win. Honour the explicit force-refresh contract so the Refresh
 			// button still recomputes fresh values.
 			$exclude_spam = $this->is_spam_excluded();
-			$cache_key    = opti_behavior_dashboard_cache_key( 'opti_behavior_section_summaries_' . md5( 'u590|' . $start_date . '|' . $end_date . '|' . ( $exclude_spam ? '1' : '0' ) ) );
+			$cache_key    = opti_behavior_dashboard_cache_key( 'opti_behavior_section_summaries_' . md5( 'u1633|' . $start_date . '|' . $end_date . '|' . ( $exclude_spam ? '1' : '0' ) ) );
 			$force_live   = function_exists( 'opti_behavior_is_force_refresh_requested' ) && opti_behavior_is_force_refresh_requested();
 			if ( $has_filters ) {
 				// Filtered requests are always live; never read or prime the shared cache.
@@ -2342,8 +2305,10 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				$not_found_sql     .= ' AND COALESCE(pv.title, \'\') NOT LIKE %s';
 				$not_found_params[] = $pattern;
 			}
+			// Own query only when the widget source is missing (OPT-1633).
+			$top_page_rows = array();
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Light dashboard summary aggregate; table name from $wpdb->prefix.
-			$top_page_rows = $wpdb->get_results(
+			$top_page_rows = method_exists( $this, 'get_top_pages_data' ) ? array() : $wpdb->get_results(
 				$wpdb->prepare(
 					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 					"SELECT pv.page_id AS page_id, pv.url AS url, MAX(pv.title) AS title, COUNT(*) AS pageviews, COUNT(DISTINCT pv.session_id) AS sessions
@@ -2360,11 +2325,33 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 			$top_page_label = '';
 			$top_page       = method_exists( $this, 'merge_top_pages_rows' ) ? $this->merge_top_pages_rows( (array) $top_page_rows ) : (array) $top_page_rows;
+			// Top Page = first row of the Top Pages widget (OPT-1633): same rows,
+			// grouping and order (the old own query grouped by the page-view URL and
+			// put a page reloaded often above the home page). "Page not found" rows
+			// are still skipped (OPT-568). The own query above stays the fallback.
+			if ( method_exists( $this, 'get_top_pages_data' ) ) {
+				$widget_rows = (array) $this->get_top_pages_data( $start_date, $end_date, $filters );
+				if ( ! empty( $widget_rows ) ) {
+					$top_page = array_values( array_filter( $widget_rows, array( $this, 'is_found_top_page_row' ) ) );
+				}
+			}
 			if ( ! empty( $top_page ) ) {
+				$all_rows       = $top_page;
 				$top_page       = reset( $top_page );
 				$top_page_label = trim( (string) ( $top_page['title'] ?? '' ) );
-				if ( '' === $top_page_label ) {
+				if ( '' === $top_page_label || 'Untitled' === $top_page_label ) {
 					$top_page_label = $this->shorten_summary_path( (string) ( $top_page['url'] ?? '' ) );
+				} else {
+					// Two rows with the same title: add the short path (OPT-1633).
+					$same_title = 0;
+					foreach ( $all_rows as $other_row ) {
+						if ( trim( (string) ( $other_row['title'] ?? '' ) ) === $top_page_label ) {
+							++$same_title;
+						}
+					}
+					if ( $same_title > 1 ) {
+						$top_page_label .= ' · ' . $this->shorten_summary_path( (string) ( $top_page['url'] ?? '' ) );
+					}
 				}
 			}
 
@@ -2436,68 +2423,36 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			// the period, spam = the stored verdict the "Exclude spam" button uses.
 			// The bot_visits log (hits, not sessions) is no longer mixed in.
 			$bot_label = $this->get_spam_session_share_label( $sessions_tbl, $start_date, $end_date, $filter_join, $filter_sql );
+			// Say where the share goes (OPT-1633): users read "22 %" next to
+			// Visitors as bots counted in Visitors.
+			$bot_tip = '';
+			if ( '' !== $bot_label ) {
+				if ( $exclude_spam ) {
+					/* translators: %s: share of the period's sessions classified as bots / spam, e.g. "22%" */
+					$bot_label = sprintf( __( '%s filtered out', 'opti-behavior' ), $bot_label );
+					$bot_tip   = __( 'Sessions classified as bots / spam over the period. They are not counted in Visitors while Excluding Spam is on.', 'opti-behavior' );
+				} else {
+					/* translators: %s: share of the period's sessions classified as bots / spam, e.g. "22%" */
+					$bot_label = sprintf( __( '%s (included)', 'opti-behavior' ), $bot_label );
+					$bot_tip   = __( 'Sessions classified as bots / spam over the period. They are counted in Visitors while Excluding Spam is off.', 'opti-behavior' );
+				}
+			}
 
-			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-			// Top traffic classification type (indexed on traffic_type).
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Light dashboard summary aggregate; table name from $wpdb->prefix.
-			$top_type = $wpdb->get_row(
-				$wpdb->prepare(
-					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-					"SELECT COALESCE(NULLIF(TRIM(s.traffic_type), ''), 'human') AS t, COUNT(*) AS c
-					FROM " . $sessions_tbl . " s" . $filter_join . "
-					WHERE s.start_time BETWEEN %s AND %s" . $spam_clause . $filter_sql['where'] . "
-					GROUP BY t
-					ORDER BY c DESC
-					LIMIT 1",
-					array_merge( array( $start_date, $end_date ), $filter_sql['params'] )
-				)
-			);
-			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-			$top_type_label = $top_type ? $this->humanize_summary_label( (string) $top_type->t ) : '';
-
+			// "Top Traffic: Human" chip removed (OPT-1630 D20): it said nothing
+			// once spam is excluded; the bot share is the "Bot Traffic" chip.
 			$audience = array(
 				$this->build_section_chip( 'user-plus', __( 'New vs Returning', 'opti-behavior' ), $nvr_label, '' !== $nvr_label ),
-				$this->build_section_chip( 'bot', __( 'Bot Traffic', 'opti-behavior' ), $bot_label, '' !== $bot_label ),
-				$this->build_section_chip( 'shield', __( 'Top Traffic', 'opti-behavior' ), $top_type_label, '' !== $top_type_label ),
+				$this->build_section_chip( 'bot', __( 'Bot Traffic', 'opti-behavior' ), $bot_label, '' !== $bot_label, $bot_tip ),
 			);
 
 			// --- Section 4: Tech & Acquisition ---
-			// Top referrer host (exact max by host; self/empty => Direct).
-			$site_host = function_exists( 'home_url' ) ? (string) wp_parse_url( home_url(), PHP_URL_HOST ) : '';
-			$site_host = preg_replace( '/^www\./i', '', strtolower( $site_host ) );
-			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Light dashboard summary aggregate; table name from $wpdb->prefix.
-			$ref_rows = $wpdb->get_results(
-				$wpdb->prepare(
-					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-					"SELECT
-						CASE
-							WHEN s.referrer IS NULL OR TRIM(s.referrer) = '' THEN 'Direct'
-							ELSE LOWER(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(s.referrer), '://', -1), '/', 1), '?', 1))
-						END AS host,
-						COUNT(*) AS c
-					FROM " . $sessions_tbl . " s" . $filter_join . "
-					WHERE s.start_time BETWEEN %s AND %s" . $spam_clause . $filter_sql['where'] . "
-					GROUP BY host
-					ORDER BY c DESC
-					LIMIT 5",
-					array_merge( array( $start_date, $end_date ), $filter_sql['params'] )
-				)
-			);
-			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
+			// Top referrer = first row of the Referrers widget (OPT-1605): same rows,
+			// same source names ("Google", not google.fr), spam rule, filters and
+			// pre-raw aggregates. No row = chip hidden.
 			$top_referrer = '';
-			foreach ( (array) $ref_rows as $ref_row ) {
-				$host = isset( $ref_row->host ) ? strtolower( trim( (string) $ref_row->host ) ) : '';
-				$host = preg_replace( '/^www\./i', '', $host );
-				if ( '' === $host || 'direct' === $host ) {
-					$top_referrer = __( 'Direct / None', 'opti-behavior' );
-					break;
-				}
-				if ( $site_host && $host === $site_host ) {
-					continue;
-				}
-				$top_referrer = $host;
-				break;
+			$ref_rows     = $this->get_referrers_data( $start_date, $end_date, $filters );
+			if ( ! empty( $ref_rows[0]['referrer'] ) && ! empty( $ref_rows[0]['count'] ) ) {
+				$top_referrer = (string) $ref_rows[0]['referrer'];
 			}
 
 			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
@@ -2611,13 +2566,39 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			return $patterns;
 		}
 
-		private function build_section_chip( $icon, $label, $value, $has_data ) {
-			return array(
+		/**
+		 * Whether a Top Pages widget row is not a "Page not found" page (OPT-568
+		 * rule of the Top Page chip, applied to the widget rows since OPT-1633).
+		 *
+		 * @param array $row Widget row { title, … }.
+		 * @return bool
+		 */
+		private function is_found_top_page_row( $row ) {
+			$title = strtolower( trim( (string) ( is_array( $row ) ? ( $row['title'] ?? '' ) : '' ) ) );
+			if ( '' === $title ) {
+				return true;
+			}
+			foreach ( $this->get_not_found_title_patterns() as $pattern ) {
+				$regex = '/^' . str_replace( '%', '.*', preg_quote( strtolower( str_replace( '\\', '', (string) $pattern ) ), '/' ) ) . '$/s';
+				$regex = str_replace( '\.\*', '.*', $regex );
+				if ( preg_match( $regex, $title ) ) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		private function build_section_chip( $icon, $label, $value, $has_data, $tip = '' ) {
+			$chip = array(
 				'icon'     => (string) $icon,
 				'label'    => (string) $label,
 				'value'    => (string) $value,
 				'has_data' => (bool) $has_data,
 			);
+			if ( '' !== (string) $tip ) {
+				$chip['tip'] = (string) $tip;
+			}
+			return $chip;
 		}
 
 		/**
@@ -4089,6 +4070,119 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			return $cur > 0 ? null : 0.0;
 		}
 		return ( ( $cur - $prev ) / $prev ) * 100;
+	}
+
+	/**
+	 * Metrics that are rates: their change is a gap in points, not a percent
+	 * of a percent (OPT-1624: bounce 29.7 % vs 11.3 % read "+163 %").
+	 *
+	 * @return string[]
+	 */
+	public static function period_change_rate_metrics() {
+		return array( 'avg_scroll_depth', 'bounce_rate', 'conversion_rate' );
+	}
+
+	/**
+	 * Change of one metric between two periods (OPT-1624, the common helper).
+	 *
+	 * Count (visitors, sessions…) = percent, see get_period_change_pct().
+	 * Rate (period_change_rate_metrics()) = gap in points, one decimal
+	 * (29.7 vs 11.3 → 18.4). Null = no base or previous period not comparable.
+	 * No base for a rate = no visit in the previous period ($prev_visits 0);
+	 * a 0 % rate over real visits is a value (0 → 20 = +20 pts). Without
+	 * $prev_visits, a previous rate of 0 with a current one counts as no base.
+	 *
+	 * @param string         $metric      Metric key.
+	 * @param int|float      $cur         Current value.
+	 * @param int|float      $prev        Previous value.
+	 * @param bool           $comparable  False = previous period incomplete.
+	 * @param int|float|null $prev_visits Visits of the previous period (rates).
+	 * @return float|null
+	 */
+	public function get_period_change( $metric, $cur, $prev, $comparable = true, $prev_visits = null ) {
+		if ( ! $comparable ) {
+			return null;
+		}
+		if ( in_array( (string) $metric, self::period_change_rate_metrics(), true ) ) {
+			$cur  = (float) $cur;
+			$prev = (float) $prev;
+			if ( null !== $prev_visits ? (float) $prev_visits <= 0 : ( $prev <= 0 && $cur > 0 ) ) {
+				return null;
+			}
+			return round( $cur - $prev, 1 );
+		}
+		return $this->round_period_change( $this->get_period_change_pct( $cur, $prev ) );
+	}
+
+	/**
+	 * Whether the previous period can be compared (OPT-1624): fewer than 20 %
+	 * of its days with a session = incomplete (plugin installed during it, data
+	 * pruned…), no change shown. Days older than the raw window are covered by
+	 * the daily aggregates: counted as complete. Filter
+	 * `opti_behavior_previous_period_comparable` (bool, $prev_start, $prev_end).
+	 *
+	 * @param string $prev_start Previous period start (Y-m-d H:i:s).
+	 * @param string $prev_end   Previous period end (Y-m-d H:i:s).
+	 * @return bool
+	 */
+	public function is_previous_period_comparable( $prev_start, $prev_end ) {
+		static $memo = array();
+		$key = $prev_start . '|' . $prev_end;
+		if ( isset( $memo[ $key ] ) ) {
+			return $memo[ $key ];
+		}
+		global $wpdb;
+
+		$days       = max( 1, (int) round( ( strtotime( $prev_end ) - strtotime( $prev_start ) + 1 ) / DAY_IN_SECONDS ) );
+		$comparable = true;
+		$pre_raw    = class_exists( 'Opti_Behavior_Dimension_Aggregates' ) ? Opti_Behavior_Dimension_Aggregates::get_pre_raw_segment( $prev_start, $prev_end ) : null;
+		if ( null === $pre_raw ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; indexed range on start_time, memoized per request.
+			$with_data  = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(DISTINCT DATE(start_time)) FROM ' . $wpdb->prefix . 'optibehavior_sessions WHERE start_time BETWEEN %s AND %s', $prev_start, $prev_end ) );
+			$comparable = $with_data <= 0 || $with_data >= 0.2 * $days;
+		}
+		$memo[ $key ] = (bool) apply_filters( 'opti_behavior_previous_period_comparable', $comparable, $prev_start, $prev_end );
+		return $memo[ $key ];
+	}
+
+	/**
+	 * The 6 KPI changes of the Traffic tiles (OPT-1624).
+	 *
+	 * @param array  $stats      Current values.
+	 * @param array  $prev_stats Previous values.
+	 * @param string $prev_start Previous period start.
+	 * @param string $prev_end   Previous period end.
+	 * @return array metric => float|null
+	 */
+	private function build_period_changes( array $stats, array $prev_stats, $prev_start, $prev_end ) {
+		$comparable = $this->is_previous_period_comparable( $prev_start, $prev_end );
+		$changes    = array();
+		// Rates: no base = no session before (a rollup scroll with 0 session is not one).
+		$prev_visits = (int) ( $prev_stats['sessions'] ?? 0 );
+		foreach ( array( 'visitors', 'sessions', 'pageviews', 'avg_session_time', 'avg_scroll_depth', 'bounce_rate' ) as $metric ) {
+			$changes[ $metric ] = $this->get_period_change( $metric, $stats[ $metric ] ?? 0, $prev_stats[ $metric ] ?? 0, $comparable, $prev_visits );
+		}
+		return $changes;
+	}
+
+	/**
+	 * How to read the changes of build_period_changes() (OPT-1624): unit per
+	 * metric ('pts' for rates, '%' else) and whether the previous period was
+	 * not comparable (then every change is null with its own tooltip).
+	 *
+	 * @param string $prev_start Previous period start.
+	 * @param string $prev_end   Previous period end.
+	 * @return array { units, not_comparable }
+	 */
+	private function get_period_change_meta( $prev_start, $prev_end ) {
+		$units = array();
+		foreach ( array( 'visitors', 'sessions', 'pageviews', 'avg_session_time', 'avg_scroll_depth', 'bounce_rate' ) as $metric ) {
+			$units[ $metric ] = in_array( $metric, self::period_change_rate_metrics(), true ) ? 'pts' : '%';
+		}
+		return array(
+			'units'          => $units,
+			'not_comparable' => ! $this->is_previous_period_comparable( $prev_start, $prev_end ),
+		);
 	}
 
 	/**
