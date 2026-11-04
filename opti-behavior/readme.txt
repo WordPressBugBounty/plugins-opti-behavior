@@ -46,7 +46,7 @@ The **How it works** page shows this loop with your own numbers, a first-days ch
 * **Page X-Ray preview** – your three most visited pages of the period, each with a health score and its first problem.
 * **Shop for WooCommerce** – product views, adds to cart, checkouts and paid orders, and the visits each product loses (viewed, not added to cart), worst product first. The shop counters store no order number, customer name, e-mail address or coupon code.
 * **Site report** – print or save as PDF a report of any period from Opti-Behavior > Reports: traffic, the three most costly issues and, when your site has them, shop, clicks, funnels, busiest hours and A/B tests. A "Site report" link in Traffic and Smart Insights opens it for the same period.
-* **Scheduled e-mail reports**, daily, weekly or monthly – visits, page views, time per visit and bounce with their change, the three most costly issues, top sources, devices, most viewed pages and, on WooCommerce sites, the product that loses the most visits.
+* **Scheduled e-mail reports**, daily, weekly or monthly – visits, page views, time per visit and bounce with their change, the three most costly issues, top sources, devices, most viewed pages and, on WooCommerce sites, a Shop block with up to three products that lose the most visits.
 * **Visitor country** from a local database shipped with the plugin (DB-IP Lite): it works right after activation, and the visitor IP address is not sent to a geolocation service.
 * **Bot and spam filtering** – visits from headless browsers and automation tools (detected by their user agent) are refused at collection, and browsers driven by an automation tool (navigator.webdriver) are marked as automated traffic. Setting "Enable automated traffic detection" in Traffic & Behavior settings, on by default.
 * **[Settings & privacy controls](https://optiuser.com/opti-behavior/ob-feature-settings/)** – consent, storage, reports, cleanup, languages and debugging in one place.
@@ -61,7 +61,7 @@ The **How it works** page shows this loop with your own numbers, a first-days ch
 * **[Form analytics](https://optiuser.com/opti-behavior/ob-feature-forms/)** – field-level effort, errors, abandonment, refill behavior and completion time.
 * **[User journeys](https://optiuser.com/opti-behavior/ob-feature-journeys/)** – Sankey-style view of common paths and exits; turn high-value journeys into funnels.
 * **Page X-Ray** – one report per page: health score, a "Where visitors click" table (rage clicks, dead clicks and JS errors per element), where visitors come from and go next, a page audit, "What changed?" against the previous period, "I fixed this" with a 14-day before / after, desktop or mobile view, and an action plan.
-* **Full reports** – full site report (a card for every page, up to 10 page reports in annex) and a one-page Page X-Ray report with the click map of the page, printed or saved as PDF, with your client's name and the sections you choose to hide.
+* **Full reports** – full site report (a card for each of your most visited pages, up to 10 page reports in annex) and a one-page Page X-Ray report with the click map of the page, printed or saved as PDF. On the site report: your client's name and the sections you choose to hide.
 * **Shop** – estimated lost sales per product (an indicative range, from your conversion rate and average order), payment errors by error type and payment method, and shop events (add to cart, checkout, payment failure) in session recordings, recorded only in Full Tracking mode after the visitor's consent.
 * **Advanced A/B testing** – visual edits, targeting, scheduling, WooCommerce tests and revenue attribution.
 * **More Smart Insights signals** – errors, rage and dead clicks, slow pages, broken links and abandoned forms feed Smart Insights and Page X-Ray, with a session recording as proof when one exists.
@@ -70,7 +70,7 @@ The **How it works** page shows this loop with your own numbers, a first-days ch
 
 = 🛡️ Privacy & Performance by Design =
 
-* **Self-hosted data** – visitor behavior data is stored in your WordPress database and files. No third-party analytics cloud: analytics data is not sold or shared with external behavior platforms.
+* **Self-hosted: visitor data stays on your own server.** Visitor behavior data is stored in your WordPress database and files. No third-party analytics cloud: analytics data is not sold or shared with external behavior platforms.
 * **Privacy controls** – cookie-free anonymous tracking by default, IP anonymization, retention settings and uninstall cleanup options. Full Tracking mode uses cookies only after the visitor accepts the consent banner, and the `[opti_behavior_cookie_settings]` shortcode lets visitors change or withdraw their choice at any time.
 * **Hybrid Storage** – high-volume analytics events are stored in files instead of the database. Database size [measured on one production site](https://optiuser.com/blog/wordpress-analytics-plugin-database-size/).
 * **Lightweight tracking** – minified trackers loaded with `defer`. We measured PageSpeed on a test page with the plugin on and off: [see the article](https://optiuser.com/blog/analytics-plugin-slow-down-wordpress/).
@@ -135,6 +135,18 @@ Each click on your tracked pages: where it happened and which element was clicke
 = Does the free plugin record sessions? =
 
 No. The free plugin records clicks, traffic and funnels. Session recordings (session replay), scroll heatmaps and rage-click detection are in Opti-Behavior Pro, a separate plugin.
+
+= Which WooCommerce products lose sales, and where do shoppers drop off? =
+
+Open **Opti-Behavior > Shop** (free, on WooCommerce sites): product views, adds to cart, checkouts and paid orders, and for each product the visits it loses (viewed, not added to cart), worst product first. **Funnels** proposes a ready-made shop funnel built from your own URLs, so you see the step where shoppers leave. The scheduled e-mail report has a Shop block with up to three products that lose the most visits. The shop counters store no order number, customer name, e-mail address or coupon code.
+
+In Pro: estimated lost sales per product (an indicative range), payment errors by error type and payment method, and shop events in session recordings (Full Tracking mode only, after the visitor's consent).
+
+= Can I send a report to my client? =
+
+Yes. **Opti-Behavior > Reports** prints or saves as PDF a site report for any period: traffic, the three most costly issues and, when your site has them, shop, clicks, funnels, busiest hours and A/B tests. Scheduled e-mail reports send the key figures daily, weekly or monthly. A "Made with Opti-Behavior" line at the end of a report is optional and off by default.
+
+In Pro: the full site report (a card for each of your most visited pages, up to 10 page reports in annex) with your client's name and the sections you choose to hide.
 
 = How does Smart Insights decide what to fix first? =
 
