@@ -805,63 +805,64 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                     </div>
 
                     <div class="danger-warning-box">
-                        <p class="danger-warning-text"><strong><i data-lucide="alert-triangle"></i> <?php esc_html_e( 'Warning:', 'opti-behavior' ); ?></strong> <?php esc_html_e( 'Select the data categories you want to delete. All options are selected by default.', 'opti-behavior' ); ?></p>
+                        <p class="danger-warning-text"><strong><i data-lucide="alert-triangle"></i> <?php esc_html_e( 'Warning:', 'opti-behavior' ); ?></strong> <?php esc_html_e( 'Select the data categories you want to delete. Nothing is selected by default.', 'opti-behavior' ); ?></p>
                         <div class="danger-categories-toggle">
-                            <a href="#" id="opti-behavior-toggle-all-categories"><?php esc_html_e( 'Deselect All', 'opti-behavior' ); ?></a>
+                            <a href="#" id="opti-behavior-toggle-all-categories"><?php esc_html_e( 'Select All', 'opti-behavior' ); ?></a>
                             <span id="opti-behavior-danger-total-size" class="danger-total-size" aria-live="polite"></span>
+                            <span id="opti-behavior-danger-selected-size" class="danger-total-size" aria-live="polite"></span>
                         </div>
                         <div class="danger-categories-list">
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="sessions" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="sessions">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Sessions & Pageviews', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Sessions, pageviews, daily stats', 'opti-behavior' ); ?> <span class="danger-category-count">(6 <?php esc_html_e( 'tables', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="sessions"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="visitors" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="visitors">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Visitors', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Unique visitors, bot visits', 'opti-behavior' ); ?> <span class="danger-category-count">(2 <?php esc_html_e( 'tables', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="visitors"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="events" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="events">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Events & Interactions', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Click events, scrolls, movements', 'opti-behavior' ); ?> <span class="danger-category-count">(1 <?php esc_html_e( 'table', 'opti-behavior' ); ?> + <?php esc_html_e( 'files', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="events"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="heatmaps" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="heatmaps">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Heatmap Data', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Heatmap page snapshots', 'opti-behavior' ); ?> <span class="danger-category-count">(1 <?php esc_html_e( 'table', 'opti-behavior' ); ?> + <?php esc_html_e( 'files', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="heatmaps"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="recordings" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="recordings">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Session Recordings', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Replay data and files', 'opti-behavior' ); ?> <span class="danger-category-count">(1 <?php esc_html_e( 'table', 'opti-behavior' ); ?> + <?php esc_html_e( 'files', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="recordings"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="traffic" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="traffic">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Traffic Sources', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Referrers, UTM, outbound clicks', 'opti-behavior' ); ?> <span class="danger-category-count">(2 <?php esc_html_e( 'tables', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="traffic"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="errors" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="errors">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Error Tracking', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'JS errors, broken links, friction, performance', 'opti-behavior' ); ?> <span class="danger-category-count">(5 <?php esc_html_e( 'tables', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="errors"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="smart_insights" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="smart_insights">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Smart Insights', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Stored recommendations, statuses, and scheduler state', 'opti-behavior' ); ?> <span class="danger-category-count">(1 <?php esc_html_e( 'table', 'opti-behavior' ); ?> + <?php esc_html_e( 'state reset', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="smart_insights"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="funnels" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="funnels">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Funnels', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Funnel definitions and tracking', 'opti-behavior' ); ?> <span class="danger-category-count">(2 <?php esc_html_e( 'tables', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="funnels"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="forms" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="forms">
                                 <span class="condition-label"><strong><?php esc_html_e( 'Forms & Reports', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Form interactions, journey groups, report schedules and logs', 'opti-behavior' ); ?> <span class="danger-category-count">(5 <?php esc_html_e( 'tables', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="forms"></span></span>
                             </label>
                             <label class="condition-row danger-category-row">
-                                <input type="checkbox" class="condition-check danger-category-check" data-category="ab_testing" checked>
+                                <input type="checkbox" class="condition-check danger-category-check" data-category="ab_testing">
                                 <span class="condition-label"><strong><?php esc_html_e( 'A/B Testing', 'opti-behavior' ); ?></strong> &mdash; <?php esc_html_e( 'Tests, variants, goals, impressions, conversions, stats', 'opti-behavior' ); ?> <span class="danger-category-count">(7+ <?php esc_html_e( 'tables', 'opti-behavior' ); ?>)</span> <span class="danger-category-size" data-category="ab_testing"></span></span>
                             </label>
                         </div>
                     </div>
 
                     <div class="danger-action-group">
-                        <button type="button" id="opti-behavior-delete-all-btn" class="btn-danger">
+                        <button type="button" id="opti-behavior-delete-all-btn" class="btn-danger" disabled>
                             <span class="btn-icon"><i data-lucide="trash-2"></i></span>
-                            <?php esc_html_e( 'Delete All Analytics Data', 'opti-behavior' ); ?>
+                            <?php esc_html_e( 'Delete Selected Data', 'opti-behavior' ); ?>
                         </button>
                     </div>
 
@@ -2720,7 +2721,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center;"><span style="<?php echo esc_attr( $opti_behavior_pill_no ); ?>"><?php esc_html_e( 'None (local database)', 'opti-behavior' ); ?></span></div>
 
                             <div style="padding:8px 10px; border-bottom:1px solid #eee; background:#fafafa;"><?php esc_html_e( 'Visitor identification', 'opti-behavior' ); ?></div>
-                            <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px;"><?php esc_html_e( 'Daily hash (non-personal)', 'opti-behavior' ); ?></div>
+                            <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px;"><?php esc_html_e( 'Daily hash (pseudonymised)', 'opti-behavior' ); ?></div>
                             <div style="padding:8px 10px; border-bottom:1px solid #eee; border-left:1px solid #ddd; text-align:center; background:#fafafa; font-size:12px;"><?php esc_html_e( 'Persistent cookie', 'opti-behavior' ); ?></div>
 
                             <div style="padding:8px 10px; border-bottom:1px solid #eee;"><?php esc_html_e( 'Waits for visitor consent', 'opti-behavior' ); ?></div>
@@ -4285,6 +4286,17 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                     </p>
                                 <?php endif; ?>
                             </div>
+
+                            <!-- Tracker status line (OPT-2957): same form, same Save button. -->
+                            <div class="debug-field">
+                                <label class="debug-checkbox-label">
+                                    <input type="checkbox" name="opti_behavior_signature" value="1" <?php checked( Opti_Behavior_Signature::is_enabled(), true ); ?>>
+                                    <span class="checkbox-text"><?php esc_html_e( 'Show tracker status in the console', 'opti-behavior' ); ?><?php opti_behavior_tooltip_e( $tooltips['tracker_status']['title'], $tooltips['tracker_status']['content'], $tooltips['tracker_status']['simple'], '', array( 'position' => 'right' ) ); ?></span>
+                                </label>
+                                <p class="debug-field-description">
+                                    <?php esc_html_e( 'Confirms in the browser console that the Opti-Behavior tracker loaded correctly.', 'opti-behavior' ); ?>
+                                </p>
+                            </div>
                         </div>
 
                         <!-- Log File Settings -->
@@ -4418,6 +4430,13 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             // phpcs:enable WordPress.Security.ValidatedSanitizedInput.MissingUnslash
 
             $debug_manager->save_settings($settings);
+
+            // Tracker status line (OPT-2957): saved with the other JavaScript debug
+            // settings, one autoloaded option read by the public pages.
+            // phpcs:disable WordPress.Security.NonceVerification.Missing -- Nonce verified in render_settings_impl() before this call.
+            $signature_enabled = isset( $_POST['opti_behavior_signature'] ) ? '1' : '0';
+            // phpcs:enable WordPress.Security.NonceVerification.Missing
+            update_option( Opti_Behavior_Signature::OPTION, $signature_enabled );
 
             add_action('admin_notices', function() {
                 echo '<div class="notice notice-success opti-behavior-notice is-dismissible"><p>' . esc_html__( 'Debug settings saved successfully!', 'opti-behavior' ) . '</p></div>';
@@ -4904,6 +4923,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                     'spam_min_scrolls_threshold'   => isset( $traffic_settings['spam_min_scrolls_threshold'] ) ? intval( $traffic_settings['spam_min_scrolls_threshold'] ) : 0,
                     'spam_min_clicks_threshold'    => isset( $traffic_settings['spam_min_clicks_threshold'] ) ? intval( $traffic_settings['spam_min_clicks_threshold'] ) : 1,
                     'custom_bot_patterns'          => array(),
+                    'spam_referrer_hosts'          => array(),
                 )
             );
 
@@ -4944,6 +4964,20 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                 }
             }
 
+            // Parse the extra spam domains (one host per line). Same reason as
+            // above for reading $_POST directly: the sanitize pass strips newlines.
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified at the top of this method.
+            if ( isset( $_POST['opti_behavior_traffic']['spam_referrer_hosts'] ) ) {
+                // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce verified at the top of this method.
+                $hosts_text = sanitize_textarea_field( wp_unslash( $_POST['opti_behavior_traffic']['spam_referrer_hosts'] ) );
+                foreach ( preg_split( '/\r\n|\r|\n/', $hosts_text ) as $host_line ) {
+                    $host_line = trim( $host_line );
+                    if ( '' !== $host_line ) {
+                        $settings['spam_referrer_hosts'][] = $host_line;
+                    }
+                }
+            }
+
             // Parse excluded IPs (one rule per line: exact IP, CIDR, or IPv4 wildcard).
             // Read from $_POST directly with sanitize_textarea_field: the map_deep
             // sanitize_text_field pass above strips newlines, which would merge
@@ -4963,6 +4997,9 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             // Save settings
             update_option( 'opti_behavior_traffic_settings', $settings );
             Opti_Behavior_IP_Exclusion::flush_cache();
+            if ( method_exists( 'Opti_Behavior_Stats_Spam_Filter', 'flush_spam_referrer_hosts' ) ) {
+                Opti_Behavior_Stats_Spam_Filter::flush_spam_referrer_hosts();
+            }
 
             // Clear traffic classification cache
             global $wpdb;
@@ -5198,6 +5235,8 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
             $spam_min_clicks = isset( $settings['spam_min_clicks_threshold'] ) ? intval( $settings['spam_min_clicks_threshold'] ) : 1;
             $custom_patterns = isset( $settings['custom_bot_patterns'] ) && is_array( $settings['custom_bot_patterns'] ) ? $settings['custom_bot_patterns'] : array();
             $custom_patterns_text = implode( "\n", $custom_patterns );
+            $spam_referrer_hosts = isset( $settings['spam_referrer_hosts'] ) && is_array( $settings['spam_referrer_hosts'] ) ? $settings['spam_referrer_hosts'] : array();
+            $spam_referrer_hosts_text = implode( "\n", $spam_referrer_hosts );
             $excluded_ips = isset( $settings['excluded_ips'] ) && is_array( $settings['excluded_ips'] ) ? $settings['excluded_ips'] : array();
             $excluded_ips_text = implode( "\n", $excluded_ips );
             $current_visitor_ip = Opti_Behavior_IP_Exclusion::get_client_ip();
@@ -5318,6 +5357,12 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         </div>
                     </div>
                     <p class="description ob-spam-traffic-card__scope"><?php esc_html_e( 'These thresholds apply only to visits without a referring site (direct or unknown). Visits that arrive from another site (search engine, social network, link) are kept, unless they come from a known bot or an automation tool.', 'opti-behavior' ); ?></p>
+
+                    <div class="ob-spam-referrer-hosts">
+                        <label for="ob-spam-referrer-hosts"><?php esc_html_e( 'Extra spam domains', 'opti-behavior' ); ?></label>
+                        <textarea id="ob-spam-referrer-hosts" name="opti_behavior_traffic[spam_referrer_hosts]" rows="4" class="large-text code" placeholder="<?php echo esc_attr( "spam-referrer.example\nfake-traffic.example" ); ?>"><?php echo esc_textarea( $spam_referrer_hosts_text ); ?></textarea>
+                        <p class="description"><?php esc_html_e( 'One domain per line. Visits that arrive from these sites are counted as spam, whatever their duration or clicks. A domain also covers its sub-domains. The plugin already ships with a list of known spam referrers, so you only add what you see on your own site.', 'opti-behavior' ); ?></p>
+                    </div>
 
                     <div class="ob-spam-traffic-card__note">
                         <span class="dashicons dashicons-info-outline" aria-hidden="true"></span>
@@ -5901,8 +5946,9 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                         <div class="stat-label" style="font-size: 12px; color: #71717a; text-transform: uppercase;"><?php esc_html_e( 'Paused', 'opti-behavior' ); ?></div>
                     </div>
                     <div class="stat-card" style="background: #f9fafb; border-radius: 8px; padding: 16px; text-align: center;">
-                        <div class="stat-value" style="font-size: 28px; font-weight: 700; color: #18181b;"><?php echo esc_html( $stats['success_rate'] ); ?>%</div>
-                        <div class="stat-label" style="font-size: 12px; color: #71717a; text-transform: uppercase;"><?php esc_html_e( 'Success Rate', 'opti-behavior' ); ?></div>
+                        <?php // OB-22: accepted by the mail system, not delivered; no send yet = "–". ?>
+                        <div class="stat-value" style="font-size: 28px; font-weight: 700; color: #18181b;"><?php echo esc_html( null === $stats['success_rate'] ? '–' : number_format_i18n( $stats['success_rate'], 1 ) . '%' ); ?></div>
+                        <div class="stat-label" style="font-size: 12px; color: #71717a; text-transform: uppercase;"><?php esc_html_e( 'Accepted for sending', 'opti-behavior' ); ?></div>
                     </div>
                 </div>
 
@@ -6194,6 +6240,16 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                 <?php foreach ( $logs as $log ) :
                                     $status_color = 'success' === $log['status'] ? '#16a34a' : ( 'failed' === $log['status'] ? '#dc2626' : '#d97706' );
                                     $status_bg = 'success' === $log['status'] ? '#f0fdf4' : ( 'failed' === $log['status'] ? '#fef2f2' : '#fef3c7' );
+                                    // OB-22: "success" only means the mail system took the e-mail.
+                                    if ( 'success' === $log['status'] ) {
+                                        $status_text = __( 'Accepted', 'opti-behavior' );
+                                    } elseif ( 'partial' === $log['status'] ) {
+                                        $status_text = __( 'Partly accepted', 'opti-behavior' );
+                                    } elseif ( 'failed' === $log['status'] ) {
+                                        $status_text = __( 'Failed', 'opti-behavior' );
+                                    } else {
+                                        $status_text = (string) $log['status'];
+                                    }
                                 ?>
                                     <tr style="border-top: 1px solid #e4e4e7;">
                                         <td style="padding: 12px; color: #18181b;"><?php echo esc_html( $log['schedule_name'] ?? __( 'Deleted Schedule', 'opti-behavior' ) ); ?></td>
@@ -6202,7 +6258,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                                         </td>
                                         <td style="padding: 12px; text-align: center;">
                                             <span style="display: inline-block; padding: 2px 8px; background: <?php echo esc_attr( $status_bg ); ?>; color: <?php echo esc_attr( $status_color ); ?>; border-radius: 4px; font-size: 11px; font-weight: 500; text-transform: uppercase;">
-                                                <?php echo esc_html( $log['status'] ); ?>
+                                                <?php echo esc_html( $status_text ); ?>
                                             </span>
                                         </td>
                                         <td style="padding: 12px; text-align: right; color: #71717a;">
@@ -6221,6 +6277,9 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             </tbody>
                         </table>
                     </div>
+                    <p class="ob-report-logs-note" style="margin: 8px 0 0; font-size: 12px; color: #71717a;">
+                        <?php esc_html_e( 'Accepted = your site\'s mail system (WordPress mail or SMTP) took the e-mail for the recipients shown. Opti-Behavior cannot see whether it reached the inbox. A failed send is not retried: the next scheduled send tries again.', 'opti-behavior' ); ?>
+                    </p>
                 </div>
                 <?php endif; ?>
             </div>
@@ -7180,7 +7239,7 @@ if ( ! trait_exists( 'opti_behavior_Settings_Views_Trait' ) ) {
                             <?php esc_html_e( 'Frontend Stats Bar', 'opti-behavior' ); ?>
                         </h2>
                         <p class="section-description">
-                            <?php esc_html_e( 'Display a compact analytics bar at the top of every frontend page. Visible only to administrators. Stats load asynchronously — zero impact on page speed.', 'opti-behavior' ); ?>
+                            <?php esc_html_e( 'Display a compact analytics bar at the top of every frontend page. Visible only to administrators. Stats load asynchronously, after the page.', 'opti-behavior' ); ?>
                         </p>
                     </div>
 

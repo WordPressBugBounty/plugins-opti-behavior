@@ -55,6 +55,18 @@ class Opti_Behavior_Broadcast {
 	const DISMISS_META_KEY = 'opti_behavior_dismissed_broadcasts';
 
 	/**
+	 * Non-autoloaded option: recorded sessions a month of the free Pro plan, as
+	 * the API last said it (field `pro_free_monthly_sessions` of the broadcast
+	 * answer, OPT-3054).
+	 *
+	 * DISPLAY ONLY, never enforced: the limit that applies comes from the quota
+	 * answer alone. Written only when the broadcast answer is read (no extra
+	 * HTTP call, nothing before the admin opted in); absent = the offer is
+	 * printed without a figure.
+	 */
+	const SESSIONS_OPTION = 'opti_behavior_pro_free_monthly_sessions';
+
+	/**
 	 * Singleton instance.
 	 *
 	 * @var self|null
@@ -126,6 +138,16 @@ class Opti_Behavior_Broadcast {
 	 * @return string API base URL with trailing slash.
 	 */
 	private function get_api_url() {
+		return self::api_base();
+	}
+
+	/**
+	 * The same base URL, readable by the other callers of the API (OPT-3054:
+	 * the one-click Pro form must hit the same host, local or production).
+	 *
+	 * @return string API base URL with trailing slash.
+	 */
+	public static function api_base() {
 		if ( defined( 'OPTI_BEHAVIOR_ENVIRONMENT' ) && 'local' === OPTI_BEHAVIOR_ENVIRONMENT
 			&& defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 			return 'http://localhost/API/'; // phpcs:ignore PluginCheck.CodeAnalysis.Localhost.Found -- dev-only URL, only active when OPTI_BEHAVIOR_ENVIRONMENT=local and WP_DEBUG are set; never active in production.
@@ -229,6 +251,9 @@ class Opti_Behavior_Broadcast {
 
 		$data = json_decode( $body, true );
 
+		// The same answer carries the sessions figure of the free Pro plan.
+		self::remember_free_sessions( $data );
+
 		if ( ! isset( $data['success'] ) || ! $data['success'] || empty( $data['data']['broadcasts'] ) ) {
 			set_transient( self::CACHE_KEY, array(), self::CACHE_TTL );
 			return array();
@@ -237,6 +262,52 @@ class Opti_Behavior_Broadcast {
 		$broadcasts = $data['data']['broadcasts'];
 		set_transient( self::CACHE_KEY, $broadcasts, self::CACHE_TTL );
 		return $broadcasts;
+	}
+
+	/**
+	 * Keep the sessions figure of the free Pro plan out of a broadcast answer.
+	 *
+	 * @param mixed $data Decoded answer of `get-broadcasts`.
+	 * @return void
+	 */
+	private static function remember_free_sessions( $data ) {
+		$value = ( is_array( $data ) && isset( $data['data']['pro_free_monthly_sessions'] ) )
+			? $data['data']['pro_free_monthly_sessions']
+			: null;
+
+		if ( is_numeric( $value ) && (int) $value > 0 ) {
+			update_option( self::SESSIONS_OPTION, (int) $value, false );
+			return;
+		}
+
+		// The API stopped sending it: never show a figure it no longer states.
+		delete_option( self::SESSIONS_OPTION );
+	}
+
+	/**
+	 * Recorded sessions a month of the free Pro plan, as the API last said it.
+	 *
+	 * Reads the stored answer only: no HTTP call, nothing to fetch at render.
+	 *
+	 * @return int|null Number of sessions, or null when there is no figure to show.
+	 */
+	public static function free_monthly_sessions() {
+		/**
+		 * Filters the sessions figure of the free Pro plan (test seam).
+		 *
+		 * @param int|null $sessions Figure read from the stored answer, or null.
+		 */
+		$filtered = apply_filters( 'opti_behavior_pro_free_monthly_sessions', null );
+		if ( is_numeric( $filtered ) && (int) $filtered > 0 ) {
+			return (int) $filtered;
+		}
+		if ( false === $filtered ) {
+			return null;
+		}
+
+		$stored = get_option( self::SESSIONS_OPTION, 0 );
+
+		return ( is_numeric( $stored ) && (int) $stored > 0 ) ? (int) $stored : null;
 	}
 
 	/**

@@ -68,6 +68,9 @@ if ( ! function_exists( 'opti_behavior_dashboard_widget_cache_registry' ) ) {
 			'new_vs_returning_visitors' => array( 'opti_behavior_new_returning_' ),
 			'visited_directories'       => array( 'opti_behavior_visited_directories_' ),
 			'bot_traffic'               => array( 'opti_behavior_bot_traffic_' ),
+			// AI row of the Traffic screen (OPT-2825): which AIs read the site,
+			// what they read, why they visit. Read-only, cached 1 h.
+			'ai_bots'                   => array( 'opti_behavior_ai_bots_' ),
 			// Teaser chips above the Heatmaps / Funnels / A-B sections. Written
 			// with the same 30 s TTL by get_section_summaries()
 			// (trait-opti-behavior-data-helpers.php), so they have to be swept

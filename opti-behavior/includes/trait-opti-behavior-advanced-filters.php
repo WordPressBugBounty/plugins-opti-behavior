@@ -413,10 +413,12 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 		 *    would false-positive inside unrelated hosts ("x.com" is inside
 		 *    gmx.com/fedex.com, "t.co" is inside every *t.com domain).
 		 *
-		 * AI assistants (ChatGPT, Perplexity, Claude, Copilot) have their own
-		 * channel, "AI Assistants" (OPT-1122): the third map, tested before
-		 * the search map. Gemini has no referrer of its own: it arrives via
-		 * gemini.google.com and stays under "google." (Organic Search). The
+		 * AI assistants (ChatGPT, Perplexity, Claude, Copilot, Gemini, Mistral,
+		 * DeepSeek, Grok, Meta AI, You.com) have their own channel, "AI
+		 * Assistants" (OPT-1122, OPT-2824): the third map, tested before the
+		 * search map — so gemini.google.com is an AI assistant and no longer
+		 * falls under "google." (Organic Search). Google AI Overviews still
+		 * arrive from google.com itself and stay in Organic Search. The
 		 * Referrers widget still names them (ChatGPT, Perplexity…). Same list in
 		 * Heatmap_Ajax::get_traffic_channel_case_sql() (Free + Pro). A visit
 		 * tagged utm_source=chatgpt.com (…) is an AI assistant visit too, with
@@ -434,6 +436,10 @@ trait Opti_Behavior_Advanced_Filters_Trait {
 			'chatgpt.com' => 'ChatGPT', 'chat.openai.com' => 'ChatGPT',
 			'perplexity.ai' => 'Perplexity', 'claude.ai' => 'Claude',
 			'copilot.microsoft.com' => 'Copilot',
+			// OPT-2824. Short hosts use the exact-host "=" syntax.
+			'gemini.google.com' => 'Gemini', 'chat.mistral.ai' => 'Mistral',
+			'chat.deepseek.com' => 'DeepSeek', '=grok.com' => 'Grok',
+			'=meta.ai' => 'Meta AI', '=you.com' => 'You.com',
 		);
 		$social_map = array(
 			'facebook.com' => 'Facebook', '=fb.com' => 'Facebook', '=fb.me' => 'Facebook',

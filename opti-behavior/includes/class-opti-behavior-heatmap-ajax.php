@@ -632,6 +632,13 @@ class Opti_Behavior_Heatmap_Ajax {
 	 * @return array Session IDs (own allow-list + Heatmaps list allow-list).
 	 */
 	private function get_spam_admission_session_ids( $page_ids ) {
+		$admission_key = $this->spam_admission_cache_key( $page_ids );
+		if ( '' !== $admission_key ) {
+			$admission_cached = get_transient( $admission_key );
+			if ( is_array( $admission_cached ) ) {
+				return $admission_cached;
+			}
+		}
 		// OPT-589: the detail's Clicks KPI admits the SAME sessions as its
 		// session pill / device chips (get_admissible_session_meta()): this
 		// class's own allow-list UNION the Heatmaps list allow-list (Free
@@ -650,6 +657,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		// the threshold spam the list drops (OPT-589 QA: detail 120 vs list 90).
 		$session_ids = $this->get_spam_allowed_session_ids( $page_ids, null === $free_dashboard );
 		if ( null !== $free_dashboard ) {
+			$this->prime_free_session_allowlist( $page_ids );
 			foreach ( (array) $page_ids as $bridge_page_id ) {
 				$bridge_lookup = $free_dashboard->get_heatmap_session_allowlist_for_page_bridge( $bridge_page_id );
 				if ( ! empty( $bridge_lookup ) && is_array( $bridge_lookup ) ) {
@@ -657,7 +665,51 @@ class Opti_Behavior_Heatmap_Ajax {
 				}
 			}
 		}
-		return array_values( array_unique( $session_ids ) );
+		$session_ids = array_values( array_unique( $session_ids ) );
+		if ( '' !== $admission_key && count( $session_ids ) <= 20000 ) {
+			set_transient( $admission_key, $session_ids, (int) apply_filters( 'opti_behavior_heatmap_admission_cache_ttl', 10 * MINUTE_IN_SECONDS ) );
+		}
+		return $session_ids;
+	}
+
+	/**
+	 * Make the Free list allow-list of a page group cheap before it is read
+	 * (heatmap detail, 65 s on a site with many page views): only the sessions
+	 * that have a heatmap file of the group are looked up, every reader here
+	 * only ever tests tokens of those files. Older Free: nothing, same result.
+	 *
+	 * @param array $page_ids Canonical page IDs.
+	 * @return void
+	 */
+	private function prime_free_session_allowlist( $page_ids ) {
+		if ( ! class_exists( 'Opti_Behavior_Heatmap_Core' ) ) {
+			return;
+		}
+		$free_core      = Opti_Behavior_Heatmap_Core::get_instance();
+		$free_dashboard = ( $free_core && method_exists( $free_core, 'get_dashboard' ) ) ? $free_core->get_dashboard() : null;
+		if ( $free_dashboard && method_exists( $free_dashboard, 'prime_heatmap_session_allowlist_bridge' ) ) {
+			$free_dashboard->prime_heatmap_session_allowlist_bridge( $page_ids );
+		}
+	}
+
+	/**
+	 * Transient of the admitted sessions of a page group: the heatmap asks for
+	 * it once per batch, the figures and the drawing must read the same list.
+	 * "Refresh" changes the key (generation of the page). '' = no cache.
+	 *
+	 * @param array $page_ids Canonical page IDs.
+	 * @return string Transient name, or '' when the cache is off.
+	 */
+	private function spam_admission_cache_key( $page_ids ) {
+		$ttl = (int) apply_filters( 'opti_behavior_heatmap_admission_cache_ttl', 'cli' === PHP_SAPI ? 0 : 10 * MINUTE_IN_SECONDS );
+		if ( $ttl <= 0 ) {
+			return '';
+		}
+		$parts = array( get_option( 'opti_behavior_traffic_settings', array() ) );
+		foreach ( array_values( array_unique( array_map( 'absint', (array) $page_ids ) ) ) as $id ) {
+			$parts[] = array( $id, get_transient( 'opti_heatmap_gen_' . $id ) );
+		}
+		return 'opti_behavior_hm_admit_' . md5( wp_json_encode( $parts ) );
 	}
 
 	/**
@@ -1035,6 +1087,7 @@ class Opti_Behavior_Heatmap_Ajax {
 				$free_core      = Opti_Behavior_Heatmap_Core::get_instance();
 				$free_dashboard = ( $free_core && method_exists( $free_core, 'get_dashboard' ) ) ? $free_core->get_dashboard() : null;
 				if ( $free_dashboard && method_exists( $free_dashboard, 'get_heatmap_session_allowlist_for_page_bridge' ) ) {
+					$this->prime_free_session_allowlist( $page_ids );
 					foreach ( $page_ids as $bridge_page_id ) {
 						$bridge_lookup = $free_dashboard->get_heatmap_session_allowlist_for_page_bridge( $bridge_page_id );
 						if ( ! empty( $bridge_lookup ) && is_array( $bridge_lookup ) ) {
@@ -3153,7 +3206,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		}
 
 		if ( ! empty( $filters['exclude_spam'] ) ) {
-			$spam_session_ids = $this->get_spam_allowed_session_ids( $page_ids );
+			$spam_session_ids = $this->get_spam_admission_session_ids( $page_ids );
 
 			// Orphan-aware admission (RC-C, spec §3.2): file sessions with NO
 			// DB trace at all can't be evidenced as spam by the allow-list
@@ -3365,7 +3418,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		}
 
 		if ( ! empty( $filters['exclude_spam'] ) ) {
-			$spam_session_ids = $this->get_spam_allowed_session_ids( $page_ids );
+			$spam_session_ids = $this->get_spam_admission_session_ids( $page_ids );
 
 			// Orphan-aware admission (RC-C, spec §3.2): file sessions with NO
 			// DB trace at all can't be evidenced as spam — admit them too, so
@@ -3715,7 +3768,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		// option counts must match. Resolve the same allow-list the data path
 		// uses and let the scan drop files whose session suffix is not in it.
 		if ( $this->resolve_spam_exclusion_from_request( $_POST ) ) {
-			$spam_session_ids = $this->get_spam_allowed_session_ids( $page_ids );
+			$spam_session_ids = $this->get_spam_admission_session_ids( $page_ids );
 
 			// Orphan-aware admission (RC-C, spec §3.2): file sessions with no
 			// DB trace at all can't be evidenced as spam — admit them too, so
@@ -4221,9 +4274,10 @@ class Opti_Behavior_Heatmap_Ajax {
 			'ecosia.org', 'startpage.com', 'qwant.com', 'search.brave.com', 'kagi.com',
 			'seznam.cz', 'sogou.com',
 		);
-		// AI assistants = their own channel (OPT-1122), same list as get_traffic_channel_domain_maps().
+		// AI assistants = their own channel (OPT-1122, OPT-2824), same list as get_traffic_channel_domain_maps().
 		$ai_needles = array(
 			'chatgpt.com', 'chat.openai.com', 'perplexity.ai', 'claude.ai', 'copilot.microsoft.com',
+			'gemini.google.com', 'chat.mistral.ai', 'chat.deepseek.com', '=grok.com', '=meta.ai', '=you.com',
 		);
 		$social_needles = array(
 			'facebook.com', '=fb.com', '=fb.me', 'instagram.com',
@@ -4617,6 +4671,8 @@ class Opti_Behavior_Heatmap_Ajax {
 		$total_moves       = 0;
 		$total_scrolls     = 0;
 		$scroll_sessions   = 0; // sessions that have scroll data (for engagement)
+		$click_session_ids = array(); // sessions with at least one click (OPT-1960)
+		$move_session_ids  = array(); // sessions with at least one move (OPT-1960)
 
 		// Single pass through all event type folders
 		$type_folders = array( 'clicks', 'moves', 'scrolls' );
@@ -4781,9 +4837,16 @@ class Opti_Behavior_Heatmap_Ajax {
 						} else {
 							$total_clicks += $deduped_clicks;
 						}
+						// Sessions with at least one click (engagement rate, OPT-1960).
+						if ( $session && ( null === $deduped_clicks ? $count : $deduped_clicks ) > 0 ) {
+							$click_session_ids[ $session ] = true;
+						}
 						break;
 					case 'moves':
 						$total_moves += $count;
+						if ( $session && $count > 0 ) {
+							$move_session_ids[ $session ] = true;
+						}
 						break;
 					case 'scrolls':
 						$total_scrolls += $count;
@@ -4833,14 +4896,16 @@ class Opti_Behavior_Heatmap_Ajax {
 		$total_time = ! empty( $session_durations ) ? array_sum( $session_durations ) : 0;
 		$avg_time   = $total_views > 0 ? round( $total_time / $total_views ) : 0;
 
-		// Calculate engagement rate based on heatmap type
+		// Engagement rate = share of sessions with at least one event of the
+		// heatmap type (OPT-1960: an event count over sessions is not a share).
 		if ( $type === 'scroll' ) {
-			$engagement_rate = $total_sessions_all > 0 ? min( 100, round( ( $scroll_sessions / $total_sessions_all ) * 100, 1 ) ) : 0;
+			$engaged_sessions = $scroll_sessions;
 		} elseif ( $type === 'move' ) {
-			$engagement_rate = $total_sessions_all > 0 ? min( 100, round( ( $total_moves / $total_sessions_all ) * 100, 1 ) ) : 0;
+			$engaged_sessions = count( $move_session_ids );
 		} else {
-			$engagement_rate = $total_sessions_all > 0 ? min( 100, round( ( $total_clicks / $total_sessions_all ) * 100, 1 ) ) : 0;
+			$engaged_sessions = count( $click_session_ids );
 		}
+		$engagement_rate = $total_sessions_all > 0 ? round( ( $engaged_sessions / $total_sessions_all ) * 100, 1 ) : 0;
 
 		$result = array(
 			'total_views'     => $total_views,
@@ -5380,9 +5445,10 @@ class Opti_Behavior_Heatmap_Ajax {
 		// the page's Period selector scopes it (device / other-dimension filters do
 		// NOT re-scope — same rule as the chips & Visitor Type). The legacy
 		// session_pages + orphan-file union below stays ONLY as a fallback for
-		// installs whose Free build predates the bridge. UTM dimensions have no
-		// bridge yet, so they keep the legacy path.
-		if ( in_array( $dimension, array( 'country', 'browser', 'os' ), true ) ) {
+		// installs whose Free build predates the bridge. UTM dimensions use the
+		// bridge too (OPT-2297): session_pages is empty for most heatmap pages,
+		// so Campaign / Source / Medium listed nothing.
+		if ( in_array( $dimension, array( 'country', 'browser', 'os', 'utm_campaign', 'utm_source', 'utm_medium' ), true ) ) {
 			$cd_period = in_array( $date_range, array( 'all', 'today', 'last7days', 'last30days', 'custom' ), true ) ? $date_range : 'all';
 			$cd_start  = isset( $filters['start_date'] ) ? (string) $filters['start_date'] : '';
 			$cd_end    = isset( $filters['end_date'] ) ? (string) $filters['end_date'] : '';
@@ -5917,6 +5983,10 @@ class Opti_Behavior_Heatmap_Ajax {
 			) hm_click_events ON hm_click_events.session_id = sp.session_id AND hm_click_events.page_id = sp.page_id";
 			$real_click_sum_sql = 'COALESCE(SUM(COALESCE(hm_click_events.click_count, 0)), 0)';
 		}
+		// Sessions with at least one click, same GREATEST(counter, events) rule (OPT-1960).
+		$session_clicked_sql = '' !== $click_events_join
+			? 'GREATEST(COALESCE(sp.clicks_count, 0), COALESCE(hm_click_events.click_count, 0)) > 0'
+			: 'COALESCE(sp.clicks_count, 0) > 0';
 
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- Table/column identifiers from $wpdb->prefix; values bound via $scope['params'] placeholders.
 		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
@@ -5928,6 +5998,7 @@ class Opti_Behavior_Heatmap_Ajax {
 						COALESCE(SUM(COALESCE(sp.clicks_count, 0)), 0),
 						{$real_click_sum_sql}
 					) AS total_clicks,
+					COUNT(DISTINCT CASE WHEN {$session_clicked_sql} THEN sp.session_id END) AS click_sessions,
 					COALESCE(SUM(COALESCE(sp.events_count, 0)), 0) AS total_events,
 					COUNT(DISTINCT CASE WHEN COALESCE(sp.scroll_depth, 0) > 0 THEN sp.session_id END) AS total_scrolls,
 					COALESCE(AVG(NULLIF({$duration_sql}, 0)), 0) AS avg_time,
@@ -5952,6 +6023,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$total_views  = isset( $row['total_views'] ) ? absint( $row['total_views'] ) : 0;
 		$total_clicks = isset( $row['total_clicks'] ) ? absint( $row['total_clicks'] ) : 0;
 		$total_events = isset( $row['total_events'] ) ? absint( $row['total_events'] ) : 0;
+		$click_sessions = isset( $row['click_sessions'] ) ? absint( $row['click_sessions'] ) : 0;
 
 		return array(
 			'total_views'     => $total_views,
@@ -5959,7 +6031,7 @@ class Opti_Behavior_Heatmap_Ajax {
 			'total_moves'     => $total_events,
 			'total_scrolls'   => isset( $row['total_scrolls'] ) ? absint( $row['total_scrolls'] ) : 0,
 			'avg_time'        => isset( $row['avg_time'] ) ? absint( round( (float) $row['avg_time'] ) ) : 0,
-			'engagement_rate' => $total_views > 0 ? min( 100, round( ( $total_clicks / $total_views ) * 100, 1 ) ) : 0,
+			'engagement_rate' => $total_views > 0 ? round( ( min( $click_sessions, $total_views ) / $total_views ) * 100, 1 ) : 0, // OPT-1960: sessions that clicked.
 			'avg_scroll'      => isset( $row['avg_scroll'] ) ? round( (float) $row['avg_scroll'], 1 ) : 0,
 		);
 	}
@@ -6294,6 +6366,7 @@ class Opti_Behavior_Heatmap_Ajax {
 				$free_core = Opti_Behavior_Heatmap_Core::get_instance();
 				$free_dashboard = ( $free_core && method_exists( $free_core, 'get_dashboard' ) ) ? $free_core->get_dashboard() : null;
 				if ( $free_dashboard && method_exists( $free_dashboard, 'get_heatmap_session_allowlist_for_page_bridge' ) ) {
+					$this->prime_free_session_allowlist( $page_ids );
 					foreach ( $page_ids as $bridge_page_id ) {
 						$bridge_lookup = $free_dashboard->get_heatmap_session_allowlist_for_page_bridge( $bridge_page_id );
 						if ( ! empty( $bridge_lookup ) && is_array( $bridge_lookup ) ) {
@@ -6896,7 +6969,7 @@ class Opti_Behavior_Heatmap_Ajax {
 		$group_url_hashes = array_values( array_unique( $group_url_hashes ) );
 
 		if ( ! empty( $filters['exclude_spam'] ) ) {
-			$spam_session_ids = $this->get_spam_allowed_session_ids( $page_ids );
+			$spam_session_ids = $this->get_spam_admission_session_ids( $page_ids );
 
 			// Orphan-aware admission (RC-C, spec §3.2) — keep this cache-validation
 			// count on the same file universe as the actual variant render.

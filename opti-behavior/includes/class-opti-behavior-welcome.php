@@ -102,11 +102,14 @@ class Opti_Behavior_Welcome {
 	private function __construct() {
 		add_action( 'admin_menu',            array( $this, 'register_welcome_page' ), 5 );
 		add_action( 'admin_init',            array( $this, 'maybe_redirect' ) );
+		// OPT-3109: core kills `admin.php?page=opti-behavior` before admin_init, so this one runs on init.
+		add_action( 'init',                  array( $this, 'maybe_redirect_brand_slug' ), 1 );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_welcome_styles' ) );
 		add_action( 'admin_post_opti_behavior_accept_consent', array( $this, 'handle_accept' ) );
 		add_action( 'admin_post_opti_behavior_decline_consent', array( $this, 'handle_decline' ) );
 		add_action( 'admin_post_opti_behavior_share_status', array( $this, 'handle_share_status_setting' ) );
 		add_action( 'admin_post_opti_behavior_welcome_skip_trial', array( $this, 'handle_skip_trial' ) );
+		add_action( 'admin_post_opti_behavior_welcome_continue', array( $this, 'handle_continue' ) );
 		add_action( 'admin_notices',         array( $this, 'render_trial_failed_notice' ) );
 		add_action( 'admin_notices',         array( $this, 'render_consent_update_notice' ) );
 		// Fix PHP 8.2 deprecation: pages registered with parent_slug=null are hidden pages that
@@ -224,6 +227,34 @@ class Opti_Behavior_Welcome {
 	}
 
 	/**
+	 * True when Pro runs with a VALID licence or trial (gate bucket "pro").
+	 *
+	 * Narrower than `is_pro_licensed()` on purpose: that one also answers true
+	 * for a Pro plugin merely active (licence not checked yet), which is right
+	 * for the data-sharing question but would hide the Pro offer of the welcome
+	 * screen from a site whose licence never opened (OPT-3024).
+	 *
+	 * @return bool
+	 */
+	public static function pro_licence_active() {
+		$active = false;
+		if ( class_exists( 'Opti_Behavior_Gate' ) && method_exists( 'Opti_Behavior_Gate', 'pro_active' ) ) {
+			try {
+				$active = (bool) Opti_Behavior_Gate::pro_active();
+			} catch ( \Throwable $e ) {
+				$active = false;
+			}
+		}
+
+		/**
+		 * Filters whether the welcome screen treats this site as a licensed Pro.
+		 *
+		 * @param bool $active Gate bucket "pro" (licence, trial or grace period).
+		 */
+		return (bool) apply_filters( 'opti_behavior_welcome_pro_licence_active', $active );
+	}
+
+	/**
 	 * True once the data-sharing question may be asked: at least CONSENT_PROMPT_DELAY after
 	 * the first activation (default 0 since OPT-697: right away; filter kept for sites that
 	 * want a wait). Sites installed before this rule (no stored time) are past the delay.
@@ -278,6 +309,27 @@ class Opti_Behavior_Welcome {
 	}
 
 	/**
+	 * A successful "Get Pro free" click counts as an answer to this screen
+	 * (OPT-3109, HX 2026-11-08).
+	 *
+	 * Before this, the welcome screen stood in front of every plugin page until
+	 * the admin clicked "Continue with Free": an admin who asked for Pro instead
+	 * was sent back to the welcome screen from Traffic, Heatmaps and the rest.
+	 * The daily status question is NOT answered yes by this: an admin who never
+	 * ticked the box stays on "nothing is sent" (the Settings card and the update
+	 * notice still let them change it). An existing answer is never overwritten.
+	 *
+	 * @return void
+	 */
+	public static function mark_choice_made_by_pro_signup() {
+		if ( self::has_made_choice() ) {
+			return;
+		}
+
+		self::decline_sharing();
+	}
+
+	/**
 	 * Called on plugin activation via register_activation_hook().
 	 * Sets a flag that triggers a redirect to the welcome page.
 	 *
@@ -310,6 +362,35 @@ class Opti_Behavior_Welcome {
 	}
 
 	/**
+	 * `admin.php?page=opti-behavior` is the brand address admins type, but it is
+	 * not a page of this plugin (its menu slug is `opti-behavior-analytics`):
+	 * core resolves the slug and calls wp_die( "Sorry, you are not allowed to
+	 * access this page" ) BEFORE `admin_init`, so this redirect runs on `init`
+	 * (OPT-3109, HX 2026-11-08). It leads where the admin expects: the welcome
+	 * screen while no choice was made, Traffic after.
+	 *
+	 * @return void
+	 */
+	public function maybe_redirect_brand_slug() {
+		if ( ! is_admin() || wp_doing_ajax() || ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only: GET param used for page identification only.
+		$current_page = isset( $_GET['page'] ) ? sanitize_text_field( wp_unslash( $_GET['page'] ) ) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+		if ( 'opti-behavior' !== $current_page ) {
+			return;
+		}
+
+		$target = self::has_made_choice()
+			? 'admin.php?page=opti-behavior-analytics'
+			: 'admin.php?page=' . self::WELCOME_SLUG;
+		wp_safe_redirect( admin_url( $target ) );
+		exit;
+	}
+
+	/**
 	 * On every admin_init, redirect to the welcome page when:
 	 * (a) plugin was just activated and no consent exists, OR
 	 * (b) user navigates to a protected plugin page without consent.
@@ -324,6 +405,23 @@ class Opti_Behavior_Welcome {
 		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only: GET param used for page identification only.
 		$current_page = isset( $_GET['page'] ) ? sanitize_text_field( wp_unslash( $_GET['page'] ) ) : '';
 		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		/*
+		 * OPT-3109 (HX 2026-11-08): `admin.php?page=opti-behavior` is not a page
+		 * of this plugin (the menu slug is `opti-behavior-analytics`), so
+		 * WordPress killed it with "Sorry, you are not allowed to access this
+		 * page" — the brand address everybody types. It now leads where the
+		 * admin expects: the welcome screen while no choice was made, Traffic
+		 * after. admin_init runs before admin.php checks the slug, so nobody
+		 * ever sees that message again.
+		 */
+		if ( 'opti-behavior' === $current_page ) {
+			$target = self::has_made_choice()
+				? 'admin.php?page=opti-behavior-analytics'
+				: 'admin.php?page=' . self::WELCOME_SLUG;
+			wp_safe_redirect( admin_url( $target ) );
+			exit;
+		}
 
 		// Never redirect when already on the welcome page.
 		if ( self::WELCOME_SLUG === $current_page ) {
@@ -401,6 +499,34 @@ class Opti_Behavior_Welcome {
 		update_option( self::OPTION_TRIAL_CHOICE, 'declined' );
 
 		wp_safe_redirect( admin_url( 'admin.php?page=' . self::WELCOME_SLUG . '#ob-consent-form' ) );
+		exit;
+	}
+
+	/**
+	 * "Continue with Free" on the welcome screen (OPT-2990): the single way into the
+	 * plugin from this screen. The daily status checkbox is the only choice posted:
+	 * ticked = sharing accepted, unticked (default) = nothing is ever sent. The Pro
+	 * trial never goes through here (its form posts to optiuser.com).
+	 *
+	 * @return void
+	 */
+	public function handle_continue() {
+		check_admin_referer( 'opti_behavior_welcome_continue' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Insufficient permissions', 'opti-behavior' ) );
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above via check_admin_referer
+		$share = isset( $_POST['ob_share_status'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['ob_share_status'] ) );
+
+		if ( $share ) {
+			self::accept_sharing();
+		} else {
+			self::decline_sharing();
+		}
+
+		wp_safe_redirect( admin_url( 'admin.php?page=opti-behavior-analytics' ) );
 		exit;
 	}
 
@@ -550,6 +676,29 @@ class Opti_Behavior_Welcome {
 	}
 
 	/**
+	 * Print THE one privacy text of the welcome screen (OPT-2990, wording validated by
+	 * the Juriste on OPT-2983). The longer data-sharing text of `render_privacy_text()`
+	 * stays for the update notice and the Settings card only: the welcome screen must
+	 * never show two privacy texts.
+	 *
+	 * @return void
+	 */
+	public static function render_trial_privacy_text() {
+		$policy_link = '<a href="' . esc_url( Opti_Behavior_Trial_Invite::PRIVACY_URL ) . '" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Privacy Policy', 'opti-behavior' ) . '</a>';
+		?>
+		<p class="ob-welcome-privacy-text">
+			<?php
+			printf(
+				/* translators: %s: Privacy Policy hyperlink */
+				esc_html__( 'When you click the button, your email and site address are sent to optiuser.com to create your trial licence. Nothing is sent before. Your visitors\' data stays on your server. %s', 'opti-behavior' ),
+				$policy_link // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built above from esc_html__ + a constant URL.
+			);
+			?>
+		</p>
+		<?php
+	}
+
+	/**
 	 * Print the "Continue without sharing" form.
 	 *
 	 * @param bool $from_notice True when printed inside the update notice.
@@ -563,7 +712,7 @@ class Opti_Behavior_Welcome {
 			<?php if ( $from_notice ) : ?>
 				<input type="hidden" name="ob_from_notice" value="1" />
 			<?php endif; ?>
-			<button type="submit" class="<?php echo esc_attr( $from_notice ? 'button' : 'ob-consent-decline' ); ?>" id="<?php echo esc_attr( $from_notice ? 'ob-consent-notice-decline' : 'ob-consent-decline' ); ?>">
+			<button type="submit" class="<?php echo esc_attr( $from_notice ? 'button ob-consent-v2-btn' : 'ob-consent-decline' ); ?>" id="<?php echo esc_attr( $from_notice ? 'ob-consent-notice-decline' : 'ob-consent-decline' ); ?>">
 				<?php esc_html_e( 'Continue without sharing', 'opti-behavior' ); ?>
 			</button>
 		</form>
@@ -599,18 +748,32 @@ class Opti_Behavior_Welcome {
 		// "inline": WordPress common.js would otherwise move it into our page header (clipped).
 		?>
 		<?php // No "update" / "welcome" / "cookie" in class names: assets/css/admin-notices.css hides such divs. ?>
-		<div id="opti-behavior-consent-update-notice" class="notice notice-info inline opti-behavior-notice ob-consent-v2-notice" style="margin:12px 20px 12px 0;">
-			<p><strong><?php esc_html_e( 'Opti-Behavior: please review what the plugin shares with us', 'opti-behavior' ); ?></strong></p>
+		<?php // The two answers share one style (refusing must be as easy as accepting, OPT-453). ?>
+		<style>
+			.ob-consent-v2-notice{margin:12px 20px 12px 0;padding:4px 16px 4px 14px;border-left-color:#4F46E5}
+			.ob-consent-v2-title{margin:10px 0 4px;font-size:14px;line-height:1.4;color:#111827}
+			.ob-consent-v2-text{max-width:760px;color:#374151}
+			.ob-consent-v2-text p{margin:6px 0;line-height:1.55}
+			.ob-consent-v2-text .ob-consent-data-list{list-style:disc;margin:0 0 8px 20px}
+			.ob-consent-v2-text .ob-consent-data-list li{margin:2px 0;line-height:1.5}
+			.ob-consent-v2-actions{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0 12px}
+			.ob-consent-v2-actions form{margin:0}
+			.ob-consent-v2-notice .button.ob-consent-v2-btn{min-height:36px;padding:4px 18px;border:2px solid #4F46E5;border-radius:6px;background:#fff;color:#3730A3;font-weight:600;line-height:1.6;box-shadow:none}
+			.ob-consent-v2-notice .button.ob-consent-v2-btn:hover{background:#EEF2FF;border-color:#4338CA;color:#312E81}
+			.ob-consent-v2-notice .button.ob-consent-v2-btn:focus-visible{outline:2px solid #312E81;outline-offset:2px;box-shadow:none}
+			@media (max-width:600px){.ob-consent-v2-actions form{flex:1 1 100%}.ob-consent-v2-notice .button.ob-consent-v2-btn{width:100%;min-height:44px}}
+		</style>
+		<div id="opti-behavior-consent-update-notice" class="notice notice-info inline opti-behavior-notice ob-consent-v2-notice">
+			<p class="ob-consent-v2-title"><strong><?php esc_html_e( 'Opti-Behavior: please review what the plugin shares with us', 'opti-behavior' ); ?></strong></p>
 			<div class="ob-consent-v2-text">
-				<style>.ob-consent-v2-text .ob-consent-data-list{list-style:disc;margin:0 0 8px 20px;}</style>
 				<?php self::render_privacy_text(); ?>
 			</div>
-			<div class="ob-consent-v2-actions" style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px;">
+			<div class="ob-consent-v2-actions">
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 					<?php wp_nonce_field( 'opti_behavior_accept_consent' ); ?>
 					<input type="hidden" name="action" value="opti_behavior_accept_consent" />
 					<input type="hidden" name="ob_from_notice" value="1" />
-					<button type="submit" class="button button-primary" id="ob-consent-notice-accept"><?php esc_html_e( 'Accept & Continue', 'opti-behavior' ); ?></button>
+					<button type="submit" class="button ob-consent-v2-btn" id="ob-consent-notice-accept"><?php esc_html_e( 'Accept & Continue', 'opti-behavior' ); ?></button>
 				</form>
 				<?php $this->render_decline_form( true ); ?>
 			</div>
@@ -712,6 +875,33 @@ class Opti_Behavior_Welcome {
 			return;
 		}
 		wp_add_inline_style( 'wp-admin', $this->get_welcome_css() );
+
+		/*
+		 * OPT-3109: the Pro button of this page is the one-click form of
+		 * OPT-3054 (admin-ajax → API → message on the page). Without this
+		 * script the click did nothing visible, so it must load here too.
+		 */
+		$signup_js = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/pro-signup.js';
+		wp_enqueue_script(
+			'opti-behavior-pro-signup',
+			OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/pro-signup.js',
+			array(),
+			OPTI_BEHAVIOR_HEATMAP_VERSION . ( file_exists( $signup_js ) ? '.' . filemtime( $signup_js ) : '' ),
+			true
+		);
+		wp_localize_script(
+			'opti-behavior-pro-signup',
+			'optiBehaviorProSignup',
+			array(
+				'ajaxUrl'     => admin_url( 'admin-ajax.php' ),
+				'fallbackUrl' => class_exists( 'Opti_Behavior_Trial_Signup' ) ? Opti_Behavior_Trial_Signup::fallback_url( 'welcome-fallback' ) : '',
+				'i18n'        => array(
+					'sending'  => __( 'Creating your trial…', 'opti-behavior' ),
+					'failed'   => __( 'Something went wrong. Open the trial page to finish.', 'opti-behavior' ),
+					'openPage' => __( 'Open the trial page', 'opti-behavior' ),
+				),
+			)
+		);
 	}
 
 	/**
@@ -723,11 +913,31 @@ class Opti_Behavior_Welcome {
 		$logo_url          = OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'images/256x256.png';
 		$action_url        = esc_url( admin_url( 'admin-post.php' ) );
 		$trial_already_set = (bool) get_option( self::OPTION_TRIAL_LICENSE_KEY );
-		// Not asked again once declined or started; hidden from admins who cannot install plugins.
-		$show_trial_card   = ! $trial_already_set
-			&& 'declined' !== get_option( self::OPTION_TRIAL_CHOICE, '' )
-			&& current_user_can( 'install_plugins' );
+		/*
+		 * The Pro offer is shown in every state but one: a Pro running with a
+		 * valid licence or trial (OPT-3024). A click on "Continue with Free" no
+		 * longer hides it for good ("declined" is only the answer to the
+		 * data-sharing question), and a site that already has a trial key but
+		 * not the Pro plugin gets the same block with an "Install" button.
+		 * Hidden from admins who cannot install plugins.
+		 */
+		$trial_card_mode = 'trial';
+		if ( ! current_user_can( 'install_plugins' ) || self::pro_licence_active() ) {
+			$trial_card_mode = 'hidden';
+		} elseif ( $trial_already_set && ! defined( 'OPTI_BEHAVIOR_PRO_VERSION' ) ) {
+			$trial_card_mode = 'install';
+		} elseif ( $trial_already_set ) {
+			// Pro installed, no licence yet: its own screens drive the licence, not this one.
+			$trial_card_mode = 'hidden';
+		}
+		$show_trial_card = 'hidden' !== $trial_card_mode;
 		$version          = defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '1.0.0';
+		$home_url         = home_url( '/' );
+		$admin_email      = class_exists( 'Opti_Behavior_Heatmap_Admin_Email_Resolver' )
+			? (string) Opti_Behavior_Heatmap_Admin_Email_Resolver::get_email()
+			: (string) get_option( 'admin_email', '' );
+		// Pro sends the site status itself: no daily-status question then (OPT-693).
+		$show_share_choice = ! self::pro_handles_status();
 		?>
 		<div class="ob-consent-wrap">
 
@@ -740,44 +950,79 @@ class Opti_Behavior_Welcome {
 				<div class="ob-consent-brand-sub"><?php esc_html_e( 'by OptiUser', 'opti-behavior' ); ?></div>
 				<h1><?php esc_html_e( 'Welcome to Opti-Behavior', 'opti-behavior' ); ?></h1>
 				<p class="ob-consent-tagline">
-					<?php esc_html_e( 'See where visitors click, scroll, hesitate, abandon forms, hit errors, and leave funnels — then improve your pages with A/B testing. All visitor behavior data stays on your own WordPress server.', 'opti-behavior' ); ?>
+					<?php esc_html_e( 'See what stops your visitors from buying or contacting you, and what to fix first. Visitor data stays on your own WordPress server.', 'opti-behavior' ); ?>
 				</p>
 			</div>
 
 			<div class="ob-consent-divider"></div>
 
 			<?php if ( $show_trial_card ) : ?>
-			<!-- Pro Trial Card: its own decision, separate from the daily status sharing below (OPT-617).
-			     Since OPT-765 the button is a plain link to the trial page on optiuser.com:
-			     the plugin sends nothing, only the site address travels in the URL. -->
-			<div class="ob-consent-trial-card" id="ob-trial-card">
-				<div class="ob-consent-trial-badge"><?php esc_html_e( '✨ Free Offer', 'opti-behavior' ); ?></div>
-				<h3><?php esc_html_e( 'Start Your Free 6-Month Pro Trial', 'opti-behavior' ); ?></h3>
-				<p>
-					<?php esc_html_e( 'Get full access to Session Recordings, Form Analytics, Error Tracking, User Journey Maps, and Smart Insights — completely free for 6 months. No credit card required.', 'opti-behavior' ); ?>
+			<!-- One decision, one click (OPT-2990 / OPT-3109): the click posts the email
+			     and the site address to admin-ajax, this site asks the API for the trial
+			     key, and the answer is shown on this very page. Nothing is sent before
+			     the click, and the email never travels in the page address (Juriste,
+			     OPT-2983). -->
+			<div class="ob-welcome-trial" id="ob-trial-card">
+				<h2 class="ob-welcome-trial-title"><?php esc_html_e( 'See why your visitors leave — and fix it', 'opti-behavior' ); ?></h2>
+				<ul class="ob-welcome-value">
+					<li><?php esc_html_e( 'Replay real visits, as they happened.', 'opti-behavior' ); ?></li>
+					<li><?php esc_html_e( 'See where visitors give up on your forms.', 'opti-behavior' ); ?></li>
+					<li><?php esc_html_e( 'JavaScript errors and slow pages, as your visitors meet them.', 'opti-behavior' ); ?></li>
+					<li><?php esc_html_e( 'Money lost in cart and checkout (WooCommerce), plus Page X-Ray page by page.', 'opti-behavior' ); ?></li>
+				</ul>
+				<?php // OPT-3109: ONE Pro block (the amber "needs Pro" box is gone). ?>
+				<?php Opti_Behavior_Trial_Invite::render_offer(); ?>
+				<?php if ( 'install' === $trial_card_mode ) : ?>
+				<?php /* Trial key already stored but the Pro plugin is not here: Free never installs Pro (guideline 8), the button opens optiuser.com. */ ?>
+				<p class="ob-welcome-cta-line">
+					<a class="ob-welcome-cta" id="ob-start-trial-btn" href="<?php echo esc_url( Opti_Behavior_Trial_Invite::link_url( 'welcome-install' ) ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Install Opti-Behavior Pro', 'opti-behavior' ); ?></a>
 				</p>
-				<p class="ob-trial-disclosure">
-					<?php
-					printf(
-						/* translators: %s: Privacy Policy hyperlink */
-						esc_html__( 'Opens the Pro trial page on optiuser.com. Only your site address is passed in the link; you choose what to share there. See our %s.', 'opti-behavior' ),
-						'<a href="https://optiuser.com/privacy-policy/" target="_blank" rel="noopener noreferrer">' . esc_html__( 'Privacy Policy', 'opti-behavior' ) . '</a>' // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_html__ + constant URL.
-					);
-					?>
-				</p>
-				<p class="ob-trial-form" id="ob-trial-form">
-					<a href="<?php echo esc_url( Opti_Behavior_Trial_Invite::link_url( 'welcome' ) ); ?>" class="ob-trial-start" id="ob-start-trial-btn" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Start your Pro trial on optiuser.com', 'opti-behavior' ); ?></a>
-				</p>
-				<form method="post" action="<?php echo esc_url( $action_url ); ?>" class="ob-trial-skip-form" id="ob-trial-skip-form">
-					<?php wp_nonce_field( 'opti_behavior_welcome_skip_trial' ); ?>
-					<input type="hidden" name="action" value="opti_behavior_welcome_skip_trial" />
-					<button type="submit" class="ob-trial-skip" id="ob-trial-skip"><?php esc_html_e( 'Continue with Free only', 'opti-behavior' ); ?></button>
-				</form>
-				<p class="ob-consent-trial-note">
-					<?php esc_html_e( 'The Free plugin does not install Pro for you: you choose whether to download and install it. No payment details are asked and nothing is billed automatically: after the trial, Pro features stop unless you buy a licence. You can remove Pro at any time.', 'opti-behavior' ); ?>
-				</p>
+				<p class="ob-welcome-nocard"><?php esc_html_e( 'Your trial licence is already saved on this site. Download Pro, then upload it in Plugins › Add New.', 'opti-behavior' ); ?></p>
+				<?php Opti_Behavior_Trial_Invite::render_trust_strip(); ?>
+				<?php else : ?>
+				<?php
+				/*
+				 * OPT-3109 (HX 2026-11-08): the form used to POST to the trial
+				 * page of optiuser.com in a new tab, where that site's nonce
+				 * rejected it ("The form expired"), with empty fields, and this
+				 * tab never moved. One click now goes to admin-ajax: this site
+				 * calls the API itself and the answer is a message right here,
+				 * the same form as the locked Pro pages (OPT-3054).
+				 */
+				Opti_Behavior_Trial_Signup::render_form( 'welcome', false );
+				Opti_Behavior_Trial_Invite::render_trust_strip();
+				?>
+				<?php endif; ?>
 			</div>
 			<?php endif; ?>
+
+			<!-- The only way into the plugin from this screen: "Continue with Free".
+			     The daily status checkbox is a separate, unticked choice (the trial works
+			     without it); nothing is sent when it stays unticked. -->
+			<form method="post" action="<?php echo esc_url( $action_url ); ?>" class="ob-welcome-continue" id="ob-consent-form">
+				<?php wp_nonce_field( 'opti_behavior_welcome_continue' ); ?>
+				<input type="hidden" name="action" value="opti_behavior_welcome_continue" />
+				<?php if ( $show_share_choice ) : ?>
+					<p class="ob-welcome-share">
+						<label for="ob-share-status">
+							<input type="checkbox" id="ob-share-status" name="ob_share_status" value="1" />
+							<?php esc_html_e( 'Share a daily installation status with OptiUser (plugin, WordPress and PHP versions, site address; never visitor data). You can turn it off in Settings.', 'opti-behavior' ); ?>
+						</label>
+					</p>
+				<?php endif; ?>
+				<p class="ob-welcome-free-line">
+					<?php
+					/*
+					 * ONE pulsing button on this screen, and it is the Pro one
+					 * (OPT-3024): "Continue with Free" is a small text link in
+					 * every state, trial block shown or not. This undoes the
+					 * filled violet button of OPT-3017.
+					 */
+					$free_button_class = 'ob-welcome-free ob-welcome-free--alt';
+					?>
+					<button type="submit" class="<?php echo esc_attr( $free_button_class ); ?>" id="ob-continue-free"><?php esc_html_e( 'Continue with Free', 'opti-behavior' ); ?></button>
+				</p>
+			</form>
 
 			<h2 class="ob-consent-section-title"><?php esc_html_e( "What's Included", 'opti-behavior' ); ?></h2>
 
@@ -788,16 +1033,17 @@ class Opti_Behavior_Welcome {
 					<div class="ob-consent-feature-icon icon-heatmap">
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12c0-3 2.5-6 2.5-6s2.5 3 2.5 6a2.5 2.5 0 1 1-5 0Z"/><path d="M12 2v1"/><path d="M12 21v1"/><path d="m4.6 4.6.7.7"/><path d="m18.7 18.7.7.7"/><path d="M2 12h1"/><path d="M21 12h1"/><path d="m4.6 19.4.7-.7"/><path d="m18.7 5.3.7-.7"/></svg>
 					</div>
-					<h3><?php esc_html_e( 'Visual Heatmaps', 'opti-behavior' ); ?></h3>
-					<p><?php esc_html_e( 'Click heatmaps on every page (scroll, move and attention layers in Pro).', 'opti-behavior' ); ?></p>
+					<h3><?php esc_html_e( 'Heatmaps', 'opti-behavior' ); ?></h3>
+					<p><?php esc_html_e( 'Click heatmaps on every page.', 'opti-behavior' ); ?></p>
+					<p class="ob-welcome-pro-extra"><?php esc_html_e( 'Pro adds scroll, move and attention layers.', 'opti-behavior' ); ?></p>
 				</div>
 
 				<div class="ob-consent-feature">
 					<div class="ob-consent-feature-icon icon-analytics">
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
 					</div>
-					<h3><?php esc_html_e( 'Advanced Analytics', 'opti-behavior' ); ?></h3>
-					<p><?php esc_html_e( 'Real-time dashboards, traffic sources, conversion funnels and visitor behavior reports.', 'opti-behavior' ); ?></p>
+					<h3><?php esc_html_e( 'Real-Time Analytics', 'opti-behavior' ); ?></h3>
+					<p><?php esc_html_e( 'Live visitors, sources, pages.', 'opti-behavior' ); ?></p>
 				</div>
 
 				<div class="ob-consent-feature">
@@ -805,7 +1051,7 @@ class Opti_Behavior_Welcome {
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
 					</div>
 					<h3><?php esc_html_e( 'Session Recordings', 'opti-behavior' ); ?> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></h3>
-					<p><?php esc_html_e( 'Replay full visitor sessions to see precisely how users interact with every page.', 'opti-behavior' ); ?></p>
+					<p><?php esc_html_e( 'Replay real visits, page by page.', 'opti-behavior' ); ?></p>
 				</div>
 
 				<div class="ob-consent-feature">
@@ -813,7 +1059,7 @@ class Opti_Behavior_Welcome {
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
 					</div>
 					<h3><?php esc_html_e( 'Conversion Funnels', 'opti-behavior' ); ?></h3>
-					<p><?php esc_html_e( 'Track multi-step user flows, identify drop-off points and optimize conversion paths.', 'opti-behavior' ); ?></p>
+					<p><?php esc_html_e( 'Unlimited funnels, see where visitors drop.', 'opti-behavior' ); ?></p>
 				</div>
 
 				<div class="ob-consent-feature">
@@ -821,7 +1067,7 @@ class Opti_Behavior_Welcome {
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 8h10"/><path d="M7 12h7"/><path d="M7 16h4"/></svg>
 					</div>
 					<h3><?php esc_html_e( 'Form Analytics', 'opti-behavior' ); ?> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></h3>
-					<p><?php esc_html_e( 'Measure form field interactions, abandonment rates and completion times.', 'opti-behavior' ); ?></p>
+					<p><?php esc_html_e( 'Where visitors give up in your forms.', 'opti-behavior' ); ?></p>
 				</div>
 
 				<div class="ob-consent-feature">
@@ -829,7 +1075,7 @@ class Opti_Behavior_Welcome {
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
 					</div>
 					<h3><?php esc_html_e( 'Errors & Performance', 'opti-behavior' ); ?> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></h3>
-					<p><?php esc_html_e( 'Capture JavaScript errors and performance bottlenecks in real time.', 'opti-behavior' ); ?></p>
+					<p><?php esc_html_e( 'JavaScript errors and slow pages.', 'opti-behavior' ); ?></p>
 				</div>
 
 				<div class="ob-consent-feature">
@@ -837,7 +1083,7 @@ class Opti_Behavior_Welcome {
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="3"/><path d="M5 9v6"/><circle cx="5" cy="18" r="3"/><path d="M12 3h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7"/><path d="M12 13h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7"/></svg>
 					</div>
 					<h3><?php esc_html_e( 'User Journey Analytics', 'opti-behavior' ); ?> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></h3>
-					<p><?php esc_html_e( 'Visualize complete visitor navigation paths from entry to exit across your site.', 'opti-behavior' ); ?></p>
+					<p><?php esc_html_e( 'The paths visitors take across your site.', 'opti-behavior' ); ?></p>
 				</div>
 
 				<div class="ob-consent-feature">
@@ -845,54 +1091,46 @@ class Opti_Behavior_Welcome {
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h5"/><path d="M4 17h5"/><path d="M15 5h5"/><path d="M15 19h5"/><path d="M9 7c4 0 3 10 6 10"/><path d="M9 17c4 0 3-10 6-10"/></svg>
 					</div>
 					<h3><?php esc_html_e( 'A/B Testing', 'opti-behavior' ); ?></h3>
-					<p><?php esc_html_e( 'Run page split and element tests to compare variants and identify winning experiences.', 'opti-behavior' ); ?></p>
+					<p><?php esc_html_e( 'Split and element tests.', 'opti-behavior' ); ?></p>
+					<p class="ob-welcome-pro-extra"><?php esc_html_e( 'Pro adds Bayesian results and targeting.', 'opti-behavior' ); ?></p>
 				</div>
 
 				<div class="ob-consent-feature">
 					<div class="ob-consent-feature-icon icon-privacy-shield">
 						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5c0 4.5 2.9 8.5 7 10 4.1-1.5 7-5.5 7-10V6l-7-3Z"/><path d="m9.5 12 1.8 1.8 3.7-4.1"/></svg>
 					</div>
-					<h3><?php esc_html_e( 'Privacy-first by design', 'opti-behavior' ); ?></h3>
-					<p><?php esc_html_e( 'IP anonymization, configurable consent and full data controls. Visitor data stays on your own server.', 'opti-behavior' ); ?></p>
+					<h3><?php esc_html_e( 'Smart Insights', 'opti-behavior' ); ?></h3>
+					<p><?php esc_html_e( 'The problems found on your site and what to fix.', 'opti-behavior' ); ?></p>
+					<p class="ob-welcome-pro-extra"><?php esc_html_e( 'Pro adds more signals.', 'opti-behavior' ); ?></p>
+				</div>
+
+				<div class="ob-consent-feature">
+					<div class="ob-consent-feature-icon icon-shop">
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h2.5l2.2 11.2a1.5 1.5 0 0 0 1.5 1.2h9.4a1.5 1.5 0 0 0 1.5-1.2L21 7H5.3"/></svg>
+					</div>
+					<h3><?php esc_html_e( 'Shop', 'opti-behavior' ); ?></h3>
+					<p><?php esc_html_e( 'WooCommerce cart and checkout counters.', 'opti-behavior' ); ?></p>
+					<p class="ob-welcome-pro-extra"><?php esc_html_e( 'Pro adds money lost and payment errors.', 'opti-behavior' ); ?></p>
+				</div>
+
+				<div class="ob-consent-feature">
+					<div class="ob-consent-feature-icon icon-reports">
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/><path d="M9 17v-3"/><path d="M12 17v-5"/><path d="M15 17v-2"/></svg>
+					</div>
+					<h3><?php esc_html_e( 'Reports', 'opti-behavior' ); ?></h3>
+					<p><?php esc_html_e( 'Short site report.', 'opti-behavior' ); ?></p>
+					<p class="ob-welcome-pro-extra"><?php esc_html_e( 'Pro adds the full report.', 'opti-behavior' ); ?></p>
+				</div>
+
+				<div class="ob-consent-feature">
+					<div class="ob-consent-feature-icon icon-xray">
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.9-4.9"/><path d="M7.5 10.5h6"/><path d="M10.5 7.5v6"/></svg>
+					</div>
+					<h3><?php esc_html_e( 'Page X-Ray', 'opti-behavior' ); ?> <span class="opti-menu-pro-badge"><?php echo esc_html_x( 'PRO', 'badge', 'opti-behavior' ); ?></span></h3>
+					<p><?php esc_html_e( 'Every problem found on one page, with its score.', 'opti-behavior' ); ?></p>
 				</div>
 
 			</div><!-- /.ob-consent-features -->
-
-			<!-- Privacy & Compliance -->
-			<div class="ob-consent-privacy">
-				<div class="ob-consent-privacy-header">
-					<div class="ob-consent-privacy-badge">
-						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg>
-					</div>
-					<strong><?php esc_html_e( 'Privacy & Data Protection', 'opti-behavior' ); ?></strong>
-				</div>
-				<div class="ob-consent-privacy-body">
-					<?php self::render_privacy_text(); ?>
-				</div>
-				<div class="ob-consent-badges">
-					<span class="ob-consent-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><?php esc_html_e( 'Self-Hosted Data', 'opti-behavior' ); ?></span>
-					<span class="ob-consent-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><?php esc_html_e( 'No Third-Party Sharing', 'opti-behavior' ); ?></span>
-					<span class="ob-consent-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><?php esc_html_e( 'IP Anonymization', 'opti-behavior' ); ?></span>
-				</div>
-			</div>
-
-			<!-- Accept form -->
-			<form method="post" action="<?php echo esc_url( $action_url ); ?>" class="ob-consent-cta-section" id="ob-consent-form">
-				<?php wp_nonce_field( 'opti_behavior_accept_consent' ); ?>
-				<input type="hidden" name="action" value="opti_behavior_accept_consent" />
-				<button type="submit" class="ob-consent-cta">
-					<?php esc_html_e( 'Accept & Continue', 'opti-behavior' ); ?>
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-				</button>
-			</form>
-
-			<!-- Decline form (separate admin-post action: nothing is sent) -->
-			<div class="ob-consent-cta-section ob-consent-decline-section">
-				<?php $this->render_decline_form( false ); ?>
-				<p class="ob-consent-footer-note">
-					<?php esc_html_e( 'You can review and adjust all privacy and tracking settings at any time from the Settings page.', 'opti-behavior' ); ?>
-				</p>
-			</div>
 
 			<!-- Bottom brand -->
 			<div class="ob-consent-bottom-brand">
@@ -919,8 +1157,8 @@ class Opti_Behavior_Welcome {
 	max-width: 880px;
 	margin: 16px auto;
 	padding: 0 20px 36px;
-	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, sans-serif;
-	color: #1a1a2e;
+	font-family: Inter, Arial, sans-serif;
+	color: #111827;
 }
 .ob-consent-accent-bar {
 	height: 4px;
@@ -949,8 +1187,8 @@ class Opti_Behavior_Welcome {
 	margin-inline: auto;
 }
 .ob-consent-brand-sub {
-	font-size: 10px;
-	color: #6366f1;
+	font-size: 11px;
+	color: #4338CA;
 	font-weight: 700;
 	text-transform: uppercase;
 	letter-spacing: 1.8px;
@@ -965,7 +1203,7 @@ class Opti_Behavior_Welcome {
 }
 .ob-consent-tagline {
 	font-size: 13px;
-	color: #64748b;
+	color: #4B5563;
 	margin: 0 auto;
 	max-width: 500px;
 	line-height: 1.6;
@@ -1028,6 +1266,9 @@ class Opti_Behavior_Welcome {
 .ob-consent-feature-icon.icon-selfhosted { background: #ecfdf5; color: #10b981; }
 .ob-consent-feature-icon.icon-abtesting  { background: #eef2ff; color: #4f46e5; }
 .ob-consent-feature-icon.icon-privacy-shield { background: #eff6ff; color: #6366f1; }
+.ob-consent-feature-icon.icon-shop       { background: #fffbeb; color: #d97706; }
+.ob-consent-feature-icon.icon-reports    { background: #f0f9ff; color: #0284c7; }
+.ob-consent-feature-icon.icon-xray       { background: #fdf2f8; color: #db2777; }
 .ob-consent-feature h3 {
 	font-size: 12.5px;
 	font-weight: 600;
@@ -1072,7 +1313,7 @@ class Opti_Behavior_Welcome {
 	line-height: 1.6;
 	margin-bottom: 10px;
 }
-.ob-consent-privacy-body a { color: #6366f1; text-decoration: none; font-weight: 500; }
+.ob-consent-privacy-body a { color: #4338CA; text-decoration: none; font-weight: 500; }
 .ob-consent-privacy-body a:hover { text-decoration: underline; }
 .ob-consent-privacy-body p { margin: 0 0 6px; font-size: 12px; }
 .ob-consent-data-list { margin: 0 0 6px 18px; padding: 0; list-style: disc; }
@@ -1093,17 +1334,17 @@ class Opti_Behavior_Welcome {
 .ob-consent-badge svg { width: 10px; height: 10px; color: #10b981; flex-shrink: 0; }
 /* Trial opt-in card */
 .ob-consent-trial-card {
-	background: linear-gradient(135deg,#fef9c3 0%,#fef3c7 100%);
-	border: 2px solid #fcd34d;
+	background: #EEF2FF;
+	border: 2px solid #C7D2FE;
 	border-radius: 11px;
 	padding: 18px 22px;
 	margin-bottom: 16px;
 }
 .ob-consent-trial-badge {
 	display: inline-block;
-	background: linear-gradient(135deg,#f59e0b,#d97706);
+	background: #4F46E5;
 	color: #fff;
-	font-size: 10px;
+	font-size: 11px;
 	font-weight: 700;
 	letter-spacing: .05em;
 	text-transform: uppercase;
@@ -1112,33 +1353,33 @@ class Opti_Behavior_Welcome {
 	margin-bottom: 8px;
 }
 .ob-consent-trial-card h3 {
-	font-size: 15px;
+	font-size: 17px;
 	font-weight: 700;
-	color: #92400e;
+	color: #111827;
 	margin: 0 0 7px;
 	line-height: 1.3;
 }
 .ob-consent-trial-card > p {
-	font-size: 12.5px;
-	color: #78350f;
+	font-size: 13.5px;
+	color: #374151;
 	margin: 0 0 12px;
 	line-height: 1.55;
 }
 .ob-trial-disclosure {
 	font-size: 13px;
-	color: #451a03;
-	background: rgba(255,255,255,.65);
-	border: 1px solid #fde68a;
+	color: #1f2937;
+	background: #fff;
+	border: 1px solid #C7D2FE;
 	border-radius: 8px;
 	padding: 10px 12px;
 	margin: 0 0 14px;
 	line-height: 1.55;
 }
-.ob-trial-disclosure a { color: #1d4ed8; text-decoration: underline; }
+.ob-trial-disclosure a { color: #4338CA; text-decoration: underline; }
 .ob-trial-form, .ob-trial-skip-form { margin: 0; text-align: center; }
 .ob-trial-start {
 	display: inline-block;
-	background: #b45309;
+	background: #4F46E5;
 	color: #fff;
 	font-size: 15px;
 	font-weight: 700;
@@ -1146,28 +1387,28 @@ class Opti_Behavior_Welcome {
 	border: none;
 	border-radius: 8px;
 	cursor: pointer;
-	box-shadow: 0 2px 12px rgba(180,83,9,.30);
+	box-shadow: 0 2px 12px rgba(79,70,229,.30);
 	line-height: 1.2;
 	transition: background .2s, box-shadow .2s;
 }
-.ob-trial-start:hover { background: #92400e; box-shadow: 0 4px 16px rgba(146,64,14,.38); }
+.ob-trial-start:hover { background: #4338CA; box-shadow: 0 4px 16px rgba(67,56,202,.38); }
 .ob-trial-start, .ob-trial-start:hover, .ob-trial-start:focus, .ob-trial-start:visited { color: #fff; text-decoration: none; }
-.ob-trial-start:focus-visible, .ob-trial-skip:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.ob-trial-start:focus-visible, .ob-trial-skip:focus-visible { outline: 2px solid #312E81; outline-offset: 2px; }
 .ob-trial-skip {
 	background: none;
 	border: none;
 	padding: 8px 6px;
 	margin-top: 4px;
-	color: #78350f;
+	color: #3730A3;
 	font-size: 14px;
 	font-weight: 500;
 	text-decoration: underline;
 	cursor: pointer;
 }
-.ob-trial-skip:hover { color: #451a03; }
+.ob-trial-skip:hover { color: #312E81; }
 .ob-consent-trial-note {
 	font-size: 12px;
-	color: #78350f;
+	color: #4B5563;
 	margin: 8px 0 0;
 	text-align: center;
 	line-height: 1.5;
@@ -1176,50 +1417,43 @@ class Opti_Behavior_Welcome {
 	.ob-consent-trial-card { padding: 16px 14px; }
 	.ob-trial-start { display: block; width: 100%; box-sizing: border-box; padding: 13px 12px; text-align: center; }
 }
-/* CTA form */
-.ob-consent-cta-section { text-align: center; padding: 4px 0 0; }
-.ob-consent-cta {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	background: linear-gradient(135deg,#6366f1,#7c3aed);
-	color: #fff !important;
-	font-size: 14px;
-	font-weight: 600;
-	padding: 12px 32px;
-	border: none;
-	border-radius: 8px;
-	cursor: pointer;
-	transition: background .2s, box-shadow .2s, transform .15s;
-	box-shadow: 0 2px 12px rgba(99,102,241,.30);
-	text-decoration: none !important;
-	line-height: 1;
-	letter-spacing: .2px;
+/* The two answers: same size, same style, side by side (OPT-2575) */
+.ob-consent-choices {
+	display: flex;
+	justify-content: center;
+	gap: 12px;
+	max-width: 520px;
+	margin: 4px auto 0;
 }
-.ob-consent-cta:hover {
-	background: linear-gradient(135deg,#4f46e5,#6d28d9);
-	box-shadow: 0 4px 18px rgba(99,102,241,.42);
-	transform: translateY(-1px);
-}
-.ob-consent-cta:active { transform: translateY(0); }
-.ob-consent-cta svg { width: 15px; height: 15px; flex-shrink: 0; }
-.ob-consent-decline-section { padding-top: 10px; }
+.ob-consent-cta-section { flex: 1 1 0; margin: 0; padding: 0; text-align: center; }
 .ob-consent-decline-form { margin: 0; }
+.ob-consent-cta,
 .ob-consent-decline {
-	background: transparent;
-	border: 1px solid #cbd5e1;
+	display: block;
+	width: 100%;
+	min-height: 46px;
+	box-sizing: border-box;
+	background: #fff;
+	border: 2px solid #4F46E5;
 	border-radius: 8px;
-	color: #475569;
-	font-size: 13px;
-	font-weight: 500;
-	padding: 9px 24px;
+	color: #3730A3;
+	font-family: inherit;
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1.2;
+	padding: 11px 16px;
 	cursor: pointer;
+	transition: background .2s, color .2s;
 }
-.ob-consent-decline:hover { background: #f1f5f9; color: #1e293b; }
+.ob-consent-cta:hover,
+.ob-consent-decline:hover { background: #EEF2FF; color: #312E81; }
+.ob-consent-cta:focus-visible,
+.ob-consent-decline:focus-visible { outline: 2px solid #312E81; outline-offset: 2px; }
 .ob-consent-footer-note {
-	margin-top: 10px;
-	font-size: 11px;
-	color: #94a3b8;
+	margin: 12px 0 0;
+	text-align: center;
+	font-size: 12px;
+	color: #4B5563;
 	line-height: 1.5;
 }
 /* Bottom brand */
@@ -1228,11 +1462,311 @@ class Opti_Behavior_Welcome {
 	margin-top: 20px;
 	padding-top: 14px;
 	border-top: 1px solid #e5e7eb;
-	font-size: 11px;
-	color: #94a3b8;
+	font-size: 12px;
+	color: #4B5563;
 }
-.ob-consent-bottom-brand a { color: #6366f1; text-decoration: none; font-weight: 500; }
+.ob-consent-bottom-brand a { color: #4338CA; text-decoration: none; font-weight: 500; }
 .ob-consent-bottom-brand a:hover { text-decoration: underline; }
+@media (max-width: 520px) {
+	.ob-consent-choices { flex-direction: column; gap: 10px; }
+}
+/* ── Welcome v2: one trial form, one Free link (OPT-2990) ── */
+.ob-welcome-trial {
+	max-width: 520px;
+	margin: 0 auto 10px;
+	padding: 20px 22px 16px;
+	background: #F5F3FF;
+	border: 1px solid #DDD6FE;
+	border-radius: 12px;
+	text-align: left;
+}
+.ob-welcome-field { margin: 0 0 12px; }
+.ob-welcome-field label {
+	display: block;
+	margin-bottom: 4px;
+	font-size: 13px;
+	font-weight: 600;
+	color: #1F2937;
+}
+.ob-welcome-field input[type="email"],
+.ob-welcome-field input[type="text"] {
+	width: 100%;
+	box-sizing: border-box;
+	min-height: 36px;
+	padding: 6px 10px;
+	border: 1px solid #C7C3F0;
+	border-radius: 6px;
+	background: #fff;
+	color: #111827;
+	font-size: 14px;
+}
+.ob-welcome-field--site input[type="text"] { background: #EEF2FF; color: #374151; }
+.ob-welcome-cta-line { margin: 16px 0 6px; text-align: center; }
+.ob-welcome-cta {
+	display: inline-block;
+	min-height: 48px;
+	padding: 13px 26px;
+	border: 0;
+	border-radius: 8px;
+	background: #4F46E5;
+	color: #fff;
+	font-size: 15px;
+	font-weight: 700;
+	cursor: pointer;
+	box-shadow: 0 2px 10px rgba(79,70,229,.30);
+	animation: obWelcomePulse 2.6s ease-out infinite;
+}
+.ob-welcome-cta:hover { background: #4338CA; }
+.ob-welcome-cta:focus-visible { outline: 2px solid #312E81; outline-offset: 2px; }
+@keyframes obWelcomePulse {
+	0%   { box-shadow: 0 2px 10px rgba(79,70,229,.30), 0 0 0 0 rgba(79,70,229,.45); }
+	70%  { box-shadow: 0 2px 10px rgba(79,70,229,.30), 0 0 0 12px rgba(79,70,229,0); }
+	100% { box-shadow: 0 2px 10px rgba(79,70,229,.30), 0 0 0 0 rgba(79,70,229,0); }
+}
+.ob-welcome-nocard {
+	margin: 0 0 10px;
+	text-align: center;
+	font-size: 13px;
+	color: #374151;
+}
+/* One-click Pro form of this page (OPT-3109): the answer of the API, in place. */
+.ob-pro-cta__actions { margin: 0 0 10px; text-align: center; }
+.ob-pro-signup__why {
+	margin: 0 0 8px;
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: #374151;
+}
+.ob-pro-signup__msg {
+	margin: 10px 0 0;
+	padding: 10px 12px;
+	border-radius: 8px;
+	border: 1px solid #C7D2FE;
+	background: #EEF2FF;
+	font-size: 13px;
+	line-height: 1.5;
+	color: #312E81;
+}
+.ob-pro-signup__msg.is-ok { border-color: #A7F3D0; background: #ECFDF5; color: #065F46; }
+.ob-pro-signup__msg.is-error { border-color: #FECACA; background: #FEF2F2; color: #991B1B; }
+.ob-pro-signup__msg a { color: #3730A3; }
+.ob-pro-signup__msg[hidden] { display: none; }
+.ob-pro-signup__msg .ob-pro-signup__account { display: inline-block; margin-top: 8px; padding: 7px 16px; border-radius: 6px; background: #4F46E5; color: #fff; font-weight: 600; text-decoration: none; }
+.ob-pro-signup__msg .ob-pro-signup__account:hover, .ob-pro-signup__msg .ob-pro-signup__account:focus { background: #4338CA; color: #fff; }
+.ob-welcome-privacy-text {
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.55;
+	color: #4B5563;
+}
+.ob-welcome-privacy-text a { color: #3730A3; }
+.ob-welcome-continue { max-width: 520px; margin: 0 auto 22px; text-align: left; }
+.ob-welcome-share { margin: 0 0 12px; font-size: 12px; line-height: 1.5; color: #4B5563; }
+.ob-welcome-share label { display: flex; gap: 8px; align-items: flex-start; }
+.ob-welcome-share input[type="checkbox"] { flex: 0 0 auto; margin: 1px 0 0; }
+.ob-welcome-free-line { margin: 0; text-align: center; }
+.ob-welcome-free {
+	border: 0;
+	background: none;
+	padding: 4px 2px;
+	font-size: 14px;
+	font-family: inherit;
+	color: #1F2937;
+	text-decoration: underline;
+	cursor: pointer;
+}
+.ob-welcome-free:hover { color: #111827; }
+.ob-welcome-free:focus-visible { outline: 2px solid #312E81; outline-offset: 2px; }
+/* OPT-3024: "Continue with Free" is a small text link in EVERY state — one
+   pulsing button on this screen and it is the Pro one. No filled variant. */
+.ob-welcome-free--alt {
+	display: inline-block;
+	min-height: 0;
+	padding: 4px 2px;
+	border: 0;
+	background: none;
+	color: #4B5563;
+	font-size: 13px;
+	font-weight: 400;
+	text-decoration: underline;
+}
+.ob-welcome-free--alt:hover { background: none; color: #111827; }
+.ob-welcome-pro-extra { margin: 4px 0 0; font-size: 12px; color: #4B5563; }
+/* ── Pro offer block + trust strip, shared with the Pro pages (OPT-3026) ── */
+.ob-welcome-trial-title {
+	margin: 0 0 10px;
+	font-size: 18px;
+	line-height: 1.3;
+	font-weight: 700;
+	color: #1F2937;
+}
+.ob-welcome-value {
+	margin: 0 0 14px;
+	padding: 0;
+	list-style: none;
+	font-size: 13px;
+	line-height: 1.5;
+	color: #374151;
+}
+.ob-welcome-value li { position: relative; margin: 0 0 5px; padding-left: 20px; }
+.ob-welcome-value li::before {
+	content: "";
+	position: absolute;
+	left: 4px;
+	top: 7px;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: #4F46E5;
+}
+.ob-pro-offer {
+	margin: 0 0 14px;
+	padding: 12px 14px;
+	background: #fff;
+	border: 1px solid #DDD6FE;
+	border-radius: 10px;
+	text-align: left;
+}
+/* OPT-3109: one block, a title and three lines (WHERE / WHY / the offer). */
+.ob-pro-offer__title {
+	margin: 0 0 8px;
+	font-size: 17px;
+	line-height: 1.3;
+	font-weight: 800;
+	color: #312E81;
+	text-align: center;
+}
+.ob-pro-offer__list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.ob-pro-offer__list li {
+	position: relative;
+	margin: 0 0 6px;
+	padding-left: 18px;
+	font-size: 14px;
+	line-height: 1.45;
+	color: #1F2937;
+}
+.ob-pro-offer__list li:last-child {
+	margin-bottom: 0;
+	font-weight: 700;
+}
+.ob-pro-offer__list li::before {
+	content: "";
+	position: absolute;
+	top: 8px;
+	left: 4px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #4F46E5;
+}
+.ob-pro-offer__main {
+	margin: 0 0 4px;
+	font-size: 17px;
+	line-height: 1.3;
+	font-weight: 800;
+	color: #312E81;
+}
+.ob-pro-offer__then {
+	margin: 0 0 4px;
+	font-size: 15px;
+	line-height: 1.35;
+	font-weight: 700;
+	color: #1F2937;
+}
+.ob-pro-offer__nocard {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.35;
+	font-weight: 600;
+	color: #374151;
+}
+/* Trust strip + "needs Pro" box: design OPT-3041, coded by OPT-3042. The same
+   rules live at the end of assets/css/pro-feature-page.css (.ob-pro-page): keep
+   the two copies in step (OPT-3026 rule). */
+.ob-trust {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 14px 18px;
+	margin: 14px 0 12px;
+	padding: 14px 0 0;
+	border-top: 1px solid #E5E7EB;
+	list-style: none;
+}
+.ob-trust__item {
+	display: flex;
+	flex: 1 1 calc(50% - 18px);
+	min-width: 0;
+	gap: 10px;
+	align-items: center;
+	margin: 0;
+}
+.ob-trust__icon {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	border-radius: 50%;
+	color: #4F46E5;
+	background: #EEF2FF;
+	border: 1px solid #E0E7FF;
+	line-height: 1;
+}
+.ob-trust__icon .ob-trust__svg { display: block; width: 18px; height: 18px; }
+/* Real WordPress mark (OPT-3051): the Dashicons glyph, sized like the SVGs. */
+.ob-trust__icon .ob-trust__dashicon { display: block; width: 19px; height: 19px; font-size: 19px; line-height: 19px; }
+.ob-trust__text { display: block; }
+.ob-trust__title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 14px;
+	font-weight: 800;
+	line-height: 1.2;
+	color: #111827;
+}
+.ob-trust__sub { display: block; margin-top: 2px; font-size: 11px; line-height: 1.4; font-weight: 600; color: #4B5563; }
+.ob-trust__item--rating .ob-trust__icon { background: #111827; border-color: #111827; color: #FFFFFF; }
+.ob-trust__item--rating .ob-trust__svg { stroke-width: 1.7; }
+.ob-trust__num { font-size: 16px; font-weight: 800; color: #111827; }
+.ob-trust__stars { display: inline-flex; gap: 1px; }
+.ob-trust__stars svg { display: block; width: 13px; height: 13px; fill: #FBBF24; stroke: #B45309; stroke-width: 1; }
+.ob-trust__item--installs .ob-trust__icon { background: #ECFDF5; border-color: #A7F3D0; color: #059669; }
+.ob-trust__item--installs .ob-trust__title { font-variant-numeric: tabular-nums; }
+.ob-pro-need {
+	margin: 0 0 14px;
+	padding: 12px 14px 12px 16px;
+	background: #FFFBEB;
+	border: 1px solid #FDE68A;
+	border-left: 3px solid #F59E0B;
+	border-radius: 10px;
+	text-align: left;
+}
+.ob-pro-need__title {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0 0 4px;
+	font-size: 14px;
+	line-height: 1.35;
+	font-weight: 800;
+	color: #92400E;
+}
+.ob-pro-need__title svg { flex: 0 0 auto; width: 18px; height: 18px; margin-top: 1px; fill: #B45309; }
+.ob-pro-need__text { margin: 0; font-size: 13px; line-height: 1.5; color: #78350F; }
+@media (max-width: 520px) {
+	.ob-welcome-cta { display: block; width: 100%; box-sizing: border-box; }
+	.ob-trust__sub { font-size: 10.5px; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.ob-consent-accent-bar { animation: none; }
+	.ob-welcome-cta { animation: none; }
+}
 		';
 	}
 }

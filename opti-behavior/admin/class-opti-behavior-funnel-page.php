@@ -368,6 +368,10 @@ class Opti_Behavior_Funnel_Page {
 					'completions'           => __( 'Completions', 'opti-behavior' ),
 					'dropOff'               => __( 'Drop-off', 'opti-behavior' ),
 					'stepCount'             => __( 'Steps', 'opti-behavior' ),
+					/* translators: %1$s: first day, %2$s: last day of the figures shown on the card. */
+					'cardPeriod'            => __( 'Figures from %1$s to %2$s', 'opti-behavior' ),
+					'broadStepUrls'         => __( 'Tracked pages this step matches:', 'opti-behavior' ),
+					'cardPeriodHint'        => __( 'Entries = visits that reached step 1 during these days. The details open on the same days.', 'opti-behavior' ),
 					/* translators: 1: first item index, 2: last item index, 3: total items. */
 					'showingRange'          => __( 'Showing %1$d–%2$d of %3$d funnels', 'opti-behavior' ),
 					'noFunnelsFound'        => __( 'No funnels match your search.', 'opti-behavior' ),
@@ -1096,7 +1100,7 @@ class Opti_Behavior_Funnel_Page {
 			// ONE rule everywhere (OPT-588): visits that reached the previous step
 			// (step 1: entered the funnel) and not this one — the drop-off band,
 			// the Smart Insights "lost" count and the funnel_scope=abandoned replays.
-			$step_row         = self::build_step_row( $step_number, $step_def['name'], $completed, $previous_reached, $initial_entries );
+			$step_row         = self::build_step_row( $step_number, self::display_step_name( $step_def ), $completed, $previous_reached, $initial_entries );
 			$funnel_steps[]   = $step_row;
 			$previous_reached = (int) $completed;
 		}
@@ -1145,6 +1149,77 @@ class Opti_Behavior_Funnel_Page {
 			'entry_pages'      => $entry_pages,
 			'exit_pages'       => $exit_pages,
 		);
+	}
+
+	/**
+	 * Step label shown on the Funnels screen (OB-20). Pure.
+	 *
+	 * A step saved with a digits-only name ("2", a paginated archive picked
+	 * by its number) reads "<section> (page 2)" — the same label as the
+	 * Smart Insights cards and the site report. Other names are kept.
+	 *
+	 * @param array $step Step definition (name, url_pattern).
+	 * @return string
+	 */
+	public static function display_step_name( $step ) {
+		$name    = isset( $step['name'] ) ? (string) $step['name'] : '';
+		$pattern = isset( $step['url_pattern'] ) ? (string) $step['url_pattern'] : '';
+		if ( class_exists( 'Opti_Behavior_Smart_Insights_Funnel_Aggregator' ) ) {
+			return Opti_Behavior_Smart_Insights_Funnel_Aggregator::readable_step_label( $name, $pattern );
+		}
+		return $name;
+	}
+
+	/**
+	 * Description shown on a Funnels list card (OB-20). Pure.
+	 *
+	 * A funnel created from a suggestion keeps the recipe sentence, which
+	 * names the full journey ("Home page to blog index to a single post to
+	 * your contact page.") even when this site only resolved 2 of its pages.
+	 * Such a stock sentence is replaced by the real steps ("Home page → Blog
+	 * index"); a description the user wrote is kept as it is.
+	 *
+	 * @param string $description Stored description.
+	 * @param array  $steps       Stored steps.
+	 * @param array  $stock       Recipe sentences (current language).
+	 * @return string
+	 */
+	public static function display_description( $description, $steps, array $stock ) {
+		$description = (string) $description;
+		if ( '' === trim( $description ) || ! is_array( $steps ) || ! in_array( trim( $description ), $stock, true ) ) {
+			return $description;
+		}
+		$named = array();
+		foreach ( $steps as $step ) {
+			if ( is_array( $step ) ) {
+				$named[] = array( 'name' => self::display_step_name( $step ) );
+			}
+		}
+		$real = class_exists( 'Opti_Behavior_Funnel_Recipes' ) ? Opti_Behavior_Funnel_Recipes::describe_steps( $named ) : '';
+		return '' !== $real ? $real : $description;
+	}
+
+	/**
+	 * Recipe sentences of the suggestion catalog, current language.
+	 *
+	 * @return array<int,string>
+	 */
+	private static function stock_descriptions() {
+		if ( ! class_exists( 'Opti_Behavior_Funnel_Recipes' ) ) {
+			return array();
+		}
+		$out = array();
+		try {
+			$recipes = new Opti_Behavior_Funnel_Recipes();
+			foreach ( $recipes->get_all() as $recipe ) {
+				if ( ! empty( $recipe['description'] ) ) {
+					$out[] = trim( (string) $recipe['description'] );
+				}
+			}
+		} catch ( \Throwable $e ) {
+			return array();
+		}
+		return $out;
 	}
 
 	/**
@@ -1618,6 +1693,7 @@ class Opti_Behavior_Funnel_Page {
 		$total_completions  = 0;
 		$funnel_count       = 0;
 		$suggested_ids      = class_exists( 'Opti_Behavior_Funnel_Database' ) ? Opti_Behavior_Funnel_Database::suggested_ids() : array();
+		$stock_descriptions = ! empty( $funnels ) ? self::stock_descriptions() : array();
 
 		if ( ! empty( $funnels ) ) {
 			foreach ( $funnels as $funnel ) {
@@ -1644,7 +1720,7 @@ class Opti_Behavior_Funnel_Page {
 				$rows[] = array(
 					'id'              => $funnel_id,
 					'name'            => $funnel['name'],
-					'description'     => $funnel['description'],
+					'description'     => self::display_description( $funnel['description'], $steps, $stock_descriptions ),
 					'step_count'      => $step_count,
 					'entries'         => $entries,
 					'completions'     => $completions,
@@ -1668,6 +1744,8 @@ class Opti_Behavior_Funnel_Page {
 		wp_send_json_success(
 			array(
 				'funnels' => $rows,
+				// OB-20: the days these figures cover, printed on every card.
+				'range'   => self::range_days( $date_range ),
 				'totals'  => array(
 					'funnels'             => $funnel_count,
 					'entries'             => $total_entries,
@@ -1733,7 +1811,23 @@ class Opti_Behavior_Funnel_Page {
 				'completions'     => $completions,
 				'conversion_rate' => $conversion,
 				'dropoff_rate'    => $dropoff,
+				'range'           => self::range_days( $date_range ),
 			)
+		);
+	}
+
+	/**
+	 * First and last day (Y-m-d) of a resolved date range (OB-20). Pure.
+	 *
+	 * @param array $date_range Output of calculate_date_range().
+	 * @return array{from:string,to:string}
+	 */
+	public static function range_days( $date_range ) {
+		$from = isset( $date_range['start_date'] ) ? (string) $date_range['start_date'] : ( isset( $date_range['start'] ) ? substr( (string) $date_range['start'], 0, 10 ) : '' );
+		$to   = isset( $date_range['end_date'] ) ? (string) $date_range['end_date'] : ( isset( $date_range['end'] ) ? substr( (string) $date_range['end'], 0, 10 ) : '' );
+		return array(
+			'from' => $from,
+			'to'   => $to,
 		);
 	}
 
@@ -1856,7 +1950,79 @@ class Opti_Behavior_Funnel_Page {
 			wp_send_json_error( array( 'message' => $saved_id->get_error_message() ) );
 		}
 
-		wp_send_json_success( array( 'funnel_id' => $saved_id, 'message' => __( 'Funnel saved successfully', 'opti-behavior' ) ) );
+		$response = array(
+			'funnel_id' => $saved_id,
+			'message'   => __( 'Funnel saved successfully', 'opti-behavior' ),
+		);
+		// OB-20: a step that matches every page is saved (a "starts with" or
+		// "contains" choice can be wanted) but signalled at once, with the
+		// tracked addresses it catches, before anyone reads the figures.
+		$wide = $this->broad_step_warning( $steps_array );
+		if ( null !== $wide ) {
+			$response['warning'] = $wide;
+		}
+
+		wp_send_json_success( $response );
+	}
+
+	/**
+	 * Warning for the first step whose rule matches every page (OB-20).
+	 *
+	 * Same probe as the site report and Page X-Ray (OPT-1933): the home page
+	 * AND a made-up address both match. An `exact` step never does. Preview =
+	 * the most recent tracked addresses this step catches (≤ 5, out of the
+	 * last 200 pages).
+	 *
+	 * @param array $steps Saved steps.
+	 * @return array|null { step, name, message, urls[] } or null.
+	 */
+	private function broad_step_warning( $steps ) {
+		if ( ! class_exists( 'Opti_Behavior_Report_Site' ) || ! method_exists( 'Opti_Behavior_Report_Site', 'funnel_every_page_step' ) ) {
+			return null;
+		}
+		$n = (int) Opti_Behavior_Report_Site::funnel_every_page_step( $steps );
+		if ( $n < 1 ) {
+			return null;
+		}
+		// Step n counts only steps with a usable rule: find that step again.
+		$step = null;
+		$seen = 0;
+		foreach ( $steps as $candidate ) {
+			$type    = isset( $candidate['match_type'] ) ? (string) $candidate['match_type'] : '';
+			$pattern = isset( $candidate['url_pattern'] ) ? trim( (string) $candidate['url_pattern'] ) : '';
+			if ( '' === $type || ( '' === $pattern && ! in_array( $type, array( 'any', 'pageview' ), true ) ) ) {
+				continue;
+			}
+			if ( ++$seen === $n ) {
+				$step = $candidate;
+				break;
+			}
+		}
+		if ( null === $step ) {
+			return null;
+		}
+
+		global $wpdb;
+		$urls = array();
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name from $wpdb->prefix; one bounded read after a save.
+		$rows = $wpdb->get_col( "SELECT url FROM {$wpdb->prefix}optibehavior_pages ORDER BY id DESC LIMIT 200" );
+		foreach ( is_array( $rows ) ? $rows : array() as $url ) {
+			$url = (string) $url;
+			if ( '' !== $url && $this->url_matches_pattern( $url, (string) $step['url_pattern'], (string) $step['match_type'] ) ) {
+				$path   = (string) wp_parse_url( $url, PHP_URL_PATH );
+				$urls[] = '' !== $path ? $path : '/';
+			}
+		}
+		$urls = array_slice( array_values( array_unique( $urls ) ), 0, 5 );
+		$name = self::display_step_name( $step );
+
+		return array(
+			'step'    => $n,
+			'name'    => $name,
+			/* translators: 1: step number, 2: step name. */
+			'message' => sprintf( __( 'Step %1$d (%2$s) matches every page of the site: every visit enters the funnel there. Use "Exact URL" for one page; keep "URL Starts With" or "URL Contains" only if you want a whole section.', 'opti-behavior' ), $n, $name ),
+			'urls'    => $urls,
+		);
 	}
 
 	/**

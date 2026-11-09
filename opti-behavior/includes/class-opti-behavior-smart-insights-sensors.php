@@ -57,6 +57,12 @@ class Opti_Behavior_Smart_Insights_Sensors {
 	// User meta: this user has already seen the strip once (OPT-1168).
 	const SEEN_META = 'opti_behavior_si_loop_seen';
 
+	// User meta: fold state chosen by hand, 'open' / 'closed' (OPT-2179).
+	const STATE_META = 'opti_behavior_si_loop_state';
+
+	// admin-ajax action + nonce that store STATE_META.
+	const STATE_ACTION = 'opti_behavior_si_loop_state';
+
 	/**
 	 * Sensor definitions: admin page slug, Pro feature gate, insight entity type.
 	 *
@@ -151,12 +157,18 @@ class Opti_Behavior_Smart_Insights_Sensors {
 		$sensors = self::get_sensor_rows( $context );
 		$sensors = self::add_insight_counts( $sensors, $context );
 
+		// Page X-Ray figures (Pro), read from its stored list: never computed
+		// here. Null = no Page X-Ray on this site, nothing is printed for it.
+		$pages = apply_filters( 'opti_behavior_smart_insights_loop_pages', null, $args );
+		$pages = is_array( $pages ) ? $pages : null;
+
 		return array(
 			'sensors'     => $sensors,
-			'open'        => self::count_insights( $context, array( 'status__in' => self::active_statuses() ) ),
-			'in_progress' => self::count_insights( $context, array( 'status' => 'in_progress' ) ),
-			'resolved'    => self::count_insights( $context, array( 'status__in' => array( 'resolved', 'auto_resolved' ) ) ),
+			'open'        => self::count_open_problems( $context ),
+			'in_progress' => self::count_insights( $context, array( 'status' => 'in_progress' ) ) + ( $pages ? absint( $pages['fix_running'] ?? 0 ) : 0 ),
+			'resolved'    => self::count_insights( $context, array( 'status__in' => array( 'resolved', 'auto_resolved' ) ) ) + ( $pages ? absint( $pages['fix_done'] ?? 0 ) : 0 ),
 			'confirmed'   => self::count_confirmed_fixes(),
+			'pages'       => $pages,
 			'range'       => array(
 				'from' => $context['date_from'],
 				'to'   => $context['date_to'],
@@ -456,6 +468,32 @@ class Opti_Behavior_Smart_Insights_Sensors {
 		}
 	}
 
+	/**
+	 * Open problems of the period = THE count of the menu, the screen's
+	 * cards and the site report (OB-14: the strip counted raw rows, story
+	 * children and merged twins included: 17 for 9 cards).
+	 *
+	 * @param array $context Context.
+	 * @return int
+	 */
+	private static function count_open_problems( $context ) {
+		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Repository' ) || ! method_exists( 'Opti_Behavior_Smart_Insights_Repository', 'get_open_problem_summary' ) ) {
+			return self::count_insights( $context, array( 'status__in' => self::active_statuses() ) );
+		}
+
+		try {
+			$repository = new Opti_Behavior_Smart_Insights_Repository();
+			$summary    = $repository->get_open_problem_summary(
+				$context['date_from'],
+				$context['date_to'],
+				$context['exclude_spam'] ? 'exclude_spam_1' : 'exclude_spam_0'
+			);
+			return isset( $summary['active'] ) ? absint( $summary['active'] ) : 0;
+		} catch ( Throwable $e ) {
+			return 0;
+		}
+	}
+
 	private static function count_insights( $context, $extra ) {
 		if ( ! class_exists( 'Opti_Behavior_Smart_Insights_Repository' ) ) {
 			return 0;
@@ -742,6 +780,49 @@ class Opti_Behavior_Smart_Insights_Sensors {
 	 * @param array $args See get_summary().
 	 * @return void
 	 */
+	/**
+	 * Help mark of a part of the "How it works" strip.
+	 *
+	 * @param string $key Key of opti_behavior_get_smart_insights_section_tooltips().
+	 * @return string HTML, escaped by opti_behavior_tooltip().
+	 */
+	private static function help( $key ) {
+		if ( ! function_exists( 'opti_behavior_get_smart_insights_section_tooltips' ) || ! function_exists( 'opti_behavior_tooltip' ) ) {
+			return '';
+		}
+		$all = opti_behavior_get_smart_insights_section_tooltips();
+		if ( empty( $all[ $key ] ) ) {
+			return '';
+		}
+		return opti_behavior_tooltip( $all[ $key ]['title'], $all[ $key ]['content'], isset( $all[ $key ]['simple'] ) ? $all[ $key ]['simple'] : '' );
+	}
+
+	/**
+	 * Pages with a problem, in the "Understand" step. Hidden until the Page
+	 * X-Ray list is scored: smart-insights-xray.js fills it from the attributes.
+	 *
+	 * @param array|null $pages `with_problem`, `listed` (null = not scored yet).
+	 * @return void
+	 */
+	private static function render_loop_pages( $pages ) {
+		if ( ! is_array( $pages ) ) {
+			return;
+		}
+		$count  = isset( $pages['with_problem'] ) ? (int) $pages['with_problem'] : -1;
+		$listed = isset( $pages['listed'] ) ? (int) $pages['listed'] : 0;
+		$known  = $count >= 0 && $listed > 0;
+		/* translators: %s: number of pages in the Page X-Ray list. */
+		$one = __( 'page with a problem, among the %s most visited', 'opti-behavior' );
+		/* translators: %s: number of pages in the Page X-Ray list. */
+		$many = __( 'pages with a problem, among the %s most visited', 'opti-behavior' );
+		?>
+		<span class="ob-si-loop__pages" data-ob-si-loop-pages data-one="<?php echo esc_attr( $one ); ?>" data-many="<?php echo esc_attr( $many ); ?>"<?php echo $known ? '' : ' hidden'; ?>>
+			<strong class="ob-si-loop__figure"><?php echo esc_html( $known ? number_format_i18n( $count ) : '' ); ?></strong>
+			<span class="ob-si-loop__caption"><?php echo esc_html( $known ? sprintf( 1 === $count ? $one : $many, number_format_i18n( $listed ) ) : '' ); ?></span>
+		</span>
+		<?php
+	}
+
 	public static function render( $args = array() ) {
 		try {
 			$summary = self::get_summary( $args );
@@ -751,18 +832,26 @@ class Opti_Behavior_Smart_Insights_Sensors {
 
 		$definitions = self::get_definitions();
 
-		// OPT-1168: open on the user's first visit only; it took the whole first
-		// screen at every visit. A fold / unfold made by hand is kept per browser
-		// by the inline script of the assets trait.
+		// OPT-1168 / OPT-2179: open on the user's first visit, and while no open
+		// problem exists; folded to one line once there are insights. A fold /
+		// unfold made by hand is stored for the user (STATE_META, written by
+		// ajax_save_state() from the inline script of the assets trait) and wins.
 		$user_id = get_current_user_id();
-		$open    = $user_id <= 0 || ! get_user_meta( $user_id, self::SEEN_META, true );
-		if ( $open && $user_id > 0 ) {
+		$first   = $user_id <= 0 || ! get_user_meta( $user_id, self::SEEN_META, true );
+		if ( $first && $user_id > 0 ) {
 			update_user_meta( $user_id, self::SEEN_META, time() );
 		}
+		$saved = $user_id > 0 ? (string) get_user_meta( $user_id, self::STATE_META, true ) : '';
+		if ( 'open' === $saved || 'closed' === $saved ) {
+			$open = 'open' === $saved;
+		} else {
+			$saved = '';
+			$open  = $first || (int) $summary['open'] <= 0;
+		}
 		?>
-		<details class="ob-si-loop"<?php echo $open ? ' open' : ''; ?> data-ob-si-loop>
-			<summary class="ob-si-loop__summary">
-				<span class="ob-si-loop__title"><?php esc_html_e( 'How it works', 'opti-behavior' ); ?></span>
+		<details class="ob-si-loop"<?php echo $open ? ' open' : ''; ?> data-ob-si-loop data-ob-si-loop-saved="<?php echo '' !== $saved ? '1' : '0'; ?>" data-ob-si-loop-nonce="<?php echo esc_attr( $user_id > 0 ? wp_create_nonce( self::STATE_ACTION ) : '' ); ?>">
+			<summary class="ob-si-loop__summary" aria-expanded="<?php echo $open ? 'true' : 'false'; ?>">
+				<span class="ob-si-loop__title"><?php esc_html_e( 'How it works', 'opti-behavior' ); ?><?php echo self::help( 'loop_how' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></span>
 				<span class="ob-si-loop__lede"><?php esc_html_e( 'Your modules collect. Smart Insights finds what to fix. An A/B test proves the fix.', 'opti-behavior' ); ?></span>
 				<span class="ob-si-loop__dots" aria-hidden="true">
 					<?php foreach ( $summary['sensors'] as $row ) : ?>
@@ -773,7 +862,7 @@ class Opti_Behavior_Smart_Insights_Sensors {
 
 			<ol class="ob-si-loop__steps">
 				<li class="ob-si-loop__step ob-si-loop__step--collect">
-					<span class="ob-si-loop__step-name"><?php esc_html_e( '1 · Collect', 'opti-behavior' ); ?></span>
+					<span class="ob-si-loop__step-name"><?php esc_html_e( '1 · Collect', 'opti-behavior' ); ?><?php echo self::help( 'loop_collect' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></span>
 					<ul class="ob-si-loop__sensors">
 						<?php foreach ( $summary['sensors'] as $id => $row ) : ?>
 							<li>
@@ -795,12 +884,13 @@ class Opti_Behavior_Smart_Insights_Sensors {
 					<?php endif; ?>
 				</li>
 				<li class="ob-si-loop__step is-current">
-					<span class="ob-si-loop__step-name"><?php esc_html_e( '2 · Understand', 'opti-behavior' ); ?></span>
+					<span class="ob-si-loop__step-name"><?php esc_html_e( '2 · Understand', 'opti-behavior' ); ?><?php echo self::help( 'loop_understand' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></span>
 					<strong class="ob-si-loop__figure" data-ob-si-loop-open><?php echo esc_html( number_format_i18n( $summary['open'] ) ); ?></strong>
 					<span class="ob-si-loop__caption"><?php echo esc_html( _n( 'open problem found by Smart Insights', 'open problems found by Smart Insights', $summary['open'], 'opti-behavior' ) ); ?></span>
+					<?php self::render_loop_pages( $summary['pages'] ); ?>
 				</li>
 				<li class="ob-si-loop__step">
-					<span class="ob-si-loop__step-name"><?php esc_html_e( '3 · Fix', 'opti-behavior' ); ?></span>
+					<span class="ob-si-loop__step-name"><?php esc_html_e( '3 · Fix', 'opti-behavior' ); ?><?php echo self::help( 'loop_fix' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></span>
 					<strong class="ob-si-loop__figure"><?php echo esc_html( number_format_i18n( $summary['in_progress'] ) ); ?></strong>
 					<span class="ob-si-loop__caption">
 						<?php
@@ -816,12 +906,30 @@ class Opti_Behavior_Smart_Insights_Sensors {
 					</span>
 				</li>
 				<li class="ob-si-loop__step">
-					<span class="ob-si-loop__step-name"><?php esc_html_e( '4 · Prove', 'opti-behavior' ); ?></span>
+					<span class="ob-si-loop__step-name"><?php esc_html_e( '4 · Prove', 'opti-behavior' ); ?><?php echo self::help( 'loop_prove' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></span>
 					<a class="ob-si-loop__link" href="<?php echo esc_url( admin_url( 'admin.php?page=opti-behavior-ab-testing' ) ); ?>"><?php esc_html_e( 'A/B Testing', 'opti-behavior' ); ?></a>
 					<span class="ob-si-loop__caption"><?php esc_html_e( 'Test the fix, keep what wins', 'opti-behavior' ); ?></span>
 				</li>
 			</ol>
 		</details>
 		<?php
+	}
+
+	/**
+	 * Store the fold state chosen by hand (admin-ajax STATE_ACTION, OPT-2179).
+	 *
+	 * @return void
+	 */
+	public static function ajax_save_state() {
+		check_ajax_referer( self::STATE_ACTION );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( null, 403 );
+		}
+		$state = isset( $_POST['state'] ) ? sanitize_key( wp_unslash( $_POST['state'] ) ) : '';
+		if ( 'open' !== $state && 'closed' !== $state ) {
+			wp_send_json_error( null, 400 );
+		}
+		update_user_meta( get_current_user_id(), self::STATE_META, $state );
+		wp_send_json_success( array( 'state' => $state ) );
 	}
 }

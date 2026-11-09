@@ -3369,7 +3369,7 @@ class Opti_Behavior_Heatmap_Storage {
 		$page_heights = array();
 		$window_heights = array();
 		$total_events = 0;
-		$max_y_coord = 0;
+		$session_max_y = array();
 
 		// Normal aggregation for click, move, scroll heatmaps
 		foreach ( $files_data as $file_data ) {
@@ -3398,26 +3398,38 @@ class Opti_Behavior_Heatmap_Storage {
 				$file_coords = $this->dedupe_recording_click_twins( $file_coords );
 			}
 
+			// One height and one depth per session: a session with many events
+			// must not weigh more than the others in the reference below.
+			$file_height = 0;
+			$file_max_y  = 0;
+
 			// Add coordinates and track max Y and page heights from individual events
 			foreach ( $file_coords as $coord ) {
 				$all_coordinates[] = $coord;
 				$total_events++;
 
 				// Track maximum Y coordinate to determine actual page height
-				if ( isset( $coord['y'] ) && $coord['y'] > $max_y_coord ) {
-					$max_y_coord = (int) $coord['y'];
+				if ( isset( $coord['y'] ) && $coord['y'] > $file_max_y ) {
+					$file_max_y = (int) $coord['y'];
 				}
 
 				// The 'vh' field in click data actually contains page height (scrollHeight),
 				// not viewport height. Collect these for accurate reference_height calculation.
-				if ( isset( $coord['vh'] ) && $coord['vh'] > 0 ) {
-					$page_heights[] = (int) $coord['vh'];
+				if ( isset( $coord['vh'] ) && (int) $coord['vh'] > $file_height ) {
+					$file_height = (int) $coord['vh'];
 				}
 
 				// Collect actual browser window heights (wh field) for attention heatmap
 				if ( isset( $coord['wh'] ) && $coord['wh'] > 0 ) {
 					$window_heights[] = (int) $coord['wh'];
 				}
+			}
+
+			if ( $file_height > 0 ) {
+				$page_heights[] = $file_height;
+			}
+			if ( $file_max_y > 0 ) {
+				$session_max_y[] = $file_max_y;
 			}
 		}
 
@@ -3426,16 +3438,17 @@ class Opti_Behavior_Heatmap_Storage {
 		$reference_width = $this->compute_reference_width( $viewport_widths, $device );
 
 		// Calculate reference height for coordinate scaling:
-		// Priority 1: Use page heights from event data (vh field contains scrollHeight)
-		// Priority 2: Use max Y coordinate + buffer (ensures all clicks are within bounds)
+		// Priority 1: Page heights from event data (vh field contains scrollHeight),
+		//             robust like the scroll heatmap (OPT-2296): one session with an
+		//             aberrant height (116 031 px for a 14 286 px page) must not set
+		//             the scale, it squeezed every point into the top of the page.
+		// Priority 2: Deepest session without outliers + buffer
 		// Priority 3: Fall back to viewport heights average
 		// Priority 4: Default to 5000 (typical long page)
 		if ( ! empty( $page_heights ) ) {
-			// Use the maximum page height from collected data
-			$reference_height = max( $page_heights );
-		} elseif ( $max_y_coord > 0 ) {
-			// Use max Y coordinate + 20% buffer to ensure full coverage
-			$reference_height = (int) ( $max_y_coord * 1.2 );
+			$reference_height = self::robust_page_height( $page_heights );
+		} elseif ( ! empty( $session_max_y ) ) {
+			$reference_height = (int) ( self::robust_max_depth( $session_max_y ) * 1.2 );
 		} elseif ( ! empty( $viewport_heights ) ) {
 			// Fall back to max viewport height (legacy data)
 			$reference_height = max( $viewport_heights );
@@ -3517,9 +3530,9 @@ class Opti_Behavior_Heatmap_Storage {
 		// pageviews across aggregated page_ids), which would otherwise inflate the
 		// "N views" tooltip far past the header Views KPI (distinct session_id).
 		$session_max_y_map = array();
+		$session_vh_map    = array();
 		$viewport_widths   = array();
 		$viewport_heights  = array();
-		$page_heights      = array();
 		$max_y_coord       = 0;
 		$fallback_index    = 0;
 
@@ -3533,7 +3546,8 @@ class Opti_Behavior_Heatmap_Storage {
 			}
 
 			// Reduce this file to its deepest reached Y. Default 0 = saw top only.
-			$session_y = 0;
+			$session_y  = 0;
+			$session_vh = 0;
 			if ( isset( $file_data['data'] ) && is_array( $file_data['data'] ) ) {
 				foreach ( $file_data['data'] as $coord ) {
 					if ( isset( $coord['y'] ) && (int) $coord['y'] > $session_y ) {
@@ -3541,8 +3555,8 @@ class Opti_Behavior_Heatmap_Storage {
 					}
 
 					// The 'vh' field carries page height (scrollHeight) for reference.
-					if ( isset( $coord['vh'] ) && $coord['vh'] > 0 ) {
-						$page_heights[] = (int) $coord['vh'];
+					if ( isset( $coord['vh'] ) && (int) $coord['vh'] > $session_vh ) {
+						$session_vh = (int) $coord['vh'];
 					}
 				}
 			}
@@ -3561,6 +3575,9 @@ class Opti_Behavior_Heatmap_Storage {
 			if ( ! isset( $session_max_y_map[ $session_key ] ) || $session_y > $session_max_y_map[ $session_key ] ) {
 				$session_max_y_map[ $session_key ] = $session_y;
 			}
+			if ( $session_vh > 0 && ( ! isset( $session_vh_map[ $session_key ] ) || $session_vh > $session_vh_map[ $session_key ] ) ) {
+				$session_vh_map[ $session_key ] = $session_vh;
+			}
 		}
 
 		// Collapse to one max-reach entry per distinct session.
@@ -3571,12 +3588,17 @@ class Opti_Behavior_Heatmap_Storage {
 		// non-desktop pollution and floors at a real desktop breakpoint.
 		$reference_width = $this->compute_reference_width( $viewport_widths, $device );
 
-		// Reference height ladder (mirrors aggregate_heatmap_data):
-		// 1) page heights (vh = scrollHeight), 2) max Y + 20%, 3) viewport heights, 4) default.
-		if ( ! empty( $page_heights ) ) {
-			$reference_height = max( $page_heights );
+		// Reference height ladder (OPT-2296: robust, never the max of all sessions —
+		// one session with an aberrant scrollHeight used to set the scale of the
+		// whole page and squeeze the real page into its top 14 %):
+		// 1) median of the per-session page heights (vh = scrollHeight), outliers
+		// left out, 2) deepest non-outlier session Y + 20%, 3) viewport heights,
+		// 4) default. A session deeper than the reference counts at every band
+		// (100 %) in build_scroll_reach_bands(); it no longer stretches the scale.
+		if ( ! empty( $session_vh_map ) ) {
+			$reference_height = self::robust_page_height( array_values( $session_vh_map ) );
 		} elseif ( $max_y_coord > 0 ) {
-			$reference_height = (int) ( $max_y_coord * 1.2 );
+			$reference_height = (int) ( self::robust_max_depth( $session_max_y ) * 1.2 );
 		} elseif ( ! empty( $viewport_heights ) ) {
 			$reference_height = max( $viewport_heights );
 		} else {
@@ -3599,6 +3621,91 @@ class Opti_Behavior_Heatmap_Storage {
 			'scroll_metric'    => 'reach',
 			'total_sessions'   => $total_sessions,
 		);
+	}
+
+	/**
+	 * Robust page height of ONE page from its sessions' page heights (OPT-2296).
+	 *
+	 * Median of the per-session scrollHeight values after leaving out outliers
+	 * (> 2 x the median: infinite scroll, lazy-load, a badly measured page, or a
+	 * longer page variant grouped with this one; < half the median: page measured
+	 * before its content loaded). The median itself barely moves with outliers,
+	 * the cut only keeps a few extreme values from tilting an even-count median.
+	 * Also used by the parser fallback (aggregate_normalized_scroll_data).
+	 *
+	 * @param array $heights Page heights in px, one per session ideally.
+	 * @return int Reference height in px (0 when no positive value).
+	 */
+	public static function robust_page_height( $heights ) {
+		$values = array();
+		foreach ( (array) $heights as $height ) {
+			if ( (int) $height > 0 ) {
+				$values[] = (int) $height;
+			}
+		}
+		if ( empty( $values ) ) {
+			return 0;
+		}
+
+		$median = self::median_of( $values );
+		$kept   = array();
+		foreach ( $values as $value ) {
+			if ( $value <= 2 * $median && $value >= $median / 2 ) {
+				$kept[] = $value;
+			}
+		}
+
+		return (int) round( empty( $kept ) ? $median : self::median_of( $kept ) );
+	}
+
+	/**
+	 * Deepest session reach once outliers are left out (OPT-2296, no-vh fallback).
+	 *
+	 * Without page heights the scale comes from how deep sessions went. Reach is
+	 * spread by nature (many visits stop at the top), so the median would cut the
+	 * page; the max lets one runaway session set the scale. Middle ground: drop
+	 * depths above 2 x the 75th percentile, keep the deepest of the rest.
+	 *
+	 * @param array $depths Per-session deepest reached Y in px.
+	 * @return int Deepest non-outlier Y (0 when no positive value).
+	 */
+	public static function robust_max_depth( $depths ) {
+		$values = array();
+		foreach ( (array) $depths as $depth ) {
+			if ( (int) $depth > 0 ) {
+				$values[] = (int) $depth;
+			}
+		}
+		if ( empty( $values ) ) {
+			return 0;
+		}
+
+		sort( $values );
+		$p75  = $values[ max( 0, (int) ceil( 0.75 * count( $values ) ) - 1 ) ];
+		$kept = 0;
+		foreach ( $values as $value ) {
+			if ( $value <= 2 * $p75 && $value > $kept ) {
+				$kept = $value;
+			}
+		}
+
+		return $kept;
+	}
+
+	/**
+	 * Median of a non-empty list of numbers.
+	 *
+	 * @param array $values Numbers.
+	 * @return float Median.
+	 */
+	private static function median_of( $values ) {
+		sort( $values );
+		$count  = count( $values );
+		$middle = (int) floor( $count / 2 );
+
+		return ( 0 === $count % 2 )
+			? ( $values[ $middle - 1 ] + $values[ $middle ] ) / 2
+			: (float) $values[ $middle ];
 	}
 
 	/**

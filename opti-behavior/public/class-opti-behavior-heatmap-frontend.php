@@ -1047,6 +1047,16 @@ class Opti_Behavior_Heatmap_Frontend {
 			$this->enqueue_consent_assets( $options );
 		}
 
+		// Technical signature (OPT-2952): one console line, printed next to the
+		// tracker config already on the page. No new request, no new file; an
+		// excluded visitor never reaches here, so the line is never printed.
+		if ( class_exists( 'Opti_Behavior_Signature' ) ) {
+			$signature_script = Opti_Behavior_Signature::console_script( $privacy_mode );
+			if ( '' !== $signature_script ) {
+				wp_add_inline_script( 'opti-behavior-reporter', $signature_script, 'after' );
+			}
+		}
+
 		// Enqueue A/B test tracker when there are active tests.
 		$this->maybe_enqueue_ab_tracker();
 	}
@@ -2009,6 +2019,10 @@ JS;
 				'recordings_url'     => admin_url( 'admin.php?page=opti-behavior-recordings' ),
 				'errors_url'         => admin_url( 'admin.php?page=opti-behavior-errors&tab=errors' ),
 				'friction_url'       => admin_url( 'admin.php?page=opti-behavior-errors&tab=friction' ),
+				// Page X-Ray tab (OPT-2024): the JS adds &page_id=; locked view when Pro is closed.
+				'xray_url'           => class_exists( 'Opti_Behavior_Smart_Insights_Page' ) ? Opti_Behavior_Smart_Insights_Page::xray_url() : admin_url( 'admin.php?page=opti-behavior-smart-insights&tab=pages' ),
+				'xray_open'          => function_exists( 'opti_behavior_page_xray_available' ) && opti_behavior_page_xray_available(),
+				'xray_no_data'       => __( 'No data for this page yet', 'opti-behavior' ),
 				'settings'           => $settings,
 				'periods'            => Opti_Behavior_Page_Analytics_Repository::get_standard_periods(),
 				'default_period'     => Opti_Behavior_Page_Analytics_Repository::get_default_standard_period(),
@@ -2178,6 +2192,18 @@ JS;
 						</<?php echo esc_attr( $item_tag ); ?>>
 					<?php endforeach; ?>
 				</div>
+				<?php if ( $this->stats_bar_shows_xray() ) : ?>
+					<?php
+					// Page X-Ray of this page (OPT-2024): href set by frontend-stats-bar.js once
+					// the stats answer gives the page id; disabled until then / when not tracked.
+					$opti_behavior_xray_open = function_exists( 'opti_behavior_page_xray_available' ) && opti_behavior_page_xray_available();
+					$opti_behavior_xray_tip  = $opti_behavior_xray_open ? __( 'Page X-Ray', 'opti-behavior' ) : __( 'Page X-Ray (Pro)', 'opti-behavior' );
+					?>
+					<a class="opti-stats-bar__xray<?php echo $opti_behavior_xray_open ? '' : ' is-locked'; ?>" aria-disabled="true" data-tip="<?php echo esc_attr( $opti_behavior_xray_tip ); ?>" title="<?php echo esc_attr( $opti_behavior_xray_tip ); ?>" aria-label="<?php echo esc_attr( $opti_behavior_xray_tip ); ?>">
+						<i data-lucide="<?php echo $opti_behavior_xray_open ? 'stethoscope' : 'lock'; ?>"></i>
+						<?php if ( ! $opti_behavior_xray_open ) : ?><span class="opti-stats-bar__xray-badge" aria-hidden="true">PRO</span><?php endif; ?>
+					</a>
+				<?php endif; ?>
 				<button class="opti-stats-bar__toggle" title="<?php esc_attr_e( 'Hide Stats Bar', 'opti-behavior' ); ?>">
 					<i data-lucide="eye-off"></i>
 				</button>
@@ -2189,5 +2215,59 @@ JS;
 		</button>
 		<?php
 		$this->restore_admin_overlay_locale( $switched_locale );
+	}
+
+	/**
+	 * Whether the stats bar shows the Page X-Ray button on the current view (OPT-2024).
+	 *
+	 * @return bool
+	 */
+	private function stats_bar_shows_xray() {
+		$post_type = is_singular() ? get_post_type() : '';
+		$type_obj  = $post_type ? get_post_type_object( $post_type ) : null;
+		$woo       = function ( $fn ) {
+			return function_exists( $fn ) && call_user_func( $fn );
+		};
+
+		$shown = self::xray_shown_for(
+			array(
+				'singular'    => is_singular(),
+				'public_type' => $type_obj && ! empty( $type_obj->public ),
+				'attachment'  => is_attachment(),
+				'shop'        => $woo( 'is_shop' ),
+				'paged'       => is_paged(),
+				'search'      => is_search(),
+				'not_found'   => is_404(),
+				'private_woo' => $woo( 'is_cart' ) || $woo( 'is_checkout' ) || $woo( 'is_account_page' ),
+			)
+		);
+
+		/**
+		 * Filters whether the stats bar shows the Page X-Ray button.
+		 *
+		 * @param bool $shown Default answer for the current view.
+		 */
+		return (bool) apply_filters( 'opti_behavior_stats_bar_show_xray', $shown );
+	}
+
+	/**
+	 * Pure rule of the Page X-Ray button (OPT-2024): a single public content
+	 * (page, post, product, public custom type, static front page) or the shop.
+	 * Never attachments, lists (blog home, archives, search), 404, paged lists,
+	 * cart / checkout / account.
+	 *
+	 * @param array $ctx Flags: singular, public_type, attachment, shop, paged, search, not_found, private_woo.
+	 * @return bool
+	 */
+	public static function xray_shown_for( array $ctx ) {
+		$flag = function ( $key ) use ( $ctx ) {
+			return ! empty( $ctx[ $key ] );
+		};
+
+		if ( $flag( 'paged' ) || $flag( 'search' ) || $flag( 'not_found' ) || $flag( 'attachment' ) || $flag( 'private_woo' ) ) {
+			return false;
+		}
+
+		return $flag( 'shop' ) || ( $flag( 'singular' ) && $flag( 'public_type' ) );
 	}
 }

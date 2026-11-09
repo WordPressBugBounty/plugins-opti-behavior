@@ -291,6 +291,9 @@ class Opti_Behavior_Reports_Screen {
 		};
 		if ( false !== strpos( $hook_suffix, self::SLUG ) ) {
 			wp_enqueue_style( 'opti-behavior-dashboard-styles', OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/dashboard_styles.css', array(), $ver( 'css/dashboard_styles.css' ) );
+			if ( function_exists( 'opti_behavior_enqueue_tooltips' ) ) {
+				opti_behavior_enqueue_tooltips();
+			}
 			wp_enqueue_style( 'opti-behavior-reports', OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/reports.css', array( 'opti-behavior-dashboard-styles' ), $ver( 'css/reports.css' ) );
 			wp_enqueue_script( 'opti-behavior-reports', OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/reports.js', array(), $ver( 'js/reports.js' ), true );
 			wp_localize_script( 'opti-behavior-reports', 'optiBehaviorReports', self::client_config() );
@@ -486,7 +489,7 @@ class Opti_Behavior_Reports_Screen {
 	public static function has_visits() {
 		global $wpdb;
 		$table = $wpdb->prefix . 'optibehavior_sessions';
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name built from the prefix; one row, no user input.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table name built from the prefix; one row, no user input.
 		$found = $wpdb->get_var( "SELECT 1 FROM `{$table}` LIMIT 1" );
 
 		return null !== $found;
@@ -551,6 +554,16 @@ class Opti_Behavior_Reports_Screen {
 	 * ------------------------------------------------------------------- */
 
 	/**
+	 * Help mark of a part of the screen.
+	 *
+	 * @param string $key Key of opti_behavior_get_shop_reports_tooltips().
+	 * @return string HTML, escaped by opti_behavior_tooltip().
+	 */
+	private static function help( $key ) {
+		return function_exists( 'opti_behavior_shop_reports_help' ) ? opti_behavior_shop_reports_help( $key ) : '';
+	}
+
+	/**
 	 * Print the screen.
 	 *
 	 * @return void
@@ -574,7 +587,7 @@ class Opti_Behavior_Reports_Screen {
 					<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 					<div class="dashboard-title-text">
 						<?php Opti_Behavior_Admin_Brand::render_name(); ?>
-						<h1 class="dashboard-title"><?php esc_html_e( 'Reports', 'opti-behavior' ); ?></h1>
+						<h1 class="dashboard-title"><?php esc_html_e( 'Reports', 'opti-behavior' ); ?><?php echo self::help( 'reports' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></h1>
 						<p class="dashboard-subtitle"><?php esc_html_e( 'A printable A4 report of your site or of one page: open it, print it or save it as PDF.', 'opti-behavior' ); ?></p>
 					</div>
 				</div>
@@ -591,7 +604,7 @@ class Opti_Behavior_Reports_Screen {
 
 					<fieldset class="ob-reports__row">
 						<legend class="screen-reader-text"><?php esc_html_e( 'Report of', 'opti-behavior' ); ?></legend>
-						<div class="ob-reports__q" aria-hidden="true"><b><span class="ob-reports__step">1</span><?php esc_html_e( 'Report of', 'opti-behavior' ); ?></b><span><?php esc_html_e( 'The whole site, or one page in depth.', 'opti-behavior' ); ?></span></div>
+						<div class="ob-reports__q"><b><span class="ob-reports__step" aria-hidden="true">1</span><?php esc_html_e( 'Report of', 'opti-behavior' ); ?><?php echo self::help( 'of' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></b><span><?php esc_html_e( 'The whole site, or one page in depth.', 'opti-behavior' ); ?></span></div>
 						<div class="ob-reports__choices">
 							<label class="ob-reports__choice">
 								<input type="radio" name="type" value="site" data-ob-type <?php checked( 'site', $type ); ?>>
@@ -621,7 +634,7 @@ class Opti_Behavior_Reports_Screen {
 
 					<?php if ( null !== $pro && $has_pg ) : ?>
 						<div class="ob-reports__row" data-ob-show="page" <?php echo 'page' === $type ? '' : 'hidden'; ?>>
-							<div class="ob-reports__q"><b><span class="ob-reports__step" aria-hidden="true">2</span><label for="ob-reports-page"><?php esc_html_e( 'Page', 'opti-behavior' ); ?></label></b><span><?php esc_html_e( 'The pages of Page X-Ray, the most visited first.', 'opti-behavior' ); ?></span></div>
+							<div class="ob-reports__q"><b><span class="ob-reports__step" aria-hidden="true">2</span><label for="ob-reports-page"><?php esc_html_e( 'Page', 'opti-behavior' ); ?></label><?php echo self::help( 'page' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></b><span><?php esc_html_e( 'The pages of Page X-Ray, the most visited first.', 'opti-behavior' ); ?></span></div>
 							<div>
 								<select id="ob-reports-page" name="page_id">
 									<?php foreach ( array_slice( $pages, 0, self::PAGE_OPTIONS ) as $row ) : ?>
@@ -635,7 +648,7 @@ class Opti_Behavior_Reports_Screen {
 
 					<fieldset class="ob-reports__row">
 						<legend class="screen-reader-text"><?php esc_html_e( 'Period', 'opti-behavior' ); ?></legend>
-						<div class="ob-reports__q" aria-hidden="true"><b><span class="ob-reports__step">2</span><?php esc_html_e( 'Period', 'opti-behavior' ); ?></b><span><?php esc_html_e( 'Compared with the same number of days just before.', 'opti-behavior' ); ?></span></div>
+						<div class="ob-reports__q"><b><span class="ob-reports__step" aria-hidden="true">2</span><?php esc_html_e( 'Period', 'opti-behavior' ); ?><?php echo self::help( 'period' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></b><span><?php esc_html_e( 'Compared with the same number of days just before.', 'opti-behavior' ); ?></span></div>
 						<div>
 							<div class="ob-reports__period">
 								<div class="ob-reports__pills" role="radiogroup" aria-label="<?php esc_attr_e( 'Quick period', 'opti-behavior' ); ?>">
@@ -661,13 +674,13 @@ class Opti_Behavior_Reports_Screen {
 
 					<fieldset class="ob-reports__row" data-ob-show="site" <?php echo 'site' === $type ? '' : 'hidden'; ?>>
 						<legend class="screen-reader-text"><?php esc_html_e( 'Version', 'opti-behavior' ); ?></legend>
-						<div class="ob-reports__q" aria-hidden="true"><b><span class="ob-reports__step">3</span><?php esc_html_e( 'Version', 'opti-behavior' ); ?></b><span><?php esc_html_e( 'Short for a quick look, full to share with a client.', 'opti-behavior' ); ?></span></div>
+						<div class="ob-reports__q"><b><span class="ob-reports__step" aria-hidden="true">3</span><?php esc_html_e( 'Version', 'opti-behavior' ); ?><?php echo self::help( 'version' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></b><span><?php esc_html_e( 'Short for a quick look, full to share with a client.', 'opti-behavior' ); ?></span></div>
 						<div class="ob-reports__choices">
 							<label class="ob-reports__choice">
 								<input type="radio" name="version" value="short" data-ob-version <?php checked( null === $pro ); ?>>
 								<span class="ob-reports__card">
 									<span class="ob-reports__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg></span>
-									<span><strong><?php esc_html_e( 'Short', 'opti-behavior' ); ?></strong><p><?php esc_html_e( 'Traffic and the 3 most costly issues. About 2 pages.', 'opti-behavior' ); ?></p></span>
+									<span><strong><?php esc_html_e( 'Short', 'opti-behavior' ); ?></strong><p><?php esc_html_e( 'Traffic and the 3 issues to look at first. About 2 pages.', 'opti-behavior' ); ?></p></span>
 									<span class="ob-reports__dot" aria-hidden="true"></span>
 								</span>
 							</label>
@@ -692,7 +705,7 @@ class Opti_Behavior_Reports_Screen {
 						<fieldset class="ob-reports__row" data-ob-show="full" <?php echo 'site' === $type ? '' : 'hidden'; ?>>
 							<legend class="screen-reader-text"><?php esc_html_e( 'Pages in annex', 'opti-behavior' ); ?></legend>
 							<?php /* translators: %d: most pages in annex (10). */ ?>
-							<div class="ob-reports__q" aria-hidden="true"><b><span class="ob-reports__step">4</span><?php esc_html_e( 'Pages in annex', 'opti-behavior' ); ?></b><span><?php echo esc_html( sprintf( __( 'Each one adds its full page report at the end. Up to %d.', 'opti-behavior' ), Opti_Behavior_Report::MAX_ANNEX_PAGES ) ); ?></span></div>
+							<div class="ob-reports__q"><b><span class="ob-reports__step" aria-hidden="true">4</span><?php esc_html_e( 'Pages in annex', 'opti-behavior' ); ?><?php echo self::help( 'annex' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></b><span><?php echo esc_html( sprintf( __( 'Each one adds its full page report at the end. Up to %d.', 'opti-behavior' ), Opti_Behavior_Report::MAX_ANNEX_PAGES ) ); ?></span></div>
 							<div>
 								<?php $chosen = min( self::ANNEX_DEFAULT, count( $annex ) ); ?>
 								<?php /* translators: 1: number of pages chosen, 2: most pages allowed. */ ?>

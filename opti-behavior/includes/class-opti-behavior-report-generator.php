@@ -272,7 +272,18 @@ class Opti_Behavior_Report_Generator {
 		if ( null === $shop ) {
 			return array();
 		}
-		$shop['pro']      = Opti_Behavior_Shop_Report::pro_part( $shop );
+		global $wpdb;
+		$session_spam_sql = $this->session_spam_sql( 's' );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$visits = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->prefix}optibehavior_sessions s WHERE s.start_time BETWEEN %s AND %s {$session_spam_sql}", $this->period_start->format( 'Y-m-d H:i:s' ), $this->period_end->format( 'Y-m-d H:i:s' ) ) );
+
+		$shop['visits']      = $visits;
+		$shop['atc_suspect'] = isset( $shop['totals']['atc'] ) && Opti_Behavior_Shop_Report::adds_look_suspect( $shop['totals']['atc'], $visits );
+		// Adds to cart to check first: no product ranking, no money built on them.
+		if ( $shop['atc_suspect'] ) {
+			$shop['products'] = array();
+		}
+		$shop['pro']      = $shop['atc_suspect'] ? null : Opti_Behavior_Shop_Report::pro_part( $shop );
 		$shop['pro_line'] = null === $shop['pro'] && ! defined( 'OPTI_BEHAVIOR_PRO_VERSION' );
 		return $shop;
 	}
@@ -403,7 +414,7 @@ class Opti_Behavior_Report_Generator {
 		}
 		$start = $this->period_start->format( 'Y-m-d H:i:s' );
 		$end   = $this->period_end->format( 'Y-m-d H:i:s' );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix.
+		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix.
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT t.name, t.status, t.ended_at, v.name AS winner
@@ -419,7 +430,6 @@ class Opti_Behavior_Report_Generator {
 			),
 			ARRAY_A
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		return is_array( $rows ) ? $rows : array();
 	}
 
@@ -454,7 +464,7 @@ class Opti_Behavior_Report_Generator {
 			: array( 'network_error', 'resource_load_error', 'resource_error', 'broken_link', '404', 'api_error', 'timeout_error', 'cors_error' );
 		$in    = "'" . implode( "', '", array_map( 'esc_sql', $types ) ) . "'";
 		$spam  = $this->session_spam_sql( 's' );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; fixed type list escaped above.
+		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; fixed type list escaped above.
 		$js = $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT COUNT(*)
@@ -468,7 +478,6 @@ class Opti_Behavior_Report_Generator {
 				$this->period_end->format( 'Y-m-d H:i:s' )
 			)
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		if ( null !== $js ) {
 			$out['js_errors'] = (int) $js;
 		}
@@ -632,7 +641,7 @@ class Opti_Behavior_Report_Generator {
 			),
 			'avg_session_time' => array(
 				'value'     => (int) ( $current['avg_duration'] ?? 0 ),
-				'formatted' => $this->format_duration( $current['avg_duration'] ?? 0 ),
+				'formatted' => $this->format_duration( (int) ( $current['avg_duration'] ?? 0 ) ),
 				'change'    => $this->calculate_change( $current['avg_duration'] ?? 0, $previous['avg_duration'] ?? 0 ),
 			),
 			'bounce_rate'      => array(
@@ -736,8 +745,12 @@ class Opti_Behavior_Report_Generator {
 			ARRAY_A
 		);
 		$pages = array_slice( self::merge_pages_by_identity( (array) $pages ), 0, max( 1, (int) $limit ) );
+		$visits = self::screen_page_visits( $this->get_screen_figures( $start, $end, array( 'top_pages' ) ) );
 
 		foreach ( $pages as &$page ) {
+			// OPT-2484: visits of the Traffic Top Pages widget (null = unknown).
+			$key                        = function_exists( 'opti_behavior_page_identity_key' ) ? (string) opti_behavior_page_identity_key( (string) ( $page['url'] ?? '' ) ) : '';
+			$page['visits']             = '' !== $key && isset( $visits[ $key ] ) ? $visits[ $key ] : null;
 			$page['page_id']            = (int) ( $page['page_id'] ?? 0 );
 			$page['views']              = (int) $page['views'];
 			$avg_time                   = (float) ( $page['avg_time'] ?? 0 );
@@ -746,6 +759,31 @@ class Opti_Behavior_Report_Generator {
 		}
 
 		return $pages;
+	}
+
+	/**
+	 * Visits per page of the Traffic Top Pages widget (OPT-2484), pure:
+	 * page identity key => `sessions` of the widget row.
+	 *
+	 * @param array|null $figures get_report_email_figures() answer.
+	 * @return array
+	 */
+	public static function screen_page_visits( $figures ) {
+		$map = array();
+		if ( ! is_array( $figures ) || empty( $figures['top_pages'] ) || ! is_array( $figures['top_pages'] ) || ! function_exists( 'opti_behavior_page_identity_key' ) ) {
+			return $map;
+		}
+		foreach ( $figures['top_pages'] as $row ) {
+			if ( ! is_array( $row ) || ! isset( $row['sessions'] ) ) {
+				continue;
+			}
+			$key = (string) opti_behavior_page_identity_key( (string) ( $row['url'] ?? '' ) );
+			if ( '' !== $key && ! isset( $map[ $key ] ) ) {
+				$map[ $key ] = absint( $row['sessions'] );
+			}
+		}
+
+		return $map;
 	}
 
 	/**
@@ -1394,7 +1432,7 @@ class Opti_Behavior_Report_Generator {
 		return array(
 			'total'               => (int) ( $stats['total'] ?? 0 ),
 			'avg_duration'        => (int) ( $stats['avg_duration'] ?? 0 ),
-			'avg_duration_formatted' => $this->format_duration( $stats['avg_duration'] ?? 0 ),
+			'avg_duration_formatted' => $this->format_duration( (int) ( $stats['avg_duration'] ?? 0 ) ),
 			'watched'             => (int) ( $stats['watched'] ?? 0 ),
 			'unwatched'           => (int) ( ( $stats['total'] ?? 0 ) - ( $stats['watched'] ?? 0 ) ),
 			'avg_pages_per_session' => round( (float) ( $stats['avg_pages'] ?? 0 ), 1 ),
@@ -1459,11 +1497,51 @@ class Opti_Behavior_Report_Generator {
 			)
 		);
 
+		// OPT-2608: "Unresolved" = the Errors Tracking screen. The screen keeps the
+		// status per group (error_types.status, Resolve / Ignore buttons), never
+		// errors.resolved, so read its own list when Pro provides it.
+		$screen = $this->get_screen_unresolved_errors( $this->period_start->format( 'Y-m-d' ), $this->period_end->format( 'Y-m-d' ) );
+		if ( null !== $screen ) {
+			$unresolved = min( $screen, (int) $total );
+		}
+
 		return array(
 			'total'      => (int) $total,
 			'unresolved' => (int) $unresolved,
 			'by_type'    => $by_type,
 		);
+	}
+
+	/**
+	 * Errors of the period that the Errors Tracking screen shows as not
+	 * resolved: occurrences of the groups whose status is open / investigating
+	 * (a group without stored status is shown "Open").
+	 *
+	 * @param string $from Y-m-d.
+	 * @param string $to   Y-m-d, inclusive.
+	 * @return int|null Null when the Pro list is not available.
+	 */
+	private function get_screen_unresolved_errors( $from, $to ) {
+		if ( ! class_exists( 'Opti_Behavior_Errors_Tracking' ) || ! method_exists( 'Opti_Behavior_Errors_Tracking', 'ranked_error_groups' ) ) {
+			return null;
+		}
+		try {
+			$groups = Opti_Behavior_Errors_Tracking::ranked_error_groups( $from, $to, $this->should_exclude_spam() );
+		} catch ( \Throwable $e ) {
+			return null;
+		}
+		if ( ! is_array( $groups ) ) {
+			return null;
+		}
+		$count = 0;
+		foreach ( $groups as $group ) {
+			// status_rank: 0 = no stored status (open), 1 open, 2 investigating, 3 resolved, 4 ignored.
+			if ( isset( $group['status_rank'] ) && (int) $group['status_rank'] >= 3 ) {
+				continue;
+			}
+			$count += isset( $group['occurrence_count'] ) ? (int) $group['occurrence_count'] : 0;
+		}
+		return $count;
 	}
 
 	/**
@@ -2276,11 +2354,14 @@ class Opti_Behavior_Report_Generator {
 	/**
 	 * Format duration in seconds to human-readable string.
 	 *
-	 * @param int $seconds Duration in seconds.
+	 * Rounded to the nearest second before the minute split, like the
+	 * Traffic screen (OB-08): 61.99 s = "1m 2s", 59.6 s = "1m 0s".
+	 *
+	 * @param int|float $seconds Duration in seconds.
 	 * @return string
 	 */
 	private function format_duration( $seconds ) {
-		$seconds = (int) $seconds;
+		$seconds = (int) round( (float) $seconds );
 
 		if ( $seconds < 60 ) {
 			return sprintf( '%ds', $seconds );

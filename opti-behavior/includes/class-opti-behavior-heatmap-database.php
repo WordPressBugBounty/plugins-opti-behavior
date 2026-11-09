@@ -98,8 +98,9 @@ class Opti_Behavior_Heatmap_Database {
 	/**
 	 * Bump to run the URL privacy repair again (e.g. new default parameters).
 	 * 2 = OPT-602: site_url / siteurl / home_url / website / domain.
+	 * 3 = OPT-2978: our own opti_ab_variant marker (A/B page split).
 	 */
-	const URL_PRIVACY_REPAIR_VERSION = 2;
+	const URL_PRIVACY_REPAIR_VERSION = 3;
 
 	/**
 	 * Row-count estimate above which a table is considered "large": DDL on it
@@ -351,6 +352,14 @@ class Opti_Behavior_Heatmap_Database {
 		if ( class_exists( 'Opti_Behavior_Shop_Events' ) ) {
 			$debug_manager->log( 'Creating/updating shop events table', 'debug', 'database' );
 			Opti_Behavior_Shop_Events::create_table( $charset_collate );
+		}
+
+		// Create the AI bot daily counters (OPT-2859): one row per day x AI bot x
+		// page, so the AI widgets and the site report keep 12 months of history.
+		if ( class_exists( 'Opti_Behavior_AI_Bot_Daily' ) ) {
+			$debug_manager->log( 'Creating/updating AI bot daily counters table', 'debug', 'database' );
+			Opti_Behavior_AI_Bot_Daily::create_table( $charset_collate );
+			Opti_Behavior_AI_Bot_Daily::maybe_backfill();
 		}
 
 		// Create Smart Insights table (for deterministic, aggregated insight storage)
@@ -5263,6 +5272,8 @@ class Opti_Behavior_Heatmap_Database {
 		// Always strip debug/marketing params from canonical URL (url2)
 		$always_strip = array(
 			'opti_behavior_debug',
+			// Our own A/B page-split marker (OPT-2978): the B page is one page.
+			'opti_ab_variant',
 			'utm_source','utm_medium','utm_campaign','utm_term','utm_content',
 			'gclid','fbclid','msclkid','mc_cid','mc_eid','ref',
 			// Click / tracking IDs appended by ad networks and social apps. Any of

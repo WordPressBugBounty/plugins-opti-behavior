@@ -3946,12 +3946,17 @@
 		var sigConfidence = 0;
 		var sigTarget = 95;
 		var sigIsSignificant = false;
+		var sigNotEnough     = false;
+		var sigMessage       = '';
 
 		if ( typeof sigData === 'object' ) {
 			sigBarPct        = parseFloat(sigData.bar_pct) || 0;
 			sigConfidence    = parseFloat(sigData.confidence) || 0;
 			sigTarget        = parseFloat(sigData.target) || 95;
 			sigIsSignificant = !!sigData.is_significant;
+			// OPT-2978: a variant below the minimum sample size = no confidence figure.
+			sigNotEnough     = !!sigData.not_enough;
+			sigMessage       = sigData.message || '';
 		} else {
 			// Backward compat: old format was just a number.
 			sigBarPct = parseInt(sigData, 10) || 0;
@@ -3959,10 +3964,10 @@
 		}
 
 		// Hero confidence card.
-		$('#opti-ab-sig-hero').text(sigConfidence.toFixed(1) + '%');
+		$('#opti-ab-sig-hero').text(sigNotEnough ? '—' : sigConfidence.toFixed(1) + '%');
 
 		// Radial gauge: update pct label and SVG arc stroke-dashoffset.
-		$('#opti-ab-significance-pct').text(sigConfidence.toFixed(1) + '%');
+		$('#opti-ab-significance-pct').text(sigNotEnough ? '—' : sigConfidence.toFixed(1) + '%');
 		var arc = document.getElementById('opti-ab-significance-fill');
 		if ( arc ) {
 			var circumference = 515;
@@ -3975,7 +3980,9 @@
 		}
 
 		// Update hint text with context.
-		if ( sigIsSignificant ) {
+		if ( sigNotEnough ) {
+			$('#opti-ab-significance-hint').text( sigMessage || ( strings.sig_collecting || 'Collecting data — more visitors are needed to reach statistical significance.' ) ).show();
+		} else if ( sigIsSignificant ) {
 			$('#opti-ab-significance-hint').text(( strings.sig_reached || 'Statistical significance reached! The result is reliable.' )).show();
 		} else if ( sigConfidence > 0 ) {
 			var remaining = (sigTarget - sigConfidence).toFixed(1);
@@ -4088,7 +4095,8 @@
 				cardHtml += '<div><strong>' + ci_lower + '% – ' + ci_upper + '%</strong>' + escHtml( strings.ci_95 || '95% CI' ) + '</div>';
 				if ( v.p_value !== undefined && v.p_value !== null ) {
 					var pVal     = parseFloat(v.p_value);
-					var pDisplay = isControl ? '—' : pVal.toFixed(4);
+					// OPT-2978: no p-value while a variant is under the minimum sample size.
+					var pDisplay = ( isControl || sigNotEnough ) ? '—' : pVal.toFixed(4);
 					cardHtml += '<div><strong>' + pDisplay + '</strong>' + escHtml( strings.p_value || 'p-value' ) + '</div>';
 				}
 				cardHtml += '</div>'; // .opti-ab-vs-card__stats
@@ -4186,7 +4194,8 @@
 				cardsHtml += '    <div class="opti-ab-variant-card__stat-item"><strong>' + ci_lower + '% – ' + ci_upper + '%</strong>' + escHtml( strings.ci_95 || '95% CI' ) + '</div>';
 				if ( v.p_value !== undefined && v.p_value !== null ) {
 					var pVal = parseFloat(v.p_value);
-					var pDisplay = isControl ? '—' : pVal.toFixed(4);
+					// OPT-2978: no p-value while a variant is under the minimum sample size.
+					var pDisplay = ( isControl || sigNotEnough ) ? '—' : pVal.toFixed(4);
 					cardsHtml += '    <div class="opti-ab-variant-card__stat-item"><strong>' + pDisplay + '</strong>' + escHtml( strings.p_value || 'p-value' ) + '</div>';
 				}
 				cardsHtml += '  </div>';

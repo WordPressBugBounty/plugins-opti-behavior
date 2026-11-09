@@ -438,6 +438,31 @@ trait Opti_Behavior_Assets_Trait {
                     array( 'opti-behavior-' . $opti_behavior_pro_slug . '-upgrade' ),
                     OPTI_BEHAVIOR_HEATMAP_VERSION . ( file_exists( $opti_behavior_pro_css ) ? '.' . filemtime( $opti_behavior_pro_css ) : '' )
                 );
+
+                // One-click Pro trial form of that page (OPT-3054): the click
+                // goes to admin-ajax, WordPress calls the API, the answer is a
+                // message on the page. No call at load.
+                $opti_behavior_signup_js = OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'assets/js/pro-signup.js';
+                wp_enqueue_script(
+                    'opti-behavior-pro-signup',
+                    OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/pro-signup.js',
+                    array(),
+                    OPTI_BEHAVIOR_HEATMAP_VERSION . ( file_exists( $opti_behavior_signup_js ) ? '.' . filemtime( $opti_behavior_signup_js ) : '' ),
+                    true
+                );
+                wp_localize_script(
+                    'opti-behavior-pro-signup',
+                    'optiBehaviorProSignup',
+                    array(
+                        'ajaxUrl'     => admin_url( 'admin-ajax.php' ),
+                        'fallbackUrl' => class_exists( 'Opti_Behavior_Trial_Signup' ) ? Opti_Behavior_Trial_Signup::fallback_url() : '',
+                        'i18n'        => array(
+                            'sending'  => __( 'Creating your trial…', 'opti-behavior' ),
+                            'failed'   => __( 'Something went wrong. Open the trial page to finish.', 'opti-behavior' ),
+                            'openPage' => __( 'Open the trial page', 'opti-behavior' ),
+                        ),
+                    )
+                );
                 break;
             }
         }
@@ -489,6 +514,7 @@ trait Opti_Behavior_Assets_Trait {
                         'sizeDbLabel'       => __( 'DB', 'opti-behavior' ),
                         'sizeFilesLabel'    => __( 'Files', 'opti-behavior' ),
                         'sizeTotalLabel'    => __( 'Total storage:', 'opti-behavior' ),
+                        'sizeSelectedLabel' => __( 'Selected:', 'opti-behavior' ),
                         'repairing'         => __( 'Repairing…', 'opti-behavior' ),
                         /* translators: %d: number of pages checked */
                         'repairComplete'    => __( 'Heatmap sync repaired for %d page(s).', 'opti-behavior' ),
@@ -625,12 +651,19 @@ trait Opti_Behavior_Assets_Trait {
                         'botSessionsCleaned'       => __( '%d bot/spam sessions cleaned successfully.', 'opti-behavior' ),
                         'errorSavingSettings'      => __( 'Error saving settings', 'opti-behavior' ),
                         'storageLoadFailed'        => __( 'Could not load storage data.', 'opti-behavior' ),
+                        'storageTimeout'           => __( 'This block took too long to load.', 'opti-behavior' ),
                         'storageRetry'             => __( 'Retry', 'opti-behavior' ),
                         'storageApprox'            => __( '≈', 'opti-behavior' ),
                         'storageCountsFailed'      => __( 'Exact row counts could not be loaded — showing estimates (≈).', 'opti-behavior' ),
                         'storageNoTables'          => __( 'No database tables found.', 'opti-behavior' ),
                         'storageStatusActive'      => __( 'Active', 'opti-behavior' ),
                         'storageStatusEmpty'       => __( 'Empty', 'opti-behavior' ),
+                        // OPT-1944: batched file scan.
+                        'storageRecalculate'       => __( 'Recalculate', 'opti-behavior' ),
+                        'storageFilesBusy'         => __( 'Another calculation is running in another tab. Try again in a minute.', 'opti-behavior' ),
+                        'storageFilesProxyTimeout' => __( 'The server or a proxy stopped the request (gateway timeout). Retry continues where it stopped.', 'opti-behavior' ),
+                        'storageFilesServerError'  => __( 'The server answered with an error (500). Retry continues where it stopped; if it fails again, look at the PHP error log.', 'opti-behavior' ),
+                        'sizeFilesPending'         => __( 'calculating…', 'opti-behavior' ),
                     ),
                 )
             );
@@ -783,13 +816,25 @@ trait Opti_Behavior_Assets_Trait {
                         'relatedUnavailable' => __( 'No deep link available', 'opti-behavior' ),
                         'noApplicableReports' => __( 'No report applies directly to this insight.', 'opti-behavior' ),
                         // Card + detail anatomy (OPT-362): key-figure labels by impact basis, followed by " · <period>".
-                        'figureFunnelDropoff'   => __( 'visits lost at this step', 'opti-behavior' ),
-                        'figureFormAbandonment' => __( 'abandoned forms', 'opti-behavior' ),
-                        'figureErrorImpact'     => __( 'visitors hit this error', 'opti-behavior' ),
-                        'figureConversionGap'   => __( 'conversions lost vs. site average', 'opti-behavior' ),
-                        'figureEngagementGap'   => __( 'visitors lost vs. site average', 'opti-behavior' ),
-                        'figureFriction'        => __( 'visits with rage or dead clicks', 'opti-behavior' ),
-                        'figureVisitsLost'      => __( 'visits lost', 'opti-behavior' ),
+                        // OB-07: the units of the site report (Report_Site::issue_unit()), never "lost":
+                        // a step exit, a friction or a gap to a reference rate is not a lost sale.
+                        'figureFunnelDropoff'   => _n( 'visit left at this step', 'visits left at this step', 2, 'opti-behavior' ),
+                        'figureFormAbandonment' => _n( 'form attempt not sent', 'form attempts not sent', 2, 'opti-behavior' ),
+                        'figureErrorImpact'     => _n( 'visit with an error', 'visits with an error', 2, 'opti-behavior' ),
+                        'figureConversionGap'   => _n( 'conversion under the comparison rate, estimated', 'conversions under the comparison rate, estimated', 2, 'opti-behavior' ),
+                        'figureEngagementGap'   => _n( 'visit under the average, estimated', 'visits under the average, estimated', 2, 'opti-behavior' ),
+                        'figureFriction'        => _n( 'visit with rage or dead clicks', 'visits with rage or dead clicks', 2, 'opti-behavior' ),
+                        'figureVisitsLost'      => _n( 'visit concerned', 'visits concerned', 2, 'opti-behavior' ),
+                        // Singular of the same units (count 1), read by smart-insights.js figureUnit().
+                        'figureUnitsOne'        => array(
+                            'funnel_dropoff'   => _n( 'visit left at this step', 'visits left at this step', 1, 'opti-behavior' ),
+                            'form_abandonment' => _n( 'form attempt not sent', 'form attempts not sent', 1, 'opti-behavior' ),
+                            'error_impact'     => _n( 'visit with an error', 'visits with an error', 1, 'opti-behavior' ),
+                            'conversion_gap'   => _n( 'conversion under the comparison rate, estimated', 'conversions under the comparison rate, estimated', 1, 'opti-behavior' ),
+                            'engagement_gap'   => _n( 'visit under the average, estimated', 'visits under the average, estimated', 1, 'opti-behavior' ),
+                            'friction'         => _n( 'visit with rage or dead clicks', 'visits with rage or dead clicks', 1, 'opti-behavior' ),
+                            'default'          => _n( 'visit concerned', 'visits concerned', 1, 'opti-behavior' ),
+                        ),
                         /* translators: 1: share of visitors lost at the step, 2: visitors lost, 3: visitors who reached the step. */
                         'figureStepDropoff'     => __( 'Step drop-off %1$s (%2$s of %3$s)', 'opti-behavior' ),
                         /* translators: 1: metric name, 2: value on this page, 3: site average. */
@@ -798,6 +843,15 @@ trait Opti_Behavior_Assets_Trait {
                         'funnelCompletion'      => __( 'Whole funnel completion: %1$s (%2$s of %3$s)', 'opti-behavior' ),
                         /* translators: %s: the measured cause and its value. */
                         'likelyCauseLine'       => __( 'Likely cause: %s', 'opti-behavior' ),
+                        /* translators: %s: what we see and its value. */
+                        'causeObservationLine'  => __( 'Observation: %s', 'opti-behavior' ),
+                        /* translators: %s: the measurement that confirms what we see, and its value. */
+                        'causeEvidenceLine'     => __( 'Evidence: %s', 'opti-behavior' ),
+                        /* translators: %s: a cause we measured, and its value. */
+                        'measuredCauseLine'     => __( 'Measured cause: %s', 'opti-behavior' ),
+                        'causeLevelObservation' => __( 'Observation', 'opti-behavior' ),
+                        'causeLevelProof'       => __( 'Evidence', 'opti-behavior' ),
+                        'causeLevelCause'       => __( 'Measured cause', 'opti-behavior' ),
                         /* translators: %s: number of visits. */
                         'basedOnVisits'         => __( 'Based on %s visits', 'opti-behavior' ),
                         'visitsMeasured'        => __( 'Visits measured', 'opti-behavior' ),
@@ -819,6 +873,7 @@ trait Opti_Behavior_Assets_Trait {
                         'nextAction'         => __( 'Next action', 'opti-behavior' ),
                         'defaultNextAction'  => __( 'Review the evidence, open the most relevant report, and decide whether this should move to In progress.', 'opti-behavior' ),
                         'likelyCauses'       => __( 'Likely causes', 'opti-behavior' ),
+                        'observationsAndEvidence' => __( 'Observations and evidence', 'opti-behavior' ),
                         'thingsToCheck'       => __( 'Things to check', 'opti-behavior' ),
                         'generalThingsToCheck' => __( 'General things to check', 'opti-behavior' ),
                         'checkLikely'        => __( 'Likely', 'opti-behavior' ),
@@ -827,8 +882,8 @@ trait Opti_Behavior_Assets_Trait {
                         /* translators: %s: number of ruled-out checks. */
                         'checkShowRuledOut'  => __( 'Show ruled out (%s)', 'opti-behavior' ),
                         /* translators: 1: number of lost sessions measured, 2: number of sessions that continued. */
-                        'checkSample'        => __( 'Measured on %1$s lost and %2$s continued sessions', 'opti-behavior' ),
-                        'checkMoreWithPro'   => __( 'More checks with Pro: errors, form abandonment, rage clicks, mobile share and load time, compared between lost visitors and those who continued.', 'opti-behavior' ),
+                        'checkSample'        => __( 'Measured on %1$s sessions that left and %2$s that continued', 'opti-behavior' ),
+                        'checkMoreWithPro'   => __( 'More checks with Pro: errors, form abandonment, rage clicks, mobile share and load time, compared between visitors who left and those who continued.', 'opti-behavior' ),
                         /* translators: %s: formatted number of sessions. */
                         'causeSessions'      => __( '%s sessions', 'opti-behavior' ),
                         /* translators: %s: formatted percentage of affected sessions. */
@@ -1298,14 +1353,18 @@ trait Opti_Behavior_Assets_Trait {
 			);
 
 			// "How it works" strip (Opti_Behavior_Smart_Insights_Sensors): the server
-			// prints it open on the user's first visit only (OPT-1168); a fold or an
-			// unfold made by hand is remembered per browser ("obSiLoopState"; the
-			// older "obSiLoopFolded" = 1 still folds). Only a real click / key press
-			// is stored: browsers also fire "toggle" for the printed state.
+			// prints it open on the first visit / while no open problem exists, and
+			// applies the fold state the user chose (user meta, OPT-2179). A fold or
+			// an unfold made by hand is posted to admin-ajax
+			// `opti_behavior_si_loop_state` (+ kept per browser, "obSiLoopState");
+			// with nothing saved for the user yet, the old browser choice
+			// ("obSiLoopState", or "obSiLoopFolded" = 1) is applied and saved once.
+			// Only a real click / key press is stored: browsers also fire "toggle"
+			// for the printed state. The summary carries aria-expanded.
 			if ( wp_script_is( 'opti-behavior-smart-insights', 'enqueued' ) ) {
 				wp_add_inline_script(
 					'opti-behavior-smart-insights',
-					'(function(){function run(){var d=document.querySelector("[data-ob-si-loop]");if(!d){return;}var k="obSiLoopState",u=false,s=d.querySelector("summary");try{var v=window.localStorage.getItem(k);if("open"===v){d.setAttribute("open","");}else if("closed"===v||(null===v&&"1"===window.localStorage.getItem("obSiLoopFolded"))){d.removeAttribute("open");}}catch(e){}function mark(){u=true;}if(s){s.addEventListener("click",mark);s.addEventListener("keydown",mark);}d.addEventListener("toggle",function(){if(!u){return;}try{window.localStorage.setItem(k,d.open?"open":"closed");}catch(e){}});}if("loading"===document.readyState){document.addEventListener("DOMContentLoaded",run);}else{run();}})();'
+					'(function(){function run(){var d=document.querySelector("[data-ob-si-loop]");if(!d){return;}var k="obSiLoopState",u=false,s=d.querySelector("summary"),saved="1"===d.getAttribute("data-ob-si-loop-saved");function save(v){var n=d.getAttribute("data-ob-si-loop-nonce"),a=window.ajaxurl;if(!n||!a||!window.fetch||!window.URLSearchParams){return;}var b=new window.URLSearchParams();b.append("action","opti_behavior_si_loop_state");b.append("state",v);b.append("_ajax_nonce",n);window.fetch(a,{method:"POST",credentials:"same-origin",body:b}).catch(function(){});}function sync(){if(s){s.setAttribute("aria-expanded",d.open?"true":"false");}}if(!saved){try{var v=window.localStorage.getItem(k);if("open"===v){d.setAttribute("open","");save("open");}else if("closed"===v||(null===v&&"1"===window.localStorage.getItem("obSiLoopFolded"))){d.removeAttribute("open");save("closed");}}catch(e){}}sync();function mark(){u=true;}if(s){s.addEventListener("click",mark);s.addEventListener("keydown",mark);}d.addEventListener("toggle",function(){sync();if(!u){return;}var v=d.open?"open":"closed";try{window.localStorage.setItem(k,v);}catch(e){}save(v);});}if("loading"===document.readyState){document.addEventListener("DOMContentLoaded",run);}else{run();}})();'
 				);
 			}
 		}
@@ -1476,6 +1535,13 @@ trait Opti_Behavior_Assets_Trait {
                         'noOperatingSystemData'   => __( 'No operating system data available', 'opti-behavior' ),
                         'noPageData'              => __( 'No page data available', 'opti-behavior' ),
                         'noVisitorData'           => __( 'No visitor data available', 'opti-behavior' ),
+                        // OB-18: block that failed to load (dashboard.js showWidgetError()).
+                        'widgetLoadError'         => __( 'This block could not be loaded.', 'opti-behavior' ),
+                        'widgetTimeout'           => __( 'This block took too long to load.', 'opti-behavior' ),
+                        /* translators: %s: time of the last figures loaded */
+                        'widgetLastData'          => __( 'Showing the figures loaded at %s.', 'opti-behavior' ),
+                        'widgetRetry'             => __( 'Retry', 'opti-behavior' ),
+                        'widgetLoading'           => __( 'Loading...', 'opti-behavior' ),
                         'dataWillAppear'          => __( 'Data will appear as visitors interact with your site.', 'opti-behavior' ),
                         'chartBrowsers'           => __( 'Browsers', 'opti-behavior' ),
                         'chartOperatingSystems'   => __( 'Operating Systems', 'opti-behavior' ),
@@ -1565,7 +1631,9 @@ trait Opti_Behavior_Assets_Trait {
             // v11: panel "Pro installed but licence not confirmed" (OPT-927).
             // v13: the catch-alls spare the wp.media modal (root, thumbnails,
             // upload zone): Reports logo picker (OPT-1346).
-            OPTI_BEHAVIOR_HEATMAP_VERSION . '-admin-notices-v13'
+            // v14: heatmap detail reason strip `.heatmap-overlay-warning.is-visible` (OB-09).
+            // v15: layout of the "Get Pro free" banner `.ob-pro-upsell` (OPT-3054).
+            OPTI_BEHAVIOR_HEATMAP_VERSION . '-admin-notices-v15'
         );
 
         // Brand mark of the screen headers (OPT-1504), Free and Pro screens.

@@ -54,10 +54,10 @@ div[data-dismissible],
 .ocean-notice,
 
 /* Generic message containers (exclude ob-* prefixed classes — Opti-Behavior internal elements) */
-div[id^="message"]:not(#support-form-message),
-div[id*="notice"],
-div[id*="warning"],
-div[id*="error"],
+div[id^="message"]:not(#support-form-message):not([id^="ob-"]):not([class^="ob-"]),
+div[id*="notice"]:not([id^="ob-"]):not([class^="ob-"]),
+div[id*="warning"]:not([id^="ob-"]):not([class^="ob-"]),
+div[id*="error"]:not([id^="ob-"]):not([class^="ob-"]),
 div[class*="notice"]:not([class^="ob-"]),
 div[class*="message"]:not(.form-message):not(#support-form-message):not([class^="ob-"]):not(.uploader-inline-content),
 div[class*="notification"]:not([class^="ob-"]),
@@ -81,8 +81,8 @@ div[class*="rating"]:not([class^="ob-"]):not([class*=" ob-"]),
 div[class*="feedback"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ai-feedback-section):not(.feedback-card):not(.feedback-icon):not(.feedback-title):not(.feedback-description):not(.feedback-actions):not(.feedback-btn):not(.feedback-note),
 
 /* Newsletter/subscription notices */
-div[class*="newsletter"],
-div[class*="subscribe"],
+div[class*="newsletter"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
+div[class*="subscribe"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
 
 /* Promotional notices (third-party). Allow Opti-Behavior upgrade layouts.
  * The `:not([class^="ob-"])` guard is the same one the plugin-pattern block
@@ -95,31 +95,38 @@ div[class*="upgrade"]:not([class*="opti-behavior"]):not([class^="ob-"]):not(.upg
 div[class*="premium"]:not([class*="opti-behavior"]):not([class^="ob-"]),
 
 /* Survey/feedback notices */
-div[class*="survey"],
-div[class*="poll"],
+div[class*="survey"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
+div[class*="poll"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
 
 /* Cookie/GDPR notices (admin only) */
-#wpbody-content div[class*="cookie"],
-#wpbody-content div[class*="gdpr"],
+#wpbody-content div[class*="cookie"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
+#wpbody-content div[class*="gdpr"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
 
 /* Backup/security notices */
-div[class*="backup"],
-div[class*="security"],
+div[class*="backup"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
+div[class*="security"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
 
 /* Update notices */
-div[class*="update"],
+div[class*="update"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
 
 /* Donation/support notices.
  * `.supports-drag-drop` = the wp.media modal root (`#__wp-uploader-id-N`, child
  * of body): without the exclusion the logo picker of the Reports screen opens
  * invisible and leaves body.modal-open stuck (OPT-1346). */
-div[class*="donate"],
-div[class*="support"]:not(.support-form):not([id*="support-"]):not(.supports-drag-drop):not([id^="__wp-uploader"]),
+div[class*="donate"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
+div[class*="support"]:not(.support-form):not([id*="support-"]):not(.supports-drag-drop):not([id^="__wp-uploader"]):not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
 
-/* Onboarding/welcome notices */
-div[class*="welcome"],
-div[class*="onboard"],
-div[class*="getting-started"],
+/* Onboarding/welcome notices.
+ * The `ob-` guards are MANDATORY here: the welcome screen renders
+ * `div.ob-welcome-trial#ob-trial-card` (the Pro trial offer) and a dozen other
+ * `.ob-welcome-*` wrappers, all of which match `div[class*="welcome"]`. Without
+ * the guards this plugin hid its own Pro offer on a fresh site (OPT-3024:
+ * element in the DOM, display:none from our own stylesheet). The
+ * `.ob-consent-wrap *` exclusion covers the few non-`ob-` helper classes used
+ * inside that card (`.settings-section`, `.button`, `.opti-menu-pro-badge`). */
+div[class*="welcome"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
+div[class*="onboard"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
+div[class*="getting-started"]:not([class^="ob-"]):not([class*=" ob-"]):not(.ob-consent-wrap *),
 
 /* Specific plugin patterns.
  * Two exclusions, both required:
@@ -139,12 +146,12 @@ div[class*="-alert"]:not([class^="ob-"]):not([class*="opti-behavior"]),
 div[class*="-banner"]:not([class^="ob-"]):not([class*="opti-behavior"]),
 
 /* Catch-all for admin notices in content area */
-#wpbody-content > div[class*="notice"]:not([class*="opti-behavior"]),
-#wpbody-content > div[class*="message"]:not([class*="opti-behavior"]),
-#wpbody-content > div[class*="error"]:not([class*="opti-behavior"]),
-#wpbody-content > div[class*="warning"]:not([class*="opti-behavior"]),
-#wpbody-content > div[class*="info"]:not([class*="opti-behavior"]),
-#wpbody-content > div[class*="alert"]:not([class*="opti-behavior"]),
+#wpbody-content > div[class*="notice"]:not([class*="opti-behavior"]):not([class^="ob-"]):not([class*=" ob-"]),
+#wpbody-content > div[class*="message"]:not([class*="opti-behavior"]):not([class^="ob-"]):not([class*=" ob-"]),
+#wpbody-content > div[class*="error"]:not([class*="opti-behavior"]):not([class^="ob-"]):not([class*=" ob-"]),
+#wpbody-content > div[class*="warning"]:not([class*="opti-behavior"]):not([class^="ob-"]):not([class*=" ob-"]),
+#wpbody-content > div[class*="info"]:not([class*="opti-behavior"]):not([class^="ob-"]):not([class*=" ob-"]),
+#wpbody-content > div[class*="alert"]:not([class*="opti-behavior"]):not([class^="ob-"]):not([class*=" ob-"]),
 
 /* Inline notices before wrap */
 .wrap + .notice,
@@ -158,6 +165,13 @@ div[class*="-banner"]:not([class^="ob-"]):not([class*="opti-behavior"]),
 	padding: 0 !important;
 	overflow: hidden !important;
 }
+
+/* NOTE (OPT-3024): every hide selector above must carry the
+ * `:not([class^="ob-"]):not([class*=" ob-"])` guards. No blanket
+ * "keep all ob-* visible" rule can be added here: a `display: … !important`
+ * exception would also override the `display:none` that the feature
+ * stylesheets and the admin JS use to fold panels (`.ob-share-status-panel`,
+ * the consent steps). The guards on each selector are the fix. */
 
 /* EXCEPTION: Keep opti-behavior notices visible.
  * Selectors intentionally use compound class selectors (e.g. .notice.opti-behavior-notice)
@@ -191,6 +205,21 @@ div[class*="notice"].heatmap-pro-feature-notice {
 	min-height: 600px !important;
 	margin: 0 !important;
 	padding: 40px !important;
+	overflow: visible !important;
+}
+
+/* EXCEPTION: heatmap detail reason strip (overlay could not be drawn / page
+ * preview too slow, OB-09). First-party page content that matches
+ * `div[id*="warning"]` and `div[class*="notice"]`; only while the script marks
+ * it `.is-visible`, so Dismiss and a new load can still hide it. Box styles
+ * come from heatmap-detail.css. */
+div[class*="notice"].heatmap-overlay-warning.is-visible {
+	display: flex !important;
+	visibility: visible !important;
+	opacity: 1 !important;
+	height: auto !important;
+	margin: 0 !important;
+	padding: 10px 16px !important;
 	overflow: visible !important;
 }
 
@@ -239,6 +268,143 @@ div.opti-behavior-trial-banner div {
 	opacity: 1 !important;
 	height: auto !important;
 	overflow: visible !important;
+}
+
+/* "Get Pro free" banner of Smart Insights / Reports (OPT-3054). It carries
+   .opti-behavior-notice, so the exception above already keeps it visible; this
+   block is only its layout.
+   OPT-3055 (design): the house palette of the locked Pro pages and of the Pro
+   block of the report — indigo #4F46E5 on a soft indigo field #EEF2FF, Pro pill
+   with the same gradient as the Pro pages, never the WordPress blue. */
+div.notice.ob-pro-upsell {
+	display: flex !important;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px 20px;
+	border: 1px solid #c7d2fe;
+	border-left: 4px solid #4f46e5;
+	border-radius: 10px;
+	background: linear-gradient( 135deg, #ffffff 0%, #eef2ff 100% );
+	box-shadow: 0 1px 2px rgba( 17, 24, 39, .06 );
+	padding: 16px 18px !important;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__body {
+	flex: 1 1 320px;
+	min-width: 0;
+}
+
+div.notice.ob-pro-upsell p {
+	margin: 0;
+	padding: 0;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__lead {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 1.4;
+	color: #111827;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__text {
+	margin-top: 5px;
+	font-size: 13px;
+	line-height: 1.5;
+	color: #4b5563;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__badge {
+	display: inline-block;
+	margin-right: 0;
+	padding: 2px 9px;
+	border-radius: 999px;
+	background: linear-gradient( 135deg, #4f46e5 0%, #7c3aed 100% );
+	color: #fff;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: .04em;
+	line-height: 1.6;
+	text-transform: uppercase;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 14px;
+	flex: 0 0 auto;
+}
+
+/* The call to action wears the house indigo, not the admin blue. */
+div.notice.ob-pro-upsell .ob-pro-upsell__btn.button,
+div.notice.ob-pro-upsell .ob-pro-upsell__btn.button-primary {
+	border: 0;
+	border-radius: 8px;
+	min-height: 36px;
+	padding: 0 18px;
+	background: linear-gradient( 135deg, #4f46e5 0%, #7c3aed 100% );
+	box-shadow: 0 1px 2px rgba( 17, 24, 39, .12 );
+	color: #fff;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 36px;
+	text-shadow: none;
+	transition: filter .15s ease, transform .15s ease;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__btn.button:hover,
+div.notice.ob-pro-upsell .ob-pro-upsell__btn.button:focus {
+	background: linear-gradient( 135deg, #4338ca 0%, #6d28d9 100% );
+	color: #fff;
+	filter: none;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__btn.button:active {
+	transform: translateY( 1px );
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__btn.button:focus-visible {
+	outline: 3px solid #a5b4fc;
+	outline-offset: 2px;
+	box-shadow: none;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__close {
+	color: #4b5563;
+	font-size: 13px;
+	text-decoration: none;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__close:hover,
+div.notice.ob-pro-upsell .ob-pro-upsell__close:focus {
+	color: #3730a3;
+	text-decoration: underline;
+}
+
+div.notice.ob-pro-upsell .ob-pro-upsell__close:focus-visible {
+	outline: 2px solid #a5b4fc;
+	outline-offset: 2px;
+	border-radius: 4px;
+}
+
+@media screen and (max-width: 782px) {
+	div.notice.ob-pro-upsell {
+		padding: 14px 16px !important;
+	}
+
+	div.notice.ob-pro-upsell .ob-pro-upsell__actions {
+		flex: 1 1 100%;
+		gap: 10px 14px;
+	}
+
+	div.notice.ob-pro-upsell .ob-pro-upsell__btn.button {
+		flex: 1 1 100%;
+		text-align: center;
+	}
 }
 
 /* NOTE: The onboarding popup is rendered via admin_footer hook (outside #wpbody-content)

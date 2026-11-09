@@ -8141,18 +8141,19 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 
 .opti-behavior-dashboard-page .pages-widget .top-pages .page-metrics {
 	display: flex;
-	/* Four badges (visits, page views, clicks, avg time; OPT-1604), compacted
-	   below. When the widget is too narrow for one line, the last badge goes
-	   to a second line instead of being cut (a cut figure reads as another
-	   number). */
-	flex-wrap: wrap;
+	/* Four badges (visits, page views, clicks, avg time; OPT-1604) always on one
+	   line, compacted below. Too narrow for them: the line scrolls, a figure is
+	   never cut (a cut figure reads as another number). */
+	flex-wrap: nowrap;
 	align-items: center;
 	justify-content: flex-start;
-	gap: 6px;
-	margin-left: 30px;
+	gap: 4px;
+	margin-left: 0;
 	width: auto;
 	max-width: 100%;
 	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
 	font-variant-numeric: tabular-nums;
 }
 
@@ -8160,11 +8161,11 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	display: inline-flex;
 	align-items: center;
 	gap: 3px;
-	padding: 4px 6px;
+	padding: 3px 4px;
 	white-space: nowrap;
 	min-width: 0;
-	flex: 0 1 auto;
-	overflow: hidden;
+	flex: 0 0 auto;
+	overflow: visible;
 }
 
 .opti-behavior-dashboard-page .pages-widget .top-pages .metric-icon {
@@ -8185,7 +8186,7 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 .opti-behavior-dashboard-page .pages-widget .top-pages .metric-change {
 	white-space: nowrap;
 	gap: 1px;
-	padding: 2px 4px;
+	padding: 1px 3px;
 	flex-shrink: 0;
 }
 
@@ -8384,8 +8385,8 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	}
 
 	.opti-behavior-dashboard-page .pages-widget .top-pages .metric {
-		max-width: 100%;
-		overflow: hidden;
+		max-width: none;
+		overflow: visible;
 	}
 
 	.opti-behavior-dashboard-page .pages-widget .top-pages .metric-value {
@@ -8522,7 +8523,7 @@ a.ob-smart-insights-report-card.is-current .ob-smart-insights-report-card-action
 	}
 
 	.opti-behavior-dashboard-page .pages-widget .top-pages .page-metrics {
-		gap: 6px;
+		gap: 4px;
 	}
 
 	.opti-behavior-dashboard-page .pages-widget .top-pages .metric {
@@ -9516,6 +9517,57 @@ span.ob-si-subline__entity {
 	padding: 2px 0 2px 10px;
 }
 
+/*
+ * OPT-2948: the cause level reads at a glance, same three colours in the list
+ * card (Z5 line) and in the opened card (Z5 + the measured-causes list).
+ * Levels come from the JS getCauseLevel(): observation = neutral,
+ * proof (Evidence) = amber, cause (Measured cause) = indigo.
+ */
+.ob-si-cause.is-proof {
+	border-left-color: #f59e0b;
+}
+
+.ob-si-cause.is-cause {
+	border-left-color: #4f46e5;
+}
+
+/* The level pill of the measured-causes list. */
+.ob-si-cause-level,
+.ob-smart-insights-measured-causes li > .ob-si-cause-level {
+	background: #f1f5f9;
+	border: 1px solid #cbd5e1;
+	border-radius: 999px;
+	color: #334155;
+	display: inline-block;
+	flex: 0 0 auto;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	line-height: 1.5;
+	max-width: 100%;
+	padding: 1px 8px;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-measured-causes li.is-proof > .ob-si-cause-level {
+	background: #fef3c7;
+	border-color: #fcd34d;
+	color: #92400e;
+}
+
+.ob-smart-insights-measured-causes li.is-cause > .ob-si-cause-level {
+	background: #eef2ff;
+	border-color: #c7d2fe;
+	color: #3730a3;
+}
+
+/* 375 px: the pill keeps its own line rather than squeezing the label. */
+@media screen and (max-width: 480px) {
+	.ob-smart-insights-measured-causes li > .ob-si-cause-level {
+		white-space: normal;
+	}
+}
+
 /* OPT-374: the action as a green "Next action" block, button at its foot. */
 .ob-si-action {
 	background: #f0fdf4;
@@ -9728,5 +9780,333 @@ span.ob-si-subline__entity {
 
 	.ob-si-card__foot .ob-smart-insights-card-actions {
 		margin-left: 0;
+	}
+}
+
+/* OB-18: a widget whose request failed (dashboard.js showWidgetError()). */
+.ob-widget-error {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    background: #fef2f2;
+    color: #991b1b;
+    font-size: 13px;
+}
+.ob-widget-error p {
+    margin: 0;
+}
+.ob-widget-error__last {
+    color: #4b5563;
+    flex-basis: 100%;
+    order: 2;
+}
+.ob-widget-error__retry {
+    order: 1;
+}
+
+/* Row trend chips of the Traffic tables (OPT-2294 design, OPT-2648).
+   Rise / fall colours darkened to reach AA 4.5:1 on white (#10b981 was 2.5:1,
+   #ef4444 3.8:1); the arrow keeps its full size so the direction never rests
+   on colour alone. Referrers had a 40px cap (old flex layout) that squashed
+   the arrow in its 58px grid column. */
+.opti-behavior-dashboard-page .dashboard-widget .visitor-trend.trend-up {
+    color: #047857;
+}
+.opti-behavior-dashboard-page .dashboard-widget .visitor-trend.trend-down {
+    color: #b91c1c;
+}
+.opti-behavior-dashboard-page .dashboard-widget .visitor-trend svg {
+    flex: 0 0 auto;
+}
+.opti-behavior-dashboard-page .referrers-widget .ob-metric-values .visitor-trend {
+    max-width: none;
+}
+@media (max-width: 430px) {
+    .opti-behavior-dashboard-page .referrers-widget .ob-metric-values .visitor-trend {
+        max-width: 50px;
+    }
+}
+
+/* Pages widget: on a narrow widget the four stats get smaller rather than leave
+   their line. Measured on the widget, whatever the width of the screen. */
+.opti-behavior-dashboard-page .pages-widget .widget-content {
+	container-type: inline-size;
+}
+
+@container (max-width: 400px) {
+	.opti-behavior-dashboard-page .pages-widget .top-pages .page-metrics {
+		gap: 2px;
+	}
+
+	.opti-behavior-dashboard-page .pages-widget .top-pages .metric {
+		gap: 2px;
+		padding: 2px 3px;
+		font-size: 10px;
+	}
+
+	.opti-behavior-dashboard-page .pages-widget .top-pages .metric-icon {
+		flex-basis: 11px;
+		width: 11px;
+		height: 11px;
+	}
+
+	.opti-behavior-dashboard-page .pages-widget .top-pages .metric-change {
+		padding: 1px 2px;
+		font-size: 9.5px;
+	}
+}
+
+/* AI row of the Traffic screen (OPT-2825): page table + pills + notes.
+   The two charts reuse .user-intent-chart-container / .traffic-classification-legend. */
+.ob-ai-note {
+	margin: 8px 0 0;
+	color: #6b7280;
+	font-size: 11px;
+	line-height: 1.4;
+}
+
+.ob-ai-note--stale {
+	color: #92400e;
+}
+
+/* OPT-2881: one neutral note for the whole AI row, on its own line under the
+   three widgets (it used to be printed inside each of them, in orange, over the
+   end of the legend). */
+.ob-ai-row-note {
+	grid-column: 1 / -1;
+	margin: 0;
+	color: #6b7280;
+	font-size: 11px;
+	line-height: 1.4;
+}
+
+/* OPT-2881: "The 50 most-read of 312 pages", under the widget title. */
+.ob-ai-pages-count {
+	margin: 2px 0 0;
+	color: #6b7280;
+	font-size: 11px;
+	line-height: 1.3;
+}
+
+/* OPT-2859: the three AI widgets keep the height of the row above (Traffic
+   Classification / Bot Traffic / User Intent), measured at 474 px: the lists
+   scroll like .bot-traffic-widget .bot-traffic-list instead of growing the
+   card (13 companies gave 858 px). */
+.ai-companies-widget,
+.ai-pages-widget,
+.ai-intents-widget {
+	max-height: 480px;
+}
+
+.ai-companies-widget .widget-content,
+.ai-pages-widget .widget-content,
+.ai-intents-widget .widget-content {
+	min-height: 0;
+	overflow: hidden;
+}
+
+.ai-companies-widget .user-intent-chart-container,
+.ai-intents-widget .user-intent-chart-container {
+	min-height: 0;
+}
+
+.ob-ai-legend-scroll {
+	width: 100%;
+	min-width: 0;
+	flex: 1 1 auto;
+	max-height: 270px;
+	overflow-y: auto;
+	margin-right: -24px;
+	padding-right: 24px;
+}
+
+.ob-ai-legend-scroll .traffic-classification-legend {
+	width: 100%;
+}
+
+.ob-ai-pages-scroll {
+	max-height: 270px;
+	overflow-y: auto;
+}
+
+/* OPT-2881: `separate` instead of `collapse`. With collapsed borders the sticky
+   head of a scrolling table paints under the first row in Chrome, so the first
+   line of the list was half hidden behind "Page". */
+.ob-ai-pages-table {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	table-layout: fixed;
+	font-size: 12px;
+}
+
+.ob-ai-pages-table th {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	padding: 4px 6px;
+	background: #fff;
+	background-clip: padding-box;
+	border-bottom: 1px solid #e5e7eb;
+	color: #6b7280;
+	font-size: 11px;
+	font-weight: 600;
+	text-align: left;
+}
+
+.ob-ai-pages-table th:nth-child(2),
+.ob-ai-pages-table th:nth-child(3),
+.ob-ai-pages-table .ob-ai-pills,
+.ob-ai-pages-table .ob-ai-sent {
+	text-align: right;
+}
+
+.ob-ai-pages-table td {
+	padding: 6px;
+	border-bottom: 1px solid #f3f4f6;
+	vertical-align: top;
+}
+
+/* OPT-2875: the two figure columns get the room their content needs (4 pills
+   of up to 3 digits on one line, "Visitors sent"); the page name takes what is
+   left and is shortened with "…". */
+.ob-ai-pages-table th:first-child,
+.ob-ai-page-cell {
+	width: auto;
+}
+
+.ob-ai-pages-table th:nth-child(2) {
+	width: 152px;
+}
+
+.ob-ai-pages-table th:nth-child(3) {
+	width: 74px;
+}
+
+.ob-ai-page-cell {
+	min-width: 0;
+}
+
+.ob-ai-page-title,
+.ob-ai-page-path {
+	display: block;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.ob-ai-page-title {
+	color: #111827;
+	font-weight: 500;
+}
+
+.ob-ai-page-path {
+	color: #9ca3af;
+	font-size: 11px;
+}
+
+/* OPT-2875: no empty band under the legend. The page list takes every pixel
+   the card has left (the card is as tall as its neighbours of the row), the
+   legend and the notes stay at the bottom. */
+.ai-pages-widget .widget-content {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	justify-content: flex-start;
+}
+
+.ai-pages-widget .ob-ai-pages {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-height: 0;
+	width: 100%;
+}
+
+.ai-pages-widget .ob-ai-pages-scroll {
+	flex: 1 1 auto;
+	min-height: 0;
+	max-height: none;
+}
+
+.ai-pages-widget .ob-ai-legend,
+.ai-pages-widget .ob-ai-note {
+	flex: 0 0 auto;
+}
+
+.ob-ai-pills {
+	/* OPT-2875: the 4 figures of a page stay on ONE line, 3 digits included.
+	   Only the page name may be shortened with "…". */
+	white-space: nowrap;
+}
+
+.ob-ai-pill {
+	display: inline-block;
+	min-width: 18px;
+	margin: 0 0 0 2px;
+	padding: 1px 5px;
+	border-radius: 9px;
+	color: #fff;
+	font-size: 11px;
+	font-weight: 600;
+	text-align: center;
+}
+
+.ob-ai-pill--user-responses,
+.ob-ai-dot--user-responses { background-color: #10b981; }
+
+.ob-ai-pill--indexing-search,
+.ob-ai-dot--indexing-search { background-color: #6366f1; }
+
+.ob-ai-pill--model-training,
+.ob-ai-dot--model-training { background-color: #f59e0b; }
+
+.ob-ai-pill--data-collection,
+.ob-ai-dot--data-collection { background-color: #64748b; }
+
+.ob-ai-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	margin: 8px 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.ob-ai-legend-item {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	margin: 0;
+	/* OPT-2859: "Indexing & search" / "Data collection" used to wrap on two
+	   lines (49 px), like .traffic-type-name they stay on one line. */
+	white-space: nowrap;
+	color: #6b7280;
+	font-size: 11px;
+}
+
+.ob-ai-dot {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+}
+
+@media screen and (max-width: 782px) {
+	.ob-ai-pages-table {
+		font-size: 11px;
+	}
+
+	.ob-ai-pages-table th:nth-child(2) {
+		width: 140px;
+	}
+
+	.ob-ai-pages-table th:nth-child(3) {
+		width: 62px;
 	}
 }

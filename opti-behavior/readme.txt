@@ -1,16 +1,16 @@
 === Opti-Behavior – Self-Hosted Heatmaps, Funnels, A/B Testing & Smart Insights ===
 Contributors: optiuser
 Donate link: https://optiuser.com/
-Tags: heatmap, click tracking, funnel, woocommerce analytics, user behavior
+Tags: heatmap, click tracking, woocommerce analytics, conversion optimization, behavior analytics
 
 Requires at least: 5.8
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.10.1
+Stable tag: 1.11.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Self-hosted click heatmaps, click tracking and funnels for WordPress and WooCommerce. Analytics data is stored on your server. Session replay in Pro.
+Self-hosted heatmaps, funnels and Smart Insights for WordPress and WooCommerce. Data on your server. All of Pro free 6 months, 1 site, no card.
 
 == Description ==
 
@@ -20,7 +20,7 @@ Opti-Behavior adds click heatmaps, click tracking, conversion funnels and A/B te
 
 https://www.youtube.com/watch?v=2wlJ6ok5-Wk
 
-🚀 **[Try the Live Demo](https://demo.optiuser.com/?demo_login=go)** – explore the full analytics dashboard in one click, no installation and no signup required.
+🚀 **[Try the Live Demo](https://demo.optiuser.com/?demo_login=go)** – explore the full dashboard in one click, no signup required.
 
 Visitors rarely explain why they leave. They click, scroll, hesitate, abandon forms, hit errors or drop out of checkout. Opti-Behavior records those silent signals, and Smart Insights tells you which problem to fix first, why, and whether your fix worked.
 
@@ -38,7 +38,8 @@ The **How it works** page shows this loop with your own numbers, a first-days ch
 = ✅ Free features =
 
 * **[Real-time traffic](https://optiuser.com/opti-behavior/ob-feature-dashboard/)** – visitors, sessions, pageviews, bounce rate, scroll depth, top pages, traffic sources, devices and visitor map, with visit duration, visited pages, referrers and outbound links.
-* **"AI Assistants" channel** – visits from ChatGPT, Perplexity, Claude and Copilot are counted on their own instead of inside Organic Search.
+* **"AI Assistants" channel** – visits from ChatGPT, Perplexity, Claude, Copilot, Gemini, Mistral, DeepSeek, Grok, Meta AI and You.com are counted on their own instead of inside Organic Search or Referral.
+* **AI on your site** – on the Traffic screen, which AI robots read your site (by company), the pages they read most, why they visit, and how many visitors AI assistants sent to each page. AI passes are kept 12 months as daily counters, with no IP address or user agent. The site report has the same AI section.
 * **[Click heatmaps](https://optiuser.com/opti-behavior/ob-feature-heatmaps/)** for desktop and mobile. Point at a hot area to see how many clicks it received ("N clicks in this area").
 * **[Unlimited conversion funnels](https://optiuser.com/opti-behavior/ob-feature-funnels/)** with multi-step drop-off analysis and device filtering. Opti-Behavior detects your site type (WooCommerce, Easy Digital Downloads, blog, lead-gen, signup, membership, LMS, booking) and proposes ready-made funnels built from your own URLs: create one in a click or edit it first. Nothing is created without you asking.
 * **[A/B testing](https://optiuser.com/opti-behavior/ob-feature-ab-testing/)** – page-split experiments, variant previews, conversion goals and winner application.
@@ -66,15 +67,15 @@ The **How it works** page shows this loop with your own numbers, a first-days ch
 * **Advanced A/B testing** – visual edits, targeting, scheduling, WooCommerce tests and revenue attribution.
 * **More Smart Insights signals** – errors, rage and dead clicks, slow pages, broken links and abandoned forms feed Smart Insights and Page X-Ray, with a session recording as proof when one exists.
 
-🎁 **Try Pro free for 6 months**, no credit card required. [See Pro plans and prices](https://optiuser.com/opti-behavior/pricing/) | 🚀 [Live Demo](https://demo.optiuser.com/?demo_login=go)
+🎁 All of Pro free for 6 months on 1 site, after a quick sign-up. Then free up to 1,000 sessions a month. No credit card. The Free plugin stays unchanged. [See Pro plans and prices](https://optiuser.com/opti-behavior/pricing/) | 🚀 [Live Demo](https://demo.optiuser.com/?demo_login=go)
 
 = 🛡️ Privacy & Performance by Design =
 
-* **Self-hosted: visitor data stays on your own server.** Visitor behavior data is stored in your WordPress database and files. No third-party analytics cloud: analytics data is not sold or shared with external behavior platforms.
+* **Self-hosted: visitor data stays on your own server.** No third-party analytics cloud: analytics data is not sold or shared with external behavior platforms.
 * **Privacy controls** – cookie-free anonymous tracking by default, IP anonymization, retention settings and uninstall cleanup options. Full Tracking mode uses cookies only after the visitor accepts the consent banner, and the `[opti_behavior_cookie_settings]` shortcode lets visitors change or withdraw their choice at any time.
 * **Hybrid Storage** – high-volume analytics events are stored in files instead of the database. Database size [measured on one production site](https://optiuser.com/blog/wordpress-analytics-plugin-database-size/).
 * **Lightweight tracking** – minified trackers loaded with `defer`. We measured PageSpeed on a test page with the plugin on and off: [see the article](https://optiuser.com/blog/analytics-plugin-slow-down-wordpress/).
-* **WooCommerce ready** – analyze product pages, carts, checkout funnels and revenue-focused experiments while keeping customer behavior data under your control.
+* **WooCommerce ready** – analyze product pages, carts, checkout funnels and revenue-focused experiments.
 
 == Installation ==
 
@@ -106,6 +107,10 @@ The **How it works** page shows this loop with your own numbers, a first-days ch
 That's it! Opti-Behavior works out of the box with smart defaults.
 
 == Frequently Asked Questions ==
+
+= What happens after the 6-month Pro trial? =
+
+All of Pro is free for 6 months on 1 site, after a quick sign-up with your e-mail, with unlimited sessions and no credit card. Then Pro stays free up to 1,000 recorded sessions a month (spam and bot visits included). When the limit is reached, all Pro data collection pauses until the next month (Pro screens stay visible): nothing is deleted, and the free features keep working. Your visitor data is stored on your own server. [See the plans](https://optiuser.com/opti-behavior/pricing/?utm_source=wordpress.org&utm_medium=readme&utm_campaign=pro-free-1000)
 
 = Is there a live demo I can try? =
 
@@ -228,6 +233,14 @@ Opti-Behavior works on multisite: each site keeps its own tables and data folder
 
 Yes, only for specific supporting features such as an optional update of the country database (only when you ask for it, no visitor data sent), admin map tiles, an optional daily status message (site URL, versions, one admin email) after you accept it on the welcome screen, optional announcements (licence type only, same condition), and user-initiated OptiUser website links (the Pro trial page included). See the **External Services** section below for details.
 
+= How do I remove the Opti-Behavior HTML comment and X-Analytics header? =
+
+On the public pages where the tracker runs, the plugin leaves two technical marks for developers who inspect a site: the HTML comment `<!-- This site uses Opti-Behavior - https://optiuser.com -->` in the page head and the HTTP header `X-Analytics: Opti-Behavior`. Nothing is visible to your visitors and no version number is published. To remove both, add this line to your theme functions file or to a small plugin:
+
+`add_filter( 'opti_behavior_signature_markup', '__return_false' );`
+
+The console line is separate: it confirms that the tracker loaded and which mode is active, and you can switch it off under **JavaScript Debug Settings** in **Settings > Debug & Logging** (or with the filter `opti_behavior_signature`). Removing the marks changes nothing else in the plugin.
+
 = What data does this plugin collect? =
 
 Depending on settings, Opti-Behavior can collect page views, URLs, click positions, scroll depth, session timestamps, referrers, device/browser data, anonymized IP data, approximate location signals, and interaction metadata. It does not collect form field values by default, and analytics data is stored locally in your WordPress database or file system.
@@ -279,15 +292,14 @@ This plugin may connect to external services in limited circumstances:
 
 = Country database (DB-IP Lite, db-ip.com) =
 
-**Purpose:** The free DB-IP Lite country database from db-ip.com (https://db-ip.com) is used to find a visitor's country on your own server. The database is included in the plugin (assets/geo/) and renewed with each plugin version: no download is needed. The plugin can also download a newer file from db-ip.com. Only the database file is downloaded; no visitor data is sent to db-ip.com. Terms and licence: https://db-ip.com/db/lite.php (CC BY 4.0). IP geolocation by DB-IP (https://db-ip.com).
+**Purpose:** The free DB-IP Lite country database finds a visitor's country on your own server. It is included in the plugin (assets/geo/) and renewed with each version, so no download is needed; the plugin can also download a newer file. IP geolocation by DB-IP.
 
-**When Used:** Never on its own. db-ip.com is contacted only when an administrator clicks "Update now" in Settings > Traffic & Behavior, or ticks "Check for a newer database every month" there (off by default, can be turned off).
+**When Used:** Never on its own. db-ip.com is contacted only when an administrator clicks "Update now" in Settings > Traffic & Behavior, or ticks "Check for a newer database every month" there (off by default).
 
-**Data Sent:** No visitor data. The request sends the user agent "Opti-Behavior/<version>", without your site address.
+**Data Sent:** Only the database file is downloaded and no visitor data is sent to db-ip.com; the request sends the user agent "Opti-Behavior/<version>", without your site address.
 
 **Privacy:**
-* Service: https://db-ip.com/
-* Terms and licence: https://db-ip.com/db/lite.php
+* Service: https://db-ip.com/ - Terms and licence: https://db-ip.com/db/lite.php (CC BY 4.0)
 
 = OpenStreetMap Tiles =
 
@@ -296,31 +308,42 @@ This plugin may connect to external services in limited circumstances:
 **Data Sent:** Your browser makes direct requests to OpenStreetMap tile servers (standard HTTP headers only).
 
 **Privacy:**
-* Service: https://www.openstreetmap.org/
-* Tile Policy: https://operations.osmfoundation.org/policies/tiles/
+* Service: https://www.openstreetmap.org/ - Tile Policy: https://operations.osmfoundation.org/policies/tiles/
 * Privacy Policy: https://wiki.osmfoundation.org/wiki/Privacy_Policy
 
 = OptiUser API (api.optiuser.com) =
 
-**Purpose:** Handles the optional daily status message (site URL, versions, one admin email; only after you accept it on the welcome screen), and plugin deactivation notifications. Licence validation and update checks are made by the Pro plugin itself, only after you install and activate it.
+**Purpose:** Handles the optional daily status message (site URL, versions, one admin email; only after you accept it on the welcome screen) and deactivation notifications. Licence validation and update checks are made by the Pro plugin itself, once installed.
 
 **When Used:**
-* **Install tracker:** Sends a heartbeat once every 24 hours after activation, containing only: site URL, WordPress version, PHP version, plugin version, plugin type (free/pro), and one best available administrator contact email when a valid contact exists. No visitor data is sent.
+* **Install tracker:** A heartbeat once every 24 hours after activation: site URL, WordPress, PHP and plugin version, plugin type (free/pro), and one administrator contact email when a valid contact exists. No visitor data.
 * **Deactivation:** Notifies the API when the plugin is deactivated so installation records stay up to date.
-* **Announcements:** Optional short news banners on the plugin's own screens. Only after you accept the daily status message on the welcome screen, or while Pro is active, the plugin asks api.optiuser.com for current announcements at most once every 6 hours. Data sent: only the licence type (free, pro, trial or expired); no site URL, domain or email. Closing a banner is stored on your site only, nothing is sent. Terms of Service: https://optiuser.com/terms-of-service/ - Privacy Policy: https://optiuser.com/privacy-policy/
+* **Announcements:** Optional short news banners on the plugin's own screens, asked at most once every 6 hours, and only after you accept the daily status message or while Pro is active. Data sent: only the licence type (free, pro, trial or expired); no site URL, domain or email. Closing a banner is stored on your site only.
 
-**Data Sent:** Site URL, WordPress admin username when applicable, and one best available administrator contact email for install tracking. The plugin selects a single valid contact email and does not send a list of administrator emails. No visitor analytics data is ever sent to the API.
+**Data Sent:** Site URL, WordPress admin username when applicable, and one best available administrator contact email (a single valid contact, never a list of administrator emails). No visitor analytics data is ever sent to the API, which stores installation metadata (site URL, plugin version) for licence management only.
+
+**Privacy:**
+* Service: https://api.optiuser.com/ - Website: https://optiuser.com/
+* Terms of Service: https://optiuser.com/terms-of-service/ - Privacy Policy: https://optiuser.com/privacy-policy/
+
+= OptiUser Pro trial sign-up (api.optiuser.com/pro-signup) =
+
+**Purpose:** Creates your free Pro trial (account, licence key and the email that holds them) without leaving WordPress, when you use the "Start my free 6-month Pro trial" form on a Pro feature page of the plugin.
+
+**When Used:** Only when an administrator fills that form and clicks the button. Nothing is sent when the page is displayed, and the plugin never asks on its own. The form is the only place that triggers this call.
+
+**Data Sent:** The email address shown in the form (which you can change), your site address, the plugin version and the name of the screen the button was on. Nothing else; no visitor data. The email address is not stored in your WordPress options.
+
+**What You Get Back:** A message telling you to check your inbox, or the reason the request was refused. The e-mail from optiuser.com holds the licence key, a download link valid 24 hours and a link to set your password. The free plugin never downloads, installs or activates the Pro plugin by itself.
 
 **Privacy:**
 * Service: https://api.optiuser.com/
-* Website: https://optiuser.com/
 * Terms of Service: https://optiuser.com/terms-of-service/
 * Privacy Policy: https://optiuser.com/privacy-policy/
-* The API stores installation metadata (site URL, plugin version) for license management. No visitor data is collected or stored by the API.
 
 = OptiUser Website (optiuser.com) =
 
-**Purpose:** Hosts the Opti-Behavior Pro trial page and sales/feature pages. Every "Upgrade to Pro" / "Try Pro" link of the plugin (welcome screen, trial notice, Pro feature pages, heatmap, Smart Insights, A/B tests, Settings) opens the same Pro trial page on optiuser.com in a new tab.
+**Purpose:** Hosts the Opti-Behavior Pro trial page and the sales / feature pages. Every "Upgrade to Pro" / "Try Pro" link of the plugin opens the same Pro trial page on optiuser.com in a new tab.
 
 **When Used:** Only when an admin clicks one of these links. The plugin itself sends nothing: the browser opens the page.
 
@@ -330,7 +353,7 @@ This plugin may connect to external services in limited circumstances:
 * Service: https://optiuser.com/
 * Privacy Policy: https://optiuser.com/privacy-policy/
 
-**Important Note:** All analytics data is stored locally on your WordPress server. The external services listed above are used only for optional geographic features (optional update of the DB-IP Lite country database, which is included in the plugin; OpenStreetMap map tiles), the optional daily status message (only after you accept it), optional announcements (only after you accept the daily status message, or with Pro active), and Pro license management (api.optiuser.com). Visitor analytics data (pages, clicks, sessions) stays on your server. The visitor's IP address is not sent to any geolocation service: the country is looked up on your own server.
+**Important Note:** Visitor analytics data (pages, clicks, sessions) is stored locally on your WordPress server. The services above serve only the optional geographic features (optional update of the included DB-IP Lite country database, OpenStreetMap tiles), the optional daily status message and announcements, and Pro licence management. The visitor's IP address is not sent to any geolocation service: the country is looked up on your own server.
 
 == Screenshots ==
 
@@ -370,92 +393,117 @@ This plugin may connect to external services in limited circumstances:
 
 == Changelog ==
 
+= 1.11.0 - 2026-11-09 =
+* **Feature:** Opti-Behavior Pro stays free after the 6-month trial, up to 1,000 recorded sessions a month on 1 site. When the limit is reached, all Pro data collection pauses until the next month: the Pro screens and the data already collected stay visible, nothing is deleted, and the free features keep working.
+* **Feature:** Pro in one click: give your e-mail address and your site address, and the trial key, the download link and a link to set your password arrive by e-mail.
+* **Feature:** Traffic: new "Audience Insights / AI" row with three widgets. "Which AIs read your site" shows the AI robots by company. "What AI reads and who it sends" lists the 50 most-read pages (with the total number of pages read), the AI passes of each page and the visitors that AI assistants sent to it. "Why AIs visit" shows the intent of the AI passes. The filter panel narrows "Visitors sent". A robot has no country or device, so AI passes follow the period only.
+* **Feature:** AI passes are kept as daily counters for 12 months (one row per day, AI robot and page; no IP address, no user agent, no referrer) instead of the 30 days of the crawler log. On update, the 30 days still in the crawler log are copied in once.
+* **Feature:** Site report: an AI section with the AI companies that read your site, the real number of pages they read and the visitors who landed on those pages from an AI assistant. It says "to answer questions" only when that intent was measured. It gives the first day of AI data on your site and explains in one line what AI passes, pages and visitors sent count.
+* **Feature:** Traffic: visits from Gemini, Mistral, DeepSeek, Grok, Meta AI and You.com are counted in the "AI Assistants" channel instead of Organic Search or Referral (Google AI Overviews arrive from google.com and stay in Organic Search).
+* **Feature:** Traffic: the traffic source, Referrers and Screen resolution tables show the change of each row against the previous period.
+* **Feature:** Tracker status: on public pages where the tracker runs, the browser console shows "[Opti-Behavior] tracker loaded", the page carries the HTML comment "<!-- This site uses Opti-Behavior - https://optiuser.com -->" and the response carries the header "X-Analytics: Opti-Behavior". The console line has its own checkbox, "Show tracker status in the console" (on by default), in Settings > Debug & Logging > JavaScript Debug Settings. The comment and the header can be removed with the filter opti_behavior_signature_markup.
+* **Feature:** Spam: a built-in list of 56 known spam referrer domains (for example forexwikitrading.com). A visit they send is counted as spam in Traffic, Referrers and the site report, past visits included. New "Extra spam domains" setting, one domain per line.
+* **Feature:** Site report: a "Signals by module" section, the same blocks as the report e-mail (Pro rows carry a PRO tag).
+* **Feature:** Site report on WooCommerce sites: "Carts without an order" section, with the products whose carts most often ended without an order and what to check.
+* **Feature:** Smart Insights: the weekly summary also lists the pages that lose the most visitors. The summary and this list share one card.
+* **Feature:** Front-end stats bar: a "Page X-Ray" button opens the Page X-Ray of the page you are looking at (with Opti-Behavior Pro; a locked "PRO" button without it). It is shown on single public pages, posts, products and the shop.
+* **Feature:** Reports: a waiting page with a progress bar while a site report is built, and the report reads are cached so it is built faster.
+* **Enhancement:** The site report and Page X-Ray are always built, with or without every Pro module. When one is missing, a notice at the top says the report is not complete and gives a Pro button.
+* **Enhancement:** The trust bar shows the real WordPress logo, and the "6 months" wording is no longer repeated on the same screen.
+* **Enhancement:** Site report in one click: the waiting page shows "Page N of M" while page scores are computed in small steps, and the document opens only when they are done. A page that could not be measured is named; "Partial report" and "generate it again" are gone.
+* **Enhancement:** Smart Insights: a line says "Likely cause" only when a cause was really measured. Otherwise it says "Observation" (recordings to watch, a concentration in one segment) or "Evidence", and the list is titled "Observations and evidence".
+* **Enhancement:** Site report: one funnel recommendation, chosen from the goal of the page; a funnel that does not follow the page goal is never advised first, and the table says so.
+* **Enhancement:** Reports: "The 3 issues to look at first" replaces "most costly". The report notes the time it was read and that a figure can still move (new visits, sessions later classed as spam).
+* **Enhancement:** Shop: a second add to cart on a product already in the cart (block themes, Store API) is counted; a lower quantity is not. Each success is counted once, and orders at 0 are kept out of paid figures. A warning line appears above the tiles when the adds to cart look too high for the visits of the period.
+* **Enhancement:** Smart Insights and reports: funnel figures say "sessions that left at this step" instead of "lost", estimates and advice say what they are based on, and checks name the pages and sample sizes they use. The "Low scroll depth" help says the figure is an average.
+* **Enhancement:** Site report and report e-mails: a figure measured on too few visits is no longer shown as a result. Key figures carry the name of the screen they come from, and dated sections say their period. A warning appears when a funnel step matches every page of the site.
+* **Enhancement:** A/B tests: the screen and the site report give the same verdict (winner, loser, not enough data, no clear winner, check the goal), based on participation figures; "Check goal tracking" counts different visitors.
+* **Enhancement:** Report e-mail: times are rounded to the nearest second like the Traffic screen, top pages show visits next to views, unresolved errors are counted like the Errors Tracking screen, and colours and names follow the plugin design.
+* **Enhancement:** Smart Insights page: "How it works" first, then the weekly summary, then the tabs. The fold of the loop is remembered for each user, and the tab bar works with the keyboard.
+* **Enhancement:** Loading, empty and error states on dashboard panels. Storage Stats measures the plugin files in steps with a progress bar, stops after 30 seconds with a Retry button, and an error can be resumed.
+* **Enhancement:** Settings > Danger Zone > Full reset: nothing is checked when the page opens, the size of the selection is shown, and the delete button stays off until a category is chosen.
+* **Enhancement:** Setup check: a module that has simply been quiet is no longer reported as blocked; a blocked collection is reported only when it is confirmed.
+* **Enhancement:** Funnels: the counting rules and the period are shown on the funnels screen.
+* **Enhancement:** Clearer welcome screen choices, consent notice buttons with one style, new deactivation survey design, new design of the agency screen in Reports.
+* **Enhancement:** Pro: Errors Tracking separates severity from action priority; a group seen on few visits gets a low-priority badge. Network failures are classified by kind.
+* **Enhancement:** Pro: User Journeys and the full report count multi-page visits against visits with a recorded journey.
+* **Enhancement:** Pro: Page X-Ray scores pages on their detected goal until it is confirmed, and says what the health score counts.
+* **Enhancement:** Pro: Recordings show the measured number of tracked sessions without a replay.
+* **Fix:** Traffic: the Bot Traffic panel no longer shows a made-up "+100 %" change. The crawler log is kept 30 days, so when the previous period falls outside it the change reads "—" with an explanation, in the header and on each crawler row.
+* **Fix:** AI page list: page addresses with non-Latin characters are stored and shown correctly.
+* **Fix:** Heatmap detail: the page preview no longer waits forever; scroll heatmaps use a robust page height; UTM filters list campaign, source and medium.
+* **Fix:** Heatmap engagement rate is the share of visits with at least one interaction.
+* **Fix:** Time on page in reports uses the same formula as Top Pages and excludes spam in every case.
+* **Fix:** Shop: an add to cart from a plain link is counted only when a person clicks it (no more counts from link prefetch or robots).
+* **Fix:** UTM tags are kept when your pages are served from a page cache.
+* **Fix:** The Apply button of the date filter works again on the dashboard and on funnels.
+* **Fix:** Pro: the "Where visitors click" panel of Page X-Ray no longer shows an empty broken image on pages without a saved picture.
+
 = 1.10.1 - 2026-10-20 =
 * **New:** Shop screen for WooCommerce sites (menu Opti-Behavior > Shop): product views, adds to cart, checkouts and paid orders, and the lost visits of each product (product views that did not lead to an add to cart), worst product first. The shop counters store no order number, customer name, e-mail address or coupon code.
 * **New:** "Shop" block in the scheduled e-mail report on WooCommerce sites: product views, adds to cart, paid orders and failed payments of the report period compared with the period before, the three products that lose the most visits and a link to the Shop screen. No block when nothing was counted.
 * **New:** Print or save as PDF a site report from Opti-Behavior > Reports. It opens with a Summary (traffic tiles and the three most costly issues), then one section for each part of your site that has data: Traffic, Shop, Clicks and errors, Busiest time, Journeys and funnels, A/B tests. Charts have round graduations. A "Site report" link in the header of Traffic and Smart Insights opens it with the same period.
 * **New:** Optional "Made with Opti-Behavior" line at the end of a report, off by default.
 * **New:** The country of a visitor now comes from a free local database (DB-IP Lite) included in the plugin, in every privacy mode: the visitor IP address is no longer sent to ip-api.com / ipwho.is. Countries work right after activation, with no download; an optional monthly update is in Settings > Traffic & Behavior > Country database. IP Geolocation by DB-IP.
-* **New:** Traffic Channel filter: visits coming from ChatGPT, Perplexity, Claude and Copilot have their own channel, "AI Assistants". They were counted in "Organic Search": that figure goes down by the same number, also for past periods (the visits are reclassified when the report is read, nothing is lost). Gemini has no referrer of its own and stays under Google. A visit whose link carries utm_source=chatgpt.com (or chat.openai.com, perplexity, perplexity.ai, claude.ai, copilot.microsoft.com) is counted there too, even when the browser sends no referrer; a paid click (utm_medium cpc, ppc, paid) stays in "Paid Ads".
+* **New:** Traffic Channel filter: visits from ChatGPT, Perplexity, Claude and Copilot have their own channel, "AI Assistants". They were counted in "Organic Search", which goes down by the same number, also for past periods (nothing is lost, the visits are reclassified when the report is read). A link carrying utm_source=chatgpt.com, perplexity, claude.ai or copilot.microsoft.com counts there too, even without a referrer; a paid click stays in "Paid Ads".
 * **New:** Smart Insights: without Pro, the "Page X-Ray" tab now shows a real preview: your three most visited pages of the period (20 visits or more), each with a health score and the headline of its first problem, computed from the data the free plugin collects (bounce, scroll depth, clicks, funnels). The full report stays in Opti-Behavior Pro.
-* **New:** Traffic and Heatmaps: during the first days, a box at the top of the page says whether visits are received (waiting, warning or error, with the action to take). "Visits are received" is shown once. A site installed for more than 7 days that has visits shows no box.
-* **New:** License & Quota tab: "Already have a Pro trial or license?" block with an "Open My account" link to optiuser.com (no address and no parameter in the link).
+* **New:** Traffic and Heatmaps: during the first days, a box at the top says whether visits are received (waiting, warning or error, with the action to take); a site installed for more than 7 days that has visits shows no box. The License & Quota tab gets an "Already have a Pro trial or license?" block with an "Open My account" link (no address and no parameter in the link).
 * **New:** With Opti-Behavior Pro installed, when its licence could not be confirmed, the Recordings, User Journeys, Errors and Forms pages show the reason, a "Re-check licence" button and a link to the License & Quota tab, instead of an empty or upgrade page. The menu shows an amber dot.
 * **New:** Scheduled e-mail report, new design: the key figures first (visits, page views, time per visit, bounce, with their change), the three most costly issues, top sources, devices and most viewed pages, the most clicked element with a link to its heatmap, the Shop block and an A/B test block, each with one "What it means / What to do" sentence. A summary subject line and inbox preview, a plain-text version, a layout for phones and dark mode.
 * **New:** Top Pages shows the page views of each page. The Traffic export includes the campaigns.
 * **New:** The Opti-Behavior brand mark at the top of the Opti-Behavior screens, of the reports and of the report e-mails.
 * **Improved:** Deactivation survey: a "Skip & Deactivate" button, a sentence that says what is sent to optiuser.com if you submit, and two new reasons. The Deactivate click never waits when optiuser.com cannot be reached.
-* **Improved:** Smart Insights: the severity of a card is its coloured left edge, the page ends with room for the floating Insights button, the Insights button keeps your choice, and the "How it works" strip is open on the first visit only.
-* **Improved:** Settings, data retention: on WooCommerce sites, the detailed data line also names the store events.
-* **Improved:** Review request: it is shown only after an administrator has seen their own data (a heatmap with clicks opened, or a funnel report with entries), from the next Opti-Behavior screen, never before 48 hours after install and never next to another Opti-Behavior banner. New text with "Leave a review", "Maybe later" and "Don't ask again".
-* **Improved:** Settings > Privacy: "Anonymous Mode" is now labelled "Cookieless mode (pseudonymised, 24 h)", with a short note under the choice: this is pseudonymisation, not anonymisation, and GDPR still applies. The behaviour is unchanged.
-* **Improved:** Heatmap detail: the "AI Insights" panel is now titled "Top Clicked Elements", with the subtitle "Ranked by number of clicks". The list itself is unchanged.
-* **Improved:** How it works: in the Setup check card, a check that needs an action is one full-width band with its button; the checks that pass are small tiles on one row.
-* **Improved:** Settings > Danger Zone: one white card per sensitive action with a red outline button, and the size of each Full Reset category at the end of its line. Texts and behaviour are unchanged.
-* **Improved:** Settings > Traffic & Behavior: the Country database card shows its status, a switch for the monthly update and an "Update now" button. "IP Geolocation by DB-IP" is credited in this card.
-* **Improved:** Traffic, reports and report e-mails: the change of a rate (bounce, scroll depth) is shown in points, the change of a count in percent. When the previous period has too few days of data to compare, the change says "new" instead of a made-up +100%.
-* **Improved:** Funnels created by the plugin itself are marked "Suggested" with a "Confirm" button. Until you confirm one, it is not counted in Smart Insights, Page X-Ray or the reports.
-* **Improved:** Smart Insights: funnel step names are readable, each card links to its main report, and an open card that an updated rule no longer finds is closed.
-* **Improved:** Display: the realtime map fits every visitor, the Traffic chips are never cut, and the Heatmaps list has clearer folder and device labels with one sort arrow.
-* **Improved:** Every new screen, report and e-mail text is translated in French, German, Spanish, Italian and Brazilian Portuguese.
+* **Improved:** Clearer wording and layout: "Anonymous Mode" is now "Cookieless mode (pseudonymised, 24 h)" with a note that GDPR still applies, the heatmap "AI Insights" panel is "Top Clicked Elements", the Setup check puts an action that is needed on its own band, Danger Zone shows one card per action with the size of each Full Reset category, and the Country database card shows its status, a monthly-update switch and an "Update now" button.
+* **Improved:** Smart Insights: severity is the coloured left edge of a card, the floating Insights button keeps your choice, and the "How it works" strip is open on the first visit only. On WooCommerce sites the data-retention line also names the store events.
+* **Improved:** Review request: shown only after an administrator has seen their own data (a heatmap with clicks, or a funnel report with entries), never before 48 hours after install and never next to another Opti-Behavior banner, with "Leave a review", "Maybe later" and "Don't ask again".
+* **Improved:** Traffic, reports and report e-mails: the change of a rate (bounce, scroll depth) is in points, the change of a count in percent, and "new" replaces a made-up +100% when the previous period has too few days.
+* **Improved:** Funnels created by the plugin itself are marked "Suggested" with a "Confirm" button, and are not counted in Smart Insights, Page X-Ray or the reports until you confirm them. Smart Insights funnel step names are readable, each card links to its main report, and an open card that an updated rule no longer finds is closed.
+* **Improved:** Display: the realtime map fits every visitor, the Traffic chips are never cut, the Heatmaps list has clearer folder and device labels with one sort arrow, and every new screen, report and e-mail text is translated in French, German, Spanish, Italian and Brazilian Portuguese.
 * **Fix:** www.example.com and example.com are now one page in Top Pages and in the Page X-Ray preview. Another sub-domain stays its own site.
 * **Fix:** An address under the search permalink base (for example /search/term/) is a search page, like ?s=. It leaves the Page X-Ray preview and its heatmap follows the archive rule.
 * **Fix:** The country is no longer guessed from the browser language (it was often wrong, e.g. "United States" for any en-US browser). Without Cloudflare and without the country database it shows "Unknown". The language itself is still recorded.
-* **Fix:** License & Quota tab: the "could not initialize" card was shown without Opti-Behavior Pro. It is now shown only when Pro is loaded.
 * **Fix:** Time per page and per visit: a page view counts 30 minutes at most and a visit 4 hours at most, so a tab left open no longer inflates the averages. Older data is read the same way; nothing is rewritten.
-* **Fix:** Funnels count entries from real visits only, following the spam setting of the site.
-* **Fix:** Smart Insights: the admin menu, the Smart Insights screen and the site report show the same number of open problems.
-* **Fix:** Reports: "the three most costly issues" uses the open Smart Insights cards that overlap the period, so a report no longer says "No costly issue" while problems are listed.
-* **Fix:** Report e-mail: scroll depth and referrers are the same as on the Traffic screen, and the addresses of one page (www, trailing slash, tracking parameters) are one row in Top pages.
-* **Fix:** Traffic: the Top Page and Top referrer chips show the first row of their widget.
-* **Fix:** Shop: an add to cart from a plain link (?add-to-cart=) is counted when the visitor comes from a page of your site. A product with adds to cart but no measured product view shows "Not measured" instead of 0.
-* **Fix:** The short site report no longer shows the Pro line when Opti-Behavior Pro is active.
-* **Privacy:** Pro: session-linked shop events are recorded only in Full mode, after the visitor's consent. Anonymous mode keeps daily counters only, with no session.
-* **Privacy:** Anonymous Mode, and Full Tracking before the visitor accepts: the tracker no longer reads the time zone or the browser language on the visitor's device. The language comes from the Accept-Language header the browser already sends.
-* **Privacy:** Anonymous Mode: the daily salt behind the anonymous visitor identifier is now random, kept for one UTC day and deleted the next day, so a past identifier cannot be rebuilt. The geolocation cache key is no longer built from the bare IP address.
-* **Privacy:** The log of bot visits stores the full IP address only in Full Tracking mode. In the other modes it keeps the network part only (IPv4 /24, IPv6 /48).
-* **Privacy:** An older session-start path could store the real IP address. It now follows the same rule as the live one (real IP only in Full Tracking with consent), and its unused entry point was removed.
-* **Privacy:** Full Tracking before the visitor accepts: when another visitor on the same IP address had accepted during the last hour, the cached region, city and time zone could be stored for the visitor who had not. Without consent nothing is taken from that cached answer.
-* **Privacy:** WooCommerce order numbers are removed from the page addresses Opti-Behavior stores (order received, view order and order pay pages, also with plain permalinks). The page itself is still counted, so a funnel step on the order received page keeps working.
-* **Privacy:** Address parameters with a secret name (password reset key, reset token, API key...) are removed from tracked page addresses, Top Pages and exports.
-* **Privacy:** Realtime visitors and the Traffic export never show a whole IP address: in Full Tracking mode the end is hidden (IPv4 x.x.x.0, IPv6 /48), in the other modes the visitor is "Anonymous". A privacy mode that cannot be read is treated as anonymous.
-* **Privacy:** Top Engaged Users shows an anonymous visitor as such, with no login name and no profile link.
+* **Fix:** Same figures everywhere: funnels count entries from real visits only (spam setting of the site), the admin menu, the Smart Insights screen and the site report show the same number of open problems, "the three most costly issues" uses the open cards that overlap the period, and the report e-mail matches the Traffic screen for scroll depth, referrers and Top pages rows.
+* **Fix:** Traffic: the Top Page and Top referrer chips show the first row of their widget. Shop: an add to cart from a plain link (?add-to-cart=) is counted when the visitor comes from a page of your site, and a product with adds to cart but no measured product view shows "Not measured" instead of 0.
+* **Fix:** The short site report no longer shows the Pro line when Opti-Behavior Pro is active, and the "could not initialize" card of the License & Quota tab is only shown when Pro is loaded.
+* **Privacy:** Without consent, nothing personal is read or stored: the tracker no longer reads the time zone or the browser language on the device (the language comes from the Accept-Language header), the anonymous daily salt is random and deleted the next day, and the cached region, city and time zone of another visitor on the same IP address are never reused. Pro session-linked shop events need Full mode and consent; anonymous mode keeps daily counters only.
+* **Privacy:** IP addresses: the bot log and the older session-start path keep the whole address only in Full Tracking mode (elsewhere the network part only, IPv4 /24, IPv6 /48), the geolocation cache key is no longer the bare address, and realtime visitors, the Traffic export and Top Engaged Users never show a whole address or a login name.
+* **Privacy:** Page addresses: WooCommerce order numbers and parameters with a secret name (password reset key, reset token, API key...) are removed from stored addresses, Top Pages and exports. The pages are still counted, so a funnel step on the order received page keeps working.
 * **Docs:** The readme, the settings and a new suggested privacy policy text (in the WordPress privacy guide) describe the local country database (DB-IP Lite).
 
 = 1.10.0 - 2026-10-10 =
-* **New:** Smart Insights "Things to check": page, funnel, engagement, scroll, mobile bounce and traffic spike cards now list the checks behind the problem, each one measured on your own data and shown as a compact card ("Not measured" when there is not enough traffic yet).
-* **New:** Smart Insights cards have a clearer design: severity colour, key figures in tiles, a short story per signal family and a detail panel. Free users see every result Free computes.
+* **New:** Smart Insights "Things to check": page, funnel, engagement, scroll, mobile bounce and traffic spike cards list the checks behind the problem, each measured on your own data ("Not measured" when there is not enough traffic yet). Cards have a clearer design: severity colour, key figures in tiles, a short story per signal family and a detail panel.
 * **New:** Spam filter: automated visits (headless browsers, scripts) are refused at collection and filtered from every report, even when they arrive with a referrer.
-* **New:** Heatmap detail: hovering a click area shows "N clicks in this area" in the free plugin too, following the Count Bar Display setting. On small sites the Heatmaps list is up to date right away.
-* **New:** The Pro feature pages (Recordings, User Journeys, Errors, Forms) explain what each feature does, with the trial button first. The Pro trial notice has a new design and can be closed for good.
-* **Changed:** Pro trial: every "Try Pro" / "Upgrade to Pro" link (welcome screen, trial notice, Pro feature pages, heatmap, Smart Insights, A/B tests, Settings) opens the same Pro trial page on optiuser.com in a new tab. The plugin no longer starts a trial in one click and no longer downloads or installs Opti-Behavior Pro. It sends nothing when you click: only your site address travels in the link.
-* **Changed:** Welcome screen: the data-sharing question is asked right after activation, only when Free runs alone, you can decline it, and the Pro trial is a separate choice. Settings show one line "Installation status: Shared / Not shared" with a Change link. Announcement banners are fetched only after you accept the daily status message, or with Pro active.
-* **Changed:** The per-audience segment breakdown and the Weekly CRO Summary are now part of Opti-Behavior Pro.
-* **Changed:** "How it works": the lines from the active modules to Smart Insights are animated. A/B tests: a click goal that is not a CSS selector (an XPath, for example) is refused with a clear message.
+* **New:** Heatmap detail: hovering a click area shows "N clicks in this area" in the free plugin too, following the Count Bar Display setting. On small sites the Heatmaps list is up to date right away. The Pro feature pages (Recordings, User Journeys, Errors, Forms) explain what each feature does, with the trial button first, and the Pro trial notice can be closed for good.
+* **Changed:** Pro trial: every "Try Pro" / "Upgrade to Pro" link opens the same Pro trial page on optiuser.com in a new tab. The plugin no longer starts a trial in one click and no longer downloads or installs Opti-Behavior Pro; only your site address travels in the link.
+* **Changed:** Welcome screen: the data-sharing question is asked right after activation, only when Free runs alone, and you can decline it; the Pro trial is a separate choice. Settings show "Installation status: Shared / Not shared" with a Change link. Announcement banners are fetched only after you accept the daily status message, or with Pro active.
+* **Changed:** The per-audience segment breakdown and the Weekly CRO Summary are now part of Opti-Behavior Pro. In "How it works" the lines from the active modules to Smart Insights are animated, and an A/B test click goal that is not a CSS selector is refused with a clear message.
 * **Security:** Admin screens (Traffic browsers / referrers / top pages, Smart Insights, A/B test builder) now escape quotes in every value they display, so a crafted browser name, referrer or page title sent by a visitor can no longer run script in the admin. A leftover debug branch of the heatmap data endpoint was removed.
 * **Privacy:** Personal data (e-mail, user name, tokens, keys) is removed from tracked page addresses. Addresses already stored are cleaned in the background.
 * **Performance:** wp-admin no longer waits when api.optiuser.com cannot be reached: the daily status message is sent in the background and the deactivation survey never holds the Deactivate click. Dashboard widget caches are cleared without heavy database queries.
 * **Fix:** Same numbers everywhere: Traffic visitors, new / returning and Top Pages use one set of visits; Smart Insights, funnels and Page X-Ray count the same visits; Top Pages shows one row per page; the Heatmaps list and detail show the same click count.
-* **Fix:** Smart Insights figures: each card shows the loss of its own gap (exit rate, scroll, segment vs all visitors), related cards never repeat the main card's figure, traffic spikes show no loss figure, and old figures are cleared on recalculation. A story card is never hidden as noise.
-* **Fix:** Smart Insights: cards are regenerated once after each plugin update, the briefing stacks on phones, the Severity filter and severity sort work in every admin language, the Reset button appears with "All statuses", success messages stay visible, and the detail window moves keyboard focus.
+* **Fix:** Smart Insights figures: each card shows the loss of its own gap (exit rate, scroll, segment vs all visitors), related cards never repeat the main card's figure, traffic spikes show no loss figure, and old figures are cleared on recalculation.
+* **Fix:** Smart Insights: cards are regenerated once after each plugin update, the briefing stacks on phones, the Severity filter and sort work in every admin language, the Reset button appears with "All statuses", and the detail window moves keyboard focus.
 * **Fix:** Traffic: "% vs last period" shows "—" when there is no previous period, an idle tab no longer inflates the visit duration, the Traffic Channel filter classifies visits exactly like the dashboard, and the review reminder only appears on the plugin's own screens.
-* **Fix:** Heatmaps: Refresh now really clears the cached heatmap; deleting heatmap data keeps the device and type you were looking at; Reset puts the header period back to All time; switching views quickly never shows the previous view's numbers. Heatmaps taken over by URL query variants (?utm=…) are repaired and grouped like the list.
-* **Fix:** Heatmaps list: a page number past the last page shows the last page; searching keeps your sort; the first click on a column sorts high to low.
-* **Fix:** Funnels: editing a paused funnel keeps it paused, a deleted funnel cannot be saved back, a step without a URL is refused, the report of a paused funnel opens, a failed Re-scan no longer locks the button, and changing period quickly never shows the old numbers.
-* **Fix:** A/B tests: "Declare Best Performer" no longer crowns a variant on a tie or without data. Numbers and dates follow your admin language. Filter profile labels are translatable. The onboarding popup sends its answer once.
+* **Fix:** Heatmaps: Refresh really clears the cached heatmap, deleting data keeps the device and type you were looking at, Reset puts the period back to All time, switching views never shows the previous numbers, heatmaps taken over by URL query variants (?utm=…) are repaired and grouped, a page number past the last page shows the last page, searching keeps your sort and the first click on a column sorts high to low.
+* **Fix:** Funnels: editing a paused funnel keeps it paused, a deleted funnel cannot be saved back, a step without a URL is refused, the report of a paused funnel opens, a failed Re-scan no longer locks the button, and changing period never shows the old numbers.
+* **Fix:** A/B tests: "Declare Best Performer" no longer crowns a variant on a tie or without data, numbers and dates follow your admin language, filter profile labels are translatable, and the onboarding popup sends its answer once.
 * **Fix:** Heatmap image download — on long pages the downloaded PNG showed the clicks shifted and paler than the heatmap on screen. The image now shows every click exactly where the screen does, and very long pages no longer produce an empty image.
 * **Fix:** With Opti-Behavior Pro on a renewed trial (or a licence bought after the trial), the red "Your Pro Trial Has Ended" banner could appear while Pro was working. It is no longer shown when the licence server confirms the licence is active.
 * **Fix:** Smart Insights — "Visitor Confusion Pattern" now compares a page's button clicks with a site average in the same unit, and "quick visit" signals respect the minimum session duration of your spam filter.
 * **Fix:** The code passes the WordPress.org Plugin Check without errors, and the plugin name is the same in the plugin list and on its WordPress.org page.
 
 = 1.9.2.1 - 2026-09-25 =
-* **Security:** Hardening from the WordPress.org security review. Funnel events are tied to the visitor's own session cookie, so a public request can no longer report made-up sessions, and new funnel entries are limited per visitor IP. Forwarding headers (X-Forwarded-For, Client-IP, CF-Connecting-IP) are only trusted from Cloudflare or from a reverse proxy on your own network. Visitor IP addresses are never sent to a geolocation service before the visitor accepts the consent banner, and outbound geolocation lookups are limited per minute.
-* **Fix:** Translation files no longer contain pieces of source code in their translator comments (a build tool copied them by mistake; security scanners reported them as suspicious). Translations are unchanged.
+* **Security:** Hardening from the WordPress.org security review: funnel events are tied to the visitor's own session cookie and limited per visitor IP, forwarding headers are trusted only from Cloudflare or a reverse proxy on your own network, and no IP address went to a geolocation service before consent.
+* **Fix:** Translation files no longer contain pieces of source code in their translator comments. Translations are unchanged.
 
 = Earlier versions =
 Full changelog: changelog.txt (in the plugin folder) / [https://optiuser.com/opti-behavior/changelog/](https://optiuser.com/opti-behavior/changelog/)
 
 == Upgrade Notice ==
+
+= 1.11.0 =
+See which AI robots read your site and how many visitors AI assistants send you, and get the site report in one click. Pro now stays free after the trial, up to 1,000 sessions a month on 1 site, and starts in one click. Update Opti-Behavior Pro to 1.11.0 too.
 
 = 1.10.1 =
 Shop counters for WooCommerce, a site report to print or save as PDF (Opti-Behavior > Reports), a new scheduled e-mail report, a Page X-Ray preview and privacy changes: the country comes from a local database included in the plugin. Pair with Opti-Behavior Pro 1.10.1.
@@ -480,63 +528,28 @@ Smart Insights usability release: notification cards, the Smart Insights center,
 
 == Privacy Policy ==
 
-Opti-Behavior collects user interaction data to provide analytics insights. This data includes:
+Opti-Behavior collects user interaction data to provide analytics insights:
 
-* Page URLs and titles
-* Click coordinates and target elements
-* Mouse movement patterns
-* Scroll depth
-* Session timestamps
-* Referrer URLs
-* Browser and device information
+* Page URLs and titles, click coordinates and target elements, mouse movement patterns, scroll depth, session timestamps, referrer URLs, browser and device information
 * IP addresses (can be anonymized)
-* Approximate location: the country only. It comes from the Cloudflare header when present, otherwise from the visitor's IP address, looked up on your own server in the local DB-IP Lite country database, in every privacy mode. The IP address is not sent to any third party. Without Cloudflare and without the database, no country is recorded (the screens show "Unknown"). The browser language and the time zone are never used to guess a country.
+* Approximate location: the country only. It comes from the Cloudflare header when present, otherwise from the visitor's IP address, looked up on your own server in the local DB-IP Lite country database, in every privacy mode. Without Cloudflare and without the database, no country is recorded (the screens show "Unknown"). The browser language and the time zone are never used to guess a country.
 
-**Data Storage:** All analytics data is stored locally in your WordPress database or file system. No data is sent to external analytics servers.
+**Data Storage:** All analytics data is stored locally in your WordPress database or file system. Nothing goes to external analytics servers, and the visitor's IP address is not sent to any geolocation service: the country is found on your own server (see "External Services" above). Opti-Behavior does not sell visitor data. You are the data controller.
 
-**External Services:** The country of a visitor is found on your own server, from the Cloudflare header or the local DB-IP Lite country database. The visitor's IP address is not sent to any geolocation service. The database is included in the plugin; a newer file is downloaded from db-ip.com only after an administrator asks for it. See the "External Services" section above for complete details.
-
-**Usage Tracking:** With your explicit consent (granted via the first-run welcome screen), this plugin sends usage statistics to api.optiuser.com once every 24 hours. The data includes: site URL, plugin version, WordPress version, PHP version, and one best available administrator contact email when a valid contact exists. This data is used solely to understand plugin adoption, support license/trial email flows, and improve the product. Tracking only begins after you click "Accept & Continue" on the welcome page shown at first activation. You may review our full data practices at https://optiuser.com/privacy-policy/
-
-**No analytics cloud:** Opti-Behavior does not sell visitor data or send it to an analytics platform. No visitor data is sent to a geolocation service: the country is looked up on your own server (see External Services). You are the data controller.
+**Usage Tracking:** With your explicit consent, given on the first-run welcome screen, the plugin sends usage statistics to api.optiuser.com once every 24 hours: site URL, plugin, WordPress and PHP version, and one administrator contact email when a valid contact exists. They serve only to understand adoption, support licence / trial e-mails and improve the product. Nothing is sent before you click "Accept & Continue". Full data practices: https://optiuser.com/privacy-policy/
 
 **User Rights:** You have full control over data retention and deletion. Users can request data deletion at any time.
 
-When using this plugin, ensure your site's privacy policy discloses:
-* What data is being collected
-* How long it is retained
-* Who has access to it
-* How users can request deletion
-* That analytics data is stored locally on your server
-* That the visitor's IP address is used on your own server to determine the country (DB-IP Lite database), and is not sent to any third party
+When using this plugin, ensure your site's privacy policy discloses what data is collected, how long it is retained, who has access to it, how users can request deletion, that analytics data is stored locally on your server, and that the visitor's IP address is used on your own server to determine the country (DB-IP Lite database) and is not sent to any third party.
 
 == Third-Party Libraries ==
 
 This plugin bundles the following open-source libraries:
 
-= Chart.js =
-* Version: 4.4.0
-* License: MIT License
-* Homepage: https://www.chartjs.org/
-* Used for: Rendering analytics charts and graphs
-
-= Leaflet =
-* Version: 1.9.4
-* License: BSD 2-Clause License
-* Homepage: https://leafletjs.com/
-* Used for: Real-time visitor map visualization
-
-= heatmap.js =
-* Version: 2.0.5
-* License: MIT License
-* Homepage: https://www.patrick-wied.at/static/heatmapjs/
-* Used for: Generating visual heatmaps of user interactions
-
-= Lucide =
-* Version: 0.554.0
-* License: ISC License
-* Homepage: https://lucide.dev/
-* Used for: Icon library for the admin interface
+* Chart.js 4.4.0, MIT License, https://www.chartjs.org/ - analytics charts and graphs
+* Leaflet 1.9.4, BSD 2-Clause License, https://leafletjs.com/ - real-time visitor map
+* heatmap.js 2.0.5, MIT License, https://www.patrick-wied.at/static/heatmapjs/ - visual heatmaps of user interactions
+* Lucide 0.554.0, ISC License, https://lucide.dev/ - icons of the admin interface
 
 All bundled libraries use GPL-compatible licenses (MIT, BSD 2-Clause, and ISC) and are included locally within the plugin. See THIRD-PARTY-LICENSES.txt in the plugin directory for full license texts.
 

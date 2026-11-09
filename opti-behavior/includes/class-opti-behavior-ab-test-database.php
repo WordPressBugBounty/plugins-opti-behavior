@@ -1710,6 +1710,7 @@ class Opti_Behavior_AB_Test_Database {
 				COALESCE(imp.impression_count, 0) AS impressions,
 				COALESCE(imp.unique_visitors, 0) AS unique_visitors,
 				COALESCE(conv.conversion_count, 0) AS conversions,
+				COALESCE(conv.event_count, 0) AS conversion_events,
 				COALESCE(conv.total_revenue, 0) AS revenue
 			FROM {$variants_table} v
 			LEFT JOIN (
@@ -1722,7 +1723,8 @@ class Opti_Behavior_AB_Test_Database {
 			) imp ON imp.variant_id = v.id
 			LEFT JOIN (
 				SELECT c.variant_id,
-					COUNT(*) AS conversion_count,
+					COUNT(DISTINCT c.visitor_id) AS conversion_count,
+					COUNT(*) AS event_count,
 					COALESCE(SUM(c.revenue), 0) AS total_revenue
 				FROM {$conversions_table} c
 				WHERE c.test_id = %d{$conversion_spam_where}" . ( $goal_id ? " AND c.goal_id = %d" : "" ) . "
@@ -1739,6 +1741,90 @@ class Opti_Behavior_AB_Test_Database {
 
 		return $wpdb->get_results(
 			$wpdb->prepare( $sql, absint( $test_id ), absint( $test_id ), absint( $test_id ) ) // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		);
+	}
+
+	/**
+	 * Conversions of every goal of a test (OPT-1941): visitors who converted
+	 * (unique) and conversion events, per goal. Lets the verdict tell "the
+	 * primary goal never fires" from "nobody converts".
+	 *
+	 * @param int       $test_id      Test ID.
+	 * @param bool|null $exclude_spam Optional spam filter override.
+	 * @return array Rows { goal_id, is_primary, converted, events }.
+	 */
+	public static function get_goal_conversion_totals( $test_id, $exclude_spam = null ) {
+		global $wpdb;
+
+		$conversions_table = $wpdb->prefix . 'optibehavior_ab_conversions';
+		$goals_table       = $wpdb->prefix . 'optibehavior_ab_goals';
+		$spam_where        = self::get_ab_spam_session_filter_sql( 'c', $exclude_spam );
+
+		// Table names from $wpdb->prefix, spam clause built by the plugin; values prepared (codes disabled at the top of the file).
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT g.id AS goal_id, g.is_primary,
+					COUNT(DISTINCT c.visitor_id) AS converted,
+					COUNT(c.id) AS events
+				FROM {$goals_table} g
+				LEFT JOIN {$conversions_table} c ON c.goal_id = g.id AND c.test_id = g.test_id{$spam_where}
+				WHERE g.test_id = %d
+				GROUP BY g.id, g.is_primary",
+				absint( $test_id )
+			)
+		);
+
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * Whole-test counts with one name per unit (OB-15), over the life of the
+	 * test like get_test_stats(): impressions (rows), participants (unique
+	 * visitors shown a variant), visitors who reached the primary goal
+	 * (unique), visitors who reached any other goal (unique over ALL other
+	 * goals: one person reaching 3 goals = 1, never the sum per goal) and
+	 * the events of the other goals.
+	 *
+	 * @param int       $test_id      Test ID.
+	 * @param bool|null $exclude_spam Optional spam filter override.
+	 * @return array { impressions, participants, primary_converted, other_converted, other_events }.
+	 */
+	public static function get_test_participation( $test_id, $exclude_spam = null ) {
+		global $wpdb;
+
+		$impressions_table = $wpdb->prefix . 'optibehavior_ab_impressions';
+		$conversions_table = $wpdb->prefix . 'optibehavior_ab_conversions';
+		$goals_table       = $wpdb->prefix . 'optibehavior_ab_goals';
+		$impression_spam   = self::get_ab_spam_session_filter_sql( 'i', $exclude_spam );
+		$conversion_spam   = self::get_ab_spam_session_filter_sql( 'c', $exclude_spam );
+
+		// Table names from $wpdb->prefix, spam clauses built by the plugin; values prepared (codes disabled at the top of the file).
+		$imp  = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT COUNT(*) AS impressions, COUNT(DISTINCT i.visitor_id) AS participants
+				FROM {$impressions_table} i
+				WHERE i.test_id = %d{$impression_spam}",
+				absint( $test_id )
+			)
+		);
+		$conv = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT COUNT(DISTINCT CASE WHEN g.is_primary = 1 THEN c.visitor_id END) AS primary_converted,
+					COUNT(DISTINCT CASE WHEN g.is_primary = 1 THEN NULL ELSE c.visitor_id END) AS other_converted,
+					COALESCE(SUM(CASE WHEN g.is_primary = 1 THEN 0 ELSE 1 END), 0) AS other_events
+				FROM {$conversions_table} c
+				INNER JOIN {$goals_table} g ON g.id = c.goal_id AND g.test_id = c.test_id
+				WHERE c.test_id = %d{$conversion_spam}",
+				absint( $test_id )
+			)
+		);
+
+		return array(
+			'impressions'       => is_object( $imp ) ? (int) $imp->impressions : 0,
+			'participants'      => is_object( $imp ) ? (int) $imp->participants : 0,
+			'primary_converted' => is_object( $conv ) ? (int) $conv->primary_converted : 0,
+			'other_converted'   => is_object( $conv ) ? (int) $conv->other_converted : 0,
+			'other_events'      => is_object( $conv ) ? (int) $conv->other_events : 0,
 		);
 	}
 

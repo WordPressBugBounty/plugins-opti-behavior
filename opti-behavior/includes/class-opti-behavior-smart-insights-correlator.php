@@ -776,7 +776,10 @@ class Opti_Behavior_Smart_Insights_Correlator {
 		}
 
 		$worst = isset( $insight['detection']['worst_transition'] ) && is_array( $insight['detection']['worst_transition'] ) ? $insight['detection']['worst_transition'] : array();
-		if ( empty( $worst['from_step'] ) && isset( $metrics['worst_transition'] ) && is_array( $metrics['worst_transition'] ) ) {
+		// OPT-2611: a card about one step (`detection.own_step`, Pro shop
+		// signals) never borrows the funnel's worst step of the metrics row.
+		$own_step = ! empty( $insight['detection']['own_step'] );
+		if ( empty( $worst['from_step'] ) && ! $own_step && isset( $metrics['worst_transition'] ) && is_array( $metrics['worst_transition'] ) ) {
 			$worst = $metrics['worst_transition'];
 		}
 		if ( empty( $worst['from_step'] ) ) {
@@ -1023,6 +1026,58 @@ class Opti_Behavior_Smart_Insights_Correlator {
 	}
 
 	/**
+	 * The three levels a cause row can carry (OPT-2884).
+	 *
+	 * `observation` = what we see (records to watch, a concentration inside one
+	 * segment), `proof` = a measurement that confirms it (a friction or error
+	 * counted on the affected visits), `cause` = a cause we really measured, and
+	 * only a probe that measured it may claim that level.
+	 */
+	const CAUSE_LEVELS = array( 'observation', 'proof', 'cause' );
+
+	/**
+	 * Probes that can only ever describe what we see, never a measured cause:
+	 * recordings are records to open, a segment skew is a concentration.
+	 */
+	const OBSERVATION_PROBES = array( 'recording_sample', 'segment_skew' );
+
+	/**
+	 * Level of one cause row (pure).
+	 *
+	 * A provider may claim a level in its probe result; an unknown word, or a
+	 * `cause` claim without a measured value, falls back to the measured rule.
+	 *
+	 * @param array $cause Cause row (probe, value, sample_size, level).
+	 * @return string One of self::CAUSE_LEVELS.
+	 */
+	public static function cause_level( $cause ) {
+		$cause = is_array( $cause ) ? $cause : array();
+		$probe = isset( $cause['probe'] ) ? (string) $cause['probe'] : '';
+
+		$value    = isset( $cause['value'] ) && '' !== $cause['value'] ? $cause['value'] : null;
+		$sample   = isset( $cause['sample_size'] ) ? (int) $cause['sample_size'] : 0;
+		$measured = ( null !== $value && is_numeric( $value ) ) || $sample > 0;
+
+		$claimed = isset( $cause['level'] ) ? (string) $cause['level'] : '';
+		if ( in_array( $claimed, self::CAUSE_LEVELS, true ) ) {
+			if ( 'cause' === $claimed && ! $measured ) {
+				$claimed = 'proof';
+			}
+			if ( in_array( $probe, self::OBSERVATION_PROBES, true ) ) {
+				return 'observation';
+			}
+
+			return $claimed;
+		}
+
+		if ( in_array( $probe, self::OBSERVATION_PROBES, true ) ) {
+			return 'observation';
+		}
+
+		return $measured ? 'proof' : 'observation';
+	}
+
+	/**
 	 * Rank available probe results into likely causes by measured share.
 	 *
 	 * @param array $probe_results Probe results keyed by probe id.
@@ -1047,7 +1102,7 @@ class Opti_Behavior_Smart_Insights_Correlator {
 				continue;
 			}
 
-			$causes[] = array(
+			$row = array(
 				'probe'        => sanitize_key( $probe_id ),
 				'label'        => isset( $result['label'] ) ? (string) $result['label'] : $this->get_probe_label( $probe_id ),
 				'metric'       => isset( $result['metric'] ) ? (string) $result['metric'] : '',
@@ -1059,6 +1114,15 @@ class Opti_Behavior_Smart_Insights_Correlator {
 				'ref_count'    => isset( $result['sample_refs'] ) ? count( (array) $result['sample_refs'] ) : 0,
 				'source'       => isset( $result['source'] ) ? sanitize_key( $result['source'] ) : 'core',
 			);
+
+			// OPT-2884: a row that only points at records to watch, or at a
+			// concentration inside one segment, is an observation — never a cause.
+			if ( isset( $result['level'] ) ) {
+				$row['level'] = (string) $result['level'];
+			}
+			$row['level'] = self::cause_level( $row );
+
+			$causes[] = $row;
 		}
 
 		usort(

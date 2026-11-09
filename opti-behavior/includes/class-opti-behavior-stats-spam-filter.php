@@ -162,7 +162,9 @@ class Opti_Behavior_Stats_Spam_Filter {
 
 		// `ref1`: since OPT-562 a visit with an external referrer passes the
 		// thresholds (see has_external_referrer()); older cached figures are stale.
-		return 'spam_filter_enabled_' . self::duration_threshold() . '_' . self::min_scrolls_threshold() . '_' . self::min_clicks_threshold() . '_' . implode( '_', self::excluded_traffic_types() ) . '_ref1';
+		// `ref2`: since OPT-2810 a visit from a referrer spam domain is spam
+		// whatever its engagement, and the active list is part of the policy.
+		return 'spam_filter_enabled_' . self::duration_threshold() . '_' . self::min_scrolls_threshold() . '_' . self::min_clicks_threshold() . '_' . implode( '_', self::excluded_traffic_types() ) . '_ref2_' . substr( md5( implode( ',', self::spam_referrer_hosts() ) ), 0, 8 );
 	}
 
 	/**
@@ -239,6 +241,165 @@ class Opti_Behavior_Stats_Spam_Filter {
 	}
 
 	/**
+	 * Referrer spam domains: the list shipped with the plugin plus the site's own.
+	 *
+	 * Sources, in this order: `includes/data/referrer-spam.txt` (our list, read
+	 * locally, never downloaded), the "Extra spam domains" setting of the Traffic
+	 * tab (one per line), then the filter. Every entry passes normalize_host(),
+	 * so the result only holds plain lowercase hosts without `www.`.
+	 *
+	 * @since 1.11.0
+	 * @return string[] Normalized hosts (may be empty).
+	 */
+	public static function spam_referrer_hosts() {
+		if ( null !== self::$spam_referrer_hosts ) {
+			return self::$spam_referrer_hosts;
+		}
+
+		$hosts = array();
+		foreach ( self::read_packaged_spam_referrers() as $host ) {
+			$hosts[] = $host;
+		}
+
+		$settings = self::settings();
+		if ( isset( $settings['spam_referrer_hosts'] ) ) {
+			$extra = is_array( $settings['spam_referrer_hosts'] )
+				? $settings['spam_referrer_hosts']
+				: preg_split( '/\r\n|\r|\n/', (string) $settings['spam_referrer_hosts'] );
+			foreach ( (array) $extra as $line ) {
+				$hosts[] = $line;
+			}
+		}
+
+		/**
+		 * Filter the referrer spam domains.
+		 *
+		 * @since 1.11.0
+		 * @param string[] $hosts Hosts from the packaged list and the setting.
+		 */
+		$hosts = (array) apply_filters( 'opti_behavior_spam_referrer_hosts', $hosts );
+
+		$clean = array();
+		foreach ( $hosts as $host ) {
+			$host = self::normalize_host( self::strip_host_decoration( $host ) );
+			if ( '' !== $host ) {
+				$clean[ $host ] = $host;
+			}
+		}
+
+		self::$spam_referrer_hosts = array_values( $clean );
+
+		return self::$spam_referrer_hosts;
+	}
+
+	/**
+	 * Memo of spam_referrer_hosts() (one read per request).
+	 *
+	 * @var string[]|null
+	 */
+	private static $spam_referrer_hosts = null;
+
+	/**
+	 * Drop the memo (settings save, tests).
+	 *
+	 * @since 1.11.0
+	 * @return void
+	 */
+	public static function flush_spam_referrer_hosts() {
+		self::$spam_referrer_hosts = null;
+	}
+
+	/**
+	 * Read the packaged list, one domain per line, `#` comments ignored.
+	 *
+	 * @return string[] Raw lines (normalized by the caller).
+	 */
+	private static function read_packaged_spam_referrers() {
+		$path = dirname( __DIR__ ) . '/includes/data/referrer-spam.txt';
+		if ( ! is_readable( $path ) ) {
+			$path = __DIR__ . '/data/referrer-spam.txt';
+		}
+		if ( ! is_readable( $path ) ) {
+			return array();
+		}
+
+		$lines = (array) @file( $path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- A missing / unreadable data file must never break tracking.
+		$out   = array();
+		foreach ( $lines as $line ) {
+			$line = trim( (string) $line );
+			if ( '' === $line || '#' === $line[0] ) {
+				continue;
+			}
+			$out[] = $line;
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Accept a pasted entry that carries a scheme, a path or a leading dot.
+	 *
+	 * `https://evil.com/path` → `evil.com`, `.evil.com` → `evil.com`. Anything
+	 * still not a plain host is dropped by normalize_host().
+	 *
+	 * @param string $entry One list / setting line.
+	 * @return string
+	 */
+	private static function strip_host_decoration( $entry ) {
+		$entry = strtolower( trim( (string) $entry ) );
+		if ( '' === $entry ) {
+			return '';
+		}
+
+		$scheme = strpos( $entry, '://' );
+		if ( false !== $scheme ) {
+			$entry = (string) substr( $entry, $scheme + 3 );
+		}
+		$entry = (string) preg_replace( '/[\/?#].*$/', '', $entry );
+		$entry = (string) preg_replace( '/^[.]+/', '', $entry );
+		$at    = strrpos( $entry, '@' );
+		if ( false !== $at ) {
+			$entry = (string) substr( $entry, $at + 1 );
+		}
+		$entry = explode( ':', $entry, 2 );
+
+		return (string) $entry[0];
+	}
+
+	/**
+	 * Is this normalized host a referrer spam domain (exact or sub-domain)?
+	 *
+	 * @since 1.11.0
+	 * @param string $host Host passed through normalize_host().
+	 * @return bool
+	 */
+	public static function is_spam_referrer_host( $host ) {
+		$host = self::normalize_host( $host );
+		if ( '' === $host ) {
+			return false;
+		}
+
+		foreach ( self::spam_referrer_hosts() as $spam_host ) {
+			if ( $host === $spam_host || substr( $host, -( strlen( $spam_host ) + 1 ) ) === '.' . $spam_host ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Does a stored referrer come from a referrer spam domain?
+	 *
+	 * @since 1.11.0
+	 * @param string|null $referrer Stored `sessions.referrer`.
+	 * @return bool
+	 */
+	public static function is_spam_referrer( $referrer ) {
+		return self::is_spam_referrer_host( self::referrer_host( $referrer ) );
+	}
+
+	/**
 	 * Does a session come from another site (search engine, social network, link)?
 	 *
 	 * True when the referrer is an http(s) URL with a valid host that is not
@@ -253,6 +414,12 @@ class Opti_Behavior_Stats_Spam_Filter {
 	public static function has_external_referrer( $referrer ) {
 		$host = self::referrer_host( $referrer );
 		if ( '' === $host ) {
+			return false;
+		}
+
+		// A known referrer spam domain is not a referring site: it never lifts
+		// the thresholds, and evaluate_classification() flags it spam outright.
+		if ( self::is_spam_referrer_host( $host ) ) {
 			return false;
 		}
 
@@ -280,10 +447,7 @@ class Opti_Behavior_Stats_Spam_Filter {
 		$prefix = $alias ? $alias . '.' : '';
 
 		$ref  = "LOWER(TRIM(COALESCE({$prefix}referrer, '')))";
-		$rest = "SUBSTRING({$ref}, LOCATE('://', {$ref}) + 3)";
-		$auth = "SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX({$rest}, '/', 1), '?', 1), '#', 1)";
-		$raw  = "SUBSTRING_INDEX(SUBSTRING_INDEX({$auth}, '@', -1), ':', 1)";
-		$host = "(CASE WHEN LEFT({$raw}, 4) = 'www.' THEN SUBSTRING({$raw}, 5) ELSE {$raw} END)";
+		$host = self::referrer_host_sql( $alias );
 
 		$conditions = array(
 			"(LEFT({$ref}, 7) = 'http://' OR LEFT({$ref}, 8) = 'https://')",
@@ -295,7 +459,70 @@ class Opti_Behavior_Stats_Spam_Filter {
 			$conditions[] = "RIGHT({$host}, " . ( strlen( $site_host ) + 1 ) . ") <> '.{$site_host}'";
 		}
 
+		// A referrer spam domain is never a referring site (SQL twin of
+		// has_external_referrer()).
+		$spam_sql = self::spam_referrer_sql( $alias );
+		if ( '(0)' !== $spam_sql ) {
+			$conditions[] = 'NOT ' . $spam_sql;
+		}
+
 		return '(' . implode( ' AND ', $conditions ) . ')';
+	}
+
+	/**
+	 * Host expression of a stored referrer (SQL twin of referrer_host()).
+	 *
+	 * Lowercased, authority after the first `://` cut at `/ ? #`, user info and
+	 * port dropped, one leading `www.` removed. No `%`, so it can sit inside a
+	 * $wpdb->prepare() query.
+	 *
+	 * @since 1.11.0
+	 * @param string $alias Sessions table alias ('' = bare column).
+	 * @return string SQL expression.
+	 */
+	public static function referrer_host_sql( $alias = 's' ) {
+		$alias  = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $alias );
+		$prefix = $alias ? $alias . '.' : '';
+
+		$ref  = "LOWER(TRIM(COALESCE({$prefix}referrer, '')))";
+		$rest = "SUBSTRING({$ref}, LOCATE('://', {$ref}) + 3)";
+		$auth = "SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX({$rest}, '/', 1), '?', 1), '#', 1)";
+		$raw  = "SUBSTRING_INDEX(SUBSTRING_INDEX({$auth}, '@', -1), ':', 1)";
+
+		return "(CASE WHEN LEFT({$raw}, 4) = 'www.' THEN SUBSTRING({$raw}, 5) ELSE {$raw} END)";
+	}
+
+	/**
+	 * SQL twin of is_spam_referrer(): the referrer host is a spam domain.
+	 *
+	 * Exact host or sub-domain, compared on the parsed host, never on a
+	 * sub-string of the URL. The hosts come from spam_referrer_hosts(), so they
+	 * passed normalize_host() ([a-z0-9.-] only) and are safe as SQL literals.
+	 * Empty list = `(0)` (never true), so nothing changes on a site that emptied
+	 * the list through the filter.
+	 *
+	 * @since 1.11.0
+	 * @param string $alias Sessions table alias ('' = bare column).
+	 * @return string SQL condition in parentheses.
+	 */
+	public static function spam_referrer_sql( $alias = 's' ) {
+		$hosts = self::spam_referrer_hosts();
+		if ( empty( $hosts ) ) {
+			return '(0)';
+		}
+
+		$host = self::referrer_host_sql( $alias );
+		$list = "'" . implode( "','", $hosts ) . "'";
+
+		// Exact host, or any sub-domain: the last 2 / 3 / 4 labels of the host
+		// are tested against the same list, so one IN per depth covers
+		// `a.b.spam.tld` without one LIKE per domain.
+		$tests = array( "{$host} IN ({$list})" );
+		for ( $labels = 2; $labels <= 4; $labels++ ) {
+			$tests[] = "SUBSTRING_INDEX({$host}, '.', -{$labels}) IN ({$list})";
+		}
+
+		return '((' . implode( ') OR (', $tests ) . '))';
 	}
 
 	/**
@@ -306,7 +533,16 @@ class Opti_Behavior_Stats_Spam_Filter {
 	 * @return string SQL condition in parentheses.
 	 */
 	public static function referrer_or_thresholds_sql( $threshold_sql, $alias = 's' ) {
-		return '(' . self::external_referrer_sql( $alias ) . ' OR (' . $threshold_sql . '))';
+		$human = '(' . self::external_referrer_sql( $alias ) . ' OR (' . $threshold_sql . '))';
+
+		// A referrer spam domain never passes, whatever its engagement: readers
+		// drop it even before the stored verdict is repaired (OPT-2810).
+		$spam_sql = self::spam_referrer_sql( $alias );
+		if ( '(0)' === $spam_sql ) {
+			return $human;
+		}
+
+		return '(NOT ' . $spam_sql . ' AND ' . $human . ')';
 	}
 
 	/**
@@ -670,6 +906,16 @@ class Opti_Behavior_Stats_Spam_Filter {
 	 * @return array { type: 'human'|'spam', reason: string|null, reasons: string[], referred: bool }
 	 */
 	public static function evaluate_classification( $duration, $scroll_count, $click_count, $referrer = null ) {
+		// A referrer spam domain is spam whatever the duration and the clicks.
+		if ( null !== $referrer && self::is_spam_referrer( $referrer ) ) {
+			return array(
+				'type'     => 'spam',
+				'reason'   => 'spam_referrer',
+				'reasons'  => array( 'spam_referrer' ),
+				'referred' => false,
+			);
+		}
+
 		if ( null !== $referrer && self::has_external_referrer( $referrer ) ) {
 			return array(
 				'type'     => 'human',
@@ -726,6 +972,180 @@ class Opti_Behavior_Stats_Spam_Filter {
 		add_action( 'init', array( __CLASS__, 'maybe_start_few_scrolls_repair' ), 31 );
 		add_action( self::REFERRER_REPAIR_HOOK, array( __CLASS__, 'run_referrer_repair_tick' ) );
 		add_action( 'init', array( __CLASS__, 'maybe_start_referrer_repair' ), 31 );
+		add_action( self::SPAM_REFERRER_REPAIR_HOOK, array( __CLASS__, 'run_spam_referrer_repair_tick' ) );
+		add_action( 'init', array( __CLASS__, 'maybe_start_spam_referrer_repair' ), 31 );
+	}
+
+	/**
+	 * One-time repair of stored sessions that came from a referrer spam domain
+	 * (OPT-2810). The other repairs only read `traffic_type = 'spam'` rows: this
+	 * one works the other way round (human / unclassified → spam).
+	 */
+	const SPAM_REFERRER_REPAIR_HOOK   = 'opti_behavior_spam_referrer_list_repair';
+	const SPAM_REFERRER_REPAIR_OPTION = 'opti_behavior_spam_referrer_list_repair';
+
+	/**
+	 * Queue the spam-referrer repair once per site.
+	 *
+	 * @since 1.11.0
+	 * @return void
+	 */
+	public static function maybe_start_spam_referrer_repair() {
+		self::maybe_start_repair( self::SPAM_REFERRER_REPAIR_HOOK, self::SPAM_REFERRER_REPAIR_OPTION );
+	}
+
+	/**
+	 * Run one time-boxed pass of the spam-referrer repair.
+	 *
+	 * @since 1.11.0
+	 * @param float|null $budget_seconds Optional time budget (tests); default 15 s.
+	 * @return array Final state for this pass.
+	 */
+	public static function run_spam_referrer_repair_tick( $budget_seconds = null ) {
+		$state = get_option( self::SPAM_REFERRER_REPAIR_OPTION );
+		if ( ! is_array( $state ) ) {
+			$state = array( 'started' => time(), 'done' => 0, 'cursor' => null, 'processed' => 0, 'changed' => 0 );
+		}
+		if ( ! empty( $state['done'] ) ) {
+			return $state;
+		}
+
+		// classify_session() is a no-op while spam detection is off: check again
+		// tomorrow instead of marking the repair done against unread rows.
+		if ( ! self::is_enabled() ) {
+			if ( ! wp_next_scheduled( self::SPAM_REFERRER_REPAIR_HOOK ) ) {
+				wp_schedule_single_event( time() + DAY_IN_SECONDS, self::SPAM_REFERRER_REPAIR_HOOK );
+			}
+			return $state;
+		}
+
+		// Nothing to look for: an empty list (filter) finishes the repair.
+		if ( empty( self::spam_referrer_hosts() ) ) {
+			$state['done']     = 1;
+			$state['finished'] = time();
+			$state['cursor']   = null;
+			update_option( self::SPAM_REFERRER_REPAIR_OPTION, $state, 'yes' );
+			return $state;
+		}
+
+		$budget   = is_numeric( $budget_seconds ) ? (float) $budget_seconds : 15.0;
+		$deadline = microtime( true ) + max( 1.0, $budget );
+
+		do {
+			$batch = self::reclassify_spam_referrer_sessions_batch(
+				array(
+					'limit'  => 200,
+					'cursor' => isset( $state['cursor'] ) ? $state['cursor'] : null,
+				)
+			);
+
+			$state['processed'] = (int) $state['processed'] + (int) $batch['processed'];
+			$state['changed']   = (int) $state['changed'] + (int) $batch['changed'];
+			$state['cursor']    = $batch['cursor'];
+
+			if ( ! empty( $batch['done'] ) ) {
+				$state['done']     = 1;
+				$state['finished'] = time();
+				$state['cursor']   = null;
+				break;
+			}
+		} while ( microtime( true ) < $deadline );
+
+		update_option( self::SPAM_REFERRER_REPAIR_OPTION, $state, 'yes' );
+
+		if ( empty( $state['done'] ) ) {
+			if ( ! wp_next_scheduled( self::SPAM_REFERRER_REPAIR_HOOK ) ) {
+				wp_schedule_single_event( time() + 60, self::SPAM_REFERRER_REPAIR_HOOK );
+			}
+		} elseif ( (int) $state['changed'] > 0 ) {
+			self::clear_traffic_classification_caches();
+		}
+
+		return $state;
+	}
+
+	/**
+	 * One batch of stored human / unclassified sessions whose referrer is a
+	 * referrer spam domain, re-run through classify_session() (→ spam).
+	 *
+	 * Bot / automated rows are left alone (classify_session() protects them and
+	 * the WHERE clause leaves them out).
+	 *
+	 * @since 1.11.0
+	 * @param array $args { limit, cursor }.
+	 * @return array { processed, changed, done, cursor }
+	 */
+	public static function reclassify_spam_referrer_sessions_batch( $args = array() ) {
+		global $wpdb;
+
+		$args = wp_parse_args( $args, array( 'limit' => 100, 'cursor' => null ) );
+
+		$limit  = max( 1, (int) $args['limit'] );
+		$cursor = is_array( $args['cursor'] ) ? $args['cursor'] : null;
+
+		$sessions = $wpdb->prefix . 'optibehavior_sessions';
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Safety check before a data-repair scan.
+		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $sessions ) ) !== $sessions ) {
+			return array( 'processed' => 0, 'changed' => 0, 'done' => true, 'cursor' => null );
+		}
+
+		$spam_sql = self::spam_referrer_sql( '' );
+		if ( '(0)' === $spam_sql ) {
+			return array( 'processed' => 0, 'changed' => 0, 'done' => true, 'cursor' => null );
+		}
+
+		$where  = "(traffic_type IS NULL OR traffic_type NOT IN ('spam','bot','automated')) AND " . $spam_sql;
+		$params = array();
+
+		if ( $cursor && isset( $cursor['time'], $cursor['id'] ) ) {
+			$where   .= ' AND (start_time < %s OR (start_time = %s AND id < %s))';
+			$params[] = (string) $cursor['time'];
+			$params[] = (string) $cursor['time'];
+			$params[] = (string) $cursor['id'];
+		}
+
+		$params[] = $limit;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Fixed plugin table from $wpdb->prefix; the WHERE clause is literal SQL (hosts normalized to [a-z0-9.-]) plus %s/%d placeholders bound through $wpdb->prepare.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- One-time data-repair scan; no caching needed.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, start_time FROM {$sessions} WHERE {$where} ORDER BY start_time DESC, id DESC LIMIT %d",
+				$params
+			)
+		);
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		if ( empty( $rows ) ) {
+			return array( 'processed' => 0, 'changed' => 0, 'done' => true, 'cursor' => $cursor );
+		}
+
+		$changed = 0;
+		$last    = $cursor;
+		foreach ( $rows as $row ) {
+			$res = self::classify_session( $row->id );
+			if ( ! empty( $res['changed'] ) ) {
+				++$changed;
+			}
+			$last = array(
+				'time' => (string) $row->start_time,
+				'id'   => (string) $row->id,
+			);
+		}
+
+		$done = count( $rows ) < $limit;
+
+		if ( $done && $changed > 0 ) {
+			self::clear_traffic_classification_caches();
+		}
+
+		return array(
+			'processed' => count( $rows ),
+			'changed'   => $changed,
+			'done'      => $done,
+			'cursor'    => $last,
+		);
 	}
 
 	/**
@@ -1003,8 +1423,11 @@ class Opti_Behavior_Stats_Spam_Filter {
 			$target_where = "s.id IN ({$in_sql}) AND ";
 		}
 
-		// A visit referred by another site is never marked spam (OPT-562).
+		// A visit referred by another site is never marked spam (OPT-562) —
+		// unless that site is a referrer spam domain, which is spam whatever its
+		// engagement (OPT-2810). `(0)` when the list is empty.
 		$referred_sql = self::external_referrer_sql( 's' );
+		$spam_ref_sql = self::spam_referrer_sql( 's' );
 
 		// Placeholder order follows the SQL text: the three derived tables (bound
 		// above), the spam_reason CASEs, the id scope, then the verdict.
@@ -1022,17 +1445,22 @@ class Opti_Behavior_Stats_Spam_Filter {
 				 LEFT JOIN ( {$page_sql} ) sp ON s.id = sp.session_id
 				 LEFT JOIN ( {$recording_sql} ) sr ON s.id = sr.session_id
 				 SET s.traffic_type = 'spam',
-				     s.spam_reason = CONCAT_WS(',',
+				     s.spam_reason = CASE WHEN {$spam_ref_sql} THEN 'spam_referrer' ELSE CONCAT_WS(',',
 				         CASE WHEN {$duration_sql} < %d THEN 'short_duration' ELSE NULL END,
 				         CASE WHEN {$scroll_sql} < %d THEN 'few_scrolls' ELSE NULL END,
 				         CASE WHEN {$click_sql} < %d THEN 'few_clicks' ELSE NULL END
-				     )
+				     ) END
 				 WHERE {$target_where}(s.traffic_type IS NULL OR s.traffic_type = '' OR s.traffic_type = 'human')
-				   AND NOT {$referred_sql}
 				   AND (
-				       {$duration_sql} < %d
-				       OR {$scroll_sql} < %d
-				       OR {$click_sql} < %d
+				       {$spam_ref_sql}
+				       OR (
+				           NOT {$referred_sql}
+				           AND (
+				               {$duration_sql} < %d
+				               OR {$scroll_sql} < %d
+				               OR {$click_sql} < %d
+				           )
+				       )
 				   )",
 				$values
 			)

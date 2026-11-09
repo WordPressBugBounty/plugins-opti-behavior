@@ -49,14 +49,25 @@
 	function funnelDetailUrl(funnelId) {
 		const base = (window.optiBehaviorFunnels && optiBehaviorFunnels.pageUrl) || 'admin.php?page=opti-behavior-funnels';
 		const sep = base.indexOf('?') === -1 ? '?' : '&';
-		return base + sep + 'funnel=' + encodeURIComponent(funnelId);
+		let url = base + sep + 'funnel=' + encodeURIComponent(funnelId);
+		// OB-20: the details open on the card's own days (same figures).
+		// Without it the details used their own default (30 days) under a card
+		// counted on 7 days: 56 entries on the card, 207 in the details.
+		const state = getFunnelState(funnelId);
+		if (state.period) {
+			url += '&period=' + encodeURIComponent(state.period);
+			if (state.period === 'custom' && state.customStart && state.customEnd) {
+				url += '&start_date=' + encodeURIComponent(state.customStart) + '&end_date=' + encodeURIComponent(state.customEnd);
+			}
+		}
+		return url;
 	}
 
 	function getFunnelState(funnelId) {
 		const key = String(funnelId);
 		if (!funnelStateById[key]) {
 			funnelStateById[key] = {
-				period: '7days',
+				period: '30days',
 				device: 'all',
 				customStart: '',
 				customEnd: '',
@@ -744,13 +755,13 @@
 		$('#opti-funnel-pagination').empty();
 
 		// The summary endpoint seeds every row's KPI under the DEFAULT selection
-		// (7 Days / All Devices) — matching each funnel's default state on load.
+		// (30 Days / All Devices) — matching each funnel's default state on load.
 		// Non-default funnels (e.g. a Smart Insights deep-link) are reconciled
 		// afterwards via reconcileNonDefaultFunnels().
 		const requestData = {
 			action: 'optibehavior_get_funnels_summary',
 			nonce: optiBehaviorFunnels.nonce,
-			period: '7days',
+			period: '30days',
 			filter: 'all',
 			exclude_spam: getExcludeSpamFlag()
 		};
@@ -762,6 +773,7 @@
 			success: function(response) {
 				if (response.success && response.data) {
 					summaryRows = response.data.funnels || [];
+					summaryRows.forEach(function(r) { r.range = response.data.range || null; });
 					updateSummaryCards(response.data.totals || {});
 					applyFilterAndRender();
 					reconcileNonDefaultFunnels();
@@ -873,9 +885,12 @@
 						r.completions = kpi.completions;
 						r.conversion_rate = kpi.conversion_rate;
 						r.dropoff_rate = kpi.dropoff_rate;
+						r.range = kpi.range || r.range;
 					}
 				});
 				updateRowBadges(funnelId, kpi);
+				$('.funnel-card[data-funnel-id="' + funnelId + '"] .opti-funnel-row__period').replaceWith(renderRowPeriod(kpi.range));
+				$('.funnel-card[data-funnel-id="' + funnelId + '"] .opti-funnel-row__toggle').attr('href', funnelDetailUrl(funnelId));
 				updateSummaryCards(computeFilteredTotals(getFilteredRows()));
 			}
 		});
@@ -896,11 +911,11 @@
 	}
 
 	// Refresh any funnel whose per-funnel selection differs from the default
-	// (7 Days / All Devices) — e.g. a Smart Insights deep-link seeded one funnel.
+	// (30 Days / All Devices) — e.g. a Smart Insights deep-link seeded one funnel.
 	function reconcileNonDefaultFunnels() {
 		summaryRows.forEach(function(row) {
 			const state = funnelStateById[String(row.id)];
-			if (state && (state.period !== '7days' || state.device !== 'all')) {
+			if (state && (state.period !== '30days' || state.device !== 'all')) {
 				refreshFunnelKpi(row.id);
 			}
 		});
@@ -979,6 +994,28 @@
 			'</div>';
 	}
 
+	// OB-20: days the card figures cover (the list and the details can sit on
+	// different periods, e.g. 7 days here and 30 days in the details).
+	function formatRangeDay(ymd) {
+		const parts = String(ymd || '').split('-');
+		if (parts.length !== 3) return String(ymd || '');
+		const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+		if (typeof OptiBehaviorLocale === 'object' && OptiBehaviorLocale && typeof OptiBehaviorLocale.date === 'function') {
+			return OptiBehaviorLocale.date(d, { day: 'numeric', month: 'short', year: 'numeric' });
+		}
+		return String(ymd);
+	}
+
+	function renderRowPeriod(range) {
+		if (!range || !range.from || !range.to) {
+			return '<span class="opti-funnel-row__period"></span>';
+		}
+		const text = (_s.cardPeriod || 'Figures from %1$s to %2$s')
+			.replace('%1$s', formatRangeDay(range.from))
+			.replace('%2$s', formatRangeDay(range.to));
+		return '<span class="opti-funnel-row__period" title="' + escapeHtml(_s.cardPeriodHint || '') + '">' + escapeHtml(text) + '</span>';
+	}
+
 	function renderFunnelRows(rows, $container) {
 		let html = '';
 		rows.forEach(function(funnel) {
@@ -1010,6 +1047,7 @@
 				html += '        <span class="opti-funnel-status-pill opti-funnel-status-pill--suggested" title="' + escapeHtml(_s.suggestedFunnelHint || '') + '"><i data-lucide="sparkles"></i>' + escapeHtml(_s.suggestedFunnel || 'Suggested') + '</span>';
 			}
 			html += '        <span class="opti-funnel-row__steps">' + stepCount + ' ' + (_s.stepCount || 'Steps') + '</span>';
+			html += '        ' + renderRowPeriod(funnel.range);
 			html += '      </div>';
 			html += '    </div>';
 
@@ -1666,7 +1704,13 @@
 						// container is missing, so the new funnel would not appear
 						// until a manual refresh. Reload to let the server render the
 						// full list markup.
+						// The detail view has no list either: reload it the same way,
+						// after showing the OB-20 warning (a reload would lose it).
 						if ($('#opti-funnel-list-container').length === 0) {
+							if ($('#opti-funnel-detail').length > 0 && response.data && response.data.warning && response.data.warning.message) {
+								const dw = response.data.warning;
+								alert(dw.message + (Array.isArray(dw.urls) && dw.urls.length ? '\n\n' + (_s.broadStepUrls || 'Tracked pages this step matches:') + '\n' + dw.urls.join('\n') : ''));
+							}
 							window.location.reload();
 							return;
 						}
@@ -1678,6 +1722,15 @@
 						editingFunnelId = null;
 						currentPage = 1;
 						loadFunnelsSummary();
+
+						// OB-20: a step that matches every page is signalled right
+						// away, with the addresses it catches.
+						if (response.data && response.data.warning && response.data.warning.message) {
+							var w = response.data.warning;
+							var urls = Array.isArray(w.urls) && w.urls.length ? '\n\n' + (_s.broadStepUrls || 'Tracked pages this step matches:') + '\n' + w.urls.join('\n') : '';
+							alert(w.message + urls);
+							return;
+						}
 
 						var msg = _s.funnelSavedSuccess || 'Funnel saved successfully!';
 						var $toast = $('<div class="opti-toast opti-toast-success"><span class="opti-toast-icon">&#10003;</span> ' + $('<span>').text(msg).html() + '</div>');
@@ -2145,6 +2198,15 @@
 		// Seed this funnel's period state (detail default = Last 30 Days, matches dashboard).
 		const state = getFunnelState(funnelId);
 		state.period = '30days';
+		// OB-20: opened from a list card = that card's days (period in the
+		// address), so the details repeat the card's figures.
+		if (!smartInsightsFunnelContext.funnelId && smartInsightsFunnelContext.period) {
+			state.period = smartInsightsFunnelContext.period;
+			if (state.period === 'custom') {
+				state.customStart = smartInsightsFunnelContext.startDate;
+				state.customEnd = smartInsightsFunnelContext.endDate;
+			}
+		}
 		// ...unless the URL arrived from a Smart Insights deep link carrying the
 		// cohort the insight was measured on. Overwriting it here would show a
 		// different window than the link promised.
@@ -2163,6 +2225,11 @@
 				this.setAttribute('aria-expanded', open ? 'true' : 'false');
 			});
 		}
+
+		initFunnelBuilder();
+		$('#funnel-detail-edit').on('click', function() {
+			window.loadFunnelForEdit(funnelId);
+		});
 
 		refreshIcons();
 		loadFunnelDetail(funnelId);
@@ -2225,7 +2292,27 @@
 			loadFunnelDetail(funnelId);
 		});
 
+		// Typing a date = a custom range (OPT-1916): the list follows the fields.
+		$start.add($end).on('change', function() {
+			if ($(this).val()) {
+				$period.val('custom');
+			}
+		});
+
 		$apply.on('click', function() {
+			// OPT-1916: a preset still chosen in the list wins over the fields
+			// (Apply used to turn it into a custom range under a preset label).
+			const preset = $period.val();
+			if (preset && preset !== 'custom') {
+				state.period = preset;
+				state.customStart = '';
+				state.customEnd = '';
+				state.customStartDateTime = '';
+				state.customEndDateTime = '';
+				prefillFunnelDetailDates(state);
+				loadFunnelDetail(funnelId);
+				return;
+			}
 			const s = $start.val();
 			const e = $end.val();
 			if (!s || !e) {

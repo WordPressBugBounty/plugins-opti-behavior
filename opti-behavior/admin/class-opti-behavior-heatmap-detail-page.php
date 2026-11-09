@@ -330,6 +330,8 @@ class Opti_Behavior_Heatmap_Detail_Page {
 					'no_countries_found' => __( 'No countries found', 'opti-behavior' ),
 					'no_browsers_found'  => __( 'No browsers found', 'opti-behavior' ),
 					'stop'               => __( 'Stop', 'opti-behavior' ),
+					'wait_title'           => __( 'Heatmap loading, please wait.', 'opti-behavior' ),
+					'stats_wait'           => __( 'Calculating the figures, please wait.', 'opti-behavior' ),
 					'stop_loading'       => __( 'Stop Loading', 'opti-behavior' ),
 					'stop_loading_more'  => __( 'Stop loading more data', 'opti-behavior' ),
 					'loading_stopped_final' => __( 'Loading stopped', 'opti-behavior' ),
@@ -342,6 +344,7 @@ class Opti_Behavior_Heatmap_Detail_Page {
 					'loading_fallback'   => __( 'Loading heatmap data with fallback...', 'opti-behavior' ),
 					'loading_preview_proxy'   => __( 'Loading page preview through proxy...', 'opti-behavior' ),
 					'measuring_preview_proxy' => __( 'Measuring proxied page preview...', 'opti-behavior' ),
+					'preview_timeout'    => __( 'The page preview took too long to load (a slow or blocked resource on the page). The heatmap is drawn without the page background. Use Refresh to try again.', 'opti-behavior' ),
 					'interactive_on'     => __( 'Interactive preview ON — click inside the page to reveal hidden menus/accordions, then hotspots realign', 'opti-behavior' ),
 					'interactive_off'    => __( 'Interactive preview OFF', 'opti-behavior' ),
 					'interactive_hint'   => __( 'Interactive preview: click inside the page to reveal hidden menus/accordions so click hotspots line up', 'opti-behavior' ),
@@ -1635,6 +1638,10 @@ class Opti_Behavior_Heatmap_Detail_Page {
 	/**
 	 * Render error message.
 	 *
+	 * Carries the same brand header as render_header() (OPT-3103): this screen
+	 * replaces the whole page when the page id is missing or unknown, so
+	 * without it the user gets an Opti-Behavior screen with no logo or name.
+	 *
 	 * @param string $message Error message.
 	 */
 	private function render_error( $message ) {
@@ -1646,6 +1653,17 @@ class Opti_Behavior_Heatmap_Detail_Page {
 		// of leaving it orphaned.
 		?>
 		<div class="wrap">
+			<div class="opti-heatmap-header opti-heatmap-hero">
+				<div class="opti-heatmap-hero-main">
+					<a href="<?php echo esc_url( admin_url( 'admin.php?page=opti-behavior-heatmaps' ) ); ?>" class="opti-heatmap-hero-back" title="<?php esc_attr_e( 'Back to Heatmaps', 'opti-behavior' ); ?>" aria-label="<?php esc_attr_e( 'Back to Heatmaps', 'opti-behavior' ); ?>">
+						<i data-lucide="arrow-left"></i>
+					</a>
+					<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
+					<div class="opti-heatmap-title">
+						<?php Opti_Behavior_Admin_Brand::render_name(); ?>
+					</div>
+				</div>
+			</div>
 			<h1 class="wp-heading-inline"><?php esc_html_e( 'Heatmap Detail', 'opti-behavior' ); ?></h1>
 			<hr class="wp-header-end">
 			<div class="notice notice-error opti-behavior-notice">

@@ -1,0 +1,162 @@
+/* Waiting page of a report (OPT-1862, design OPT-1864): brand band, title,
+   a progress bar that follows the server steps, the four steps, error box.
+   Stand-alone page (no admin CSS), local file only (CSP). */
+:root {
+	--obw-indigo: #4f46e5;
+	--obw-violet: #7c3aed;
+	--obw-accent: #f97316;
+	--obw-ink: #111827;
+	--obw-text: #374151;
+	--obw-muted: #4b5563;
+	--obw-soft: #6b7280;
+	--obw-line: #e5e7eb;
+	--obw-track: #eef0fb;
+	--obw-bg: #f5f6fb;
+}
+html { background: var(--obw-bg); }
+body.obw {
+	margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+	padding: 32px 16px; box-sizing: border-box;
+	font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	color: var(--obw-ink);
+	background:
+		radial-gradient(60% 50% at 15% 0%, rgba(79, 70, 229, .10), transparent 70%),
+		radial-gradient(50% 45% at 100% 100%, rgba(124, 58, 237, .09), transparent 70%),
+		var(--obw-bg);
+}
+.obw-box {
+	width: 100%; max-width: 480px; box-sizing: border-box; overflow: hidden;
+	background: #fff; border: 1px solid var(--obw-line); border-radius: 16px;
+	box-shadow: 0 1px 2px rgba(17, 24, 39, .04), 0 12px 32px -8px rgba(49, 46, 129, .18);
+	animation: obw-in .35s ease-out both;
+}
+
+/* Brand band */
+.obw-head {
+	display: flex; align-items: center; gap: 12px; padding: 18px 28px;
+	background: linear-gradient(135deg, var(--obw-indigo) 0%, var(--obw-violet) 100%); color: #fff;
+}
+.obw-logo {
+	display: block; flex: none; width: 40px; height: 40px; padding: 4px; box-sizing: border-box;
+	border-radius: 10px; background: #fff; box-shadow: 0 2px 6px rgba(17, 24, 39, .18);
+}
+.obw-brand { font-size: 16px; font-weight: 700; letter-spacing: .01em; }
+
+.obw-body { padding: 26px 28px 28px; }
+.obw-body h1 { margin: 0 0 6px; font-size: 22px; line-height: 1.3; font-weight: 700; color: var(--obw-ink); }
+.obw-lead { margin: 0 0 20px; color: var(--obw-muted); }
+
+/* Progress bar: width = steps reached on the server (report-wait.js). */
+.obw-bar { position: relative; height: 8px; margin: 0 0 22px; border-radius: 999px; background: var(--obw-track); }
+.obw-bar__fill {
+	position: relative; display: block; height: 100%; width: 6%; min-width: 8px; border-radius: inherit;
+	background: linear-gradient(90deg, var(--obw-indigo), var(--obw-violet));
+	transition: width .6s cubic-bezier(.22, .61, .36, 1);
+}
+.obw-bar__fill::before {
+	content: ""; position: absolute; inset: 0; border-radius: inherit;
+	background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .45), transparent);
+	background-size: 200% 100%; animation: obw-shine 1.6s linear infinite;
+}
+.obw-bar__fill::after {
+	content: ""; position: absolute; top: 50%; right: -2px; width: 12px; height: 12px; margin-top: -6px;
+	border: 2px solid #fff; border-radius: 50%; box-sizing: border-box; background: var(--obw-accent);
+	box-shadow: 0 0 0 0 rgba(249, 115, 22, .45); animation: obw-pulse 1.6s ease-out infinite;
+}
+
+/* Steps */
+.obw-steps { list-style: none; margin: 0; padding: 0; }
+.obw-steps li { position: relative; min-height: 22px; padding: 0 0 16px 36px; color: var(--obw-soft); transition: color .3s; }
+.obw-steps li:last-child { padding-bottom: 0; }
+.obw-steps li::before {
+	content: ""; position: absolute; z-index: 1; left: 0; top: 1px; width: 22px; height: 22px;
+	box-sizing: border-box; border: 2px solid #d1d5db; border-radius: 50%; background: #fff;
+}
+.obw-steps li:not(:last-child)::after {
+	content: ""; position: absolute; left: 10px; top: 25px; bottom: 0; width: 2px; border-radius: 1px; background: var(--obw-line);
+}
+.obw-steps li.is-now { color: var(--obw-ink); font-weight: 600; }
+.obw-steps li.is-now::before { border-color: var(--obw-indigo); border-right-color: transparent; animation: obw-spin .9s linear infinite; }
+.obw-steps li.is-done { color: var(--obw-text); }
+.obw-steps li.is-done::before {
+	border-color: var(--obw-indigo);
+	background: var(--obw-indigo) no-repeat center / 12px 12px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6 9.5 3.6' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.obw-steps li.is-done::after { background: #c7d2fe; }
+.obw-count { min-height: 1.5em; margin: 14px 0 0 36px; font-size: 13px; color: var(--obw-muted); font-variant-numeric: tabular-nums; }
+
+/* Error / time limit */
+.obw-error {
+	position: relative; margin-top: 18px; padding: 14px 16px 14px 48px;
+	border: 1px solid #fecaca; border-radius: 12px; background: #fef2f2; color: #991b1b;
+}
+.obw-error::before {
+	content: "!"; position: absolute; left: 14px; top: 13px; width: 22px; height: 22px; border-radius: 50%;
+	background: #dc2626; color: #fff; font-weight: 700; font-size: 14px; line-height: 22px; text-align: center;
+}
+.obw-error[hidden] { display: none; }
+.obw-error p { margin: 0 0 12px; font-weight: 500; }
+.obw-error button {
+	min-height: 36px; padding: 8px 18px; border: 0; border-radius: 8px; cursor: pointer;
+	font: inherit; font-size: 14px; font-weight: 600; color: #fff;
+	background: linear-gradient(135deg, var(--obw-indigo), var(--obw-violet));
+	box-shadow: 0 1px 2px rgba(17, 24, 39, .12); transition: filter .15s, transform .15s;
+}
+.obw-error button:hover { filter: brightness(1.08); }
+.obw-error button:active { transform: translateY(1px); }
+.obw-error button:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 2px; }
+.obw-error button[hidden] { display: none; }
+/* OPT-3054: Pro modules missing from this report, said while it is written. */
+.obw-pro {
+	margin: 0 0 20px; padding: 14px 16px; border: 1px solid #fde68a; border-left: 4px solid #f59e0b;
+	border-radius: 12px; background: #fffbeb; color: #78350f;
+}
+.obw-pro__t { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 6px; font-weight: 700; }
+/* OPT-3055: same Pro pill as the upsell banner (admin-notices.css). */
+.obw-pro__badge {
+	display: inline-block; padding: 2px 9px; border-radius: 999px;
+	background: linear-gradient(135deg, var(--obw-indigo), var(--obw-violet));
+	color: #fff; font-size: 11px; font-weight: 700; letter-spacing: .04em;
+	line-height: 1.6; text-transform: uppercase;
+}
+.obw-pro__l { margin: 0; font-size: 14px; }
+.obw-pro__a { margin: 12px 0 0; }
+.obw-pro__cta {
+	display: inline-block; min-height: 36px; padding: 8px 18px; border-radius: 8px;
+	font-size: 14px; font-weight: 600; color: #fff; text-decoration: none;
+	background: linear-gradient(135deg, var(--obw-indigo), var(--obw-violet));
+	box-shadow: 0 1px 2px rgba(17, 24, 39, .12); transition: filter .15s, transform .15s;
+}
+.obw-pro__cta:hover { filter: brightness(1.08); }
+.obw-pro__cta:active { transform: translateY(1px); }
+.obw-pro__cta:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 2px; }
+
+.is-error .obw-count:empty { display: none; }
+.is-error .obw-steps li.is-now::before { animation: none; border-color: #dc2626; }
+.is-error .obw-bar__fill { background: #f87171; }
+.is-error .obw-bar__fill::before,
+.is-error .obw-bar__fill::after { display: none; }
+
+.obw-noscript { margin: 18px 0 0; color: var(--obw-muted); }
+.obw-noscript a { color: var(--obw-indigo); font-weight: 600; }
+.obw-noscript a:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 2px; border-radius: 2px; }
+
+@keyframes obw-spin { to { transform: rotate(360deg); } }
+@keyframes obw-shine { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes obw-pulse { 0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, .45); } 100% { box-shadow: 0 0 0 8px rgba(249, 115, 22, 0); } }
+@keyframes obw-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 480px) {
+	body.obw { align-items: flex-start; padding: 16px; }
+	.obw-head { padding: 14px 20px; }
+	.obw-body { padding: 22px 20px 24px; }
+	.obw-body h1 { font-size: 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.obw-box,
+	.obw-bar__fill::before,
+	.obw-bar__fill::after,
+	.obw-steps li.is-now::before { animation: none; }
+	.obw-bar__fill,
+	.obw-steps li { transition: none; }
+}

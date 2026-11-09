@@ -1,0 +1,72 @@
+# Opti-Behavior — referrer spam domains shipped with the plugin.
+#
+# Our own list, written and maintained by the Opti-Behavior team; it is part of
+# the plugin and released under the same licence (GPLv2 or later). No third-party
+# list is copied here, and nothing is downloaded: the file is read locally.
+#
+# Format: one domain per line, lowercase, no scheme, no path, no `www.`.
+# A line matches the referrer host exactly OR any of its sub-domains
+# (forexwikitrading.com also matches news.forexwikitrading.com), never a
+# sub-string of the URL. Lines starting with `#` and empty lines are ignored.
+#
+# Add your own domains in Settings > Traffic & Behavior > "Extra spam domains"
+# (or through the `opti_behavior_spam_referrer_hosts` filter) instead of editing
+# this file: a plugin update replaces it.
+
+# Fake-traffic / SEO link spam seen on customer sites
+forexwikitrading.com
+forex-wiki.com
+semalt.com
+semalt.semalt.com
+buttons-for-website.com
+buttons-for-your-website.com
+free-share-buttons.com
+free-social-buttons.com
+share-buttons.xyz
+social-buttons.com
+simple-share-buttons.com
+4webmasters.org
+best-seo-offer.com
+best-seo-solution.com
+get-free-traffic-now.com
+get-free-social-traffic.com
+success-seo.com
+seo-platform.com
+cenoval.ru
+darodar.com
+econom.co
+ilovevitaly.com
+ilovevitaly.ru
+iskalko.ru
+kambasoft.com
+savetubevideo.com
+savetubevideo.info
+trafficmonetizer.org
+trafficmonetize.org
+event-tracking.com
+hulfingtonpost.com
+humanorightswatch.org
+o-o-6-o-o.com
+o-o-8-o-o.com
+offers.bycontext.com
+prodvigator.ua
+ranksonic.info
+ranksonic.org
+screentoolkit.com
+site3.free-share-buttons.com
+traffic2cash.xyz
+trafficgenius.pro
+website-stealer.nufaq.com
+www1.social-buttons.com
+anticrawler.org
+copyrightclaims.org
+sanjosestartups.com
+sharebutton.net
+sharebutton.to
+shop.ilovevitaly.com
+slftsdybbg.ru
+vodkoved.ru
+webmaster-traffic.com
+webmonetizer.net
+your-ad-here.online
+your-free-traffic.com

@@ -3,7 +3,7 @@
  * Plugin Name: Opti-Behavior – Self-Hosted Heatmaps, Funnels, A/B Testing & Smart Insights
  * Plugin URI:  https://optiuser.com/
  * Description: Self-hosted heatmaps, funnels, A/B WooCommerce testing, behavior analytics & Smart Insights for WordPress. Own your data and optimize what users do.
- * Version:     1.10.1
+ * Version:     1.11.0
  * Author:      OptiUser
  * Author URI:  https://optiuser.com/
  * License:     GPLv2 or later
@@ -81,7 +81,7 @@ if ( defined( 'OPTI_BEHAVIOR_HEATMAP' ) ) {
 }
 
 // Define plugin constants.
-define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.10.1' );
+define( 'OPTI_BEHAVIOR_HEATMAP_VERSION', '1.11.0' );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR', OPTI_BEHAVIOR_HEATMAP_PLUGIN_DIR . 'includes/' );
@@ -156,7 +156,23 @@ function opti_behavior_capped_seconds_sql( $expr, $kind ) {
  * @return string[]
  */
 function opti_behavior_ai_assistant_utm_sources() {
-	return array( 'chatgpt.com', 'chat.openai.com', 'perplexity', 'perplexity.ai', 'claude.ai', 'copilot.microsoft.com' );
+	return array(
+		'chatgpt.com',
+		'chat.openai.com',
+		'perplexity',
+		'perplexity.ai',
+		'claude.ai',
+		'copilot.microsoft.com',
+		// OPT-2824: the other assistants people really use.
+		'gemini.google.com',
+		'gemini',
+		'chat.mistral.ai',
+		'chat.deepseek.com',
+		'grok.com',
+		'grok',
+		'meta.ai',
+		'you.com',
+	);
 }
 
 /**
@@ -211,6 +227,18 @@ require_once __DIR__ . '/includes/class-opti-behavior-admin-email-resolver.php';
 // Load welcome/consent class early so its activation hook fires on plugin activation.
 require_once __DIR__ . '/includes/class-opti-behavior-welcome.php';
 
+/*
+ * OPT-3109 (Test Plugin 2026-11-08): build the singleton HERE, at load time.
+ * Its constructor registers `maybe_redirect_brand_slug` on `init` priority 1,
+ * and the plugin's own bootstrap below runs inside an `init` priority 10
+ * callback — by then `init` has passed priority 1, so the redirect was
+ * registered but never ran and `admin.php?page=opti-behavior` kept dying with
+ * "Sorry, you are not allowed to access this page". The constructor only calls
+ * add_action(), so this costs nothing. The later Opti_Behavior_Welcome::init()
+ * returns this same instance.
+ */
+Opti_Behavior_Welcome::init();
+
 // Load onboarding popup class (shown on dashboard after first activation with no data).
 require_once __DIR__ . '/includes/class-opti-behavior-onboarding.php';
 
@@ -243,6 +271,17 @@ require_once __DIR__ . '/includes/class-opti-behavior-mmdb-reader.php';
 require_once __DIR__ . '/includes/class-opti-behavior-geo-country.php';
 Opti_Behavior_Geo_Country::init();
 
+// Technical signature (OPT-2952): console line, HTML comment, X-Analytics header
+// on the public pages where the tracker runs. One autoloaded option, no query.
+require_once __DIR__ . '/includes/class-opti-behavior-signature.php';
+Opti_Behavior_Signature::init();
+
+// Daily counters of the AI bot passes (OPT-2859): the bot tracker writes them
+// on the front, the Traffic widgets and the site report read them (12 months of
+// history where the crawler log keeps 30 days).
+require_once __DIR__ . '/includes/class-opti-behavior-ai-bot-daily.php';
+Opti_Behavior_AI_Bot_Daily::init();
+
 // Shop events (WooCommerce): daily counters per product and event type, filled
 // by the WooCommerce hooks and the tracker. Nothing is hooked without WooCommerce.
 require_once __DIR__ . '/includes/class-opti-behavior-shop-events.php';
@@ -268,6 +307,8 @@ Opti_Behavior_Reports_Screen::init();
 // scripts + the front-end stats bar shown to admins; never the trackers).
 require_once __DIR__ . '/includes/class-opti-behavior-admin-locale.php';
 Opti_Behavior_Admin_Locale::init();
+require_once __DIR__ . '/includes/class-opti-behavior-loading-indicator.php';
+Opti_Behavior_Loading_Indicator::init();
 
 // Brand mark of the screen headers (logo tile + "Opti-Behavior"), also used by Pro.
 require_once __DIR__ . '/includes/class-opti-behavior-admin-brand.php';
@@ -638,6 +679,10 @@ add_action(
 		// Initialize welcome/consent flow (must run before tracker).
 		Opti_Behavior_Welcome::init();
 
+		// Background read of the wordpress.org rating / active installs shown by
+		// the Pro trust strip (OPT-3042): no HTTP call while a screen renders.
+		Opti_Behavior_Trial_Invite::init();
+
 		// Initialize onboarding popup (shown on dashboard when no data exists).
 		Opti_Behavior_Onboarding::init();
 
@@ -664,6 +709,14 @@ add_action(
 		// Initialize broadcast banner manager (API-driven in-plugin messages)
 		require_once OPTI_BEHAVIOR_HEATMAP_INCLUDES_DIR . 'class-opti-behavior-broadcast.php';
 		Opti_Behavior_Broadcast::init();
+
+		// "Get Pro free" banner of Smart Insights / Reports (OPT-3054): no
+		// network call, closable, our two screens only.
+		Opti_Behavior_Trial_Upsell_Banner::init();
+
+		// One-click Pro trial form (OPT-3054): AJAX handler only, nothing
+		// leaves the site before the admin clicks the button.
+		Opti_Behavior_Trial_Signup::init();
 
 		// Initialize deactivation survey AJAX relay (plugins.php flow).
 		Opti_Behavior_Heatmap_Deactivation_Survey::init();

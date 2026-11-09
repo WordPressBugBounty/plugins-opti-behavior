@@ -222,11 +222,11 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 
 		// Extract referrer and UTM parameters from POST
 		$referrer = isset( $_POST['referrer'] ) ? opti_behavior_strip_sensitive_query_args( esc_url_raw( wp_unslash( $_POST['referrer'] ) ) ) : '';
-		$utm_source = isset( $_POST['utm_source'] ) ? sanitize_text_field( wp_unslash( $_POST['utm_source'] ) ) : '';
-		$utm_medium = isset( $_POST['utm_medium'] ) ? sanitize_text_field( wp_unslash( $_POST['utm_medium'] ) ) : '';
-		$utm_campaign = isset( $_POST['utm_campaign'] ) ? sanitize_text_field( wp_unslash( $_POST['utm_campaign'] ) ) : '';
-		$utm_term = isset( $_POST['utm_term'] ) ? sanitize_text_field( wp_unslash( $_POST['utm_term'] ) ) : '';
-		$utm_content = isset( $_POST['utm_content'] ) ? sanitize_text_field( wp_unslash( $_POST['utm_content'] ) ) : '';
+		$utm_source = isset( $_POST['utm_source'] ) ? self::sanitize_utm_value( sanitize_text_field( wp_unslash( $_POST['utm_source'] ) ) ) : '';
+		$utm_medium = isset( $_POST['utm_medium'] ) ? self::sanitize_utm_value( sanitize_text_field( wp_unslash( $_POST['utm_medium'] ) ) ) : '';
+		$utm_campaign = isset( $_POST['utm_campaign'] ) ? self::sanitize_utm_value( sanitize_text_field( wp_unslash( $_POST['utm_campaign'] ) ) ) : '';
+		$utm_term = isset( $_POST['utm_term'] ) ? self::sanitize_utm_value( sanitize_text_field( wp_unslash( $_POST['utm_term'] ) ) ) : '';
+		$utm_content = isset( $_POST['utm_content'] ) ? self::sanitize_utm_value( sanitize_text_field( wp_unslash( $_POST['utm_content'] ) ) ) : '';
 
 		$processed_count  = 0;
 		$touched_sessions = array();
@@ -2712,6 +2712,17 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 		$session_url = isset( $data['url'] ) ? $data['url'] : ( isset( $data['entry_page'] ) ? $data['entry_page'] : '' );
 		$session_title = isset( $data['title'] ) ? $data['title'] : '';
 
+		// UTM tags of this page view, read from the page address by the tracker
+		// (a page cache serves the server copy without them, OPT-1927). Stored
+		// once per session: a later page without tags never clears them.
+		$session_utm = array();
+		foreach ( array( 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content' ) as $utm_key ) {
+			$utm_value = isset( $data[ $utm_key ] ) ? self::sanitize_utm_value( $data[ $utm_key ] ) : '';
+			if ( '' !== $utm_value ) {
+				$session_utm[ $utm_key ] = $utm_value;
+			}
+		}
+
 		// Check if session already exists
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix; analytics queries.
 		$existing_session = $wpdb->get_row( $wpdb->prepare(
@@ -2727,6 +2738,16 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 			// segment filters from giving inconsistent counts.
 			$update_data    = array( 'end_time' => current_time( 'mysql' ) );
 			$update_formats = array( '%s' );
+
+			// UTM tags only when the session has none yet: the tags of the
+			// first tagged page stay for the whole visit.
+			if ( ! empty( $session_utm )
+				&& empty( $existing_session->utm_source ) && empty( $existing_session->utm_medium ) && empty( $existing_session->utm_campaign ) ) {
+				foreach ( $session_utm as $utm_key => $utm_value ) {
+					$update_data[ $utm_key ] = $utm_value;
+					$update_formats[]        = '%s';
+				}
+			}
 
 			$current_uid = $this->resolve_request_user_id();
 			if ( $current_uid > 0 && ( $existing_session->user_id === null || (int) $existing_session->user_id === 0 ) ) {
@@ -2768,11 +2789,16 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 				'ip'         => $is_effectively_anonymous ? 'Anonymous' : $this->get_client_ip(),
 				'is_bounce'  => 1,
 			);
+			$session_formats = array( '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%d' );
+			foreach ( $session_utm as $utm_key => $utm_value ) {
+				$session_data[ $utm_key ] = $utm_value;
+				$session_formats[]        = '%s';
+			}
 
 			$session_inserted = $wpdb->insert(
 				"{$wpdb->prefix}optibehavior_sessions",
 				$session_data,
-				array( '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%d' )
+				$session_formats
 			);
 
 			// Do NOT mask a failed write as success. When the analytics tables are
@@ -3258,6 +3284,23 @@ class Opti_Behavior_Heatmap_Ajax_Handler {
 
 		$debug_manager->log( 'Page load processed successfully', 'debug', 'ajax' );
 		wp_send_json_success( __( 'Page load recorded', 'opti-behavior' ) );
+	}
+
+	/**
+	 * Clean one UTM value received from the public tracker (OPT-1927).
+	 *
+	 * Same rule as the tracker's obCleanUtm(): plain text, at most 100
+	 * characters (the size of the utm_* columns).
+	 *
+	 * @param mixed $value Raw value from the tracker payload.
+	 * @return string Clean value, or '' when there is none.
+	 */
+	public static function sanitize_utm_value( $value ) {
+		if ( ! is_scalar( $value ) ) {
+			return '';
+		}
+		$value = sanitize_text_field( (string) $value );
+		return function_exists( 'mb_substr' ) ? mb_substr( $value, 0, 100 ) : substr( $value, 0, 100 );
 	}
 
 	/**

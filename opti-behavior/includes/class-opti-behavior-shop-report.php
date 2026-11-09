@@ -48,6 +48,10 @@ class Opti_Behavior_Shop_Report {
 	const LINE  = '#e5e7eb';
 	const BRAND = '#4f46e5';
 
+	// Adds to cart "to check": from this many add events, above this many per visit.
+	const SUSPECT_MIN_ADDS       = 50;
+	const SUSPECT_ADDS_PER_VISIT = 3;
+
 	/**
 	 * Hooks registered once.
 	 *
@@ -159,19 +163,27 @@ class Opti_Behavior_Shop_Report {
 		if ( ! Opti_Behavior_Shop_Events::table_ready() ) {
 			return array();
 		}
-		$types = null === $types ? array( 'product_view', 'add_to_cart', 'order_paid', 'payment_failed' ) : array_values( array_intersect( Opti_Behavior_Shop_Events::TYPES, (array) $types ) );
+		$types = null === $types
+			? array( 'product_view', 'add_to_cart', 'add_to_cart_refused', 'order_paid', 'payment_failed' )
+			: array_values( array_intersect( Opti_Behavior_Shop_Events::TYPES, (array) $types ) );
 		if ( empty( $types ) ) {
 			return array();
 		}
 		// Whitelisted constant names only: no request value reaches the IN list.
 		$in    = "'" . implode( "', '", $types ) . "'";
 		$table = Opti_Behavior_Shop_Events::table();
+		// Adds written before the origin guard went live are grouped apart, like
+		// on the Shop screen (OPT-2999).
+		$since      = Opti_Behavior_Shop_Events::guard_since();
+		$unverified = '' !== $since
+			? $wpdb->prepare( 'CASE WHEN day < %s THEN 1 ELSE 0 END', $since )
+			: '0';
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Plugin's own table, read once a week.
-		$rows = $wpdb->get_results(
+		$rows = $wpdb->get_results( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Plugin's own table name; IN list = whitelisted constants.
 			$wpdb->prepare(
-				"SELECT product_id, event_type, SUM(count) AS count, SUM(qty) AS qty, SUM(amount) AS amount
+				"SELECT product_id, event_type, {$unverified} AS unverified, SUM(count) AS count, SUM(qty) AS qty, SUM(amount) AS amount
 				FROM {$table} WHERE day BETWEEN %s AND %s AND event_type IN ({$in})
-				GROUP BY product_id, event_type",
+				GROUP BY product_id, event_type, unverified",
 				$from,
 				$to
 			),
@@ -192,7 +204,7 @@ class Opti_Behavior_Shop_Report {
 			return '';
 		}
 		$table = Opti_Behavior_Shop_Events::table();
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Plugin's own table, indexed column.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Plugin's own table, indexed column.
 		return (string) $wpdb->get_var( "SELECT MIN(day) FROM {$table}" );
 	}
 
@@ -224,10 +236,11 @@ class Opti_Behavior_Shop_Report {
 	 * Totals + products of one week (pure).
 	 *
 	 * @param array[] $counts Rows of query_counts().
-	 * @return array { totals{ views, atc, orders, amount, lost, failed }, rows[] }
+	 * @param string  $to     Last day of the period (Y-m-d, '' = read it from the rows; OPT-3004).
+	 * @return array { totals{ views, views_covered, atc, orders, amount, lost, failed }, rows[], lost_measured }
 	 */
-	public static function summarize( $counts ) {
-		$report = Opti_Behavior_Shop_Screen::build_report( $counts );
+	public static function summarize( $counts, $to = '' ) {
+		$report = Opti_Behavior_Shop_Screen::build_report( $counts, Opti_Behavior_Shop_Events::guard_since(), $to );
 		$failed = 0;
 		foreach ( (array) $counts as $row ) {
 			if ( isset( $row['event_type'] ) && 'payment_failed' === $row['event_type'] ) {
@@ -252,9 +265,17 @@ class Opti_Behavior_Shop_Report {
 		if ( 0 === $t['views'] + $t['atc'] + $t['orders'] + $t['failed'] ) {
 			return null;
 		}
-		$prev_lost = array();
-		foreach ( (array) $prev['rows'] as $row ) {
-			$prev_lost[ (int) $row['product_id'] ] = (int) $row['lost'];
+		// Lost visits of the period compared: unmeasurable there = no arrow at all,
+		// never a fall from 0 (OPT-3004).
+		$prev_measured = Opti_Behavior_Shop_Screen::lost_shown( $prev );
+		$prev_lost     = array();
+		if ( $prev_measured ) {
+			foreach ( (array) $prev['rows'] as $row ) {
+				if ( isset( $row['lost_measured'] ) && empty( $row['lost_measured'] ) ) {
+					continue;
+				}
+				$prev_lost[ (int) $row['product_id'] ] = (int) $row['lost'];
+			}
 		}
 		$products = array();
 		foreach ( (array) $cur['rows'] as $row ) {
@@ -267,7 +288,7 @@ class Opti_Behavior_Shop_Report {
 				'name'       => isset( $names[ $pid ] ) && '' !== $names[ $pid ] ? (string) $names[ $pid ] : '#' . $pid,
 				'views'      => (int) $row['views'],
 				'lost'       => (int) $row['lost'],
-				'prev_lost'  => isset( $prev_lost[ $pid ] ) ? $prev_lost[ $pid ] : 0,
+				'prev_lost'  => $prev_measured ? ( isset( $prev_lost[ $pid ] ) ? $prev_lost[ $pid ] : 0 ) : null,
 			);
 		}
 		// Added to the cart without a product page view: "Not measured" (OPT-1735).
@@ -289,6 +310,11 @@ class Opti_Behavior_Shop_Report {
 			'prev'       => $prev['totals'],
 			'products'   => $products,
 			'unmeasured' => $unmeasured,
+			// Adds nobody could check + adds refused by the origin guard (OPT-2999)
+			// + the day lost visits are counted from (OPT-3004).
+			'add_notes'  => Opti_Behavior_Shop_Screen::add_notes( $cur ),
+			// OPT-3004: the period holds a day the origin guard covers.
+			'lost_measured' => Opti_Behavior_Shop_Screen::lost_shown( $cur ),
 		);
 	}
 
@@ -386,8 +412,8 @@ class Opti_Behavior_Shop_Report {
 	 * @return array|null
 	 */
 	private static function assemble( $from, $to, $prev_from, $prev_to ) {
-		$cur   = self::summarize( self::query_counts( $from, $to ) );
-		$prev  = self::summarize( self::query_counts( $prev_from, $prev_to ) );
+		$cur   = self::summarize( self::query_counts( $from, $to ), $to );
+		$prev  = self::summarize( self::query_counts( $prev_from, $prev_to ), $prev_to );
 		$first = self::first_day();
 		$names = array();
 		$named = array_merge( array_slice( (array) $cur['rows'], 0, self::TOP_PRODUCTS * 2 ), array_slice( isset( $cur['unmeasured'] ) ? (array) $cur['unmeasured'] : array(), 0, self::TOP_PRODUCTS ) );
@@ -610,6 +636,48 @@ class Opti_Behavior_Shop_Report {
 	}
 
 	/**
+	 * Whether the adds to cart of a period are too many to act on (pure but for
+	 * the filter). Add events, not quantities, against all visits of the period:
+	 * more adds than product views is normal (pricing page, list button) and is
+	 * not a criterion. The figure stays printed; advice and estimates built on
+	 * it stop. Filter `opti_behavior_shop_adds_per_visit_limit` moves the ratio.
+	 *
+	 * @param int $atc    Add events of the period.
+	 * @param int $visits Visits of the period.
+	 * @return bool
+	 */
+	public static function adds_look_suspect( $atc, $visits ) {
+		$atc = max( 0, (int) $atc );
+		if ( $atc < self::SUSPECT_MIN_ADDS ) {
+			return false;
+		}
+		$limit = (float) apply_filters( 'opti_behavior_shop_adds_per_visit_limit', self::SUSPECT_ADDS_PER_VISIT );
+
+		return $atc > $limit * max( 0, (int) $visits );
+	}
+
+	/**
+	 * Sentence of adds to cart "to check": says what is known, no proven cause.
+	 *
+	 * @param int $atc    Add events of the period.
+	 * @param int $visits Visits of the period.
+	 * @return string
+	 */
+	public static function suspect_sentence( $atc, $visits ) {
+		return sprintf(
+			/* translators: 1: adds to cart, 2: visits of the period. */
+			_n(
+				'%1$s adds to cart for %2$s visit is unusually high: the count may include robots or repeated requests. Compare it with your WooCommerce orders before changing the cart or the checkout.',
+				'%1$s adds to cart for %2$s visits is unusually high: the count may include robots or repeated requests. Compare it with your WooCommerce orders before changing the cart or the checkout.',
+				(int) $visits,
+				'opti-behavior'
+			),
+			number_format_i18n( (int) $atc ),
+			number_format_i18n( (int) $visits )
+		);
+	}
+
+	/**
 	 * Sentence of the "no paid order" box.
 	 *
 	 * @param array $report Report.
@@ -696,7 +764,7 @@ class Opti_Behavior_Shop_Report {
 			$last = count( $report['products'] ) - 1;
 			foreach ( $report['products'] as $i => $p ) {
 				$line   = $i < $last ? ' border-bottom: 1px solid ' . self::LINE . ';' : '';
-				$change = $first ? array( 'text' => '' ) : self::change( $p['lost'], $p['prev_lost'], false, true );
+				$change = ( $first || null === $p['prev_lost'] ) ? array( 'text' => '' ) : self::change( $p['lost'], (int) $p['prev_lost'], false, true );
 				$h     .= '<tr><td style="padding: 14px 16px;' . $line . '"><table cellpadding="0" cellspacing="0" border="0" role="presentation"><tr>';
 				$h     .= '<td valign="top" ' . self::style( 'width: 22px; font-size: 13px; line-height: 1.4; font-weight: 700; color: ' . self::MUTED . ';' ) . '>' . esc_html( (string) ( $i + 1 ) ) . '</td>';
 				$h     .= '<td ' . self::style( 'font-size: 14px; line-height: 1.4; color: ' . self::INK . ';' ) . '>' . esc_html( $p['name'] ) . '<div ' . self::style( 'font-size: 12px; color: ' . self::MUTED . '; margin-top: 2px;' ) . '>' . esc_html(
@@ -775,7 +843,7 @@ class Opti_Behavior_Shop_Report {
 			$lines[] = '';
 			$lines[] = __( 'Products losing the most visits', 'opti-behavior' );
 			foreach ( $report['products'] as $i => $p ) {
-				$change  = $first ? array( 'text' => '' ) : self::change( $p['lost'], $p['prev_lost'], false, true );
+				$change  = ( $first || null === $p['prev_lost'] ) ? array( 'text' => '' ) : self::change( $p['lost'], (int) $p['prev_lost'], false, true );
 				$lines[] = ( $i + 1 ) . '. ' . $p['name'] . ': ' . __( 'Lost visits', 'opti-behavior' ) . ' ' . number_format_i18n( $p['lost'] ) . ( '' !== $change['text'] ? ' (' . $change['text'] . ')' : '' ) . ', ' . sprintf(
 					/* translators: %s: number of product page views. */
 					_n( '%s view', '%s views', $p['views'], 'opti-behavior' ),
@@ -860,6 +928,9 @@ class Opti_Behavior_Shop_Report {
 		if ( '' !== $unmeasured ) {
 			$h .= '<p ' . self::style( 'margin: 10px 0 0 4px; font-size: 12px; line-height: 1.5; color: ' . self::R_MUTED . ';' ) . '>' . esc_html( $unmeasured ) . '</p>';
 		}
+		foreach ( isset( $report['add_notes'] ) ? (array) $report['add_notes'] : array() as $note ) {
+			$h .= '<p ' . self::style( 'margin: 10px 0 0 4px; font-size: 12px; line-height: 1.5; color: ' . self::R_MUTED . ';' ) . '>' . esc_html( $note ) . '</p>';
+		}
 		if ( $first ) {
 			$h .= '<p ' . self::style( 'margin: 10px 0 0 4px; font-size: 12px; line-height: 1.5; color: ' . self::R_MUTED . ';' ) . '>' . esc_html__( 'First period of counting: the comparison starts with the next report.', 'opti-behavior' ) . '</p>';
 		}
@@ -867,7 +938,8 @@ class Opti_Behavior_Shop_Report {
 
 		if ( null !== $pro && ! empty( $pro['html'] ) ) {
 			$h .= $pro['html']; // Escaped by the Pro plugin (filter contract): `<tr>` rows.
-		} elseif ( $pro_line ) {
+		} elseif ( $pro_line && Opti_Behavior_Shop_Screen::lost_shown( $report ) ) {
+			// OPT-3004: no money line while the lost visits it prices are not measured.
 			$h .= '<tr><td style="padding: 0 40px 24px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border: 1px solid #e5e7eb; border-radius: 8px;"><tr><td ' . self::style( 'padding: 12px 16px;' ) . '>';
 			$h .= '<span ' . self::style( 'font-size: 14px; font-weight: 700; color: ' . self::INK . ';' ) . '>' . esc_html__( 'Money at stake', 'opti-behavior' ) . '</span>';
 			$h .= ' <span style="display: inline-block; margin-left: 4px; padding: 1px 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.4px; color: #4338ca; background-color: #eef2ff; border: 1px solid #c7d2fe; border-radius: 999px; vertical-align: 1px;">PRO</span>';
@@ -882,7 +954,7 @@ class Opti_Behavior_Shop_Report {
 			$h .= '<table class="ob-t" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border: 1px solid #e5e7eb; border-radius: 8px; border-collapse: separate;">';
 			$h .= '<tr style="background-color: #f9fafb;"><td ' . self::style( $th ) . '>' . esc_html__( 'Product', 'opti-behavior' ) . '</td><td ' . self::style( $th . ' text-align: right;' ) . '>' . esc_html__( 'Lost visits', 'opti-behavior' ) . '</td></tr>';
 			foreach ( $report['products'] as $i => $p ) {
-				$change = $first ? array( 'text' => '' ) : self::change( $p['lost'], $p['prev_lost'], false, true, true );
+				$change = ( $first || null === $p['prev_lost'] ) ? array( 'text' => '' ) : self::change( $p['lost'], (int) $p['prev_lost'], false, true, true );
 				$h     .= '<tr><td ' . self::style( 'padding: 12px 14px; font-size: 14px; line-height: 1.4; color: ' . self::INK . '; border-top: 1px solid #e5e7eb; word-break: break-word;' ) . '>' . esc_html( ( $i + 1 ) . '. ' . $p['name'] );
 				$h     .= '<div ' . self::style( 'font-size: 12px; color: ' . self::R_MUTED . '; margin-top: 2px;' ) . '>' . esc_html(
 					sprintf(
@@ -927,18 +999,22 @@ class Opti_Behavior_Shop_Report {
 		if ( '' !== $unmeasured ) {
 			$lines[] = $unmeasured;
 		}
+		foreach ( isset( $report['add_notes'] ) ? (array) $report['add_notes'] : array() as $note ) {
+			$lines[] = $note;
+		}
 		if ( $first ) {
 			$lines[] = __( 'First period of counting: the comparison starts with the next report.', 'opti-behavior' );
 		}
 		if ( null !== $pro && ! empty( $pro['text'] ) ) {
 			$lines[] = (string) $pro['text'];
-		} elseif ( $pro_line ) {
+		} elseif ( $pro_line && Opti_Behavior_Shop_Screen::lost_shown( $report ) ) {
+			// OPT-3004: no money line while the lost visits it prices are not measured.
 			$lines[] = __( 'Money at stake', 'opti-behavior' ) . ': ' . __( 'Available with Opti-Behavior Pro', 'opti-behavior' ) . ' - ' . self::trial_url();
 		}
 		if ( ! empty( $report['products'] ) ) {
 			$lines[] = __( 'Products losing the most visits', 'opti-behavior' );
 			foreach ( $report['products'] as $i => $p ) {
-				$change  = $first ? array( 'text' => '' ) : self::change( $p['lost'], $p['prev_lost'], false, true, true );
+				$change  = ( $first || null === $p['prev_lost'] ) ? array( 'text' => '' ) : self::change( $p['lost'], (int) $p['prev_lost'], false, true, true );
 				$lines[] = ( $i + 1 ) . '. ' . $p['name'] . ': ' . __( 'Lost visits', 'opti-behavior' ) . ' ' . number_format_i18n( $p['lost'] ) . ( '' !== $change['text'] ? ' (' . $change['text'] . ')' : '' ) . ', ' . sprintf(
 					/* translators: %s: number of product page views. */
 					_n( '%s view', '%s views', $p['views'], 'opti-behavior' ),

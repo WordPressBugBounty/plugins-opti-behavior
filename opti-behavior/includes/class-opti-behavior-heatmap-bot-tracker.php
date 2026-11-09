@@ -69,6 +69,11 @@ class Opti_Behavior_Heatmap_Bot_Tracker {
 			'oai-adsbot'                    => 'OAI-AdsBot',
 			'gptbot'                        => 'GPTBot',
 			'chatgpt-user'                  => 'ChatGPT-User',
+			// OPT-2859: agents of AI companies we did not name yet. Every
+			// pattern is a full agent token on purpose: a generic word
+			// ('Operator', 'OpenAI', 'Devin') would match ordinary user agents
+			// through stripos() and invent robots.
+			'chatgpt-agent'                 => 'ChatGPT-Agent',
 			'claudebot'                     => 'ClaudeBot',
 			'claude-user'                   => 'Claude-User',
 			'claude-searchbot'              => 'Claude-SearchBot',
@@ -80,15 +85,32 @@ class Opti_Behavior_Heatmap_Bot_Tracker {
 			'googleother-image'             => 'GoogleOther-Image',
 			'googleother-video'             => 'GoogleOther-Video',
 			'googleother'                   => 'GoogleOther',
+			'googleagent-mariner'           => 'GoogleAgent-Mariner',
+			'google-notebooklm'             => 'Google-NotebookLM',
+			'google-cloudvertexbot'         => 'Google-CloudVertexBot',
 			'gemini'                        => 'Gemini',
 			'bard'                          => 'Bard',
 			'ccbot'                         => 'CCBot',
 			'bytespider'                    => 'Bytespider',
 			'amazonbot'                     => 'Amazonbot',
+			'amzn-searchbot'                => 'Amzn-SearchBot',
+			'amzn-user'                     => 'Amzn-User',
+			'amazonbuyforme'                => 'AmazonBuyForMe',
+			'bedrockbot'                    => 'bedrockbot',
+			'novaact'                       => 'NovaAct',
 			'applebot-extended'             => 'Applebot-Extended',
 			'applebot'                      => 'Applebot',
 			'meta-externalagent'            => 'meta-externalagent',
+			'meta-externalfetcher'          => 'meta-externalfetcher',
+			'meta-webindexer'               => 'meta-webindexer',
 			'meta-facebookbot'              => 'FacebookBot',
+			'azureai-searchbot'             => 'AzureAI-SearchBot',
+			'pangubot'                      => 'PanguBot',
+			'alibaba-ai'                    => 'Alibaba-AI',
+			'character-ai'                  => 'character-ai',
+			'poe-chat-bot'                  => 'poe-chat-bot',
+			'phindbot'                      => 'PhindBot',
+			'iaskbot'                       => 'iAskBot',
 			'diffbot'                       => 'Diffbot',
 			'cohere-ai'                     => 'cohere-ai',
 			'cohere-training-data-crawler'  => 'cohere-training-data-crawler',
@@ -140,6 +162,111 @@ class Opti_Behavior_Heatmap_Bot_Tracker {
 			'pingdom'         => 'Pingdom',
 			'statuspage'      => 'StatusPage',
 		);
+	}
+
+	/**
+	 * AI bots only: company + why they came (OPT-2825).
+	 *
+	 * Keys are the `bot_type` slugs stored in `optibehavior_bot_visits` (same
+	 * keys as get_known_bot_patterns()). A bot absent from this map is NOT an
+	 * AI bot and never appears in the AI row of the Traffic screen — classic
+	 * search engines (Googlebot, bingbot, Applebot) stay out on purpose.
+	 *
+	 * Intents mirror the four pills of the Traffic screen:
+	 * user_responses (an AI read the page to answer someone now),
+	 * indexing_search, model_training, data_collection.
+	 *
+	 * @since 1.11.0
+	 * @return array<string,array{company:string,intent:string}>
+	 */
+	public static function get_ai_bot_map() {
+		$map = array(
+			// OpenAI.
+			'gptbot'                       => array( 'company' => 'OpenAI', 'intent' => 'model_training' ),
+			'chatgpt-user'                 => array( 'company' => 'OpenAI', 'intent' => 'user_responses' ),
+			'oai-searchbot'                => array( 'company' => 'OpenAI', 'intent' => 'indexing_search' ),
+			'oai-adsbot'                   => array( 'company' => 'OpenAI', 'intent' => 'data_collection' ),
+			'chatgpt-agent'                => array( 'company' => 'OpenAI', 'intent' => 'user_responses' ),
+			// Anthropic.
+			'claudebot'                    => array( 'company' => 'Anthropic', 'intent' => 'model_training' ),
+			'anthropic-ai'                 => array( 'company' => 'Anthropic', 'intent' => 'model_training' ),
+			'claude-user'                  => array( 'company' => 'Anthropic', 'intent' => 'user_responses' ),
+			'claude-web'                   => array( 'company' => 'Anthropic', 'intent' => 'user_responses' ),
+			'claude-searchbot'             => array( 'company' => 'Anthropic', 'intent' => 'indexing_search' ),
+			// Perplexity.
+			'perplexitybot'                => array( 'company' => 'Perplexity', 'intent' => 'indexing_search' ),
+			'perplexity-user'              => array( 'company' => 'Perplexity', 'intent' => 'user_responses' ),
+			// Google (AI surfaces only; Googlebot is a classic search engine).
+			'google-extended'              => array( 'company' => 'Google', 'intent' => 'model_training' ),
+			'googleagent-mariner'          => array( 'company' => 'Google', 'intent' => 'user_responses' ),
+			'google-notebooklm'            => array( 'company' => 'Google', 'intent' => 'user_responses' ),
+			'google-cloudvertexbot'        => array( 'company' => 'Google', 'intent' => 'data_collection' ),
+			'gemini'                       => array( 'company' => 'Google', 'intent' => 'user_responses' ),
+			'bard'                         => array( 'company' => 'Google', 'intent' => 'user_responses' ),
+			// Meta. `meta-facebookbot` matches the token "FacebookBot" only:
+			// the link preview agent is "facebookexternalhit", another slug, so
+			// it stays in Bot Traffic and never lands in the AI row (OPT-2859).
+			'meta-externalagent'           => array( 'company' => 'Meta', 'intent' => 'data_collection' ),
+			'meta-externalfetcher'         => array( 'company' => 'Meta', 'intent' => 'user_responses' ),
+			'meta-webindexer'              => array( 'company' => 'Meta', 'intent' => 'indexing_search' ),
+			'meta-facebookbot'             => array( 'company' => 'Meta', 'intent' => 'data_collection' ),
+			// ByteDance, Amazon, Apple, Microsoft.
+			'bytespider'                   => array( 'company' => 'ByteDance', 'intent' => 'model_training' ),
+			'amazonbot'                    => array( 'company' => 'Amazon', 'intent' => 'model_training' ),
+			'amzn-searchbot'               => array( 'company' => 'Amazon', 'intent' => 'indexing_search' ),
+			'amzn-user'                    => array( 'company' => 'Amazon', 'intent' => 'user_responses' ),
+			'amazonbuyforme'               => array( 'company' => 'Amazon', 'intent' => 'user_responses' ),
+			'novaact'                      => array( 'company' => 'Amazon', 'intent' => 'user_responses' ),
+			'bedrockbot'                   => array( 'company' => 'Amazon', 'intent' => 'data_collection' ),
+			'applebot-extended'            => array( 'company' => 'Apple', 'intent' => 'model_training' ),
+			'azureai-searchbot'            => array( 'company' => 'Microsoft', 'intent' => 'indexing_search' ),
+			// xAI.
+			'grokbot'                      => array( 'company' => 'xAI', 'intent' => 'model_training' ),
+			'xai-bot'                      => array( 'company' => 'xAI', 'intent' => 'model_training' ),
+			'xai'                          => array( 'company' => 'xAI', 'intent' => 'model_training' ),
+			'grok'                         => array( 'company' => 'xAI', 'intent' => 'user_responses' ),
+			// Mistral, DeepSeek, Cohere.
+			'mistralai-user'               => array( 'company' => 'Mistral', 'intent' => 'user_responses' ),
+			'mistral-ai'                   => array( 'company' => 'Mistral', 'intent' => 'model_training' ),
+			'deepseek'                     => array( 'company' => 'DeepSeek', 'intent' => 'user_responses' ),
+			'deepseekbot'                  => array( 'company' => 'DeepSeek', 'intent' => 'model_training' ),
+			'cohere-ai'                    => array( 'company' => 'Cohere', 'intent' => 'model_training' ),
+			'cohere-training-data-crawler' => array( 'company' => 'Cohere', 'intent' => 'model_training' ),
+			// Other AI companies.
+			'pangubot'                     => array( 'company' => 'Huawei', 'intent' => 'model_training' ),
+			'alibaba-ai'                   => array( 'company' => 'Alibaba', 'intent' => 'model_training' ),
+			'character-ai'                 => array( 'company' => 'Character.AI', 'intent' => 'user_responses' ),
+			'poe-chat-bot'                 => array( 'company' => 'Poe', 'intent' => 'user_responses' ),
+			'phindbot'                     => array( 'company' => 'Phind', 'intent' => 'indexing_search' ),
+			'iaskbot'                      => array( 'company' => 'iAsk', 'intent' => 'indexing_search' ),
+			// Search-style AI assistants.
+			'duckassistbot'                => array( 'company' => 'DuckDuckGo', 'intent' => 'user_responses' ),
+			'youbot'                       => array( 'company' => 'You.com', 'intent' => 'indexing_search' ),
+			'ai2bot'                       => array( 'company' => 'Allen Institute', 'intent' => 'model_training' ),
+			'allenai'                      => array( 'company' => 'Allen Institute', 'intent' => 'model_training' ),
+			// OPT-2859: ccbot (Common Crawl), diffbot, omgili / omgilibot and the
+			// three GoogleOther agents are dataset / crawl services, not agents of
+			// an AI company: they stay in the Bot Traffic widget, so the same pass
+			// is never counted on two widgets of the same screen.
+		);
+
+		/**
+		 * Filter the AI bot map (company + intent per stored bot_type).
+		 *
+		 * @since 1.11.0
+		 * @param array $map bot_type => { company, intent }.
+		 */
+		return (array) apply_filters( 'opti_behavior_ai_bot_map', $map );
+	}
+
+	/**
+	 * The four AI intent keys, in display order (OPT-2825).
+	 *
+	 * @since 1.11.0
+	 * @return string[]
+	 */
+	public static function get_ai_intent_keys() {
+		return array( 'user_responses', 'indexing_search', 'model_training', 'data_collection' );
 	}
 
 	/**
@@ -308,7 +435,12 @@ class Opti_Behavior_Heatmap_Bot_Tracker {
 	private function get_current_url() {
 		$protocol = isset( $_SERVER['HTTPS'] ) && 'on' === $_SERVER['HTTPS'] ? 'https' : 'http';
 		$host = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '';
-		$request_uri = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
+		// OPT-2881: never sanitize_text_field() the address. It drops every
+		// percent-encoded octet, so an Arabic or Japanese path was stored as
+		// "/--/---/" (only the dashes of the slug were left). esc_url_raw()
+		// below keeps %xx and UTF-8 and removes what an address may not hold.
+		$request_uri = isset( $_SERVER['REQUEST_URI'] ) ? esc_url_raw( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
+		$request_uri = is_string( $request_uri ) ? wp_strip_all_tags( $request_uri ) : '';
 
 		return esc_url_raw( $protocol . '://' . $host . $request_uri );
 	}
@@ -337,5 +469,12 @@ class Opti_Behavior_Heatmap_Bot_Tracker {
 			),
 			array( '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
+
+		// OPT-2859: an AI pass is also counted in the daily counters, which keep
+		// 12 months where this log keeps 30 days. One upsert, no IP, no user
+		// agent, no referrer; a bot outside the AI map is refused there.
+		if ( class_exists( 'Opti_Behavior_AI_Bot_Daily' ) ) {
+			Opti_Behavior_AI_Bot_Daily::record( $bot_type, $visited_url );
+		}
 	}
 }

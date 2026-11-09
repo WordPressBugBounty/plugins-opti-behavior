@@ -515,6 +515,108 @@ body.opti-stats-bar-collapsed {
 	height: 14px;
 }
 
+/* Page X-Ray button (OPT-2024): same box as the toggle, just before it. */
+.opti-stats-bar__xray {
+	background: var(--osb-item-bg);
+	border: 1px solid transparent;
+	color: var(--osb-muted);
+	cursor: pointer;
+	padding: 5px;
+	border-radius: 8px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 3px;
+	flex: 0 0 auto;
+	position: relative;
+	z-index: 2;
+	text-decoration: none;
+	box-shadow: none;
+	transition: color 0.2s, background 0.2s, border-color 0.2s, transform 0.15s;
+}
+
+.opti-stats-bar__xray:hover,
+.opti-stats-bar__xray:focus-visible {
+	color: var(--osb-accent);
+	background: var(--osb-hover);
+	border-color: var(--osb-separator);
+	transform: scale(1.05);
+	text-decoration: none;
+}
+
+.opti-stats-bar__xray svg {
+	width: 14px;
+	height: 14px;
+}
+
+.opti-stats-bar__xray-badge {
+	font-size: 8px;
+	font-weight: 700;
+	line-height: 1;
+	letter-spacing: 0.02em;
+	padding: 2px 3px;
+	border-radius: 3px;
+	background: #6d28d9;
+	color: #fff;
+}
+
+.opti-stats-bar__xray.is-disabled {
+	cursor: default;
+	opacity: 0.45;
+}
+
+.opti-stats-bar__xray.is-disabled:hover {
+	color: var(--osb-muted);
+	background: var(--osb-item-bg);
+	border-color: transparent;
+	transform: none;
+}
+
+/* Design OPT-2025: X-Ray + eye buttons, one look in every bar theme.
+   Invisible 4 px ring = 34 px touch target without making the bar taller. */
+.opti-stats-bar__toggle::after,
+.opti-stats-bar__xray::after {
+	content: "";
+	position: absolute;
+	inset: -4px;
+	border-radius: 10px;
+}
+
+.opti-stats-bar__toggle:focus-visible,
+.opti-stats-bar__xray:focus-visible {
+	color: var(--osb-accent);
+	background: var(--osb-hover);
+	border-color: var(--osb-separator);
+	outline: 2px solid var(--osb-accent);
+	outline-offset: 2px;
+}
+
+.opti-stats-bar__xray.is-locked:hover,
+.opti-stats-bar__xray.is-locked:focus-visible {
+	color: var(--osb-text);
+}
+
+.opti-stats-bar__xray .opti-stats-bar__xray-badge {
+	font-size: 9px;
+	padding: 2px 4px;
+	letter-spacing: 0.04em;
+	white-space: nowrap;
+	flex: 0 0 auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.opti-stats-bar__toggle,
+	.opti-stats-bar__xray {
+		transition: none;
+	}
+
+	.opti-stats-bar__toggle:hover,
+	.opti-stats-bar__xray:hover,
+	.opti-stats-bar__xray:focus-visible {
+		transform: none;
+	}
+}
+
 /* =========================================================================
    Dynamic Fit Modes — applied by frontend-stats-bar.js after measuring width
    ========================================================================= */

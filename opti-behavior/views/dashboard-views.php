@@ -21,8 +21,9 @@ if ( ! function_exists( 'opti_behavior_render_widget_loading' ) ) {
 	 */
 	function opti_behavior_render_widget_loading() {
 		?>
-		<div class="widget-loading-overlay">
+		<div class="widget-loading-overlay" role="status">
 			<div class="widget-spinner"></div>
+			<span class="screen-reader-text"><?php esc_html_e( 'Loading...', 'opti-behavior' ); ?></span>
 		</div>
 		<?php
 	}

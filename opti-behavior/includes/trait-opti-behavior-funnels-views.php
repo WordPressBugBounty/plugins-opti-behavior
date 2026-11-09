@@ -234,6 +234,20 @@ trait Opti_Behavior_Funnels_Views_Trait {
 				?>
 			<?php endif; ?>
 
+			<?php $this->render_funnel_builder_modal( $tooltips ); ?>
+			</div><!-- .funnels-content-wrapper -->
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render the funnel builder modal (create / edit). Shared by the funnels
+	 * list and the funnel detail view.
+	 *
+	 * @param array $tooltips Funnels tooltip definitions.
+	 */
+	private function render_funnel_builder_modal( $tooltips ) {
+		?>
 			<!-- Funnel Builder Modal -->
 			<div class="funnel-builder-modal" id="funnel-builder-modal" style="display: none;">
 				<div class="funnel-builder-overlay"></div>
@@ -294,8 +308,6 @@ trait Opti_Behavior_Funnels_Views_Trait {
 					</div>
 				</div>
 			</div>
-			</div><!-- .funnels-content-wrapper -->
-		</div>
 		<?php
 	}
 
@@ -526,6 +538,10 @@ trait Opti_Behavior_Funnels_Views_Trait {
 								<span class="opti-funnel-pro-lock" aria-hidden="true"><i data-lucide="lock"></i></span>
 							<?php endif; ?>
 						</button>
+						<button class="refresh-btn" id="funnel-detail-edit" type="button">
+							<i data-lucide="pencil"></i>
+							<?php esc_html_e( 'Edit Funnel', 'opti-behavior' ); ?>
+						</button>
 					</div>
 				</div>
 			</div>
@@ -573,6 +589,7 @@ trait Opti_Behavior_Funnels_Views_Trait {
 					</div>
 				</div>
 			</div>
+			<?php $this->render_funnel_builder_modal( opti_behavior_get_funnels_tooltips() ); ?>
 		</div>
 		<?php
 	}

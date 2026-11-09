@@ -49,6 +49,7 @@ delete_option( 'opti_behavior_page_type_prune_migrated' );
 delete_option( 'opti_behavior_page_type_prune_state' );
 delete_option( 'opti_behavior_spam_few_scrolls_repair' );
 delete_option( 'opti_behavior_spam_referrer_repair' );
+delete_option( 'opti_behavior_spam_referrer_list_repair' );
 delete_option( 'opti_behavior_url_privacy_repair' );
 // Site change log (Pages tab "what changed in WordPress").
 delete_option( 'opti_behavior_site_changes' );
@@ -81,6 +82,9 @@ delete_option( 'opti_behavior_filter_profiles' );
 delete_option( 'opti_behavior_form_analytics_settings' );
 // Free tracker options
 delete_option( 'opti_behavior_tracker_last_heartbeat' );
+// Tracker heartbeat notice + collection test (OPT-1943).
+delete_option( 'opti_behavior_heartbeat_dismissed_until' );
+delete_option( 'opti_behavior_heartbeat_probe' );
 delete_option( 'opti_behavior_tracked' );
 delete_option( 'opti_behavior_has_data_7d' );
 // Consent / welcome options
@@ -249,6 +253,27 @@ delete_option( 'opti_behavior_spam_reclassify_v1_done' );
 delete_option( 'opti_behavior_spam_scroll_default_migrated' );
 delete_option( 'opti_behavior_url2_canonical_v2_migrated' );
 
+// Settings, cursors and cleanup run state that were left behind (OPT-2273,
+// guarded by tests/uninstall-options-inventory-opt2273-test.php).
+delete_option( 'opti_behavior_funnel_purge_mode' );
+delete_option( 'opti_behavior_smart_insights_conversion_value' );
+delete_option( 'opti_behavior_invalid_cleanup_cursor' );
+delete_option( 'optibehavior_indexes_last_checked' );
+delete_option( 'optibehavior_referrers_last_backfill' );
+delete_option( 'optibehavior_bot_cleanup_total' );
+delete_option( 'optibehavior_bot_cleanup_deleted' );
+delete_option( 'optibehavior_bot_cleanup_rows_deleted_by_table' );
+delete_option( 'optibehavior_bot_cleanup_files_deleted' );
+delete_option( 'optibehavior_bot_cleanup_orphaned_visitors_deleted' );
+delete_option( 'optibehavior_smart_cleanup_total' );
+delete_option( 'optibehavior_smart_cleanup_deleted' );
+delete_option( 'optibehavior_smart_cleanup_rows_deleted_by_table' );
+delete_option( 'optibehavior_smart_cleanup_files_deleted' );
+delete_option( 'optibehavior_smart_cleanup_orphaned_visitors_deleted' );
+delete_option( 'optibehavior_smart_cleanup_estimated_bytes_reclaimed' );
+delete_option( 'optibehavior_smart_cleanup_warnings' );
+delete_option( 'optibehavior_smart_cleanup_optimize_after_cleanup' );
+
 // Transients.
 delete_transient( 'opti_behavior_trial_failed' );
 delete_transient( 'opti_behavior_pro_download_url' );
@@ -297,6 +322,8 @@ wp_clear_scheduled_hook( 'opti_behavior_daily_heartbeat' );
 wp_clear_scheduled_hook( 'opti_behavior_shop_weekly_report' );
 // --- One-off events ---
 wp_clear_scheduled_hook( 'opti_behavior_debug_auto_disable' );
+wp_clear_scheduled_hook( 'opti_behavior_wporg_info_refresh' );
+wp_clear_scheduled_hook( 'opti_behavior_heartbeat_probe_run' );
 wp_clear_scheduled_hook( 'opti_behavior_smart_insights_scheduler_batch' );
 wp_clear_scheduled_hook( 'opti_behavior_smart_insights_upgrade_regenerate' );
 wp_clear_scheduled_hook( 'opti_behavior_heatmap_agg_sync' );
@@ -320,6 +347,7 @@ wp_clear_scheduled_hook( 'opti_behavior_geo_db_check' );
 wp_clear_scheduled_hook( 'opti_behavior_page_type_prune_purge' );
 wp_clear_scheduled_hook( 'opti_behavior_spam_few_scrolls_repair' );
 wp_clear_scheduled_hook( 'opti_behavior_spam_referrer_repair' );
+wp_clear_scheduled_hook( 'opti_behavior_spam_referrer_list_repair' );
 wp_clear_scheduled_hook( 'opti_behavior_heatmap_migration_batch' );
 wp_clear_scheduled_hook( 'opti_behavior_recording_orphan_sweep' );
 
@@ -351,15 +379,22 @@ $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_form_interaction
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_form_submissions" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_heatmap_daily" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_insights" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+// AI bot daily counters (OPT-2859).
+$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_ai_bot_daily" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+delete_option( 'opti_behavior_ai_bot_daily_db_version' );
+delete_option( 'opti_behavior_ai_bot_daily_backfill' );
 // Shop events (WooCommerce daily counters) + the Pro rows linked to a session.
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_shop_daily" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_shop_session_events" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 delete_option( 'opti_behavior_shop_db_version' );
+delete_option( 'opti_behavior_shop_add_origins' );
 delete_option( 'opti_behavior_shop_tracking' );
 delete_option( 'opti_behavior_shop_report' );
 delete_option( 'opti_behavior_shop_report_state' );
 // "Made with Opti-Behavior" box of the reports (OPT-1348).
 delete_option( 'opti_behavior_report_credit' );
+// Technical signature choice (OPT-2952).
+delete_option( 'opti_behavior_signature' );
 
 // Drop A/B testing tables.
 $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}optibehavior_ab_daily_stats" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery

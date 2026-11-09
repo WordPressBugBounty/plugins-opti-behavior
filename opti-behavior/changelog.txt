@@ -2,6 +2,52 @@
 
 The canonical, always up-to-date changelog is published at https://optiuser.com/opti-behavior/changelog/
 
+= 1.11.0 - 2026-11-06 =
+* **Feature:** Opti-Behavior Pro stays free after the 6-month trial, up to 1,000 recorded sessions a month on 1 site. When the limit is reached, all Pro data collection pauses until the next month: the Pro screens and the data already collected stay visible, nothing is deleted, and the free features keep working.
+* **Feature:** Pro in one click: give your e-mail address and your site address, and the trial key, the download link and a link to set your password arrive by e-mail.
+* **Feature:** Traffic: new "Audience Insights / AI" row with three widgets. "Which AIs read your site" shows the AI robots by company. "What AI reads and who it sends" lists the 50 most-read pages (with the total number of pages read), the AI passes of each page and the visitors that AI assistants sent to it. "Why AIs visit" shows the intent of the AI passes. The filter panel narrows "Visitors sent". A robot has no country or device, so AI passes follow the period only.
+* **Feature:** AI passes are kept as daily counters for 12 months (one row per day, AI robot and page; no IP address, no user agent, no referrer) instead of the 30 days of the crawler log. On update, the 30 days still in the crawler log are copied in once.
+* **Feature:** Site report: an AI section with the AI companies that read your site, the real number of pages they read and the visitors who landed on those pages from an AI assistant. It says "to answer questions" only when that intent was measured. It gives the first day of AI data on your site and explains in one line what AI passes, pages and visitors sent count.
+* **Feature:** Traffic: visits from Gemini, Mistral, DeepSeek, Grok, Meta AI and You.com are counted in the "AI Assistants" channel instead of Organic Search or Referral (Google AI Overviews arrive from google.com and stay in Organic Search).
+* **Feature:** Traffic: the traffic source, Referrers and Screen resolution tables show the change of each row against the previous period.
+* **Feature:** Tracker status: on public pages where the tracker runs, the browser console shows "[Opti-Behavior] tracker loaded", the page carries the HTML comment "<!-- This site uses Opti-Behavior - https://optiuser.com -->" and the response carries the header "X-Analytics: Opti-Behavior". The console line has its own checkbox, "Show tracker status in the console" (on by default), in Settings > Debug & Logging > JavaScript Debug Settings. The comment and the header can be removed with the filter opti_behavior_signature_markup.
+* **Feature:** Spam: a built-in list of 56 known spam referrer domains (for example forexwikitrading.com). A visit they send is counted as spam in Traffic, Referrers and the site report, past visits included. New "Extra spam domains" setting, one domain per line.
+* **Feature:** Site report: a "Signals by module" section, the same blocks as the report e-mail (Pro rows carry a PRO tag).
+* **Feature:** Site report on WooCommerce sites: "Carts without an order" section, with the products whose carts most often ended without an order and what to check.
+* **Feature:** Smart Insights: the weekly summary also lists the pages that lose the most visitors. The summary and this list share one card.
+* **Feature:** Front-end stats bar: a "Page X-Ray" button opens the Page X-Ray of the page you are looking at (with Opti-Behavior Pro; a locked "PRO" button without it). It is shown on single public pages, posts, products and the shop.
+* **Feature:** Reports: a waiting page with a progress bar while a site report is built, and the report reads are cached so it is built faster.
+* **Enhancement:** The site report and Page X-Ray are always built, with or without every Pro module. When one is missing, a notice at the top says the report is not complete and gives a Pro button.
+* **Enhancement:** The trust bar shows the real WordPress logo, and the "6 months" wording is no longer repeated on the same screen.
+* **Enhancement:** Site report in one click: the waiting page shows "Page N of M" while page scores are computed in small steps, and the document opens only when they are done. A page that could not be measured is named; "Partial report" and "generate it again" are gone.
+* **Enhancement:** Smart Insights: a line says "Likely cause" only when a cause was really measured. Otherwise it says "Observation" (recordings to watch, a concentration in one segment) or "Evidence", and the list is titled "Observations and evidence".
+* **Enhancement:** Site report: one funnel recommendation, chosen from the goal of the page; a funnel that does not follow the page goal is never advised first, and the table says so.
+* **Enhancement:** Reports: "The 3 issues to look at first" replaces "most costly". The report notes the time it was read and that a figure can still move (new visits, sessions later classed as spam).
+* **Enhancement:** Shop: a second add to cart on a product already in the cart (block themes, Store API) is counted; a lower quantity is not. Each success is counted once, and orders at 0 are kept out of paid figures. A warning line appears above the tiles when the adds to cart look too high for the visits of the period.
+* **Enhancement:** Smart Insights and reports: funnel figures say "sessions that left at this step" instead of "lost", estimates and advice say what they are based on, and checks name the pages and sample sizes they use. The "Low scroll depth" help says the figure is an average.
+* **Enhancement:** Site report and report e-mails: a figure measured on too few visits is no longer shown as a result. Key figures carry the name of the screen they come from, and dated sections say their period. A warning appears when a funnel step matches every page of the site.
+* **Enhancement:** A/B tests: the screen and the site report give the same verdict (winner, loser, not enough data, no clear winner, check the goal), based on participation figures; "Check goal tracking" counts different visitors.
+* **Enhancement:** Report e-mail: times are rounded to the nearest second like the Traffic screen, top pages show visits next to views, unresolved errors are counted like the Errors Tracking screen, and colours and names follow the plugin design.
+* **Enhancement:** Smart Insights page: "How it works" first, then the weekly summary, then the tabs. The fold of the loop is remembered for each user, and the tab bar works with the keyboard.
+* **Enhancement:** Loading, empty and error states on dashboard panels. Storage Stats measures the plugin files in steps with a progress bar, stops after 30 seconds with a Retry button, and an error can be resumed.
+* **Enhancement:** Settings > Danger Zone > Full reset: nothing is checked when the page opens, the size of the selection is shown, and the delete button stays off until a category is chosen.
+* **Enhancement:** Setup check: a module that has simply been quiet is no longer reported as blocked; a blocked collection is reported only when it is confirmed.
+* **Enhancement:** Funnels: the counting rules and the period are shown on the funnels screen.
+* **Enhancement:** Clearer welcome screen choices, consent notice buttons with one style, new deactivation survey design, new design of the agency screen in Reports.
+* **Enhancement:** Pro: Errors Tracking separates severity from action priority; a group seen on few visits gets a low-priority badge. Network failures are classified by kind.
+* **Enhancement:** Pro: User Journeys and the full report count multi-page visits against visits with a recorded journey.
+* **Enhancement:** Pro: Page X-Ray scores pages on their detected goal until it is confirmed, and says what the health score counts.
+* **Enhancement:** Pro: Recordings show the measured number of tracked sessions without a replay.
+* **Fix:** Traffic: the Bot Traffic panel no longer shows a made-up "+100 %" change. The crawler log is kept 30 days, so when the previous period falls outside it the change reads "—" with an explanation, in the header and on each crawler row.
+* **Fix:** AI page list: page addresses with non-Latin characters are stored and shown correctly.
+* **Fix:** Heatmap detail: the page preview no longer waits forever; scroll heatmaps use a robust page height; UTM filters list campaign, source and medium.
+* **Fix:** Heatmap engagement rate is the share of visits with at least one interaction.
+* **Fix:** Time on page in reports uses the same formula as Top Pages and excludes spam in every case.
+* **Fix:** Shop: an add to cart from a plain link is counted only when a person clicks it (no more counts from link prefetch or robots).
+* **Fix:** UTM tags are kept when your pages are served from a page cache.
+* **Fix:** The Apply button of the date filter works again on the dashboard and on funnels.
+* **Fix:** Pro: the "Where visitors click" panel of Page X-Ray no longer shows an empty broken image on pages without a saved picture.
+
 = 1.10.1 - 2026-10-20 =
 * **New:** Shop screen for WooCommerce sites (menu Opti-Behavior > Shop): product views, adds to cart, checkouts and paid orders, and the lost visits of each product (product views that did not lead to an add to cart), worst product first. The shop counters store no order number, customer name, e-mail address or coupon code.
 * **New:** "Shop" block in the scheduled e-mail report on WooCommerce sites: product views, adds to cart, paid orders and failed payments of the report period compared with the period before, the three products that lose the most visits and a link to the Shop screen. No block when nothing was counted.

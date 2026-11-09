@@ -5,7 +5,7 @@
  * (`qa/design-opt-1338/short.html`).
  *
  * Sections: head (site, period, compared period, visits), 1 Traffic (the
- * Traffic screen's own figures for the period), 2 The 3 most costly issues
+ * Traffic screen's own figures for the period), 2 The 3 issues to look at first
  * (active Smart Insights cards ranked by
  * Opti_Behavior_Smart_Insights_Impact_Calculator::compare_by_impact(), cards
  * without an impact block after), then one sober line about the full report.
@@ -34,8 +34,29 @@ class Opti_Behavior_Report_Site {
 	/** Most viewed pages printed. */
 	const TOP_PAGES = 5;
 
+	/** AI block (OPT-2860): AI passes needed over the period before it describes anything. */
+	const AI_MIN_PASSES = 20;
+
+	/** AI block: pages printed. */
+	const AI_TOP_PAGES = 3;
+
 	/** Share (%) under which a device segment of the stacked bar carries no words. */
 	const SPLIT_LABEL_MIN = 15;
+
+	/*
+	 * Proof thresholds of the report sentences (OPT-1940): ONE place, read by
+	 * the Free short report and the Pro full report / Page X-Ray report.
+	 * Every sentence with a figure stands on a counted number of visits.
+	 */
+
+	/** "Most visits / most visitors" only above this share (%) of the counted visits. */
+	const PROOF_MAJORITY_SHARE = 50;
+
+	/** Visits needed in the busiest hour before the report advises a time to publish. */
+	const PROOF_HOUR_MIN_VISITS = 30;
+
+	/** Impact bases estimated from an average gap (no "% of all visits"); funnel / form / error / friction bases are counted visit by visit. */
+	const PROOF_ESTIMATED_BASES = array( 'engagement_gap', 'conversion_gap' );
 
 	/** More words than this in a clicked text element = a sentence being read, not a click target (QA OPT-1730). */
 	const READING_WORDS = 6;
@@ -49,6 +70,29 @@ class Opti_Behavior_Report_Site {
 	/** Product pages printed in "Shop" (OPT-1683). */
 	const TOP_SHOP = 3;
 
+	/** Life (s) of a cached query result (OPT-1863): the Page X-Ray dossier's 10 minutes. */
+	const CACHE_TTL = 600;
+
+	/** Transient prefix of the cached query results (OPT-1863). */
+	const CACHE_PREFIX = 'opti_behavior_rsite_';
+
+	/** Shape of the cached results; bump when one changes. */
+	const CACHE_VERSION = 2;
+
+	/**
+	 * Results already read in this request (OPT-1863), by transient name.
+	 *
+	 * @var array
+	 */
+	private static $memo = array();
+
+	/**
+	 * True while sections() reads the report's data (OPT-1863).
+	 *
+	 * @var bool
+	 */
+	private static $caching = false;
+
 	/**
 	 * Hooks.
 	 *
@@ -56,6 +100,86 @@ class Opti_Behavior_Report_Site {
 	 */
 	public static function init() {
 		add_filter( 'opti_behavior_report_sections', array( __CLASS__, 'sections' ), 10, 3 );
+	}
+
+	/**
+	 * A query result of this report, kept CACHE_TTL in a transient (never
+	 * autoloaded: it has an expiry) and once per request (OPT-1863). Key =
+	 * function + its arguments + the dashboard cache generation (bumped by new
+	 * visits, deletes, spam changes: the Traffic widgets follow the same one)
+	 * + locale. A force refresh (`force_refresh=1`, live dashboard request)
+	 * reads again and stores the new result; a computation with one failed
+	 * query (any of them, read through the `query` filter) is never stored.
+	 * Only while sections() builds a report: a direct call (e-mail path,
+	 * tests on shadow tables) reads the database and stores nothing.
+	 *
+	 * @param string   $fn      Function name.
+	 * @param array    $parts   Its arguments.
+	 * @param callable $compute Reads the database, returns the result.
+	 * @return mixed
+	 */
+	private static function cached( $fn, $parts, $compute ) {
+		global $wpdb;
+		if ( ! self::$caching ) {
+			return $compute();
+		}
+		$gen = function_exists( 'opti_behavior_dashboard_cache_generation' ) ? opti_behavior_dashboard_cache_generation() : 0;
+		$key = self::CACHE_PREFIX . md5( wp_json_encode( array( self::CACHE_VERSION, $fn, array_values( $parts ), $gen, determine_locale() ) ) );
+		if ( array_key_exists( $key, self::$memo ) ) {
+			return self::$memo[ $key ];
+		}
+		$force = function_exists( 'opti_behavior_is_force_refresh_requested' ) && opti_behavior_is_force_refresh_requested();
+		if ( ! $force ) {
+			$hit = get_transient( $key );
+			if ( is_array( $hit ) && array_key_exists( 'v', $hit ) ) {
+				self::$memo[ $key ] = $hit['v'];
+
+				return $hit['v'];
+			}
+		}
+		// wpdb clears last_error at each query: read it before every next
+		// query of the computation and once after, so one failed query among
+		// several (one per funnel) is never stored.
+		$ran    = 0;
+		$failed = false;
+		$watch  = static function ( $query ) use ( $wpdb, &$ran, &$failed ) {
+			if ( '' === (string) $query ) {
+				return $query;
+			}
+			if ( $ran > 0 && '' !== (string) $wpdb->last_error ) {
+				$failed = true;
+			}
+			++$ran;
+
+			return $query;
+		};
+		add_filter( 'query', $watch, PHP_INT_MAX );
+		try {
+			$value = $compute();
+		} finally {
+			remove_filter( 'query', $watch, PHP_INT_MAX );
+		}
+		if ( $ran > 0 && '' !== (string) $wpdb->last_error ) {
+			$failed = true;
+		}
+		if ( ! $failed ) {
+			set_transient( $key, array( 'v' => $value ), self::CACHE_TTL );
+		}
+		self::$memo[ $key ] = $value;
+
+		return $value;
+	}
+
+	/**
+	 * Drop the cached query results (tests, measures).
+	 *
+	 * @return void
+	 */
+	public static function flush_cache() {
+		self::$memo = array();
+		if ( function_exists( 'opti_behavior_delete_transients_by_prefix' ) ) {
+			opti_behavior_delete_transients_by_prefix( array( self::CACHE_PREFIX ) );
+		}
 	}
 
 	/**
@@ -99,9 +223,23 @@ class Opti_Behavior_Report_Site {
 		} catch ( Throwable $e ) {
 			$ctx = null;
 		}
+		/**
+		 * A step of a report is done (OPT-1862): the waiting page of a report
+		 * built in the background shows it. Points, in order: `sessions`
+		 * (visits and traffic read), `clicks` (clicks and scroll), `journeys`
+		 * (funnels, A/B tests, shop), `pro` (Pro blocks), then one `section`
+		 * per printed section and `finish` (Opti_Behavior_Report::render_document()).
+		 *
+		 * @param string $step  Progress point.
+		 * @param int    $done  Sections written (`section` / `finish`), else 0.
+		 * @param int    $total Sections of the document (`section` / `finish`), else 0.
+		 */
+		do_action( 'opti_behavior_report_progress', 'sessions', 0, 0 );
 
 		$list = array( array( 'site-head', 'render_head' ) );
 		if ( is_array( $ctx ) && $ctx['visits'] > 0 ) {
+			// OPT-1863: the reads below are cached 10 minutes (cached()).
+			self::$caching = true;
 			// OPT-1681: top clicked elements + day x hour grid, read here (not on the e-mail path).
 			try {
 				$ctx['clicks'] = self::click_rows( $ctx['from'], $ctx['to'], $ctx['spam'] );
@@ -110,6 +248,8 @@ class Opti_Behavior_Report_Site {
 				$ctx['clicks'] = array();
 				$ctx['hours']  = array();
 			}
+			/** This action is documented above. */
+			do_action( 'opti_behavior_report_progress', 'clicks', 0, 0 );
 			// OPT-1682: confirmed funnels + A/B tests with visits in the period.
 			try {
 				$ctx['funnels'] = self::funnel_rows( $ctx['from'], $ctx['to'], $ctx['spam'], $ctx['issues'] );
@@ -124,14 +264,23 @@ class Opti_Behavior_Report_Site {
 			// OPT-1683: WooCommerce counters (no visitor, no order number).
 			try {
 				$ctx['shop'] = self::shop_rows( $ctx['from'], $ctx['to'] );
+				if ( is_array( $ctx['shop'] ) ) {
+					$ctx['shop']['visits']      = (int) $ctx['visits'];
+					$ctx['shop']['atc_suspect'] = Opti_Behavior_Shop_Report::adds_look_suspect( $ctx['shop']['atc'], $ctx['visits'] );
+				}
 			} catch ( Throwable $e ) {
 				$ctx['shop'] = null;
 			}
+			self::$caching = false;
+			/** This action is documented above. */
+			do_action( 'opti_behavior_report_progress', 'journeys', 0, 0 );
 			// Blocks of the full version (Pro, OPT-1684 / OPT-1685): escaped HTML,
 			// '' = nothing. Filled only when Pro answers for these arguments.
 			$ctx['forms_pro']    = self::pro_html( 'opti_behavior_report_site_forms', $ctx, $args );
 			$ctx['clicks_pro']   = self::pro_html( 'opti_behavior_report_site_clicks', $ctx, $args );
 			$ctx['journeys_pro'] = self::pro_html( 'opti_behavior_report_site_journeys', $ctx, $args );
+			/** This action is documented above. */
+			do_action( 'opti_behavior_report_progress', 'pro', 0, 0 );
 			// OPT-1680..1683 (design OPT-1666): Summary, Issues, Shop, (Forms), Clicks,
 			// Traffic, Journeys and funnels, Busiest time, A/B test; an empty block is
 			// left out and the numbers follow.
@@ -151,6 +300,10 @@ class Opti_Behavior_Report_Site {
 				$list[] = array( 'site-clicks', 'render_clicks' );
 			}
 			$list[] = array( 'site-traffic', 'render_traffic' );
+			// OPT-2860: the AI block, right after Traffic (same universe).
+			if ( ! empty( $ctx['ai'] ) ) {
+				$list[] = array( 'site-ai', 'render_ai' );
+			}
 			if ( $ctx['funnels'] || '' !== $ctx['journeys_pro'] ) {
 				$list[] = array( 'site-journeys', 'render_funnels' );
 			}
@@ -160,11 +313,17 @@ class Opti_Behavior_Report_Site {
 			if ( $ctx['ab'] ) {
 				$list[] = array( 'site-ab', 'render_ab' );
 			}
+			// OPT-1599 / OPT-2560: the e-mail's signal blocks of the same days that no
+			// section above prints (Recordings, User Journeys, Errors).
+			$ctx['signals'] = self::signal_blocks( $ctx );
+			if ( $ctx['signals'] ) {
+				$list[] = array( 'site-signals', 'render_signals' );
+			}
 		}
 		$list[] = array( 'site-more', 'render_more' );
 		$no     = 0;
 		foreach ( $list as $item ) {
-			$numbered   = ! in_array( $item[0], array( 'site-head', 'site-more', 'site-forms-pro' ), true );
+			$numbered   = ! in_array( $item[0], array( 'site-head', 'site-more', 'site-forms-pro', 'site-signals' ), true );
 			$no        += $numbered ? 1 : 0;
 			$sections[] = array(
 				'id'     => $item[0],
@@ -213,6 +372,14 @@ class Opti_Behavior_Report_Site {
 		}
 		$ranked = self::rank_issues( $open );
 		$top    = array_slice( $ranked, 0, self::TOP_ISSUES );
+		$i_days = self::rows_days( $top );
+		// OB-01: visits each card's figure is a share of (its own days), read
+		// on the raw rows: shaping may drop the impact block.
+		$visits = isset( $stats['sessions'] ) ? absint( $stats['sessions'] ) : 0;
+		$i_base = array();
+		foreach ( array_values( $top ) as $row ) {
+			$i_base[] = self::issue_base( $row, $from, $to, $visits );
+		}
 		if ( $top && $dash && method_exists( $dash, 'shape_report_insights' ) ) {
 			$top = array_values( (array) $dash->shape_report_insights( $top ) );
 		}
@@ -234,10 +401,101 @@ class Opti_Behavior_Report_Site {
 			'returning'    => isset( $traffic['new_vs_returning'] ) && is_array( $traffic['new_vs_returning'] ) ? $traffic['new_vs_returning'] : array(),
 			'pages'        => isset( $traffic['top_pages'] ) && is_array( $traffic['top_pages'] ) ? array_slice( array_values( $traffic['top_pages'] ), 0, self::TOP_PAGES ) : array(),
 			'issues'       => $top,
+			// OPT-1958: days of the printed cards (said when they differ from the report).
+			'issues_from'  => $i_days[0],
+			'issues_to'    => $i_days[1],
+			// OB-01: per printed card, { visits, own } (null = no share).
+			'issues_base'  => $i_base,
 			// OPT-1618: every open problem, counted like the Smart Insights screen
 			// and the menu (locked previews included; they are not printed).
 			'issues_total' => $si_repo ? count( Opti_Behavior_Smart_Insights_Repository::drop_story_children( array_values( array_filter( $rows, 'is_array' ) ) ) ) : count( $ranked ),
 			'spam'         => ! empty( $args['exclude_spam'] ),
+			// OPT-2860: the AI block, from the same answer as the three AI
+			// widgets of the Traffic screen (no extra query).
+			'ai'           => self::ai_view( isset( $traffic['ai_bots'] ) ? $traffic['ai_bots'] : null, $days ),
+		);
+	}
+
+	/**
+	 * The "AI" block of the site report (OPT-2860, pure): which AI companies
+	 * read the site, the pages they read most, and the visitors the assistants
+	 * sent back.
+	 *
+	 * Observation only: no "quoted by ChatGPT", no AI visibility score, no
+	 * promise, never advice to block a robot. "0 visitor sent" is a fact.
+	 *
+	 * @param array|null $data Answer of get_ai_bots_data_impl().
+	 * @param int        $days Days of the report period.
+	 * @return array|null { total, companies[], names, pages[], sent, enough, kept_days, period_too_old } or null without data.
+	 */
+	public static function ai_view( $data, $days = 0 ) {
+		if ( ! is_array( $data ) || ! isset( $data['total'] ) ) {
+			return null;
+		}
+		$total = (int) $data['total'];
+		if ( $total < 1 ) {
+			return null;
+		}
+		$companies = array();
+		foreach ( array_values( isset( $data['companies'] ) && is_array( $data['companies'] ) ? $data['companies'] : array() ) as $row ) {
+			if ( is_array( $row ) && ! empty( $row['label'] ) ) {
+				$companies[] = array(
+					'label' => (string) $row['label'],
+					'count' => (int) ( isset( $row['count'] ) ? $row['count'] : 0 ),
+				);
+			}
+		}
+		$pages = array();
+		foreach ( array_values( isset( $data['pages'] ) && is_array( $data['pages'] ) ? $data['pages'] : array() ) as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$pages[] = array(
+				'title' => isset( $row['title'] ) ? (string) $row['title'] : '',
+				'path'  => isset( $row['path'] ) ? (string) $row['path'] : '',
+				'reads' => (int) ( isset( $row['total'] ) ? $row['total'] : 0 ),
+				'sent'  => (int) ( isset( $row['sent'] ) ? $row['sent'] : 0 ),
+			);
+			if ( count( $pages ) >= self::AI_TOP_PAGES ) {
+				break;
+			}
+		}
+		$kept = (int) ( isset( $data['retention_days'] ) ? $data['retention_days'] : 0 );
+
+		// OPT-2882: how many passes were measured as answering a visitor
+		// question ("User responses"). Nothing measured there = the report never
+		// claims the robots read those pages "to answer questions".
+		$user_responses = 0;
+		foreach ( (array) ( isset( $data['intents'] ) ? $data['intents'] : array() ) as $intent_row ) {
+			if ( is_array( $intent_row ) && 'user_responses' === (string) ( isset( $intent_row['key'] ) ? $intent_row['key'] : '' ) ) {
+				$user_responses = (int) ( isset( $intent_row['count'] ) ? $intent_row['count'] : 0 );
+			}
+		}
+
+		return array(
+			'total'          => $total,
+			'companies'      => $companies,
+			// The two first company names, for the one-sentence summary.
+			'names'          => array_slice( wp_list_pluck( $companies, 'label' ), 0, 2 ),
+			'pages'          => $pages,
+			// OPT-2874: the printed rows are the top ones only, so the sentence
+			// says how many pages were really read (`pages_read`, never below the
+			// rows printed) and the visitors THOSE pages received (`sent_pages`).
+			'pages_read'     => max( count( $pages ), (int) ( isset( $data['pages_total'] ) ? $data['pages_total'] : 0 ) ),
+			'pages_capped'   => ! empty( $data['pages_capped'] ),
+			'sent'           => (int) ( isset( $data['sent_total'] ) ? $data['sent_total'] : 0 ),
+			'sent_pages'     => (int) ( isset( $data['sent_pages'] ) ? $data['sent_pages'] : 0 ),
+			// Under the threshold the block prints one line only.
+			'enough'         => $total >= self::AI_MIN_PASSES,
+			'kept_days'      => $kept,
+			'days'           => (int) $days,
+			// True when the asked period starts before the kept days.
+			'period_too_old' => ! empty( $data['period_too_old'] ),
+			// OPT-2882: the ONE true sentence of the AI data (OPT-2881 writes it
+			// with the first day really counted on this site), and the measured
+			// "User responses" passes.
+			'retention_note' => (string) ( isset( $data['retention_note'] ) ? $data['retention_note'] : '' ),
+			'user_responses' => $user_responses,
 		);
 	}
 
@@ -426,7 +684,7 @@ class Opti_Behavior_Report_Site {
 	/**
 	 * What the e-mail prints, from a context (pure): plain texts and numbers,
 	 * escaped by the e-mail views. Same choices as the sections of the PDF:
-	 * 4 tiles with their change, the 3 most costly issues, sources top 5 +
+	 * 4 tiles with their change, the 3 issues to look at first, sources top 5 +
 	 * "Other sources", devices, the 5 most viewed pages.
 	 *
 	 * @param array|null $ctx Result of context().
@@ -441,10 +699,10 @@ class Opti_Behavior_Report_Site {
 		$total = max( 1, (int) $ctx['visits'] );
 		$views = isset( $st['pageviews'] ) ? (int) $st['pageviews'] : 0;
 		$defs  = array(
-			array( 'sessions', __( 'Visits', 'opti-behavior' ), number_format_i18n( (int) $ctx['visits'] ), true, _x( 'visits', 'site report comparison', 'opti-behavior' ) ),
-			array( 'pageviews', __( 'Page views', 'opti-behavior' ), number_format_i18n( $views ), true, _x( 'page views', 'site report comparison', 'opti-behavior' ) ),
-			array( 'avg_session_time', __( 'Time per visit', 'opti-behavior' ), self::secs( isset( $st['avg_session_time'] ) ? (float) $st['avg_session_time'] : 0 ), true, _x( 'time per visit', 'site report comparison', 'opti-behavior' ) ),
-			array( 'bounce_rate', __( 'Bounce', 'opti-behavior' ), self::pct( isset( $st['bounce_rate'] ) ? $st['bounce_rate'] : 0 ), false, _x( 'bounce', 'site report comparison', 'opti-behavior' ) ),
+			array( 'sessions', self::kpi_label( 'sessions' ), number_format_i18n( (int) $ctx['visits'] ), true ),
+			array( 'pageviews', self::kpi_label( 'pageviews' ), number_format_i18n( $views ), true ),
+			array( 'avg_session_time', self::kpi_label( 'avg_session_time' ), self::secs( isset( $st['avg_session_time'] ) ? (float) $st['avg_session_time'] : 0 ), true ),
+			array( 'bounce_rate', self::kpi_label( 'bounce_rate' ), self::pct( isset( $st['bounce_rate'] ) ? $st['bounce_rate'] : 0 ), false ),
 		);
 		$tiles   = array();
 		$missing = array();
@@ -459,7 +717,7 @@ class Opti_Behavior_Report_Site {
 				'good'   => null,
 			);
 			if ( null === $change ) {
-				$missing[] = $d[4];
+				$missing[] = $d[1];
 			} else {
 				$tile['text'] = self::change_text( $change, self::change_unit( $d[0] ) );
 				$tile['good'] = 0.0 === $change || ( $change > 0 ) === $d[3];
@@ -507,7 +765,7 @@ class Opti_Behavior_Report_Site {
 
 		$issues = array();
 		foreach ( $ctx['issues'] as $i => $it ) {
-			$issues[] = self::email_issue( $i + 1, $it, $total );
+			$issues[] = self::email_issue( $i + 1, $it, self::ctx_issue_base( $ctx, $i ) );
 		}
 
 		return array(
@@ -526,7 +784,234 @@ class Opti_Behavior_Report_Site {
 			'pages'        => $pages,
 			'issues'       => $issues,
 			'issues_total' => (int) $ctx['issues_total'],
+			'issues_period' => self::issues_period_text( $ctx ),
+			// OPT-2860: the AI block, same shape as the PDF one (null = nothing
+			// counted); both e-mail views print `ai_line` under the sources.
+			'ai'           => isset( $ctx['ai'] ) ? $ctx['ai'] : null,
+			'ai_line'      => isset( $ctx['ai'] ) ? self::ai_email_line( $ctx['ai'] ) : '',
 		);
+	}
+
+	/**
+	 * One sentence of the AI block for the scheduled e-mail (OPT-2860, pure).
+	 *
+	 * @param array|null $ai `ai_view()` answer.
+	 * @return string '' when there is nothing to say.
+	 */
+	public static function ai_email_line( $ai ) {
+		if ( ! is_array( $ai ) || empty( $ai['total'] ) ) {
+			return '';
+		}
+		if ( empty( $ai['enough'] ) ) {
+			/* translators: 1: AI passes counted, 2: passes needed. */
+			return sprintf( __( 'AI: too little data to describe (%1$s passes, %2$s needed).', 'opti-behavior' ), number_format_i18n( $ai['total'] ), number_format_i18n( self::AI_MIN_PASSES ) );
+		}
+		return self::ai_sentence( $ai );
+	}
+
+	/**
+	 * The one sentence of the AI block (OPT-2874, pure): ONE place for the
+	 * screen, the PDF and both e-mail views.
+	 *
+	 * The pages counted are every page an AI bot read over the period (not the
+	 * few rows printed), and the visitors are the ones who landed on those same
+	 * pages.
+	 *
+	 * @param array $ai `ai_view()` answer.
+	 * @return string
+	 */
+	public static function ai_sentence( $ai ) {
+		$names = isset( $ai['names'] ) ? (array) $ai['names'] : array();
+		$who   = count( $names ) > 1 ? wp_sprintf( '%l', $names ) : ( isset( $names[0] ) ? $names[0] : '' );
+		$rows  = isset( $ai['pages'] ) ? count( $ai['pages'] ) : 0;
+		// An older stored answer carries no `pages_read`: the rows are then the
+		// only figure available.
+		$pages = isset( $ai['pages_read'] ) ? max( $rows, (int) $ai['pages_read'] ) : $rows;
+		$sent  = isset( $ai['sent_pages'] ) ? (int) $ai['sent_pages'] : (int) ( isset( $ai['sent'] ) ? $ai['sent'] : 0 );
+
+		$pages_text = sprintf(
+			/* translators: %s: number of pages. */
+			_n( '%s page', '%s pages', $pages ? $pages : 1, 'opti-behavior' ),
+			number_format_i18n( $pages )
+		);
+		$sent_text  = sprintf(
+			/* translators: %s: number of visitors. */
+			_n( '%s visitor', '%s visitors', $sent, 'opti-behavior' ),
+			number_format_i18n( $sent )
+		);
+
+		// OPT-2882: "to answer questions" is a measured intent ("User
+		// responses"), not a given. Nothing measured there = the plain fact.
+		if ( empty( $ai['user_responses'] ) ) {
+			/* translators: 1: AI company names, 2: pages read, 3: visitors sent by an AI assistant. */
+			return sprintf(
+				__( '%1$s read %2$s. Those pages received %3$s from an AI assistant.', 'opti-behavior' ),
+				$who,
+				$pages_text,
+				$sent_text
+			);
+		}
+
+		/* translators: 1: AI company names, 2: pages read, 3: visitors sent by an AI assistant. */
+		return sprintf(
+			__( '%1$s read %2$s to answer questions. Those pages received %3$s from an AI assistant.', 'opti-behavior' ),
+			$who,
+			$pages_text,
+			$sent_text
+		);
+	}
+
+	/**
+	 * Label of a Traffic key figure (OPT-1958): the words of the Traffic screen
+	 * cards (same msgids), so a figure carries one name on the screen, in the
+	 * PDF and in the e-mail.
+	 *
+	 * @param string $key sessions | visitors | pageviews | avg_session_time | avg_scroll_depth | bounce_rate.
+	 * @return string
+	 */
+	public static function kpi_label( $key ) {
+		switch ( $key ) {
+			case 'visitors':
+				return __( 'Visitors', 'opti-behavior' );
+			case 'sessions':
+				return __( 'Sessions', 'opti-behavior' );
+			case 'pageviews':
+				return __( 'Page Views', 'opti-behavior' );
+			case 'avg_session_time':
+				return __( 'Avg. Session Time', 'opti-behavior' );
+			case 'avg_scroll_depth':
+				return __( 'Avg. Scroll Depth', 'opti-behavior' );
+			case 'bounce_rate':
+				return __( 'Bounce Rate', 'opti-behavior' );
+		}
+
+		return '';
+	}
+
+	/**
+	 * Days of the printed Smart Insights cards (pure, OPT-1958): '' when they are
+	 * the report days (or unknown), else "period: <first day> – <last day>" (the
+	 * OPT-1727 fallback takes the cards of the latest run overlapping the period).
+	 *
+	 * @param array $ctx Context (issues_from, issues_to, from, to).
+	 * @return string
+	 */
+	public static function issues_period_text( $ctx ) {
+		$from = isset( $ctx['issues_from'] ) ? (string) $ctx['issues_from'] : '';
+		$to   = isset( $ctx['issues_to'] ) ? (string) $ctx['issues_to'] : '';
+		if ( '' === $from || '' === $to || empty( $ctx['issues'] ) ) {
+			return '';
+		}
+		if ( $from === (string) $ctx['from'] && $to === (string) $ctx['to'] ) {
+			return '';
+		}
+
+		// Same day format as the section heads ("21 Oct 2026 – 23 Oct 2026").
+		/* translators: %s: first and last day of the Smart Insights analysis. */
+		return sprintf( __( 'period: %s', 'opti-behavior' ), self::day_long( $from ) . ' – ' . self::day_long( $to ) );
+	}
+
+	/**
+	 * First and last day of a set of Smart Insights rows (pure, OPT-1958).
+	 *
+	 * @param array $rows Insight rows (date_from / date_to, date or date time).
+	 * @return array [ from, to ] ('' when unknown).
+	 */
+	public static function rows_days( $rows ) {
+		$from = '';
+		$to   = '';
+		foreach ( (array) $rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+			$f = substr( (string) ( $row['date_from'] ?? '' ), 0, 10 );
+			$t = substr( (string) ( $row['date_to'] ?? '' ), 0, 10 );
+			if ( preg_match( '/^\d{4}-\d{2}-\d{2}$/', $f ) && ( '' === $from || strcmp( $f, $from ) < 0 ) ) {
+				$from = $f;
+			}
+			if ( preg_match( '/^\d{4}-\d{2}-\d{2}$/', $t ) && strcmp( $t, $to ) > 0 ) {
+				$to = $t;
+			}
+		}
+
+		return array( $from, $to );
+	}
+
+	/**
+	 * Visits a card's lost visits are a share of (pure, OB-01): the report's
+	 * visits when the card covers the report days (or its days are unknown),
+	 * else the visits of the card's own run (`site_sessions` of its impact
+	 * block), never the report's: a card of another run (OPT-1727 fallback)
+	 * counts other visits. Null = no share can be given.
+	 *
+	 * @param array  $row    Raw insight row.
+	 * @param string $from   First report day (Y-m-d).
+	 * @param string $to     Last report day (Y-m-d).
+	 * @param int    $visits Visits of the report.
+	 * @return array|null { visits, own } (own = the card's own days).
+	 */
+	public static function issue_base( $row, $from, $to, $visits ) {
+		$row = is_array( $row ) ? $row : array();
+		$f   = substr( (string) ( $row['date_from'] ?? '' ), 0, 10 );
+		$t   = substr( (string) ( $row['date_to'] ?? '' ), 0, 10 );
+		if ( '' === $f || '' === $t || ( $f === (string) $from && $t === (string) $to ) ) {
+			return array(
+				'visits' => max( 0, (int) $visits ),
+				'own'    => false,
+			);
+		}
+		foreach ( array( 'impact', 'scores' ) as $bag_key ) {
+			$bag = isset( $row[ $bag_key ] ) && is_array( $row[ $bag_key ] ) ? $row[ $bag_key ] : array();
+			if ( 'scores' === $bag_key ) {
+				$bag = isset( $bag['impact'] ) && is_array( $bag['impact'] ) ? $bag['impact'] : array();
+			}
+			if ( isset( $bag['site_sessions'] ) && is_numeric( $bag['site_sessions'] ) && (int) $bag['site_sessions'] > 0 ) {
+				return array(
+					'visits' => (int) $bag['site_sessions'],
+					'own'    => true,
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Base of the printed card n of a context (OB-01); a context built
+	 * without `issues_base` keeps the report's visits.
+	 *
+	 * @param array $ctx Context.
+	 * @param int   $i   Index of the card.
+	 * @return array|null { visits, own }.
+	 */
+	public static function ctx_issue_base( $ctx, $i ) {
+		if ( isset( $ctx['issues_base'] ) && is_array( $ctx['issues_base'] ) && array_key_exists( $i, $ctx['issues_base'] ) ) {
+			$base = $ctx['issues_base'][ $i ];
+
+			return is_array( $base ) ? $base : null;
+		}
+
+		return array(
+			'visits' => isset( $ctx['visits'] ) ? (int) $ctx['visits'] : 0,
+			'own'    => false,
+		);
+	}
+
+	/**
+	 * Share of a card's lost visits in its base (pure, OB-01): null when the
+	 * figure is an estimate (OPT-1940) or no base is known.
+	 *
+	 * @param array      $it   Insight.
+	 * @param array|null $base Result of issue_base().
+	 * @return int|null 0-100.
+	 */
+	public static function issue_share( $it, $base ) {
+		$lost = Opti_Behavior_Smart_Insights_Impact_Calculator::get_users_lost( $it );
+		if ( null === $lost || ! self::lost_is_counted( $it ) || ! is_array( $base ) ) {
+			return null;
+		}
+
+		return (int) min( 100, round( 100 * $lost / max( 1, (int) $base['visits'] ) ) );
 	}
 
 	/**
@@ -535,7 +1020,7 @@ class Opti_Behavior_Report_Site {
 	 * @param int   $rank  Rank (1-3).
 	 * @param array $it    Shaped insight.
 	 * @param int   $total Visits of the period.
-	 * @return array { rank, severity, word, title, headline, where, action, lost, share, money }
+	 * @return array { rank, severity, word, title, headline, where, action, lost, unit, share, own, money }
 	 */
 	public static function email_issue( $rank, $it, $total ) {
 		$it    = is_array( $it ) ? $it : array();
@@ -549,17 +1034,31 @@ class Opti_Behavior_Report_Site {
 		$lost   = Opti_Behavior_Smart_Insights_Impact_Calculator::get_users_lost( $it );
 		$amount = Opti_Behavior_Smart_Insights_Impact_Calculator::get_revenue_amount( $it );
 		$action = isset( $it['next_action_short'] ) && is_string( $it['next_action_short'] ) ? $it['next_action_short'] : '';
+		// OB-01: $total = visits of the report, or the card's base (issue_base()).
+		$base  = is_array( $total ) || null === $total ? $total : array(
+			'visits' => (int) $total,
+			'own'    => false,
+		);
+		$share = self::issue_share( $it, $base );
+		if ( null === $share && null === $base && null !== $lost && self::lost_is_counted( $it ) ) {
+			// Counted visits of other days, base unknown: no figure rather
+			// than the "estimated" line the e-mail prints for a null share.
+			$lost = null;
+		}
 
 		return array(
 			'rank'     => (int) $rank,
 			'severity' => $sev[0],
 			'word'     => $sev[2],
 			'title'    => self::no_address( $title ),
-			'headline' => isset( $it['impact']['headline'] ) && is_string( $it['impact']['headline'] ) ? self::no_address( $it['impact']['headline'] ) : '',
+			'headline' => self::no_address( self::issue_headline( $it ) ),
 			'where'    => self::where_of( $it ),
 			'action'   => self::no_address( $action ),
 			'lost'     => null === $lost ? null : (int) $lost,
-			'share'    => null === $lost ? null : (int) min( 100, round( 100 * $lost / max( 1, $total ) ) ),
+			// OB-07: what the figure counts (issue_unit()).
+			'unit'     => null === $lost ? '' : self::issue_unit( $it, (int) $lost ),
+			'share'    => null === $lost ? null : $share,
+			'own'      => is_array( $base ) && ! empty( $base['own'] ),
 			'money'    => null === $amount ? '' : self::money( $amount, isset( $it['impact']['revenue']['currency'] ) ? (string) $it['impact']['revenue']['currency'] : '' ),
 		);
 	}
@@ -591,13 +1090,12 @@ class Opti_Behavior_Report_Site {
 			$html .= '<div><dt>' . esc_html__( 'Compared with', 'opti-behavior' ) . '</dt><dd>' . esc_html( self::range_text( $ctx['prev_from'], $ctx['prev_to'] ) ) . '<span>' . esc_html( sprintf( _n( 'the %s day before', 'the %s days before', $ctx['days'], 'opti-behavior' ), number_format_i18n( $ctx['days'] ) ) ) . '</span></dd></div>';
 		}
 		$html .= '<div><dt>' . esc_html__( 'Device', 'opti-behavior' ) . '</dt><dd>' . esc_html__( 'All devices', 'opti-behavior' ) . '</dd></div>';
-		$html .= '<div><dt>' . esc_html__( 'Visits', 'opti-behavior' ) . '</dt><dd>' . esc_html( number_format_i18n( $ctx['visits'] ) ) . '<span>' . esc_html( $ctx['spam'] ? __( 'spam visits left out', 'opti-behavior' ) : __( 'spam visits included', 'opti-behavior' ) ) . '</span></dd></div>';
+		$html .= '<div><dt>' . esc_html( self::kpi_label( 'sessions' ) ) . '</dt><dd>' . esc_html( number_format_i18n( $ctx['visits'] ) ) . '<span>' . esc_html( $ctx['spam'] ? __( 'spam visits left out', 'opti-behavior' ) : __( 'spam visits included', 'opti-behavior' ) ) . '</span></dd></div>';
 		$html .= '</dl>';
 		// Same days, time zone and spam rule as Traffic and Smart Insights
-		// (Stats_Date_Range); a gap of a few visits = visits that arrived between
-		// two reads (OPT-1626 A5).
+		// (Stats_Date_Range): at the same moment the figures are the same.
 		if ( $ctx['visits'] > 0 ) {
-			$html .= '<p class="obr-live-note" style="margin:2mm 0 0;font-size:8pt;color:#71717a">' . esc_html__( 'Figures read live when this report was made. Another screen opened earlier or later can show a few more or fewer visits: the difference is visits that arrived between the two reads.', 'opti-behavior' ) . '</p>';
+			$html .= '<p class="obr-live-note" style="margin:2mm 0 0;font-size:8pt;color:#71717a">' . esc_html( self::live_note( time() ) ) . '</p>';
 		}
 		if ( $ctx['visits'] <= 0 ) {
 			$html .= '<div class="xr-section">' . self::state(
@@ -643,7 +1141,7 @@ class Opti_Behavior_Report_Site {
 	}
 
 	/**
-	 * The 4 tiles (Visits, Page views, Time per visit, Bounce) with their
+	 * The 4 tiles (Traffic card names: Sessions, Page Views, Avg. Session Time, Bounce Rate) with their
 	 * comparison line, or one note naming the figures without comparison.
 	 *
 	 * @param array $ctx Context.
@@ -657,12 +1155,12 @@ class Opti_Behavior_Report_Site {
 		$views = isset( $st['pageviews'] ) ? (int) $st['pageviews'] : 0;
 		$tiles = array(
 			/* translators: %s: number of visitors. */
-			array( __( 'Visits', 'opti-behavior' ), number_format_i18n( $ctx['visits'] ), sprintf( _n( '%s visitor', '%s visitors', isset( $st['visitors'] ) ? (int) $st['visitors'] : 0, 'opti-behavior' ), number_format_i18n( isset( $st['visitors'] ) ? (int) $st['visitors'] : 0 ) ), 'sessions', true, _x( 'visits', 'site report comparison', 'opti-behavior' ) ),
+			array( self::kpi_label( 'sessions' ), number_format_i18n( $ctx['visits'] ), sprintf( _n( '%s visitor', '%s visitors', isset( $st['visitors'] ) ? (int) $st['visitors'] : 0, 'opti-behavior' ), number_format_i18n( isset( $st['visitors'] ) ? (int) $st['visitors'] : 0 ) ), 'sessions', true ),
 			/* translators: %s: page views per visit. */
-			array( __( 'Page views', 'opti-behavior' ), number_format_i18n( $views ), sprintf( __( '%s per visit', 'opti-behavior' ), number_format_i18n( $views / $total, 1 ) ), 'pageviews', true, _x( 'page views', 'site report comparison', 'opti-behavior' ) ),
-			array( __( 'Time per visit', 'opti-behavior' ), self::secs( $time ), __( 'average', 'opti-behavior' ), 'avg_session_time', true, _x( 'time per visit', 'site report comparison', 'opti-behavior' ) ),
-			/* translators: %s: average share of the page read, e.g. "47 %". */
-			array( __( 'Bounce', 'opti-behavior' ), self::pct( isset( $st['bounce_rate'] ) ? $st['bounce_rate'] : 0 ), sprintf( __( 'page read %s', 'opti-behavior' ), self::pct( isset( $st['avg_scroll_depth'] ) ? $st['avg_scroll_depth'] : 0 ) ), 'bounce_rate', false, _x( 'bounce', 'site report comparison', 'opti-behavior' ) ),
+			array( self::kpi_label( 'pageviews' ), number_format_i18n( $views ), sprintf( __( '%s per visit', 'opti-behavior' ), number_format_i18n( $views / $total, 1 ) ), 'pageviews', true ),
+			array( self::kpi_label( 'avg_session_time' ), self::secs( $time ), __( 'average', 'opti-behavior' ), 'avg_session_time', true ),
+			// OPT-1958: the scroll figure carries its Traffic card name.
+			array( self::kpi_label( 'bounce_rate' ), self::pct( isset( $st['bounce_rate'] ) ? $st['bounce_rate'] : 0 ), self::kpi_label( 'avg_scroll_depth' ) . ' ' . self::pct( isset( $st['avg_scroll_depth'] ) ? $st['avg_scroll_depth'] : 0 ), 'bounce_rate', false ),
 		);
 		$html    = '<div class="xr-tiles">';
 		$missing = array();
@@ -670,7 +1168,7 @@ class Opti_Behavior_Report_Site {
 			$html  .= '<div class="xr-tile"><div class="xr-label">' . esc_html( $t[0] ) . '</div><b>' . esc_html( $t[1] ) . '</b><p class="xr-vs">' . esc_html( $t[2] ) . '</p>';
 			$change = array_key_exists( $t[3], $ch ) && is_numeric( $ch[ $t[3] ] ) ? (float) $ch[ $t[3] ] : null;
 			if ( null === $change ) {
-				$missing[] = $t[5];
+				$missing[] = $t[0];
 			} else {
 				$html .= self::vs( $change, $t[4], self::change_unit( $t[3] ) );
 			}
@@ -716,7 +1214,7 @@ class Opti_Behavior_Report_Site {
 				'<strong>' . esc_html( number_format_i18n( $new ) ) . '</strong>',
 				'<strong>' . esc_html( number_format_i18n( $back ) ) . '</strong>',
 				esc_html( number_format_i18n( self::share( $back, $new + $back ) ) . ' %' )
-			) . '</span></li>';
+			) . esc_html( ' ' . self::returning_note( class_exists( 'Opti_Behavior_Shop_Screen' ) ? Opti_Behavior_Shop_Screen::privacy_mode() : '' ) ) . '</span></li>';
 		}
 		$devices = self::rows( $ctx['devices'], 'name' );
 		if ( $devices ) {
@@ -746,7 +1244,7 @@ class Opti_Behavior_Report_Site {
 
 		// The 5 most viewed pages, in the order of the Traffic screen.
 		if ( $ctx['pages'] ) {
-			$html .= '<div class="obr-top-pages obr-block"><h3>' . esc_html__( 'The 5 most viewed pages', 'opti-behavior' ) . '</h3><table class="xr-table"><thead><tr><th>#</th><th>' . esc_html__( 'Page', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Visits', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Page views', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Time on page', 'opti-behavior' ) . '</th><th>' . esc_html__( 'Share of visits', 'opti-behavior' ) . '</th></tr></thead><tbody>';
+			$html .= '<div class="obr-top-pages obr-block"><h3>' . esc_html__( 'The 5 most viewed pages', 'opti-behavior' ) . '</h3><table class="xr-table"><thead><tr><th>#</th><th>' . esc_html__( 'Page', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Visits', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Page views', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Average time spent', 'opti-behavior' ) . '</th><th>' . esc_html__( 'Share of visits', 'opti-behavior' ) . '</th></tr></thead><tbody>';
 			foreach ( $ctx['pages'] as $i => $p ) {
 				$p      = is_array( $p ) ? $p : array();
 				$url    = isset( $p['url'] ) ? (string) $p['url'] : '';
@@ -817,6 +1315,73 @@ class Opti_Behavior_Report_Site {
 	 * @param array $data { ctx, args, no }.
 	 * @return string
 	 */
+	/**
+	 * The "AI" block (OPT-2860): which AI companies read the site, the pages
+	 * they read most, and the visitors the assistants sent back.
+	 *
+	 * @param array $data { ctx, args, no }.
+	 * @return string
+	 */
+	public static function render_ai( $data ) {
+		$ctx = $data['ctx'];
+		$ai  = isset( $ctx['ai'] ) && is_array( $ctx['ai'] ) ? $ctx['ai'] : null;
+		if ( ! $ai ) {
+			return '';
+		}
+		$html = '<div class="xr-section obr-new obr-ai">' . self::sec_head( self::no_of( $data, 5 ), __( 'AI', 'opti-behavior' ), esc_html( self::day_long( $ctx['from'] ) . ' – ' . self::day_long( $ctx['to'] ) ) );
+
+		if ( empty( $ai['enough'] ) ) {
+			/* translators: 1: AI passes counted, 2: passes needed. */
+			$html .= '<p class="xr-small">' . esc_html( sprintf( __( 'Too little data to describe: %1$s AI passes over the period, %2$s are needed.', 'opti-behavior' ), number_format_i18n( $ai['total'] ), number_format_i18n( self::AI_MIN_PASSES ) ) ) . '</p>';
+
+			return $html . '</div>';
+		}
+
+		// OPT-2874: one place builds the sentence (real pages read + the visitors
+		// those pages received), so the screen, the PDF and the e-mail agree.
+		$html .= '<ul class="obr-facts"><li><b>' . esc_html__( 'What happened', 'opti-behavior' ) . '</b><span>' . esc_html( self::ai_sentence( $ai ) ) . '</span></li></ul>';
+
+		$html .= '<div class="obr-block"><h3>' . esc_html__( 'Which AI companies read your site', 'opti-behavior' ) . '</h3>';
+		$html .= '<table class="xr-table"><thead><tr><th>' . esc_html__( 'Company', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'AI passes', 'opti-behavior' ) . '</th></tr></thead><tbody>';
+		foreach ( array_slice( $ai['companies'], 0, self::TOP_SOURCES ) as $row ) {
+			$html .= '<tr><td>' . esc_html( $row['label'] ) . '</td><td class="xr-n">' . esc_html( number_format_i18n( $row['count'] ) ) . '</td></tr>';
+		}
+		$html .= '</tbody></table></div>';
+
+		if ( $ai['pages'] ) {
+			$html .= '<div class="obr-block"><h3>' . esc_html__( 'The pages AI reads most', 'opti-behavior' ) . '</h3>';
+			$html .= '<table class="xr-table"><thead><tr><th>' . esc_html__( 'Page', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'AI passes', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Visitors sent', 'opti-behavior' ) . '</th></tr></thead><tbody>';
+			foreach ( $ai['pages'] as $row ) {
+				$title = '' !== $row['title'] ? $row['title'] : $row['path'];
+				$html .= '<tr><td><b>' . esc_html( $title ) . '</b>' . ( $row['path'] !== $title ? '<p>' . esc_html( $row['path'] ) . '</p>' : '' ) . '</td>';
+				$html .= '<td class="xr-n">' . esc_html( number_format_i18n( $row['reads'] ) ) . '</td><td class="xr-n">' . esc_html( number_format_i18n( $row['sent'] ) ) . '</td></tr>';
+			}
+			$html .= '</tbody></table>';
+			$html .= self::todo( __( 'Check that these pages say clearly what to do next: a reader arriving from an AI assistant lands on them without having seen your home page.', 'opti-behavior' ) );
+			$html .= '</div>';
+		}
+
+		// OPT-2882: what the three words of this section mean, so a reader never
+		// has to guess what an "AI pass" counts.
+		$html .= '<p class="xr-small">' . esc_html__( 'AI passes: pages of this site read by an AI robot over the period (one count per robot, page and day). Pages: the pages they read. Visitors sent: visits that landed on one of those pages from an AI assistant.', 'opti-behavior' ) . '</p>';
+
+		// OPT-2882: the figures cover the days really counted. The sentence says
+		// the first day of the AI data (written by get_ai_bots_data_impl), never
+		// a retention of N days the period did not exceed.
+		if ( ! empty( $ai['period_too_old'] ) && '' !== (string) $ai['retention_note'] ) {
+			$html .= '<p class="xr-small">' . esc_html( (string) $ai['retention_note'] ) . '</p>';
+		}
+
+		return $html . '</div>';
+	}
+
+	/**
+	 * Busiest time: day x hour grid of the period (docblock above the AI block
+	 * belongs to this method; kept here since OPT-2860 moved the AI block in).
+	 *
+	 * @param array $data { ctx, args, no }.
+	 * @return string
+	 */
 	public static function render_busiest( $data ) {
 		$ctx  = $data['ctx'];
 		$grid = isset( $ctx['hours'] ) && is_array( $ctx['hours'] ) ? $ctx['hours'] : array();
@@ -824,7 +1389,7 @@ class Opti_Behavior_Report_Site {
 		if ( ! $peak ) {
 			return '';
 		}
-		$html  = '<div class="xr-section obr-new obr-busiest">' . self::sec_head( self::no_of( $data, 5 ), __( 'Busiest time', 'opti-behavior' ), esc_html( self::tz_label() ) );
+		$html  = '<div class="xr-section obr-new obr-busiest">' . self::sec_head( self::no_of( $data, 5 ), __( 'Busiest time', 'opti-behavior' ), esc_html( self::day_long( $ctx['from'] ) . ' – ' . self::day_long( $ctx['to'] ) . ' · ' . self::tz_label() ) );
 		$html .= '<figure class="xr-figure obr-hours obr-block">' . self::hours_svg( $grid, $peak ) . '</figure>';
 		$html .= '<ul class="obr-facts"><li><b>' . esc_html__( 'Peak', 'opti-behavior' ) . '</b><span>' . sprintf(
 			/* translators: 1: day and hour, e.g. "Tuesday at 10:00", 2: visits started in that hour over the period, 3: quietest day of the week. */
@@ -833,8 +1398,14 @@ class Opti_Behavior_Report_Site {
 			esc_html( number_format_i18n( $peak['visits'] ) ),
 			esc_html( self::weekday( $peak['quiet'] ) )
 		) . '</span></li></ul>';
-		/* translators: 1: day of the week, 2: hour, e.g. "10:00". */
-		$html .= self::todo( sprintf( __( 'Publish news and send your e-mails on %1$s, before %2$s: it is when most visits start.', 'opti-behavior' ), self::weekday( $peak['day'] ), self::hour_label( $peak['hour'] ) ) );
+		if ( self::hour_advice_ok( $peak ) ) {
+			// OB-21: one busy hour over one period is a test to run, not a proven best time.
+			/* translators: 1: day of the week, 2: hour, e.g. "10:00", 3: visits in that hour. */
+			$html .= self::todo( sprintf( __( 'Test to try: publish news and send your e-mails on %1$s, before %2$s (busiest hour of this period, %3$s visits). One period does not prove it is the best time: compare over several weeks.', 'opti-behavior' ), self::weekday( $peak['day'] ), self::hour_label( $peak['hour'] ), number_format_i18n( $peak['visits'] ) ) );
+		} else {
+			/* translators: %s: minimum number of visits in one hour. */
+			$html .= '<p class="xr-small">' . esc_html( sprintf( __( 'No advice on the time to publish yet: the busiest hour needs at least %s visits over the period.', 'opti-behavior' ), number_format_i18n( self::PROOF_HOUR_MIN_VISITS ) ) ) . '</p>';
+		}
 
 		return $html . '</div>';
 	}
@@ -862,6 +1433,8 @@ class Opti_Behavior_Report_Site {
 		}
 		$html .= '<div class="obr-block"><h3>' . esc_html__( 'Funnels', 'opti-behavior' ) . ' <span>· ' . esc_html__( 'conversion and the step where most visitors leave', 'opti-behavior' ) . '</span></h3>';
 		$html .= '<table class="xr-table"><thead><tr><th>' . esc_html__( 'Funnel', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Conversion', 'opti-behavior' ) . '</th><th>' . esc_html__( 'Step where most visitors leave', 'opti-behavior' ) . '</th></tr></thead><tbody>';
+		// Judged once (OPT-2883): the table and the advice read the same rows.
+		$rows = self::judge_funnel_rows( $rows, $ctx );
 		foreach ( $rows as $r ) {
 			/* translators: %s: number of steps of a funnel. */
 			$steps = sprintf( _n( '%s step', '%s steps', $r['steps'], 'opti-behavior' ), number_format_i18n( $r['steps'] ) );
@@ -869,11 +1442,20 @@ class Opti_Behavior_Report_Site {
 			if ( $r['worst'] && $r['issue'] > 0 ) {
 				$worst .= ' ' . self::ref( $r['issue'] );
 			}
+			// A step that matches every page = a set-up warning, never the
+			// step where visitors leave (OPT-1933).
+			if ( ! empty( $r['every'] ) ) {
+				/* translators: %s: step number. */
+				$worst = '<span class="obr-funnel-every">' . esc_html( sprintf( __( 'Set-up: step %s matches every page. Fix the step in Funnels.', 'opti-behavior' ), number_format_i18n( (int) $r['every'] ) ) ) . '</span>';
+			} elseif ( $r['worst'] && ! empty( $r['secondary'] ) ) {
+				// Same words as the page annex (OPT-2883).
+				$worst .= ' <span class="obr-funnel-secondary">' . esc_html( self::funnel_secondary_line() ) . '</span>';
+			}
 			$html .= '<tr><td><b>' . esc_html( $r['name'] ) . '</b><p>' . esc_html( $steps ) . '</p></td>';
 			$html .= '<td class="xr-n">' . esc_html( self::pct_text( $r['rate'] ) ) . '</td><td>' . $worst . '</td></tr>';
 		}
 		$html .= '</tbody></table>';
-		$todo  = self::funnels_todo( $rows );
+		$todo  = self::funnels_todo( $rows, $ctx );
 		$html .= ( '' !== $todo ? self::todo( $todo ) : '' ) . '</div>';
 		if ( ! self::pro_on() ) {
 			$html .= self::pro_line( __( 'the 3 most frequent journeys of your visitors.', 'opti-behavior' ) );
@@ -920,7 +1502,7 @@ class Opti_Behavior_Report_Site {
 				$html .= ( $pro ? '<td>' . ( isset( $pro['cells'][ $i ] ) ? (string) $pro['cells'][ $i ] : '—' ) . '</td>' : '' ) . '</tr>';
 			}
 			$todo  = $pro && ! empty( $pro['todo'] ) ? (string) $pro['todo'] : self::ab_todo( $t );
-			$html .= '</tbody></table>' . self::todo( $todo ) . '</div>';
+			$html .= '</tbody></table>' . self::ab_events_note( $t ) . self::todo( $todo ) . '</div>';
 		}
 		if ( ! self::pro_on() ) {
 			$html .= self::pro_line( __( 'the chance that each variant is the best (Bayesian result).', 'opti-behavior' ) );
@@ -952,15 +1534,20 @@ class Opti_Behavior_Report_Site {
 		 * @param array      $args Report arguments.
 		 */
 		$pro   = apply_filters( 'opti_behavior_report_site_shop', null, $shop, isset( $data['args'] ) ? $data['args'] : array() );
-		$pro   = is_array( $pro ) && isset( $pro['tile']['label'], $pro['tile']['value'], $pro['head'], $pro['cells'] ) && is_array( $pro['cells'] ) ? $pro : null;
+		$pro = is_array( $pro ) && isset( $pro['tile']['label'], $pro['tile']['value'], $pro['head'], $pro['cells'] ) && is_array( $pro['cells'] ) ? $pro : null;
+		// Pro column only with a head (OPT-1930: no money column while the estimate has no range).
+		$col = $pro && '' !== (string) $pro['head'];
+		// Adds and orders are daily counters, never tied to one cart: the gap
+		// between them counts no cart and no abandon (OB-02). The measure is
+		// declared "not available", never computed.
 		$tiles = array(
 			/* translators: %s: number of product pages. */
 			array( __( 'Product views', 'opti-behavior' ), number_format_i18n( $shop['views'] ), sprintf( _n( 'on %s product page', 'on %s product pages', $shop['pages'], 'opti-behavior' ), number_format_i18n( $shop['pages'] ) ) ),
-			/* translators: %s: share of product views, e.g. "18 %". */
-			array( __( 'Add to cart', 'opti-behavior' ), number_format_i18n( $shop['atc'] ), $shop['views'] > 0 ? sprintf( __( '%s of views', 'opti-behavior' ), self::pct_text( 100 * $shop['atc'] / $shop['views'] ) ) : '' ),
+			array( __( 'Add to cart', 'opti-behavior' ), number_format_i18n( $shop['atc'] ), ! empty( $shop['atc_suspect'] ) ? __( 'unusually high, to check', 'opti-behavior' ) : self::atc_text( $shop['atc'], $shop['views'] ) ),
+			// Orders and tracked checkouts are separate counters: never "N orders from M checkouts".
 			/* translators: %s: number of checkouts started. */
-			array( __( 'Orders', 'opti-behavior' ), number_format_i18n( $shop['orders'] ), sprintf( _n( 'from %s checkout started', 'from %s checkouts started', $shop['checkout'], 'opti-behavior' ), number_format_i18n( $shop['checkout'] ) ) ),
-			array( __( 'Lost visits', 'opti-behavior' ), number_format_i18n( $shop['lost'] ), __( 'added, then no order', 'opti-behavior' ) ),
+			array( __( 'Orders', 'opti-behavior' ), number_format_i18n( $shop['orders'] ), sprintf( _n( '%s checkout started, counted separately', '%s checkouts started, counted separately', $shop['checkout'], 'opti-behavior' ), number_format_i18n( $shop['checkout'] ) ) ),
+			array( __( 'Abandoned carts', 'opti-behavior' ), __( 'Not available', 'opti-behavior' ), __( 'adds and orders are daily totals, not linked to one cart', 'opti-behavior' ) ),
 		);
 		if ( $pro ) {
 			$tiles[] = array( (string) $pro['tile']['label'], (string) $pro['tile']['value'], isset( $pro['tile']['text'] ) ? (string) $pro['tile']['text'] : '' );
@@ -972,13 +1559,13 @@ class Opti_Behavior_Report_Site {
 		}
 		$html .= '</div></div>';
 		if ( $shop['rows'] ) {
-			$html .= '<div class="obr-block"><h3>' . esc_html__( 'The 3 product pages that lose the most', 'opti-behavior' ) . ' <span>· ' . esc_html__( 'added to cart, then no order', 'opti-behavior' ) . '</span></h3>';
-			$html .= '<table class="xr-table"><thead><tr><th>' . esc_html__( 'Product page', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Views', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Add to cart', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Orders', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Lost visits', 'opti-behavior' ) . '</th>' . ( $pro ? '<th class="xr-n">' . esc_html( (string) $pro['head'] ) . '</th>' : '' ) . '</tr></thead><tbody>';
+			$html .= '<div class="obr-block"><h3>' . esc_html__( 'Adds to cart and orders per product page', 'opti-behavior' ) . ' <span>· ' . esc_html__( 'daily totals, not linked to one cart', 'opti-behavior' ) . '</span></h3>';
+			$html .= '<table class="xr-table"><thead><tr><th>' . esc_html__( 'Product page', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Views', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Add to cart', 'opti-behavior' ) . '</th><th class="xr-n">' . esc_html__( 'Orders', 'opti-behavior' ) . '</th>' . ( $col ? '<th class="xr-n">' . esc_html( (string) $pro['head'] ) . '</th>' : '' ) . '</tr></thead><tbody>';
 			foreach ( $shop['rows'] as $r ) {
 				$html .= '<tr><td><b>' . esc_html( $r['name'] ) . '</b>' . ( '' !== $r['path'] ? '<p>' . esc_html( $r['path'] ) . '</p>' : '' ) . '</td>';
 				$html .= '<td class="xr-n">' . esc_html( number_format_i18n( $r['views'] ) ) . '</td><td class="xr-n">' . esc_html( number_format_i18n( $r['atc'] ) ) . '</td>';
-				$html .= '<td class="xr-n">' . esc_html( number_format_i18n( $r['orders'] ) ) . '</td><td class="xr-n">' . esc_html( number_format_i18n( $r['lost'] ) ) . '</td>';
-				$html .= ( $pro ? '<td class="xr-n">' . ( isset( $pro['cells'][ $r['product_id'] ] ) ? (string) $pro['cells'][ $r['product_id'] ] : '—' ) . '</td>' : '' ) . '</tr>';
+				$html .= '<td class="xr-n">' . esc_html( number_format_i18n( $r['orders'] ) ) . '</td>';
+				$html .= ( $col ? '<td class="xr-n">' . ( isset( $pro['cells'][ $r['product_id'] ] ) ? (string) $pro['cells'][ $r['product_id'] ] : '—' ) . '</td>' : '' ) . '</tr>';
 			}
 			$html .= '</tbody></table></div>';
 		}
@@ -1007,7 +1594,7 @@ class Opti_Behavior_Report_Site {
 			return '';
 		}
 
-		return '<div class="xr-section obr-new obr-forms">' . self::sec_head( self::no_of( $data, 4 ), __( 'Forms with problems', 'opti-behavior' ), esc_html__( 'the 3 most abandoned', 'opti-behavior' ) ) . $body . '</div>';
+		return '<div class="xr-section obr-new obr-forms">' . self::sec_head( self::no_of( $data, 4 ), __( 'Forms with problems', 'opti-behavior' ), esc_html( self::day_long( $ctx['from'] ) . ' – ' . self::day_long( $ctx['to'] ) . ' · ' . __( 'the 3 most abandoned', 'opti-behavior' ) ) ) . $body . '</div>';
 	}
 
 	/**
@@ -1041,30 +1628,39 @@ class Opti_Behavior_Report_Site {
 		if ( ! self::is_day( $from ) || ! self::is_day( $to ) || ! class_exists( 'Opti_Behavior_Shop_Screen' ) || ! class_exists( 'Opti_Behavior_Shop_Report' ) || ! Opti_Behavior_Shop_Screen::available() ) {
 			return null;
 		}
-		$shop = self::shop_view( Opti_Behavior_Shop_Report::query_counts( $from, $to, array( 'product_view', 'add_to_cart', 'checkout_start', 'order_paid' ) ) );
-		if ( ! $shop ) {
-			return null;
-		}
-		foreach ( $shop['rows'] as $i => $r ) {
-			$title                      = wp_strip_all_tags( wp_specialchars_decode( (string) get_the_title( $r['product_id'] ), ENT_QUOTES ) );
-			$link                       = get_permalink( $r['product_id'] );
-			$shop['rows'][ $i ]['path'] = $link ? Opti_Behavior_Report::path_of( $link ) : '';
-			/* translators: %d: product id. */
-			$shop['rows'][ $i ]['name'] = '' !== trim( $title ) ? self::no_address( $title ) : sprintf( __( 'Product #%d', 'opti-behavior' ), $r['product_id'] );
-		}
-		$shop['from'] = $from;
-		$shop['to']   = $to;
 
-		return $shop;
+		return self::cached(
+			'shop_rows',
+			array( $from, $to ),
+			function () use ( $from, $to ) {
+				$shop = self::shop_view( Opti_Behavior_Shop_Report::query_counts( $from, $to, array( 'product_view', 'add_to_cart', 'checkout_start', 'order_paid' ) ) );
+				if ( ! $shop ) {
+					return null;
+				}
+				foreach ( $shop['rows'] as $i => $r ) {
+					$title                      = wp_strip_all_tags( wp_specialchars_decode( (string) get_the_title( $r['product_id'] ), ENT_QUOTES ) );
+					$link                       = get_permalink( $r['product_id'] );
+					$shop['rows'][ $i ]['path'] = $link ? Opti_Behavior_Report::path_of( $link ) : '';
+					/* translators: %d: product id. */
+					$shop['rows'][ $i ]['name'] = '' !== trim( $title ) ? self::no_address( $title ) : sprintf( __( 'Product #%d', 'opti-behavior' ), $r['product_id'] );
+				}
+				$shop['from'] = $from;
+				$shop['to']   = $to;
+
+				return $shop;
+			}
+		);
 	}
 
 	/**
 	 * Shop figures from the counter rows (pure). Totals = the Shop screen's
-	 * build_report(); a product row loses the adds to cart that did not end in
-	 * a paid order line ("added, then no order").
+	 * build_report(). Adds and order lines are separate daily counters: a row
+	 * `gap` (adds − order lines) only orders the rows, it counts no cart and
+	 * no abandon (several adds can be one cart, an order can come another day;
+	 * OB-02). No total of it is returned.
 	 *
 	 * @param array[] $counts Rows { product_id, event_type, count, qty, amount }.
-	 * @return array|null { views, pages, atc, checkout, orders, amount, lost, rows[] { product_id, views, atc, orders, lost } }, null = no cart, no order.
+	 * @return array|null { views, pages, atc, checkout, orders, amount, rows[] { product_id, views, atc, orders, gap } }, null = no cart, no order.
 	 */
 	public static function shop_view( $counts ) {
 		$report   = Opti_Behavior_Shop_Screen::build_report( $counts );
@@ -1088,13 +1684,13 @@ class Opti_Behavior_Report_Site {
 				'views'      => (int) $r['views'],
 				'atc'        => (int) $r['atc'],
 				'orders'     => (int) $r['orders'],
-				'lost'       => max( 0, (int) $r['atc'] - (int) $r['orders'] ),
+				'gap'        => max( 0, (int) $r['atc'] - (int) $r['orders'] ),
 			);
 		}
 		usort(
 			$rows,
 			function ( $a, $b ) {
-				foreach ( array( 'lost', 'atc', 'views' ) as $k ) {
+				foreach ( array( 'gap', 'atc', 'views' ) as $k ) {
 					if ( $a[ $k ] !== $b[ $k ] ) {
 						return $b[ $k ] - $a[ $k ];
 					}
@@ -1110,9 +1706,6 @@ class Opti_Behavior_Report_Site {
 			'checkout' => $checkout,
 			'orders'   => (int) $t['orders'],
 			'amount'   => (float) $t['amount'],
-			// Sum of the product pages (a paid order can come from a cart not
-			// counted in the period: whole orders minus adds would hide losses).
-			'lost'     => array_sum( array_column( $rows, 'lost' ) ),
 			'rows'     => array_slice( $rows, 0, self::TOP_SHOP ),
 		);
 	}
@@ -1124,20 +1717,47 @@ class Opti_Behavior_Report_Site {
 	 * @return string
 	 */
 	public static function shop_todo( $shop ) {
+		// Volume to check first: no cart or checkout action can rest on these adds.
+		if ( ! empty( $shop['atc_suspect'] ) ) {
+			return Opti_Behavior_Shop_Report::suspect_sentence( isset( $shop['atc'] ) ? $shop['atc'] : 0, isset( $shop['visits'] ) ? $shop['visits'] : 0 );
+		}
+		// Counts only (OB-02): adds and orders are never presented as carts.
 		$top = isset( $shop['rows'][0] ) ? $shop['rows'][0] : null;
-		if ( $top && $top['lost'] > 0 ) {
+		if ( $top && (int) $top['atc'] > (int) $top['orders'] ) {
 			return sprintf(
-				/* translators: 1: number of visits, 2: product name. */
-				_n( '%1$s visit added “%2$s” to the cart without ordering: go through the cart and the checkout yourself, on a phone, and check the delivery costs and the payment step.', '%1$s visits added “%2$s” to the cart without ordering: go through the cart and the checkout yourself, on a phone, and check the delivery costs and the payment step.', $top['lost'], 'opti-behavior' ),
-				number_format_i18n( $top['lost'] ),
-				isset( $top['name'] ) ? $top['name'] : ''
+				/* translators: 1: product name, 2: adds to cart, 3: order lines. */
+				_n( '“%1$s”: %2$s add to cart and %3$s ordered in this period (daily totals, not linked to one cart). Go through the cart and the checkout yourself, on a phone, and check the delivery costs and the payment step.', '“%1$s”: %2$s adds to cart and %3$s ordered in this period (daily totals, not linked to one cart). Go through the cart and the checkout yourself, on a phone, and check the delivery costs and the payment step.', $top['atc'], 'opti-behavior' ),
+				isset( $top['name'] ) ? $top['name'] : '',
+				number_format_i18n( $top['atc'] ),
+				number_format_i18n( $top['orders'] )
 			);
 		}
-		if ( $shop['atc'] > 0 && $shop['lost'] < 1 ) {
-			return __( 'Every cart of the period became an order: keep the cart and the checkout as they are.', 'opti-behavior' );
+		if ( $top && $shop['atc'] > 0 ) {
+			return __( 'No product page has more adds to cart than orders in this period: keep the cart and the checkout as they are.', 'opti-behavior' );
 		}
 
 		return '';
+	}
+
+	/**
+	 * Line under the "Add to cart" tile (pure, OPT-1930): share of the product
+	 * views only when it means something. Adds made from a list, a pricing page
+	 * or a link have no product view: more adds than views, or no view at all,
+	 * = "added from any page", never a share above 100 %.
+	 *
+	 * @param int $atc   Adds to cart.
+	 * @param int $views Product page views.
+	 * @return string
+	 */
+	public static function atc_text( $atc, $views ) {
+		$atc   = max( 0, (int) $atc );
+		$views = max( 0, (int) $views );
+		if ( $views < 1 || $atc > $views ) {
+			return $atc > 0 ? __( 'added from any page', 'opti-behavior' ) : '';
+		}
+
+		/* translators: %s: share of product views, e.g. "18 %". */
+		return sprintf( __( '%s of views', 'opti-behavior' ), self::pct_text( 100 * $atc / $views ) );
 	}
 
 	/**
@@ -1163,6 +1783,7 @@ class Opti_Behavior_Report_Site {
 	 */
 	private static function pro_html( $filter, $ctx, $args ) {
 		try {
+			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.DynamicHooknameFound -- $filter = one of the prefixed opti_behavior_report_site_* names passed by context().
 			$html = apply_filters( $filter, '', $ctx, $args );
 		} catch ( Throwable $e ) {
 			$html = '';
@@ -1185,39 +1806,48 @@ class Opti_Behavior_Report_Site {
 	 * @return array Rows of pick_funnel_rows().
 	 */
 	public static function funnel_rows( $from, $to, $spam, $issues = array() ) {
-		global $wpdb;
 		if ( ! self::is_day( $from ) || ! self::is_day( $to ) ) {
 			return array();
 		}
-		$funnels_table  = $wpdb->prefix . 'opti_behavior_funnels';
-		$tracking_table = $wpdb->prefix . 'opti_behavior_funnel_tracking';
-		$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix, clauses built by the plugin; values prepared.
-		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $tracking_table ) ) ) !== $tracking_table ) {
-			return array();
-		}
-		$confirmed = class_exists( 'Opti_Behavior_Funnel_Database' ) && method_exists( 'Opti_Behavior_Funnel_Database', 'confirmed_sql' ) ? Opti_Behavior_Funnel_Database::confirmed_sql( 'f' ) : '';
-		$funnels   = $wpdb->get_results( "SELECT f.id, f.name, f.steps FROM {$funnels_table} f WHERE f.status = 'active'{$confirmed} ORDER BY f.id ASC LIMIT 50", ARRAY_A );
-		$scope     = class_exists( 'Opti_Behavior_Smart_Insights_Funnel_Aggregator' )
-			? ( new Opti_Behavior_Smart_Insights_Funnel_Aggregator() )->get_tracking_spam_exclusion_clause( 't', $sessions_table, (bool) $spam )
-			: '';
-		$counts    = array();
-		foreach ( is_array( $funnels ) ? $funnels : array() as $f ) {
-			// One row per visit (its furthest step, completed or not), then one row per furthest step.
-			$sql = $wpdb->prepare(
-				"SELECT t.session_id, MAX(t.max_step_reached) AS m, MAX(t.completed) AS c
-				FROM {$tracking_table} t
-				WHERE t.funnel_id = %d AND t.entry_time >= %s AND t.entry_time < %s",
-				(int) $f['id'],
-				$from . ' 00:00:00',
-				self::shift_day( $to, 1 ) . ' 00:00:00'
-			);
-			$rows = $wpdb->get_results( "SELECT x.m, COUNT(*) AS n, SUM(x.c) AS done FROM ( {$sql}{$scope} GROUP BY t.session_id ) x GROUP BY x.m", ARRAY_A );
-			$counts[ (int) $f['id'] ] = is_array( $rows ) ? $rows : array();
-		}
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		// OPT-1863: the reads are cached; the issue numbers are placed after.
+		$read = self::cached(
+			'funnel_rows',
+			array( $from, $to, (bool) $spam ),
+			function () use ( $from, $to, $spam ) {
+				global $wpdb;
+				$funnels_table  = $wpdb->prefix . 'opti_behavior_funnels';
+				$tracking_table = $wpdb->prefix . 'opti_behavior_funnel_tracking';
+				$sessions_table = $wpdb->prefix . 'optibehavior_sessions';
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix, clauses built by the plugin; values prepared.
+				if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $tracking_table ) ) ) !== $tracking_table ) {
+					return array( array(), array() );
+				}
+				$confirmed = class_exists( 'Opti_Behavior_Funnel_Database' ) && method_exists( 'Opti_Behavior_Funnel_Database', 'confirmed_sql' ) ? Opti_Behavior_Funnel_Database::confirmed_sql( 'f' ) : '';
+				$funnels   = $wpdb->get_results( "SELECT f.id, f.name, f.steps FROM {$funnels_table} f WHERE f.status = 'active'{$confirmed} ORDER BY f.id ASC LIMIT 50", ARRAY_A );
+				$scope     = class_exists( 'Opti_Behavior_Smart_Insights_Funnel_Aggregator' )
+					? ( new Opti_Behavior_Smart_Insights_Funnel_Aggregator() )->get_tracking_spam_exclusion_clause( 't', $sessions_table, (bool) $spam )
+					: '';
+				$counts    = array();
+				foreach ( is_array( $funnels ) ? $funnels : array() as $f ) {
+					// One row per visit (its furthest step, completed or not), then one row per furthest step.
+					$sql = $wpdb->prepare(
+						"SELECT t.session_id, MAX(t.max_step_reached) AS m, MAX(t.completed) AS c
+						FROM {$tracking_table} t
+						WHERE t.funnel_id = %d AND t.entry_time >= %s AND t.entry_time < %s",
+						(int) $f['id'],
+						$from . ' 00:00:00',
+						self::shift_day( $to, 1 ) . ' 00:00:00'
+					);
+					$rows = $wpdb->get_results( "SELECT x.m, COUNT(*) AS n, SUM(x.c) AS done FROM ( {$sql}{$scope} GROUP BY t.session_id ) x GROUP BY x.m", ARRAY_A );
+					$counts[ (int) $f['id'] ] = is_array( $rows ) ? $rows : array();
+				}
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
-		return self::pick_funnel_rows( is_array( $funnels ) ? $funnels : array(), $counts, $issues );
+				return array( is_array( $funnels ) ? $funnels : array(), $counts );
+			}
+		);
+
+		return self::pick_funnel_rows( $read[0], $read[1], $issues );
 	}
 
 	/**
@@ -1290,6 +1920,7 @@ class Opti_Behavior_Report_Site {
 				'rate'      => round( $done / $entries * 100, 1 ),
 				'worst'     => $worst,
 				'issue'     => isset( $ranks[ $id ] ) ? $ranks[ $id ] : 0,
+				'every'     => self::funnel_every_page_step( isset( $f['steps'] ) ? $f['steps'] : '' ),
 			);
 		}
 		usort(
@@ -1334,21 +1965,120 @@ class Opti_Behavior_Report_Site {
 	}
 
 	/**
+	 * First counted step whose pattern matches every page of the site (pure,
+	 * OPT-1933). Same rule as the funnel tracker (pattern tested on the FULL
+	 * address) and as Pro Page_Xray::step_matches_every_page(): the step
+	 * matches the home page AND an address no page has. Such a step says
+	 * nothing about where the visitors leave. Same step list as
+	 * funnel_step_names().
+	 *
+	 * @param string|array $steps Stored steps (JSON).
+	 * @return int Step number (1-based), 0 = none.
+	 */
+	public static function funnel_every_page_step( $steps ) {
+		$steps = is_string( $steps ) ? json_decode( $steps, true ) : $steps;
+		$home  = untrailingslashit( home_url() );
+		$n     = 0;
+		foreach ( is_array( $steps ) ? $steps : array() as $step ) {
+			if ( ! is_array( $step ) ) {
+				continue;
+			}
+			$type    = isset( $step['match_type'] ) && is_scalar( $step['match_type'] ) ? (string) $step['match_type'] : '';
+			$pattern = isset( $step['url_pattern'] ) && is_scalar( $step['url_pattern'] ) ? trim( (string) $step['url_pattern'] ) : '';
+			if ( '' === $type || ( '' === $pattern && ! in_array( $type, array( 'any', 'pageview' ), true ) ) ) {
+				continue;
+			}
+			++$n;
+			if ( self::step_matches_every_page( $pattern, $type, $home ) ) {
+				return $n;
+			}
+		}
+
+		return 0;
+	}
+
+	/**
+	 * Whether one step pattern matches every page (OPT-1933): Pro's rule when
+	 * Pro is loaded, else the same probe here (home page + a made-up address).
+	 *
+	 * @param string $pattern Step pattern.
+	 * @param string $type    Match type.
+	 * @param string $home    Home URL, no trailing slash.
+	 * @return bool
+	 */
+	private static function step_matches_every_page( $pattern, $type, $home ) {
+		if ( class_exists( 'Opti_Behavior_Pro_Smart_Insights_Page_Xray', false ) && method_exists( 'Opti_Behavior_Pro_Smart_Insights_Page_Xray', 'step_matches_every_page' ) ) {
+			return (bool) Opti_Behavior_Pro_Smart_Insights_Page_Xray::step_matches_every_page( $pattern, $type, $home );
+		}
+		if ( '' === $pattern || '*' === $pattern ) {
+			return true;
+		}
+		$probe = $home . '/ob-xray-any-page-7f3a/q-9c2e/?ob=1#z';
+
+		return self::url_matches_pattern( $home . '/', $pattern, $type ) && self::url_matches_pattern( $probe, $pattern, $type );
+	}
+
+	/**
+	 * Funnel tracker rule on a full address (funnel-tracker.js
+	 * urlMatchesPattern(); any / pageview with a pattern = contains). Exact
+	 * never matches two different addresses, so it is left out.
+	 *
+	 * @param string $url     Full address.
+	 * @param string $pattern Step pattern.
+	 * @param string $type    Match type.
+	 * @return bool
+	 */
+	private static function url_matches_pattern( $url, $pattern, $type ) {
+		$type = strtolower( trim( (string) $type ) );
+		if ( in_array( $type, array( 'any', 'pageview' ), true ) ) {
+			$type = 'contains';
+		}
+		switch ( $type ) {
+			case 'contains':
+				return false !== stripos( $url, $pattern );
+			case 'starts_with':
+				return 0 === stripos( $url, $pattern );
+			case 'ends_with':
+				return strtolower( substr( $url, -strlen( $pattern ) ) ) === strtolower( $pattern );
+			case 'regex':
+				return 1 === @preg_match( '~' . str_replace( '~', '\~', $pattern ) . '~', $url ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- User-supplied pattern; an invalid one simply does not match.
+		}
+
+		return false;
+	}
+
+	/**
 	 * "What to do" of the funnel block (pure): the step with the most visits
 	 * lost of all the funnels printed.
 	 *
 	 * @param array $rows pick_funnel_rows().
 	 * @return string
 	 */
-	public static function funnels_todo( $rows ) {
-		$top = null;
+	public static function funnels_todo( $rows, $ctx = array() ) {
+		$rows = is_array( $rows ) ? $rows : array();
+		if ( ! $rows || empty( $rows[0]['judged'] ) ) {
+			$rows = self::judge_funnel_rows( $rows, $ctx );
+		}
+		$top       = null;
+		$secondary = null;
 		foreach ( $rows as $r ) {
-			if ( $r['worst'] && ( null === $top || $r['worst']['lost'] > $top['worst']['lost'] ) ) {
+			if ( ! is_array( $r ) || ! empty( $r['every'] ) || empty( $r['worst'] ) ) {
+				continue;
+			}
+			// A funnel that does not follow what its pages are for is never
+			// advised first: the page annex says the same (OPT-2883).
+			if ( ! empty( $r['secondary'] ) ) {
+				if ( null === $secondary || $r['worst']['lost'] > $secondary['worst']['lost'] ) {
+					$secondary = $r;
+				}
+				continue;
+			}
+			if ( null === $top || $r['worst']['lost'] > $top['worst']['lost'] ) {
 				$top = $r;
 			}
 		}
 		if ( null === $top ) {
-			return '';
+			return null === $secondary ? '' : self::funnel_secondary_todo( $secondary );
 		}
 		$step = $top['worst']['from'] . ' → ' . $top['worst']['to'];
 		if ( $top['issue'] > 0 ) {
@@ -1358,6 +2088,55 @@ class Opti_Behavior_Report_Site {
 
 		/* translators: 1: step of a funnel, e.g. "Cart → Checkout", 2: funnel name, 3: share of visits, e.g. "62 %", 4: name of the step before. */
 		return sprintf( __( 'Work on the step “%1$s” of “%2$s” first: %3$s of the visits that reached “%4$s” leave there.', 'opti-behavior' ), $step, $top['name'], self::pct_text( $top['worst']['share'] ), $top['worst']['from'] );
+	}
+
+	/**
+	 * Funnel rows judged for the advice (OPT-2883): the report block and the
+	 * page annex must give ONE recommendation, the one that knows what the page
+	 * is for. Pro answers the filter with `Page_Xray::funnel_is_main()` and
+	 * marks a row `secondary`.
+	 *
+	 * @param array $rows pick_funnel_rows().
+	 * @param array $ctx  Report context { from, to, spam } (may be empty).
+	 * @return array Same rows, each with `judged` true and maybe `secondary`.
+	 */
+	public static function judge_funnel_rows( $rows, $ctx = array() ) {
+		$rows = apply_filters( 'opti_behavior_report_site_funnels_todo', is_array( $rows ) ? $rows : array(), is_array( $ctx ) ? $ctx : array() );
+		$out  = array();
+		foreach ( is_array( $rows ) ? $rows : array() as $r ) {
+			if ( ! is_array( $r ) ) {
+				continue;
+			}
+			$r['secondary'] = ! empty( $r['secondary'] );
+			$r['judged']    = true;
+			$out[]          = $r;
+		}
+
+		return $out;
+	}
+
+	/**
+	 * "What to do" when every funnel with a losing step is secondary (pure,
+	 * OPT-2883): the step is named, with the reason it is not advised first.
+	 *
+	 * @param array $row Judged funnel row.
+	 * @return string
+	 */
+	public static function funnel_secondary_todo( $row ) {
+		$step = $row['worst']['from'] . ' → ' . $row['worst']['to'];
+
+		/* translators: 1: step of a funnel, e.g. "Cart → Checkout", 2: funnel name, 3: number of visits. */
+		return sprintf( __( 'Check the step “%1$s” of “%2$s”: %3$s visits leave there, but this funnel does not follow what its pages are for, so leaving it does not prove a loss.', 'opti-behavior' ), $step, $row['name'], number_format_i18n( (int) $row['worst']['lost'] ) );
+	}
+
+	/**
+	 * One line for the funnel table of a secondary funnel (pure, OPT-2883):
+	 * the same words as the page annex.
+	 *
+	 * @return string
+	 */
+	public static function funnel_secondary_line() {
+		return __( 'This funnel does not follow what its pages are for: leaving it does not prove a loss.', 'opti-behavior' );
 	}
 
 	/**
@@ -1372,43 +2151,63 @@ class Opti_Behavior_Report_Site {
 	 * @return array Rows of ab_view().
 	 */
 	public static function ab_rows( $from, $to, $spam ) {
-		global $wpdb;
 		if ( ! self::is_day( $from ) || ! self::is_day( $to ) || ! class_exists( 'Opti_Behavior_AB_Test_Database' ) || ! class_exists( 'Opti_Behavior_AB_Test_Engine' ) ) {
 			return array();
 		}
-		$table = $wpdb->prefix . 'optibehavior_ab_impressions';
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix, spam clause built by the plugin; values prepared.
-		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) ) !== $table ) {
-			return array();
-		}
-		$sql  = $wpdb->prepare( "SELECT i.test_id, COUNT(DISTINCT i.visitor_id) AS v FROM {$table} i WHERE i.created_at BETWEEN %s AND %s", $from . ' 00:00:00', $to . ' 23:59:59' );
-		$ids  = $wpdb->get_results( $sql . Opti_Behavior_AB_Test_Database::get_ab_spam_session_filter_sql( 'i', (bool) $spam ) . ' GROUP BY i.test_id ORDER BY v DESC, i.test_id ASC LIMIT ' . (int) self::TOP_AB_TESTS, ARRAY_A );
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
-		$out = array();
-		foreach ( is_array( $ids ) ? $ids : array() as $row ) {
-			$test = Opti_Behavior_AB_Test_Database::get_test( (int) $row['test_id'] );
-			if ( ! is_object( $test ) || ( isset( $test->status ) && 'deleted' === $test->status ) ) {
-				continue;
-			}
-			$confidence = isset( $test->confidence_level ) ? (float) $test->confidence_level : null;
-			$stats      = Opti_Behavior_AB_Test_Database::get_test_stats( (int) $row['test_id'], null, (bool) $spam );
-			$view       = self::ab_view( $test, Opti_Behavior_AB_Test_Engine::calculate_results( is_array( $stats ) ? $stats : array(), $confidence > 0 ? $confidence : null ) );
-			if ( $view ) {
-				$out[] = $view;
-			}
-		}
 
-		return $out;
+		return self::cached(
+			'ab_rows',
+			array( $from, $to, (bool) $spam ),
+			function () use ( $from, $to, $spam ) {
+				global $wpdb;
+				$table = $wpdb->prefix . 'optibehavior_ab_impressions';
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix, spam clause built by the plugin; values prepared.
+				if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) ) !== $table ) {
+					return array();
+				}
+				$sql = $wpdb->prepare( "SELECT i.test_id, COUNT(DISTINCT i.visitor_id) AS v FROM {$table} i WHERE i.created_at BETWEEN %s AND %s", $from . ' 00:00:00', $to . ' 23:59:59' );
+				$ids = $wpdb->get_results( $sql . Opti_Behavior_AB_Test_Database::get_ab_spam_session_filter_sql( 'i', (bool) $spam ) . ' GROUP BY i.test_id ORDER BY v DESC, i.test_id ASC LIMIT ' . (int) self::TOP_AB_TESTS, ARRAY_A );
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
+				$out = array();
+				foreach ( is_array( $ids ) ? $ids : array() as $row ) {
+					$test = Opti_Behavior_AB_Test_Database::get_test( (int) $row['test_id'] );
+					if ( ! is_object( $test ) || ( isset( $test->status ) && 'deleted' === $test->status ) ) {
+						continue;
+					}
+					$confidence = isset( $test->confidence_level ) ? (float) $test->confidence_level : null;
+					$stats      = Opti_Behavior_AB_Test_Database::get_test_stats( (int) $row['test_id'], null, (bool) $spam );
+					$goals      = method_exists( 'Opti_Behavior_AB_Test_Database', 'get_goal_conversion_totals' ) ? Opti_Behavior_AB_Test_Database::get_goal_conversion_totals( (int) $row['test_id'], (bool) $spam ) : array();
+					$totals     = method_exists( 'Opti_Behavior_AB_Test_Database', 'get_test_participation' ) ? Opti_Behavior_AB_Test_Database::get_test_participation( (int) $row['test_id'], (bool) $spam ) : null;
+					$view       = self::ab_view( $test, Opti_Behavior_AB_Test_Engine::calculate_results( is_array( $stats ) ? $stats : array(), $confidence > 0 ? $confidence : null ), $goals, $totals );
+					if ( $view ) {
+						$out[] = $view;
+					}
+				}
+
+				return $out;
+			}
+		);
 	}
 
 	/**
 	 * One printed A/B test (pure).
 	 *
+	 * Verdict = the shared Opti_Behavior_AB_Test_Engine::verdict() (OPT-1941),
+	 * the one the A/B screen prints. Conversions = visitors who reached the
+	 * primary goal (unique); events of the other goals are given apart.
+	 *
 	 * @param object $test    Test row { name, status }.
 	 * @param array  $results Opti_Behavior_AB_Test_Engine::calculate_results().
-	 * @return array|null { name, status, status_label, tag, verdict (winner / loser / none), best, variants[] { label, control, visitors, conversions, rate, improvement, p, significant, win } }.
+	 * OB-15: other_converted = unique visitors over ALL other goals (from
+	 * $totals); the per-goal rows are never added up for people (one visitor
+	 * reaching 3 goals = 3 events, 1 visitor). Without $totals: the largest
+	 * goal (a floor), and the note names no visitor count.
+	 *
+	 * @param array      $goals   Optional get_goal_conversion_totals() rows.
+	 * @param array|null $totals  Optional get_test_participation().
+	 * @return array|null { name, status, status_label, tag, verdict (winner / loser / none), state, other_converted, other_events, impressions, participants, primary_converted (null without $totals), started, best, variants[] { label, control, visitors, conversions, rate, improvement, p, significant, win } }.
 	 */
-	public static function ab_view( $test, $results ) {
+	public static function ab_view( $test, $results, $goals = array(), $totals = null ) {
 		if ( ! is_array( $results ) || count( $results ) < 2 ) {
 			return null;
 		}
@@ -1420,14 +2219,25 @@ class Opti_Behavior_Report_Site {
 			'applied'   => array( _x( 'Winner applied', 'A/B test status', 'opti-behavior' ), 'ok' ),
 		);
 		$label   = isset( $labels[ $status ] ) ? $labels[ $status ] : array( _x( 'Stopped', 'A/B test status', 'opti-behavior' ), 'info' );
-		$rows    = array();
-		$verdict = 'none';
-		$best    = null;
+		$rows   = array();
+		$other  = 0;
+		$events = 0;
+		foreach ( is_array( $goals ) ? $goals : array() as $g ) {
+			if ( is_object( $g ) && empty( $g->is_primary ) ) {
+				$other   = max( $other, (int) $g->converted );
+				$events += (int) $g->events;
+			}
+		}
+		$has_totals = is_array( $totals ) && isset( $totals['participants'] );
+		if ( $has_totals ) {
+			$other  = (int) $totals['other_converted'];
+			$events = (int) $totals['other_events'];
+		}
+		$shared = Opti_Behavior_AB_Test_Engine::verdict( $results, $other );
 		foreach ( array_values( $results ) as $i => $r ) {
 			$control     = ! empty( $r->is_control );
 			$rate        = (float) $r->conversion_rate * 100;
 			$significant = ! $control && ! empty( $r->is_significant );
-			$up          = ! $control && (float) $r->improvement > 0;
 			$name        = trim( wp_strip_all_tags( isset( $r->variant_name ) ? (string) $r->variant_name : '' ) );
 			$letter      = $i < 26 ? chr( 65 + $i ) : (string) ( $i + 1 );
 			$rows[]      = array(
@@ -1441,26 +2251,27 @@ class Opti_Behavior_Report_Site {
 				'significant' => $significant,
 				'win'         => false,
 			);
-			if ( $significant && $up && ( null === $best || $rate > $rows[ $best ]['rate'] ) ) {
-				$best = count( $rows ) - 1;
-			}
-			if ( $significant && ! $up && 'none' === $verdict ) {
-				$verdict = 'loser';
-			}
 		}
+		$best = $shared['index'] >= 0 ? $shared['index'] : null;
 		if ( null !== $best ) {
 			$rows[ $best ]['win'] = true;
-			$verdict              = 'winner';
 		}
 
 		return array(
-			'name'         => self::no_address( trim( wp_specialchars_decode( isset( $test->name ) ? (string) $test->name : '', ENT_QUOTES ) ) ),
-			'status'       => $status,
-			'status_label' => $label[0],
-			'tag'          => $label[1],
-			'verdict'      => $verdict,
-			'best'         => null !== $best ? $rows[ $best ]['label'] : '',
-			'variants'     => $rows,
+			'name'              => self::no_address( trim( wp_specialchars_decode( isset( $test->name ) ? (string) $test->name : '', ENT_QUOTES ) ) ),
+			'status'            => $status,
+			'status_label'      => $label[0],
+			'tag'               => $label[1],
+			'verdict'           => in_array( $shared['state'], array( 'winner', 'loser' ), true ) ? $shared['state'] : 'none',
+			'state'             => $shared['state'],
+			'other_converted'   => $other,
+			'other_events'      => $events,
+			'impressions'       => $has_totals ? (int) $totals['impressions'] : null,
+			'participants'      => $has_totals ? (int) $totals['participants'] : null,
+			'primary_converted' => $has_totals ? (int) $totals['primary_converted'] : null,
+			'started'           => isset( $test->started_at ) && is_string( $test->started_at ) && self::is_day( substr( $test->started_at, 0, 10 ) ) ? substr( $test->started_at, 0, 10 ) : '',
+			'best'              => null !== $best ? $rows[ $best ]['label'] : '',
+			'variants'          => $rows,
 		);
 	}
 
@@ -1491,6 +2302,56 @@ class Opti_Behavior_Report_Site {
 	}
 
 	/**
+	 * Grey line under an A/B table (OPT-1941): "Conversions" = visitors who
+	 * reached the primary goal; the other goals' events are named apart, with
+	 * their unit, so 0 conversions next to "~1.4 k conversions" is readable.
+	 * OB-15: one name per unit over the life of the test (impressions,
+	 * visitors in the test, visitors who reached the primary goal, events of
+	 * the other goals and the different visitors behind them, never a sum
+	 * of people per goal).
+	 *
+	 * @param array $t ab_view().
+	 * @return string HTML ('' when there is nothing to say).
+	 */
+	public static function ab_events_note( $t ) {
+		$events = isset( $t['other_events'] ) ? (int) $t['other_events'] : 0;
+		$parts  = array();
+		if ( isset( $t['participants'] ) && null !== $t['participants'] && (int) $t['participants'] > 0 ) {
+			$started = ! empty( $t['started'] ) ? self::day_long( $t['started'] ) : '';
+			$parts[] = sprintf(
+				/* translators: 1: "since 14 Oct 2026" or "over the life of the test", 2: impressions, 3: unique visitors shown a variant, 4: unique visitors who reached the primary goal. */
+				__( 'Whole test (%1$s): %2$s impressions, %3$s visitors in the test, %4$s reached the primary goal. “Conversions” counts those visitors, once each.', 'opti-behavior' ),
+				'' !== $started
+					/* translators: %s: date the test started, e.g. "14 Oct 2026". */
+					? sprintf( __( 'since %s', 'opti-behavior' ), $started )
+					: __( 'over the life of the test', 'opti-behavior' ),
+				number_format_i18n( (int) $t['impressions'] ),
+				number_format_i18n( (int) $t['participants'] ),
+				number_format_i18n( (int) $t['primary_converted'] )
+			);
+			if ( $events > 0 ) {
+				$parts[] = sprintf(
+					/* translators: 1: conversion events of the other goals, 2: different visitors behind them (one visitor can reach several goals). */
+					__( 'Other goals: %1$s conversion events by %2$s different visitors (one visitor can reach several goals; not in the table).', 'opti-behavior' ),
+					number_format_i18n( $events ),
+					number_format_i18n( isset( $t['other_converted'] ) ? (int) $t['other_converted'] : 0 )
+				);
+			}
+		} elseif ( $events > 0 ) {
+			$parts[] = sprintf(
+				/* translators: %s: conversion events of the other goals. */
+				__( '“Conversions” counts visitors who reached the primary goal, once each. Other goals of this test: %s conversion events (not in the table).', 'opti-behavior' ),
+				number_format_i18n( $events )
+			);
+		}
+		if ( empty( $parts ) ) {
+			return '';
+		}
+
+		return '<p class="obr-ab-events" style="margin:1.5mm 0 0;font-size:8pt;color:#71717a">' . esc_html( implode( ' ', $parts ) ) . '</p>';
+	}
+
+	/**
 	 * "What to do" of one A/B test (pure).
 	 *
 	 * @param array $t ab_view().
@@ -1504,7 +2365,18 @@ class Opti_Behavior_Report_Site {
 		if ( 'loser' === $t['verdict'] ) {
 			return __( 'No variant beats the original and the difference is significant: keep the original.', 'opti-behavior' );
 		}
-		if ( in_array( $t['status'], array( 'running', 'paused' ), true ) ) {
+		$state = isset( $t['state'] ) ? $t['state'] : '';
+		if ( 'check_goal' === $state ) {
+			/* translators: %s: number of visitors in the test. */
+			return sprintf( __( 'The primary goal has no conversion after %s visitors while other goals of the test convert: check that the primary goal is tracked (A/B Testing > the test > Goals). Until it records conversions, the test cannot find a winner.', 'opti-behavior' ), number_format_i18n( array_sum( wp_list_pluck( $t['variants'], 'visitors' ) ) ) );
+		}
+		$open = in_array( $t['status'], array( 'running', 'paused' ), true );
+		if ( 'not_enough_data' === $state ) {
+			return $open
+				? __( 'Let the test run: not enough visitors or conversions yet to judge.', 'opti-behavior' )
+				: __( 'The test had too few visitors or conversions to judge: keep the original, or run it again longer.', 'opti-behavior' );
+		}
+		if ( $open ) {
 			return __( 'Let the test run: no variant is significantly better yet.', 'opti-behavior' );
 		}
 
@@ -1535,35 +2407,43 @@ class Opti_Behavior_Report_Site {
 	 * @return array
 	 */
 	public static function click_rows( $from, $to, $spam ) {
-		global $wpdb;
 		if ( ! self::is_day( $from ) || ! self::is_day( $to ) ) {
 			return array();
 		}
-		$spam_sql = class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ? Opti_Behavior_Stats_Spam_Filter::session_sql( 's', 'AND', (bool) $spam ) : '';
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix, spam clause built by the plugin; values prepared.
-		$rows = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT e.page_id2 AS pid, MAX(p.title) AS title, MAX(p.url) AS url,
-					MAX(e.element_tag) AS tag, MAX(e.element_text) AS txt, MAX(e.element_class) AS cls, MAX(e.element_id) AS eid,
-					COUNT(*) AS c
-				FROM {$wpdb->prefix}optibehavior_events e
-				INNER JOIN {$wpdb->prefix}optibehavior_sessions s ON e.session_id = s.id
-				LEFT JOIN {$wpdb->prefix}optibehavior_pages p ON p.id = e.page_id2
-				WHERE e.insert_at BETWEEN %s AND %s
-				AND e.event IN (16, 17)
-				AND LOWER(COALESCE(e.element_tag, '')) NOT IN ('', 'html', 'body')
-				{$spam_sql}
-				GROUP BY e.page_id2, COALESCE(NULLIF(e.element_selector, ''), NULLIF(e.element_text, ''), e.element_tag)
-				ORDER BY c DESC
-				LIMIT 30",
-				$from . ' 00:00:00',
-				$to . ' 23:59:59'
-			),
-			ARRAY_A
-		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$rows = self::cached(
+			'click_rows',
+			array( $from, $to, (bool) $spam ),
+			function () use ( $from, $to, $spam ) {
+				global $wpdb;
+				$spam_sql = class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ? Opti_Behavior_Stats_Spam_Filter::session_sql( 's', 'AND', (bool) $spam ) : '';
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix, spam clause built by the plugin; values prepared.
+				$rows = $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT e.page_id2 AS pid, MAX(p.title) AS title, MAX(p.url) AS url,
+							MAX(e.element_tag) AS tag, MAX(e.element_text) AS txt, MAX(e.element_class) AS cls, MAX(e.element_id) AS eid,
+							COUNT(*) AS c
+						FROM {$wpdb->prefix}optibehavior_events e
+						INNER JOIN {$wpdb->prefix}optibehavior_sessions s ON e.session_id = s.id
+						LEFT JOIN {$wpdb->prefix}optibehavior_pages p ON p.id = e.page_id2
+						WHERE e.insert_at BETWEEN %s AND %s
+						AND e.event IN (16, 17)
+						AND LOWER(COALESCE(e.element_tag, '')) NOT IN ('', 'html', 'body')
+						{$spam_sql}
+						GROUP BY e.page_id2, COALESCE(NULLIF(e.element_selector, ''), NULLIF(e.element_text, ''), e.element_tag)
+						ORDER BY c DESC
+						LIMIT 30",
+						$from . ' 00:00:00',
+						$to . ' 23:59:59'
+					),
+					ARRAY_A
+				);
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
 
-		return self::pick_click_rows( is_array( $rows ) ? $rows : array() );
+				return is_array( $rows ) ? $rows : array();
+			}
+		);
+
+		return self::pick_click_rows( $rows );
 	}
 
 	/**
@@ -1727,7 +2607,7 @@ class Opti_Behavior_Report_Site {
 		}
 
 		/* translators: 1: clicked element, 2: page title. */
-		return sprintf( __( 'Keep “%1$s” on %2$s visible without scrolling, on mobile too: it is the most clicked element of the site.', 'opti-behavior' ), $row['label'], $row['page'] );
+		return sprintf( __( '“%1$s” on %2$s is the most clicked element of the site. If it serves your goal, keep it visible without scrolling, on mobile too. The most clicked is not always the one that sells.', 'opti-behavior' ), $row['label'], $row['page'] );
 	}
 
 	/**
@@ -1740,25 +2620,33 @@ class Opti_Behavior_Report_Site {
 	 * @return array
 	 */
 	public static function hour_grid( $from, $to, $spam ) {
-		global $wpdb;
 		if ( ! self::is_day( $from ) || ! self::is_day( $to ) ) {
 			return array();
 		}
-		$spam_sql = class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ? Opti_Behavior_Stats_Spam_Filter::session_sql( 's', 'AND', (bool) $spam ) : '';
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix, spam clause built by the plugin; values prepared.
-		$rows = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT DAYOFWEEK(s.start_time) - 1 AS d, HOUR(s.start_time) AS h, COUNT(*) AS c
-				FROM {$wpdb->prefix}optibehavior_sessions s
-				WHERE s.start_time BETWEEN %s AND %s
-				{$spam_sql}
-				GROUP BY d, h",
-				$from . ' 00:00:00',
-				$to . ' 23:59:59'
-			),
-			ARRAY_A
+		$rows = self::cached(
+			'hour_grid',
+			array( $from, $to, (bool) $spam ),
+			function () use ( $from, $to, $spam ) {
+				global $wpdb;
+				$spam_sql = class_exists( 'Opti_Behavior_Stats_Spam_Filter' ) ? Opti_Behavior_Stats_Spam_Filter::session_sql( 's', 'AND', (bool) $spam ) : '';
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Table names from $wpdb->prefix, spam clause built by the plugin; values prepared.
+				$rows = $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT DAYOFWEEK(s.start_time) - 1 AS d, HOUR(s.start_time) AS h, COUNT(*) AS c
+						FROM {$wpdb->prefix}optibehavior_sessions s
+						WHERE s.start_time BETWEEN %s AND %s
+						{$spam_sql}
+						GROUP BY d, h",
+						$from . ' 00:00:00',
+						$to . ' 23:59:59'
+					),
+					ARRAY_A
+				);
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+				return is_array( $rows ) ? $rows : array();
+			}
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$grid = array_fill( 0, 7, array_fill( 0, 24, 0 ) );
 		foreach ( is_array( $rows ) ? $rows : array() as $row ) {
 			$d = (int) $row['d'];
@@ -1809,6 +2697,105 @@ class Opti_Behavior_Report_Site {
 		$best['quiet'] = $quiet;
 
 		return $best;
+	}
+
+	/**
+	 * Enough visits in the busiest hour to advise a time (pure, OPT-1940).
+	 *
+	 * @param array|null $peak hours_peak().
+	 * @return bool
+	 */
+	public static function hour_advice_ok( $peak ) {
+		return is_array( $peak ) && isset( $peak['visits'] ) && (int) $peak['visits'] >= self::PROOF_HOUR_MIN_VISITS;
+	}
+
+	/**
+	 * "Most" may be said of $n out of $total (pure, OPT-1940): strictly more
+	 * than PROOF_MAJORITY_SHARE % of a counted total.
+	 *
+	 * @param int $n     Counted visits.
+	 * @param int $total Counted total.
+	 * @return bool
+	 */
+	public static function is_majority( $n, $total ) {
+		$total = (int) $total;
+
+		return $total > 0 && 100 * (int) $n > self::PROOF_MAJORITY_SHARE * $total;
+	}
+
+	/**
+	 * The visits lost of a card are counted visit by visit (pure, OPT-1940):
+	 * funnel, form, error and click-friction cards. A bounce / exit / scroll /
+	 * engagement / conversion gap is an estimate from averages: never printed
+	 * as a share of the visits.
+	 *
+	 * @param array $it Shaped insight.
+	 * @return bool
+	 */
+	public static function lost_is_counted( $it ) {
+		$basis = '';
+		foreach ( array( 'impact', 'scores' ) as $bag ) {
+			if ( '' === $basis && isset( $it[ $bag ]['basis'] ) && is_string( $it[ $bag ]['basis'] ) ) {
+				$basis = $it[ $bag ]['basis'];
+			}
+		}
+
+		return ! in_array( $basis, self::PROOF_ESTIMATED_BASES, true );
+	}
+
+	/**
+	 * Headline of a card (OB-07): a gap to a reference is said again with the
+	 * current words, since cards stored before kept "N visitors lost versus
+	 * your site average"; any other card keeps its stored headline.
+	 *
+	 * @param array $it Shaped insight.
+	 * @return string
+	 */
+	public static function issue_headline( $it ) {
+		$head = isset( $it['impact']['headline'] ) && is_string( $it['impact']['headline'] ) ? $it['impact']['headline'] : '';
+		$lost = Opti_Behavior_Smart_Insights_Impact_Calculator::get_users_lost( $it );
+		if ( '' === $head || null === $lost || self::lost_is_counted( $it ) ) {
+			return $head;
+		}
+		$basis = isset( $it['impact']['basis'] ) && is_string( $it['impact']['basis'] ) ? $it['impact']['basis'] : ( isset( $it['scores']['basis'] ) ? (string) $it['scores']['basis'] : '' );
+		$calc  = new Opti_Behavior_Smart_Insights_Impact_Calculator();
+
+		return $calc->build_headline( (int) $lost, $basis );
+	}
+
+	/**
+	 * What the figure of a card counts (pure, OB-07): an exit from a step, a
+	 * visit that met a problem, or a gap to a reference. Never "lost": a reader
+	 * who leaves an article without visiting Contact is not a lost sale.
+	 *
+	 * @param array $it Shaped insight.
+	 * @param int   $n  The figure (plural form).
+	 * @return string
+	 */
+	public static function issue_unit( $it, $n ) {
+		$basis = '';
+		foreach ( array( 'impact', 'scores' ) as $bag ) {
+			if ( '' === $basis && isset( $it[ $bag ]['basis'] ) && is_string( $it[ $bag ]['basis'] ) ) {
+				$basis = $it[ $bag ]['basis'];
+			}
+		}
+		$n = (int) $n;
+		switch ( $basis ) {
+			case 'funnel_dropoff':
+				return _n( 'visit left at this step', 'visits left at this step', $n, 'opti-behavior' );
+			case 'form_abandonment':
+				return _n( 'form attempt not sent', 'form attempts not sent', $n, 'opti-behavior' );
+			case 'error_impact':
+				return _n( 'visit with an error', 'visits with an error', $n, 'opti-behavior' );
+			case 'friction':
+				return _n( 'visit with rage or dead clicks', 'visits with rage or dead clicks', $n, 'opti-behavior' );
+			case 'conversion_gap':
+				return _n( 'conversion under the comparison rate, estimated', 'conversions under the comparison rate, estimated', $n, 'opti-behavior' );
+			case 'engagement_gap':
+				return _n( 'visit under the average, estimated', 'visits under the average, estimated', $n, 'opti-behavior' );
+			default:
+				return _n( 'visit concerned', 'visits concerned', $n, 'opti-behavior' );
+		}
 	}
 
 	/**
@@ -2004,8 +2991,8 @@ class Opti_Behavior_Report_Site {
 		);
 		// Inline SVG needs no namespace: the report prints no address.
 		$svg   = str_replace( ' xmlns="http://www.w3.org/2000/svg"', '', $svg );
-		$html  = '<figure class="xr-figure obr-curve xr-keep obr-block"><div class="xr-figure-top"><h3>' . esc_html__( 'Visits per day', 'opti-behavior' ) . '</h3>';
-		$html .= '<span class="xr-legend"><span><svg viewBox="0 0 6 2" aria-hidden="true"><line x1="0" y1="1" x2="6" y2="1" stroke="#0f172a" stroke-width=".6"/></svg>' . esc_html( _x( 'visits', 'site report comparison', 'opti-behavior' ) ) . '</span></span></div>';
+		$html  = '<figure class="xr-figure obr-curve xr-keep obr-block"><div class="xr-figure-top"><h3>' . esc_html__( 'Traffic Overview', 'opti-behavior' ) . '</h3>';
+		$html .= '<span class="xr-legend"><span><svg viewBox="0 0 6 2" aria-hidden="true"><line x1="0" y1="1" x2="6" y2="1" stroke="#0f172a" stroke-width=".6"/></svg>' . esc_html( self::kpi_label( 'sessions' ) ) . '</span></span></div>';
 		$html .= $svg . '<figcaption>' . esc_html(
 			/* translators: 1: busiest day, 2: its visits. */
 			sprintf( __( 'Busiest day: %1$s, %2$s visits.', 'opti-behavior' ), self::day_long( $days[ $peak ] ), number_format_i18n( $values[ $peak ] ) )
@@ -2126,8 +3113,9 @@ class Opti_Behavior_Report_Site {
 			}
 		}
 		if ( $src && '' !== $page ) {
+			// OB-21: the most visited page is not proven to be where this source lands.
 			/* translators: 1: source name, 2: its share of visits, e.g. "37 %", 3: page title. */
-			return sprintf( __( '%1$s brings %2$s of visits: keep the title and description of “%3$s” up to date, it is the most visited page.', 'opti-behavior' ), $src[0], number_format_i18n( self::share( $src[1], $total ) ) . ' %', $page );
+			return sprintf( __( '%1$s brings %2$s of visits. Before changing a title, check which pages these visits start on (Traffic, Traffic Channel filter): “%3$s” is the most visited page, not necessarily their entry page.', 'opti-behavior' ), $src[0], number_format_i18n( self::share( $src[1], $total ) ) . ' %', $page );
 		}
 		if ( '' !== $page ) {
 			/* translators: %s: page title. */
@@ -2175,7 +3163,7 @@ class Opti_Behavior_Report_Site {
 	}
 
 	/**
-	 * 2 The 3 most costly issues.
+	 * 2 The 3 issues to look at first.
 	 *
 	 * @param array $data { ctx, args }.
 	 * @return string
@@ -2189,16 +3177,24 @@ class Opti_Behavior_Report_Site {
 				$money = true;
 			}
 		}
-		$aside = $money ? __( 'ranked by amount lost, then visits lost', 'opti-behavior' ) : __( 'ranked by visits lost', 'opti-behavior' );
-		$html  = '<div class="xr-section obr-issues">' . self::sec_head( self::no_of( $data, 2 ), __( 'The 3 most costly issues', 'opti-behavior' ), esc_html( $aside ) );
+		// OB-07: the figure is visits concerned (exits, visits with a problem, gaps), not lost sales.
+		$aside = $money ? __( 'ranked by estimated loss, then visits concerned', 'opti-behavior' ) : __( 'ranked by visits concerned', 'opti-behavior' );
+		// OPT-1958: the days of the cards; other days than the report = "period: …".
+		$days  = self::issues_period_text( $ctx );
+		$aside = ( '' !== $days ? $days : self::day_long( $ctx['from'] ) . ' – ' . self::day_long( $ctx['to'] ) ) . ' · ' . $aside;
+		$html  = '<div class="xr-section obr-issues">' . self::sec_head( self::no_of( $data, 2 ), __( 'The 3 issues to look at first', 'opti-behavior' ), esc_html( $aside ) );
 		if ( ! $issues ) {
 			return $html . self::state( esc_html__( 'No costly issue detected for this period.', 'opti-behavior' ) ) . '</div>';
 		}
 		$html .= '<div class="xr-problems">';
-		foreach ( $issues as $i => $it ) {
-			$html .= self::issue_card( $i + 1, $it, max( 1, $ctx['visits'] ) );
+		foreach ( array_values( $issues ) as $i => $it ) {
+			$html .= self::issue_card( $i + 1, $it, self::ctx_issue_base( $ctx, $i ) );
 		}
 		$html .= '</div>';
+		// OB-01: cards of other days (no card covers the report days) say so.
+		if ( '' !== $days ) {
+			$html .= '<p class="xr-note obr-issues-other">' . esc_html__( 'These cards come from a Smart Insights analysis of other days (period above). Their figures count the visits of those days, not the visits of this report.', 'opti-behavior' ) . '</p>';
+		}
 		$count = count( $issues );
 		if ( $count < self::TOP_ISSUES && $ctx['issues_total'] <= $count ) {
 			/* translators: %s: number of issues. */
@@ -2210,6 +3206,114 @@ class Opti_Behavior_Report_Site {
 		}
 
 		return $html . '</div>';
+	}
+
+	/**
+	 * Signal ids a section of this PDF already prints (OPT-2560): never twice.
+	 */
+	const PRINTED_SIGNALS = array( 'heatmaps', 'funnels', 'shop', 'forms', 'smart_insights', 'ab_testing' );
+
+	/**
+	 * Report signal blocks of the report days (OPT-1599, OPT-2560): Report_Signals::blocks()
+	 * with the dates, spam choice and Pro state of the scheduled e-mail, so both
+	 * print the same figures, then pdf_signal_blocks(). Smart Insights = issues_total
+	 * of this report. Heatmap / funnel / A/B sources are given empty: their blocks
+	 * are printed by other sections, so no query is made for them here.
+	 *
+	 * @param array     $ctx    Context.
+	 * @param bool|null $is_pro Pro state, null = pro_on() (tests simulate Pro).
+	 * @return array[] Blocks (see Opti_Behavior_Report_Signals::blocks()), empty on failure.
+	 */
+	public static function signal_blocks( $ctx, $is_pro = null ) {
+		if ( ! class_exists( 'Opti_Behavior_Report_Signals' ) || ! is_array( $ctx ) || empty( $ctx['from'] ) || empty( $ctx['to'] ) ) {
+			return array();
+		}
+		try {
+			$blocks = Opti_Behavior_Report_Signals::blocks(
+				$ctx['from'],
+				$ctx['to'],
+				! empty( $ctx['spam'] ),
+				null === $is_pro ? self::pro_on() : (bool) $is_pro,
+				array(
+					'heatmap'  => array(),
+					'funnels'  => array(),
+					'ab_tests' => array(),
+					'site'     => array( 'issues_total' => isset( $ctx['issues_total'] ) ? (int) $ctx['issues_total'] : 0 ),
+				)
+			);
+		} catch ( Throwable $e ) {
+			$blocks = array();
+		}
+
+		return self::pdf_signal_blocks( is_array( $blocks ) ? $blocks : array(), ! empty( $ctx['journeys_pro'] ) );
+	}
+
+	/**
+	 * Blocks of the PDF signals section (OPT-2560, pure): the ids no other section
+	 * prints (PRINTED_SIGNALS out; User Journeys out when Pro printed its journeys
+	 * block); a locked block links to the trial page with the PDF UTM.
+	 *
+	 * @param array[] $blocks       Report_Signals::blocks().
+	 * @param bool    $journeys_pro Pro journeys block printed in this PDF.
+	 * @return array[]
+	 */
+	public static function pdf_signal_blocks( $blocks, $journeys_pro = false ) {
+		$out = array();
+		foreach ( (array) $blocks as $b ) {
+			if ( ! is_array( $b ) || empty( $b['id'] ) || in_array( $b['id'], self::PRINTED_SIGNALS, true ) ) {
+				continue;
+			}
+			if ( $journeys_pro && 'user_journeys' === $b['id'] ) {
+				continue;
+			}
+			if ( isset( $b['state'] ) && 'locked' === $b['state'] ) {
+				$b['url'] = Opti_Behavior_Report_Signals::trial_url( $b['id'], 'report_pdf' );
+			}
+			$out[] = $b;
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Signals by module (OPT-1599, OPT-2560): not numbered, like the Free Forms line.
+	 * Data block = title (admin link, no UTM) + figures + sentence; locked Pro block
+	 * = one line "Available with Opti-Behavior Pro · See the Pro trial", no figure.
+	 *
+	 * @param array $data { ctx, args, no }.
+	 * @return string
+	 */
+	public static function render_signals( $data ) {
+		$ctx    = $data['ctx'];
+		$blocks = isset( $ctx['signals'] ) && is_array( $ctx['signals'] ) ? $ctx['signals'] : array();
+		if ( ! $blocks ) {
+			return '';
+		}
+		$html  = '<div class="xr-section obr-signals"><div class="xr-sec-head"><h2>' . esc_html__( 'Signals by module', 'opti-behavior' ) . '</h2><span class="xr-aside">' . esc_html( self::day_long( $ctx['from'] ) . ' – ' . self::day_long( $ctx['to'] ) ) . '</span></div>';
+		$rows  = '';
+		$lines = '';
+		foreach ( $blocks as $b ) {
+			$url = isset( $b['url'] ) ? (string) $b['url'] : '';
+			if ( 'locked' === $b['state'] ) {
+				$trial  = '' !== $url ? ' · <a href="' . esc_url( $url ) . '">' . esc_html__( 'See the Pro trial', 'opti-behavior' ) . '</a>' : '';
+				$lines .= '<p class="obr-pro-line obr-pro-line--sec obr-signal obr-signal--locked" data-signal="' . esc_attr( $b['id'] ) . '"><span>PRO</span><span><b>' . esc_html( $b['title'] ) . '</b> · ' . esc_html__( 'Available with Opti-Behavior Pro', 'opti-behavior' ) . $trial . '</span></p>';
+				continue;
+			}
+			$figs = array();
+			foreach ( $b['figures'] as $f ) {
+				$figs[] = esc_html( $f['label'] ) . ' <b>' . esc_html( $f['value'] ) . '</b>';
+			}
+			$cell  = $figs ? implode( ' · ', $figs ) : '';
+			$cell .= '' !== $b['sentence'] ? ( '' !== $cell ? '<br>' : '' ) . '<span class="xr-small">' . esc_html( $b['sentence'] ) . '</span>' : '';
+			$title = '' !== $url ? '<a href="' . esc_url( $url ) . '">' . esc_html( $b['title'] ) . '</a>' : esc_html( $b['title'] );
+			$tag   = isset( $b['tier'] ) && 'pro' === $b['tier'] ? '<span class="obr-tag">PRO</span>' : '';
+			$rows .= '<tr class="obr-signal obr-signal--' . esc_attr( $b['state'] ) . '" data-signal="' . esc_attr( $b['id'] ) . '"><td>' . $tag . '<b>' . $title . '</b></td><td>' . $cell . '</td></tr>';
+		}
+		if ( '' !== $rows ) {
+			$html .= '<table class="xr-table obr-signals-table"><tbody>' . $rows . '</tbody></table>';
+		}
+
+		return $html . $lines . '</div>';
 	}
 
 	/**
@@ -2260,11 +3364,17 @@ class Opti_Behavior_Report_Site {
 				$title = $it[ $key ];
 			}
 		}
-		$head   = isset( $it['impact']['headline'] ) && is_string( $it['impact']['headline'] ) ? $it['impact']['headline'] : '';
+		$head   = self::issue_headline( $it );
 		$lost   = Opti_Behavior_Smart_Insights_Impact_Calculator::get_users_lost( $it );
 		$amount = Opti_Behavior_Smart_Insights_Impact_Calculator::get_revenue_amount( $it );
-		$share  = null === $lost ? 0 : (int) min( 100, round( 100 * $lost / max( 1, $total ) ) );
-		$action = isset( $it['next_action_short'] ) && is_string( $it['next_action_short'] ) ? $it['next_action_short'] : '';
+		$counted = null !== $lost && self::lost_is_counted( $it );
+		// OB-01: $total = visits of the report, or the card's base (issue_base()).
+		$base    = is_array( $total ) || null === $total ? $total : array(
+			'visits' => (int) $total,
+			'own'    => false,
+		);
+		$share   = self::issue_share( $it, $base );
+		$action  = isset( $it['next_action_short'] ) && is_string( $it['next_action_short'] ) ? $it['next_action_short'] : '';
 
 		$html  = '<article class="xr-problem xr-problem--' . esc_attr( $sev[0] ) . '"><div class="xr-problem-hd"><span class="xr-problem-rank">' . esc_html( number_format_i18n( $rank ) ) . '</span>';
 		$html .= '<div><span class="xr-tag xr-tag--' . esc_attr( $sev[1] ) . '">' . esc_html( $sev[2] ) . '</span><h3>' . esc_html( self::no_address( $title ) ) . '</h3>';
@@ -2276,16 +3386,24 @@ class Opti_Behavior_Report_Site {
 			$html .= '<div class="xr-problem-nums">';
 			if ( null !== $amount ) {
 				$currency = isset( $it['impact']['revenue']['currency'] ) ? (string) $it['impact']['revenue']['currency'] : '';
-				$html    .= '<div><b class="obr-money">' . esc_html( self::money( $amount, $currency ) ) . '</b><span>' . esc_html__( 'lost, measured', 'opti-behavior' ) . '</span></div>';
+				// OB-07: lost visits × completion rate × average order = an estimate.
+				$html    .= '<div><b class="obr-money">' . esc_html( self::money( $amount, $currency ) ) . '</b><span>' . esc_html__( 'estimated loss', 'opti-behavior' ) . '</span></div>';
 			}
 			if ( null !== $lost ) {
-				$html .= '<div><b>' . esc_html( number_format_i18n( $lost ) ) . '</b><span>' . esc_html( _n( 'visit lost', 'visits lost', $lost, 'opti-behavior' ) ) . '</span></div>';
-				$html .= '<div><b>' . esc_html( number_format_i18n( $share ) . ' %' ) . '</b><span>' . esc_html__( 'of all visits', 'opti-behavior' ) . '</span></div>';
+				if ( $counted ) {
+					$html .= '<div><b>' . esc_html( number_format_i18n( $lost ) ) . '</b><span>' . esc_html( self::issue_unit( $it, $lost ) ) . '</span></div>';
+					if ( null !== $share ) {
+						$of    = ! empty( $base['own'] ) ? __( 'of the visits of those days', 'opti-behavior' ) : __( 'of all visits', 'opti-behavior' );
+						$html .= '<div><b>' . esc_html( number_format_i18n( $share ) . ' %' ) . '</b><span>' . esc_html( $of ) . '</span></div>';
+					}
+				} else {
+					$html .= '<div><b>≈ ' . esc_html( number_format_i18n( $lost ) ) . '</b><span>' . esc_html( self::issue_unit( $it, $lost ) ) . '</span></div>';
+				}
 			}
 			$html .= '</div>';
 		}
 		$html .= '</div>';
-		if ( null !== $lost ) {
+		if ( null !== $share ) {
 			$html .= '<div class="xr-share" aria-hidden="true"><i style="width:' . (int) $share . '%"></i></div>';
 		}
 		$html .= '<dl class="xr-problem-body"><div><dt>' . esc_html__( 'Where', 'opti-behavior' ) . '</dt><dd>' . esc_html( self::where_of( $it ) ) . '</dd></div>';
@@ -2409,7 +3527,7 @@ class Opti_Behavior_Report_Site {
 	private static function share_table( $head, $rows, $total ) {
 		$html = '<table class="xr-table"><thead><tr><th>' . esc_html( $head ) . '</th><th class="xr-n">' . esc_html__( 'Visits', 'opti-behavior' ) . '</th><th>' . esc_html__( 'Share', 'opti-behavior' ) . '</th></tr></thead><tbody>';
 		foreach ( $rows as $r ) {
-			$html .= '<tr><td>' . esc_html( $r[0] ) . '</td><td class="xr-n">' . esc_html( number_format_i18n( $r[1] ) ) . '</td><td>' . self::bar( self::share( $r[1], $total ) ) . '</td></tr>';
+			$html .= '<tr><td>' . esc_html( $r[0] ) . '</td><td class="xr-n">' . esc_html( number_format_i18n( $r[1] ) ) . '</td><td>' . self::bar( self::share( $r[1], $total ), self::share_text( $r[1], $total ) ) . '</td></tr>';
 		}
 
 		return $html . '</tbody></table>';
@@ -2418,13 +3536,39 @@ class Opti_Behavior_Report_Site {
 	/**
 	 * Share bar of a table cell, with the share written.
 	 *
-	 * @param int $pct 0-100.
+	 * @param int    $pct  0-100.
+	 * @param string $text Share as printed ('' = "$pct %").
 	 * @return string
 	 */
-	private static function bar( $pct ) {
-		$pct = max( 0, min( 100, (int) $pct ) );
+	private static function bar( $pct, $text = '' ) {
+		$pct  = max( 0, min( 100, (int) $pct ) );
+		$text = '' !== $text ? $text : number_format_i18n( $pct ) . ' %';
 
-		return '<div class="xr-bar"><span><i style="width:' . $pct . '%"></i></span><b>' . esc_html( number_format_i18n( $pct ) . ' %' ) . '</b></div>';
+		return '<div class="xr-bar"><span><i style="width:' . $pct . '%"></i></span><b>' . esc_html( $text ) . '</b></div>';
+	}
+
+	/**
+	 * Share as printed (pure, OB-17): the whole percent of share(), except a
+	 * non-zero part that share() rounds to 0: "0.4 %", or "< 0.1 %" under
+	 * 0.1 % (3 visits of 3 415 are not "0 %").
+	 *
+	 * @param int $part  Part.
+	 * @param int $total Total.
+	 * @return string
+	 */
+	public static function share_text( $part, $total ) {
+		$part  = (int) $part;
+		$total = (int) $total;
+		$pct   = self::share( $part, $total );
+		if ( $pct > 0 || $part <= 0 || $total <= 0 ) {
+			return number_format_i18n( $pct ) . ' %';
+		}
+		$exact = 100 * $part / $total;
+		if ( $exact < 0.1 ) {
+			return '< ' . number_format_i18n( 0.1, 1 ) . ' %';
+		}
+
+		return number_format_i18n( floor( $exact * 10 ) / 10, 1 ) . ' %';
 	}
 
 	/**
@@ -2545,6 +3689,32 @@ class Opti_Behavior_Report_Site {
 		}
 
 		return date_i18n( gmdate( 'Y', $a ) === gmdate( 'Y', $b ) ? 'j M' : 'j M Y', $a ) . ' – ' . date_i18n( 'j M Y', $b );
+	}
+
+	/**
+	 * What "returning" means outside Full tracking (pure): the daily hash
+	 * recognises a visitor only within the same day. '' in Full mode.
+	 *
+	 * @param string $mode Privacy mode.
+	 * @return string
+	 */
+	public static function returning_note( $mode ) {
+		return in_array( (string) $mode, array( '', 'full' ), true ) ? '' : __( 'Cookieless mode: a visitor is recognised only within the same day.', 'opti-behavior' );
+	}
+
+	/**
+	 * Note of the head: when the figures were read, and what can move them between
+	 * two reads. A figure can go down too: new visits cannot explain that.
+	 *
+	 * @param int $at Timestamp of the read.
+	 * @return string
+	 */
+	public static function live_note( $at ) {
+		return sprintf(
+			/* translators: %s: date and time the figures were read. */
+			__( 'Figures read on %s. Another screen read at another moment can show a higher or lower figure: new visits can arrive, and sessions can later be classed as spam or corrected.', 'opti-behavior' ),
+			wp_date( get_option( 'date_format', 'Y-m-d' ) . ' ' . get_option( 'time_format', 'H:i' ), (int) $at )
+		);
 	}
 
 	/**

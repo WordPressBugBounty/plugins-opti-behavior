@@ -430,6 +430,13 @@ function opti_behavior_get_settings_tooltips() {
 			'simple'  => __( 'Show JavaScript messages in browser developer tools.', 'opti-behavior' ),
 		),
 
+		// Tracker status (OPT-2957)
+		'tracker_status' => array(
+			'title'   => __( 'Tracker status', 'opti-behavior' ),
+			'content' => __( 'Confirms in the browser console that the Opti-Behavior tracker loaded correctly.', 'opti-behavior' ),
+			'simple'  => __( 'Confirms in the browser console that the Opti-Behavior tracker loaded correctly.', 'opti-behavior' ),
+		),
+
 		// Storage Stats
 		'database_size' => array(
 			'title'   => __( 'Database Size', 'opti-behavior' ),
@@ -685,7 +692,7 @@ function opti_behavior_get_settings_tooltips() {
 		// Frontend Stats Bar Settings
 		'enable_stats_bar' => array(
 			'title'   => __( 'Enable Stats Bar', 'opti-behavior' ),
-			'content' => __( 'Show a compact analytics bar at the top of every frontend page. This bar is only visible to logged-in administrators and loads asynchronously so it has zero impact on page speed for regular visitors.', 'opti-behavior' ),
+			'content' => __( 'Show a compact analytics bar at the top of every frontend page. This bar is only visible to logged-in administrators and is never loaded for regular visitors; for administrators it loads asynchronously, after the page.', 'opti-behavior' ),
 			'simple'  => __( 'Show a small stats bar at the top of your site. Only you (the admin) can see it.', 'opti-behavior' ),
 		),
 		'hide_in_builders' => array(
@@ -2336,8 +2343,8 @@ function opti_behavior_get_smart_insights_signal_tooltips() {
 		),
 		'low_scroll_depth_important_page' => array(
 			'title'   => __( 'Low scroll depth', 'opti-behavior' ),
-			'content' => __( 'Measures how far down a page visitors scroll on average. It triggers on pages with meaningful traffic where most visitors never reach the lower part of the page, so content or calls to action placed there are rarely seen.', 'opti-behavior' ),
-			'simple'  => __( 'Most visitors never scroll far enough to see the bottom of this page.', 'opti-behavior' ),
+			'content' => __( 'Measures how far down a page visitors scroll on average. It triggers on pages with meaningful traffic where that average stays high up the page, so content or calls to action placed lower are less likely to be seen. An average does not show how many visitors reach each part.', 'opti-behavior' ),
+			'simple'  => __( 'On average, visitors scroll only part of the way down this page.', 'opti-behavior' ),
 		),
 		'traffic_spike_observation' => array(
 			'title'   => __( 'Traffic spike', 'opti-behavior' ),
@@ -2577,6 +2584,42 @@ function opti_behavior_get_smart_insights_section_tooltips() {
 			'content' => __( 'Concrete changes matched to this signal type, ordered by expected effect. They are suggestions based on common causes for this pattern, so check them against what you know about the page before applying one.', 'opti-behavior' ),
 			'simple'  => __( 'Changes worth trying, most promising first.', 'opti-behavior' ),
 		),
+		'loop_how' => array(
+			'title'   => __( 'How it works', 'opti-behavior' ),
+			'content' => __( 'Your modules collect data, Smart Insights turns it into problems to fix, you fix them, and an A/B test can prove the result. The figures follow the selected period.', 'opti-behavior' ),
+		),
+		'loop_collect' => array(
+			'title'   => __( '1 · Collect', 'opti-behavior' ),
+			'content' => __( 'What each module recorded over the period. A module with no data cannot produce findings.', 'opti-behavior' ),
+		),
+		'loop_understand' => array(
+			'title'   => __( '2 · Understand', 'opti-behavior' ),
+			'content' => __( 'Open problems are the findings of the Behavior opportunities tab. Pages with a problem come from the Page X-Ray list. The two figures are not added up, because the same problem can appear in both.', 'opti-behavior' ),
+		),
+		'loop_fix' => array(
+			'title'   => __( '3 · Fix', 'opti-behavior' ),
+			'content' => __( 'In progress: insights you marked as in progress, plus Page X-Ray fixes still being measured. Resolved: closed insights and fixes whose measurement has ended. Fixed and confirmed: fixes measured as better.', 'opti-behavior' ),
+		),
+		'loop_prove' => array(
+			'title'   => __( '4 · Prove', 'opti-behavior' ),
+			'content' => __( 'Test a change on part of your visitors and keep the version that wins.', 'opti-behavior' ),
+		),
+		'trend_watch' => array(
+			'title'   => __( 'Trend watch', 'opti-behavior' ),
+			'content' => __( 'The problem that got worse the most and the one that improved the most, compared with the previous period.', 'opti-behavior' ),
+		),
+		'recurring_patterns' => array(
+			'title'   => __( 'Recurring patterns', 'opti-behavior' ),
+			'content' => __( 'Problems still open that were already there in the previous period.', 'opti-behavior' ),
+		),
+		'top_pages' => array(
+			'title'   => __( 'Pages losing the most visitors', 'opti-behavior' ),
+			'content' => __( 'The pages where problems cost the most visits over the period. Open one to see its Page X-Ray report.', 'opti-behavior' ),
+		),
+		'page_xray_tab' => array(
+			'title'   => __( 'Page X-Ray', 'opti-behavior' ),
+			'content' => __( 'Each page checked on its own: a score, its problems and an action plan.', 'opti-behavior' ),
+		),
 		'causes' => array(
 			'title'   => __( 'Likely causes', 'opti-behavior' ),
 			'content' => __( 'The explanations that most often produce this pattern. Causes marked as measured were confirmed against your own data; the others are candidates to rule out one by one.', 'opti-behavior' ),
@@ -2590,4 +2633,51 @@ function opti_behavior_get_smart_insights_section_tooltips() {
 	 * @param array $tooltips Section key => array with title, content and simple keys.
 	 */
 	return apply_filters( 'opti_behavior_smart_insights_section_tooltips', $tooltips );
+}
+
+/**
+ * Help texts of the Shop and Reports screens: key => array( title, text ).
+ *
+ * @return array
+ */
+function opti_behavior_get_shop_reports_tooltips() {
+	return array(
+		'shop'     => array( __( 'Shop', 'opti-behavior' ), __( 'Product pages that get views but no add to cart, and what that costs you. The figures follow the period chosen on the right.', 'opti-behavior' ) ),
+		'lost'     => array( __( 'Lost visits', 'opti-behavior' ), __( 'Views of a product page that ended without an add to cart: the visitor saw the product and did not take it.', 'opti-behavior' ) ),
+		'views'    => array( __( 'Product page views', 'opti-behavior' ), __( 'How many times product pages were viewed over the period.', 'opti-behavior' ) ),
+		'added'    => array( __( 'Added to cart', 'opti-behavior' ), __( 'How many times a product was added to the cart over the period.', 'opti-behavior' ) ),
+		'orders'   => array( __( 'Paid orders', 'opti-behavior' ), __( 'Orders paid over the period. Free orders, with a total of 0, are not counted.', 'opti-behavior' ) ),
+		'products' => array( __( 'Product pages, the most lost visits first', 'opti-behavior' ), __( 'Each product viewed over the period, the one losing the most visits first. Click a column to sort by it.', 'opti-behavior' ) ),
+		'product'  => array( __( 'Product', 'opti-behavior' ), __( 'The product whose page was viewed.', 'opti-behavior' ) ),
+		'rate'     => array( __( 'Add-to-cart rate', 'opti-behavior' ), __( 'Adds to cart divided by the views of the product page.', 'opti-behavior' ) ),
+		'estimate' => array( __( 'Estimated lost sales', 'opti-behavior' ), __( 'Lost visits × the conversion rate of your shop × your average order value. An indicative estimate, not a sum of real orders.', 'opti-behavior' ) ),
+		'payments' => array( __( 'Payment errors', 'opti-behavior' ), __( 'Payments that failed, grouped by payment gateway and error code.', 'opti-behavior' ) ),
+		'reports'  => array( __( 'Reports', 'opti-behavior' ), __( 'Build a printable A4 report: choose what it covers, open it, then print it or save it as PDF.', 'opti-behavior' ) ),
+		'of'       => array( __( 'Report of', 'opti-behavior' ), __( 'The whole site gives traffic, sources, devices and the issues that cost the most visits. One page gives the Page X-Ray of that page.', 'opti-behavior' ) ),
+		'page'     => array( __( 'Page', 'opti-behavior' ), __( 'The page the report is about. The list shows the pages of Page X-Ray, the most visited first.', 'opti-behavior' ) ),
+		'period'   => array( __( 'Period', 'opti-behavior' ), __( 'The days the report covers. Its figures are compared with the same number of days just before.', 'opti-behavior' ) ),
+		'version'  => array( __( 'Version', 'opti-behavior' ), __( 'Short: traffic and the 3 issues to look at first. Full: also a card for every page and the page reports you choose, in annex.', 'opti-behavior' ) ),
+		'annex'    => array( __( 'Pages in annex', 'opti-behavior' ), __( 'Pages whose full report is added at the end of the site report.', 'opti-behavior' ) ),
+	);
+}
+
+/**
+ * Help mark of the Shop and Reports screens.
+ *
+ * @param string $key Key of opti_behavior_get_shop_reports_tooltips().
+ * @return string HTML, escaped by opti_behavior_tooltip().
+ */
+function opti_behavior_shop_reports_help( $key ) {
+	$texts = opti_behavior_get_shop_reports_tooltips();
+	return isset( $texts[ $key ] ) ? opti_behavior_tooltip( $texts[ $key ][0], $texts[ $key ][1] ) : '';
+}
+
+/**
+ * Tooltip style and script, for a screen with its own assets.
+ *
+ * @return void
+ */
+function opti_behavior_enqueue_tooltips() {
+	wp_enqueue_style( 'opti-behavior-tooltips', OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/tooltips.css', array(), OPTI_BEHAVIOR_HEATMAP_VERSION );
+	wp_enqueue_script( 'opti-behavior-tooltips', OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/tooltips.js', array(), OPTI_BEHAVIOR_HEATMAP_VERSION, true );
 }

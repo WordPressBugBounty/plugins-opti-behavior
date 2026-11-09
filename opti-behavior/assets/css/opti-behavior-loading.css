@@ -1,0 +1,167 @@
+/* "Calculating statistics…" indicator of the screens with filters (assets/js/opti-behavior-loading.js). */
+.ob-stats-loading {
+	position: fixed;
+	top: 44px;
+	right: 16px;
+	left: 16px;
+	z-index: 100000;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: fit-content;
+	margin: 0 auto;
+	padding: 10px 16px;
+	box-sizing: border-box;
+	border: 1px solid #e2e8f0;
+	border-radius: 8px;
+	background: #fff;
+	box-shadow: 0 4px 16px rgba(15, 23, 42, 0.14);
+	color: #1e293b;
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 1.4;
+}
+
+.ob-stats-loading[hidden] {
+	display: none;
+}
+
+.ob-stats-loading__icon {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	box-sizing: border-box;
+	border: 2px solid #e0e7ff;
+	border-top-color: #4f46e5;
+	border-radius: 50%;
+	animation: ob-stats-loading-spin 0.8s linear infinite;
+}
+
+@keyframes ob-stats-loading-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* Heatmap screen: the one loading message, with the Stop button. */
+.ob-heatmap-status__text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.ob-heatmap-status__text small {
+	color: #64748b;
+	font-size: 12px;
+	font-weight: 400;
+}
+
+.ob-heatmap-status__text small:empty {
+	display: none;
+}
+
+.ob-heatmap-status.is-done .ob-stats-loading__icon {
+	display: none;
+}
+
+.ob-heatmap-status__stop {
+	flex: none;
+	padding: 4px 10px;
+	border: 1px solid #cbd5e1;
+	border-radius: 6px;
+	background: #fff;
+	color: #1e293b;
+	font-size: 12px;
+	cursor: pointer;
+}
+
+.ob-heatmap-status__stop:hover,
+.ob-heatmap-status__stop:focus {
+	border-color: #4f46e5;
+	color: #4f46e5;
+}
+
+.ob-heatmap-status__stop[hidden] {
+	display: none;
+}
+
+/* A figure still on its way: the icon replaces the dots. */
+.stat-value.is-loading {
+	position: relative;
+	display: inline-block;
+	min-width: 16px;
+	min-height: 16px;
+	color: transparent !important;
+}
+
+.stat-value.is-loading::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 0;
+	width: 14px;
+	height: 14px;
+	margin-top: -7px;
+	box-sizing: border-box;
+	border: 2px solid #e0e7ff;
+	border-top-color: #4f46e5;
+	border-radius: 50%;
+	animation: ob-stats-loading-spin 0.8s linear infinite;
+}
+
+/* Filter panel: the lists wait for their figures ("Direct (1499)"). */
+.ob-filter-options-status {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 0 0 12px;
+	padding: 8px 12px;
+	border: 1px solid #e0e7ff;
+	border-radius: 6px;
+	background: #eef2ff;
+	color: #1e293b;
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 1.4;
+}
+
+.ob-filter-options-loading .filter-group:has(select) > label::after {
+	content: "";
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	margin-left: 6px;
+	box-sizing: border-box;
+	vertical-align: -1px;
+	border: 2px solid #e0e7ff;
+	border-top-color: #4f46e5;
+	border-radius: 50%;
+	animation: ob-stats-loading-spin 0.8s linear infinite;
+}
+
+/* The figures on screen are the old ones until the answer comes. */
+.ob-stats-updating .stat-card,
+.ob-stats-updating .journey-stat-card,
+.ob-stats-updating .opti-funnel-stat-card,
+.ob-stats-updating .ob-shop__tile,
+.ob-stats-updating .ob-si-xray__kpis {
+	opacity: 0.45;
+	transition: opacity 0.15s linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ob-stats-loading__icon,
+	.stat-value.is-loading::after,
+	.ob-filter-options-loading .filter-group:has(select) > label::after {
+		animation: none;
+		border-color: #4f46e5;
+	}
+
+	.ob-stats-updating .stat-card,
+	.ob-stats-updating .journey-stat-card,
+	.ob-stats-updating .opti-funnel-stat-card,
+	.ob-stats-updating .ob-shop__tile,
+	.ob-stats-updating .ob-si-xray__kpis {
+		transition: none;
+	}
+}

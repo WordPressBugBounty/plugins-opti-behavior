@@ -42,12 +42,17 @@ window.optiBehaviorChangeText = window.optiBehaviorChangeText || function(change
 // Trend chip of a widget row (Referrers, Countries, Browsers, Devices, OS).
 // No previous figure (absent or 0) = a dash with a tooltip, never "+100%"
 // (OPT-1636: every row showed "↑100%" because the server sends no previous count).
-window.optiBehaviorRowTrendHTML = window.optiBehaviorRowTrendHTML || function(currentCount, previousCount) {
+// OPT-2293: rows carry `previous_count`; notComparable (payload
+// `previous_not_comparable`) = previous period incomplete → dash + own tooltip.
+window.optiBehaviorRowTrendHTML = window.optiBehaviorRowTrendHTML || function(currentCount, previousCount, notComparable) {
 	const cur = Number(currentCount) || 0;
 	const prev = Number(previousCount) || 0;
-	if (prev <= 0) {
+	if (notComparable || prev <= 0) {
 		const i18n = (window.opti_behaviorDashboard && window.opti_behaviorDashboard.i18n) || {};
-		const tip = String(i18n.noPreviousData || 'No data for the previous period').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+		const tipText = notComparable
+			? (i18n.notComparable || 'Not comparable: previous period incomplete')
+			: (i18n.noPreviousData || 'No data for the previous period');
+		const tip = String(tipText).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 		return '<span class="visitor-trend trend-neutral" title="' + tip + '">—</span>';
 	}
 	const change = Math.round(((cur - prev) / prev) * 100);
@@ -231,6 +236,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 				if (overlay) {
 					overlay.classList.remove('hidden');
 				}
+				widget.setAttribute('aria-busy', 'true');
 			}
 
 			/**
@@ -244,7 +250,83 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 				if (overlay) {
 					overlay.classList.add('hidden');
 				}
+				widget.setAttribute('aria-busy', 'false');
 			}
+
+			/**
+			 * OB-18: one explicit state per widget request. A failed / timed-out /
+			 * unreadable answer used to leave the widget blank or on its "no data"
+			 * text. Now: a line saying it failed, "Retry", and the time of the last
+			 * figures still shown (never a "no data" claim we did not receive).
+			 */
+			const widgetLastOk = {};
+			/**
+			 * Every DOM block a single AJAX widget paints.
+			 *
+			 * One request can fill several cards (the AI row: `ai_bots` paints
+			 * ai-companies-widget + ai-pages-widget + ai-intents-widget). Only the
+			 * first one was released, so the two others stayed on "Loading" for
+			 * ever even though the data had arrived. Loading, error, retry and
+			 * "last figures" now apply to the whole list.
+			 */
+			function widgetIdsOf(widgetDef) {
+				if (!widgetDef) return [];
+				const ids = [widgetDef.widgetId];
+				if (Array.isArray(widgetDef.extraWidgetIds)) {
+					widgetDef.extraWidgetIds.forEach(function(id) { if (id && ids.indexOf(id) === -1) ids.push(id); });
+				}
+				return ids;
+			}
+			function clearWidgetError(widgetId) {
+				const widget = document.getElementById(widgetId);
+				const box = widget ? widget.querySelector('.ob-widget-error') : null;
+				if (box) box.remove();
+			}
+			function showWidgetError(widgetDef, isTimeout) {
+				widgetIdsOf(widgetDef).forEach(function(id) { showWidgetErrorIn(id, widgetDef, isTimeout); });
+			}
+			function showWidgetErrorIn(widgetId, widgetDef, isTimeout) {
+				const widget = document.getElementById(widgetId);
+				if (!widget) return;
+				const S = (window.opti_behaviorData && window.opti_behaviorData.strings) || {};
+				const content = widget.querySelector('.widget-content') || widget;
+				let box = widget.querySelector('.ob-widget-error');
+				if (!box) {
+					box = document.createElement('div');
+					box.className = 'ob-widget-error';
+					box.setAttribute('role', 'alert');
+					content.insertBefore(box, content.firstChild);
+				}
+				box.textContent = '';
+				const line = document.createElement('p');
+				line.className = 'ob-widget-error__text';
+				line.textContent = isTimeout
+					? (S.widgetTimeout || 'This block took too long to load.')
+					: (S.widgetLoadError || 'This block could not be loaded.');
+				box.appendChild(line);
+				const last = widgetLastOk[widgetId];
+				if (last) {
+					const when = (typeof OptiBehaviorLocale === 'object') ? OptiBehaviorLocale.time(last) : last.toTimeString().slice(0, 5);
+					const note = document.createElement('p');
+					note.className = 'ob-widget-error__last';
+					note.textContent = (S.widgetLastData || 'Showing the figures loaded at %s.').replace('%s', when);
+					box.appendChild(note);
+				} else {
+					// Nothing was ever received: the "no data" text would be a false claim.
+					const empty = widget.querySelector('.optibehavior-empty-state');
+					if (empty) empty.classList.remove('is-visible');
+				}
+				const retry = document.createElement('button');
+				retry.type = 'button';
+				retry.className = 'button button-small ob-widget-error__retry';
+				retry.textContent = S.widgetRetry || 'Retry';
+				retry.addEventListener('click', function() {
+					widgetIdsOf(widgetDef).forEach(clearWidgetError);
+					if (typeof window.optiBehaviorRetryWidget === 'function') window.optiBehaviorRetryWidget(widgetDef);
+				});
+				box.appendChild(retry);
+			}
+			window.optiBehaviorShowWidgetError = showWidgetError;
 
 			/**
 			 * Release the Traffic Overview chart's loading overlay.
@@ -280,6 +362,8 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 				// fallback) collapse into the batch that is already running.
 				if ( loadingInProgress ) { return; }
 				loadingInProgress = true;
+				// OB-18: widgets still under their first loading overlay are busy for screen readers.
+				document.querySelectorAll('.dashboard-widget > .widget-loading-overlay:not(.hidden)').forEach(function(o) { o.parentNode.setAttribute('aria-busy', 'true'); });
 
 				// Function to update stats cards with loaded data
 				function updateStatsCards(data) {
@@ -435,13 +519,14 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 					// Overview chart is rendered from the per-day series already returned
 					// inside the summary_stats payload (daily_history), so it needs no
 					// second query. See externalWidgets below for the no-fetch loader.
-					{ name: 'browsers', widgetId: 'browsers-widget', callback: function(data) { if (typeof updateBrowsers === 'function') updateBrowsers(data.browsers || []); } },
+					{ name: 'browsers', widgetId: 'browsers-widget', callback: function(data) { if (typeof updateBrowsers === 'function') updateBrowsers(data.browsers || [], !!data.previous_not_comparable); } },
 					{ name: 'device_types', widgetId: 'device-types-widget', callback: function(data) {
 						if (data.device_types) {
 							window.opti_behaviorData = window.opti_behaviorData || {};
 							window.opti_behaviorData.dashboard = window.opti_behaviorData.dashboard || {};
 							window.opti_behaviorData.dashboard.charts = window.opti_behaviorData.dashboard.charts || {};
 							window.opti_behaviorData.dashboard.charts.device_types = data.device_types;
+							window.opti_behaviorData.dashboard.charts.device_types_not_comparable = !!data.previous_not_comparable;
 							if (typeof initDeviceTypesWidget === 'function') initDeviceTypesWidget();
 						}
 					} },
@@ -451,6 +536,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 							window.opti_behaviorData.dashboard = window.opti_behaviorData.dashboard || {};
 							window.opti_behaviorData.dashboard.charts = window.opti_behaviorData.dashboard.charts || {};
 							window.opti_behaviorData.dashboard.charts.operating_systems = data.operating_systems;
+							window.opti_behaviorData.dashboard.charts.operating_systems_not_comparable = !!data.previous_not_comparable;
 							if (typeof initOperatingSystemsWidget === 'function') initOperatingSystemsWidget();
 						}
 					} },
@@ -462,16 +548,17 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 							if (typeof initUserIntentWidget === 'function') initUserIntentWidget();
 						}
 					} },
-					{ name: 'countries', widgetId: 'countries-widget', callback: function(data) { if (typeof updateCountries === 'function') updateCountries(data.countries || []); } },
+					{ name: 'countries', widgetId: 'countries-widget', callback: function(data) { if (typeof updateCountries === 'function') updateCountries(data.countries || [], !!data.previous_not_comparable); } },
 					{ name: 'realtime', widgetId: 'realtime-widget', callback: function(data) { if (data.active_visitors && typeof updateRealtimeVisitors === 'function') updateRealtimeVisitors(data.active_visitors); } },
 					{ name: 'top_pages', widgetId: 'top-pages-widget', callback: function(data) { if (typeof updateTopPagesEnhanced === 'function') updateTopPagesEnhanced(data.top_pages || []); } },
-					{ name: 'referrers', widgetId: 'referrers-widget', callback: function(data) { if (typeof updateReferrers === 'function') updateReferrers(data.referrers || []); } },
+					{ name: 'referrers', widgetId: 'referrers-widget', callback: function(data) { if (typeof updateReferrers === 'function') updateReferrers(data.referrers || [], !!data.previous_not_comparable); } },
 					{ name: 'screen_resolutions', widgetId: 'screen-resolution-widget', callback: function(data) {
 						if (data.screen_resolutions) {
 							window.opti_behaviorData = window.opti_behaviorData || {};
 							window.opti_behaviorData.dashboard = window.opti_behaviorData.dashboard || {};
 							window.opti_behaviorData.dashboard.charts = window.opti_behaviorData.dashboard.charts || {};
 							window.opti_behaviorData.dashboard.charts.screen_resolutions = data.screen_resolutions;
+							window.opti_behaviorData.dashboard.charts.screen_resolutions_not_comparable = !!data.previous_not_comparable;
 							if (typeof initScreenResolutionChart === 'function') initScreenResolutionChart();
 						}
 					} },
@@ -479,7 +566,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 						if (data.traffic_classification) {
 							window.opti_behaviorData = window.opti_behaviorData || {};
 							window.opti_behaviorData.dashboard = window.opti_behaviorData.dashboard || {};
-							window.opti_behaviorData.dashboard.traffic_classification = data.traffic_classification;
+							window.opti_behaviorData.dashboard.traffic_classification = Array.isArray(data.traffic_classification) ? {} : data.traffic_classification; // answered: [] = empty
 							if (typeof initTrafficClassificationWidget === 'function') initTrafficClassificationWidget();
 						}
 					} },
@@ -487,15 +574,25 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 						if (data.bot_traffic) {
 							window.opti_behaviorData = window.opti_behaviorData || {};
 							window.opti_behaviorData.dashboard = window.opti_behaviorData.dashboard || {};
-							window.opti_behaviorData.dashboard.bot_traffic = data.bot_traffic;
+							window.opti_behaviorData.dashboard.bot_traffic = Array.isArray(data.bot_traffic) ? {} : data.bot_traffic; // answered: [] = empty
 							if (typeof initBotTrafficWidget === 'function') initBotTrafficWidget();
+						}
+					} },
+					// One request paints the 3 cards of the AI row: the 2 others must be
+					// released (and must show the error + Retry) with the first one.
+					{ name: 'ai_bots', widgetId: 'ai-companies-widget', extraWidgetIds: ['ai-pages-widget', 'ai-intents-widget'], callback: function(data) {
+						if (data.ai_bots) {
+							window.opti_behaviorData = window.opti_behaviorData || {};
+							window.opti_behaviorData.dashboard = window.opti_behaviorData.dashboard || {};
+							window.opti_behaviorData.dashboard.ai_bots = Array.isArray(data.ai_bots) ? {} : data.ai_bots; // answered: [] = empty
+							if (typeof initAiRowWidgets === 'function') initAiRowWidgets();
 						}
 					} },
 					{ name: 'new_vs_returning', widgetId: 'new-vs-returning-widget', callback: function(data) {
 						if (data.new_vs_returning) {
 							window.opti_behaviorData = window.opti_behaviorData || {};
 							window.opti_behaviorData.dashboard = window.opti_behaviorData.dashboard || {};
-							window.opti_behaviorData.dashboard.new_vs_returning = data.new_vs_returning;
+							window.opti_behaviorData.dashboard.new_vs_returning = Array.isArray(data.new_vs_returning) ? {} : data.new_vs_returning; // answered: [] = empty
 							if (typeof initNewVsReturningWidget === 'function') initNewVsReturningWidget();
 						}
 					} },
@@ -503,7 +600,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 						if (data.visited_directories) {
 							window.opti_behaviorData = window.opti_behaviorData || {};
 							window.opti_behaviorData.dashboard = window.opti_behaviorData.dashboard || {};
-							window.opti_behaviorData.dashboard.visited_directories = data.visited_directories;
+							window.opti_behaviorData.dashboard.visited_directories = Array.isArray(data.visited_directories) ? {} : data.visited_directories; // answered: [] = empty
 							if (typeof initVisitedDirectoriesWidget === 'function') initVisitedDirectoriesWidget();
 						}
 					} },
@@ -511,7 +608,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 						if (data.new_registered_users) {
 							window.opti_behaviorData = window.opti_behaviorData || {};
 							window.opti_behaviorData.dashboard = window.opti_behaviorData.dashboard || {};
-							window.opti_behaviorData.dashboard.new_registered_users = data.new_registered_users;
+							window.opti_behaviorData.dashboard.new_registered_users = Array.isArray(data.new_registered_users) ? {} : data.new_registered_users; // answered: [] = empty
 							if (typeof initNewRegisteredUsersWidget === 'function') initNewRegisteredUsersWidget();
 						}
 					} }
@@ -546,7 +643,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 						return widgetInFlight[sig];
 					}
 
-					showWidgetLoading(widget.widgetId);
+					widgetIdsOf(widget).forEach(showWidgetLoading);
 
 					const controller = new AbortController();
 					const timeoutId = setTimeout(() => controller.abort(), WIDGET_TIMEOUT);
@@ -587,7 +684,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 					const request = jsonPromise
 					.then(result => {
 						clearTimeout(timeoutId);
-						hideWidgetLoading(widget.widgetId);
+						widgetIdsOf(widget).forEach(hideWidgetLoading);
 						const widgetEndTime = performance.now();
 
 						if (result.success && result.data) {
@@ -609,23 +706,30 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 								Object.assign(window.opti_behaviorData.dashboard.charts, result.data);
 							}
 
+							const okAt = new Date();
+							widgetIdsOf(widget).forEach(function(id) { widgetLastOk[id] = okAt; clearWidgetError(id); });
 							widget.callback(result.data);
-						} else if (widget.name === 'summary_stats') {
-							// `success:false` / malformed payload: the summary_stats
-							// callback never runs, so the Traffic Overview overlay would
-							// stay up forever (it has no widgetId of its own).
-							releaseSessionsChartLoading();
+						} else {
+							if (widget.name === 'summary_stats') {
+								// `success:false` / malformed payload: the summary_stats
+								// callback never runs, so the Traffic Overview overlay would
+								// stay up forever (it has no widgetId of its own).
+								releaseSessionsChartLoading();
+							}
+							showWidgetError(widget, false);
+							return { widget: widget.name, success: false };
 						}
 						return { widget: widget.name, success: true };
 					})
 					.catch(error => {
 						clearTimeout(timeoutId);
-						hideWidgetLoading(widget.widgetId);
+						widgetIdsOf(widget).forEach(hideWidgetLoading);
 						if (widget.name === 'summary_stats') {
 							releaseSessionsChartLoading();
 						}
 						const widgetEndTime = performance.now();
 						const isTimeout = error.name === 'AbortError';
+						showWidgetError(widget, isTimeout);
 
 						if (isTimeout) {
 							if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.warning('[Widget TIMEOUT] ' + widget.name + ' exceeded ' + (WIDGET_TIMEOUT/1000) + 's', 'dashboard');
@@ -639,6 +743,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 					widgetInFlight[sig] = request;
 					return request;
 				}
+				window.optiBehaviorRetryWidget = loadWidgetWithTimeout;
 
 				// PARALLEL LOADING: All widgets load simultaneously for fastest total time
 				// Total time = slowest widget (not sum of all widgets)
@@ -657,6 +762,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 					top_users: 2, top_pages: 2, visitor_heatmap: 2,
 					new_vs_returning: 3, visited_directories: 3, new_registered_users: 3,
 					traffic_classification: 3, bot_traffic: 3, user_intent: 3,
+					ai_bots: 3,
 					referrers: 4, countries: 4, browsers: 4,
 					device_types: 4, operating_systems: 4, screen_resolutions: 4
 				};
@@ -740,7 +846,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 							// which is nicer), but this is the guarantee that satisfies
 							// QA-B-DASH-022: "no widget may stay stuck behind a loading
 							// overlay" once section 1 and the cascade have settled.
-							hideWidgetLoading(w.widgetId);
+							widgetIdsOf(w).forEach(hideWidgetLoading);
 							// The Traffic Overview chart rides on summary_stats and has no
 							// widgetId of its own, so it is released with its owner.
 							if (w.name === 'summary_stats') { releaseSessionsChartLoading(); }
@@ -953,8 +1059,8 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 		})();
 
 		// Global helper function to get trend HTML with chevron icons
-		function getTrendHTML(currentCount, previousCount) {
-		  return window.optiBehaviorRowTrendHTML(currentCount, previousCount);
+		function getTrendHTML(currentCount, previousCount, notComparable) {
+		  return window.optiBehaviorRowTrendHTML(currentCount, previousCount, notComparable);
 		}
 
 		// Device Types Widget with Donut Chart + Styled Legend Table
@@ -970,6 +1076,8 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 		  function updateDeviceTypesLegend(data) {
 		    const legendBody = document.getElementById('device-types-legend-body');
 		    if (!legendBody) return;
+		    // OPT-2293: previous period incomplete (flag of the widget AJAX payload)
+		    const notComparable = !!(window.opti_behaviorData?.dashboard?.charts?.device_types_not_comparable);
 
 		    legendBody.innerHTML = '';
 
@@ -986,7 +1094,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 		        name: deviceLabels[name],
 		        rawName: name,
 		        count: item ? (item.count || 0) : 0,
-		        prevCount: item ? (item.prevCount || 0) : 0,
+		        prevCount: item ? (item.previous_count || 0) : 0,
 		        color: DEVICE_COLORS[name]
 		      };
 		    });
@@ -1011,7 +1119,7 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 		        <td class="device-stats-cell">
 		          <span class="visitor-count">${type.count}</span>
 		          <span class="visitor-percentage">${type.percentage}%</span>
-		          ${getTrendHTML(type.count, type.prevCount)}
+		          ${getTrendHTML(type.count, type.prevCount, notComparable)}
 		        </td>
 		      `;
 		      legendBody.appendChild(row);
@@ -1210,14 +1318,16 @@ window.optiBehaviorAdvancedFiltersHash = window.optiBehaviorAdvancedFiltersHash 
 		      // Calculate total and percentages
 		      const total = osData.reduce((sum, os) => sum + (os.count || 0), 0);
 
+		      // OPT-2293: rows carry previous_count; flag of the widget AJAX payload
+		      const osNotComparable = !!data.dashboard.charts.operating_systems_not_comparable;
 		      osData.forEach(os => {
 		        const count = os.count || 0;
-		        const prevCount = os.prevCount || 0;
+		        const prevCount = os.previous_count || os.prevCount || 0;
 		        const percentage = total > 0 ? ((count / total) * 100).toFixed(1) : 0;
 		        const color = OS_COLORS[os.os] || OS_COLORS[os.name] || '#6b7280';
 
 		        // Get trend HTML using the global getTrendHTML function
-		        const trendHTML = getTrendHTML(count, prevCount);
+		        const trendHTML = getTrendHTML(count, prevCount, osNotComparable);
 
 		        const row = document.createElement('tr');
 		        row.innerHTML = `
@@ -2092,10 +2202,11 @@ x = Math.min(x, maxX);
 
 				if (applyBtn) {
 					applyBtn.addEventListener('click', function() {
+						var applied = periodEl && periodEl.value ? periodEl.value : 'custom';
 						updateDashboardExportLinks({
-							period: 'custom',
-							startDate: startEl ? startEl.value : '',
-							endDate: endEl ? endEl.value : ''
+							period: applied,
+							startDate: applied === 'custom' && startEl ? startEl.value : '',
+							endDate: applied === 'custom' && endEl ? endEl.value : ''
 						});
 					});
 				}
@@ -2124,13 +2235,14 @@ x = Math.min(x, maxX);
 
 		// Date range wiring
 		document.getElementById('apply-range')?.addEventListener('click', function(){
-			const s = document.getElementById('start-date')?.value;
-			const e = document.getElementById('end-date')?.value;
-			if(!s || !e){ alert(((window.opti_behaviorDashboard&&window.opti_behaviorDashboard.i18n&&window.opti_behaviorDashboard.i18n.selectStartEndDates)||'Please select start and end dates.')); return; }
-			const ps = document.getElementById('dashboard-period');
-			if(ps) ps.value = 'custom';
+			// OPT-1916: Apply used to force "Custom Range" with the two fields, so
+			// "Last 7 Days" + Apply (before the reload of the list finished) came
+			// back on the old 30-day dates. The list now decides.
 			const params = new URLSearchParams(window.location.search);
-			params.set('period','custom'); params.set('start_date', s); params.set('end_date', e);
+			if (!window.optiBehaviorSetDashboardPeriodParams(params)) { alert(((window.opti_behaviorDashboard&&window.opti_behaviorDashboard.i18n&&window.opti_behaviorDashboard.i18n.selectStartEndDates)||'Please select start and end dates.')); return; }
+			const period = params.get('period');
+			const s = params.get('start_date') || '';
+			const e = params.get('end_date') || '';
 			// Preserve exclude_spam state
 			if (window.optiBehaviorCurrentExcludeSpamFlag() === '1') {
 				params.set('exclude_spam', '1');
@@ -2139,7 +2251,7 @@ x = Math.min(x, maxX);
 			}
 			if (window.optibehaviorUpdateDashboardExportLinks) {
 				window.optibehaviorUpdateDashboardExportLinks({
-					period: 'custom',
+					period: period,
 					startDate: s,
 					endDate: e,
 					excludeSpam: window.optiBehaviorCurrentExcludeSpamFlag()
@@ -3023,7 +3135,7 @@ x = Math.min(x, maxX);
 		    if (!ctx) return;
 
 		    const data = window.opti_behaviorData;
-		    if (!data || !data.dashboard || !data.dashboard.new_vs_returning) return;
+		    if (!data || !data.dashboard || !data.dashboard.new_vs_returning || Array.isArray(data.dashboard.new_vs_returning)) return; // OB-18: [] = page placeholder, not an answer
 
 		    const visitorData = data.dashboard.new_vs_returning;
 
@@ -3180,6 +3292,9 @@ x = Math.min(x, maxX);
 			  }
 
 			  function initNewRegisteredUsersWidget() {
+			    // OB-18: [] = the page placeholder printed before the AJAX answer: keep loading.
+			    const pendingUsers = window.opti_behaviorData?.dashboard?.new_registered_users;
+			    if (!pendingUsers || Array.isArray(pendingUsers)) return;
 			    // Hide loading overlay first
 			    if (typeof window.hideWidgetLoading === 'function') {
 			      window.hideWidgetLoading('new-registered-users-widget');
@@ -3433,6 +3548,7 @@ x = Math.min(x, maxX);
 		  // Initialize visited directories widget
 		  function initVisitedDirectoriesWidget() {
 		    const data = window.opti_behaviorData;
+		    if (data && data.dashboard && Array.isArray(data.dashboard.visited_directories)) return; // OB-18: [] = page placeholder, not an answer
 		    if (!data || !data.dashboard || !data.dashboard.visited_directories) {
 		      if (typeof window.hideWidgetLoading === 'function') {
 		        window.hideWidgetLoading('visited-directories-widget');
@@ -3487,10 +3603,47 @@ x = Math.min(x, maxX);
 		  initVisitedDirectoriesWidget();
 
 		// Refresh button functionality
+		// OPT-1916: the range to show = what the period list says NOW. A preset
+		// (Today, Last 7 Days…) wins and drops the two date fields (the server
+		// computes its dates); only "Custom Range" reads the fields. Apply and
+		// Refresh both go through this, so a click made while the reload started
+		// by the list is still running can no longer bring back the old range.
+		// Returns false when "Custom Range" misses a date.
+		window.optiBehaviorSetDashboardPeriodParams = function(params) {
+			const ps = document.getElementById('dashboard-period');
+			const period = (ps && ps.value) || 'last30days';
+			if (period !== 'custom') {
+				params.set('period', period);
+				params.delete('start_date');
+				params.delete('end_date');
+				return true;
+			}
+			const s = document.getElementById('start-date')?.value;
+			const e = document.getElementById('end-date')?.value;
+			if (!s || !e) {
+				return false;
+			}
+			params.set('period', 'custom');
+			params.set('start_date', s);
+			params.set('end_date', e);
+			return true;
+		};
+
+		// Typing a date = a custom range: the list follows, so Apply uses the fields.
+		['start-date', 'end-date'].forEach(function(id) {
+			document.getElementById(id)?.addEventListener('change', function() {
+				const ps = document.getElementById('dashboard-period');
+				if (ps && this.value) {
+					ps.value = 'custom';
+				}
+			});
+		});
+
 		document.getElementById('refresh-dashboard')?.addEventListener('click', function() {
 			// Full page reload with force_refresh=1 so the server bypasses the
 			// dashboard transient cache and re-aggregates fresh numbers.
 			const params = new URLSearchParams(window.location.search);
+			window.optiBehaviorSetDashboardPeriodParams(params);
 			params.set('force_refresh', '1');
 			if (window.optibehaviorUpdateDashboardExportLinks) {
 				window.optibehaviorUpdateDashboardExportLinks();
@@ -4486,7 +4639,7 @@ x = Math.min(x, maxX);
 
 
 			// Update browsers table
-			function updateBrowsers(items) {
+			function updateBrowsers(items, notComparable) {
 				const tbody = document.getElementById('browsers-table-body');
 				if (!tbody) return;
 
@@ -4541,12 +4694,15 @@ x = Math.min(x, maxX);
 
 				// Aggregate duplicate labels; fold Unknown/undefined/empty into "Other"
 				// so unidentified browsers show as a single catch-all row.
+				// The previous counts follow the same folding (OPT-2293).
 				const labelMap = new Map();
+				const prevMap = new Map();
 				(items || []).forEach(it => {
 					let key = (it && it.browser) ? String(it.browser).trim() : '';
 					const low = key.toLowerCase();
 					if (!key || low === 'unknown' || low === 'undefined' || low === 'other') key = 'Other';
 					labelMap.set(key, (labelMap.get(key) || 0) + Number(it?.count || 0));
+					prevMap.set(key, (prevMap.get(key) || 0) + Number(it?.previous_count || 0));
 				});
 
 				// Get total count for percentage calculation
@@ -4565,8 +4721,8 @@ x = Math.min(x, maxX);
 					const percentage = totalCount > 0 ? Math.round((count / totalCount) * 100) : 0;
 					const browserIconSVG = getBrowserIconSVG(browser);
 
-					// No previous figure from the server = a dash (OPT-1636)
-					const trendHTML = window.optiBehaviorRowTrendHTML(count, 0);
+					// Trend vs previous period; no previous figure = a dash (OPT-1636, OPT-2293)
+					const trendHTML = window.optiBehaviorRowTrendHTML(count, prevMap.get(browser), notComparable);
 
 					const row = document.createElement('tr');
 					row.className = 'ob-metric-row';
@@ -4731,7 +4887,7 @@ x = Math.min(x, maxX);
 				if (!ctx) return;
 
 				const data = window.opti_behaviorData;
-				if (!data || !data.dashboard || !data.dashboard.traffic_classification) return;
+				if (!data || !data.dashboard || !data.dashboard.traffic_classification || Array.isArray(data.dashboard.traffic_classification)) return; // OB-18: [] = page placeholder, not an answer
 
 				const trafficData = data.dashboard.traffic_classification;
 				updateTrafficSpamSummaryCard(trafficData);
@@ -4883,7 +5039,7 @@ x = Math.min(x, maxX);
 				else { window.osPie.data.labels = labels; window.osPie.data.datasets[0].data = data; window.osPie.update(); }
 			}
 
-			function updateCountries(items){
+			function updateCountries(items, notComparable){
 				const tbody = document.getElementById('countries-table-body');
 				if(!tbody) return;
 
@@ -4995,8 +5151,8 @@ x = Math.min(x, maxX);
 					// Use flagcdn.com for professional flag icons
 					const flagUrl = `https://flagcdn.com/w40/${isoCode}.png`;
 
-					// Trend vs previous period; no previous figure = a dash (OPT-1636)
-					const trendHTML = window.optiBehaviorRowTrendHTML(count, item.previous_count);
+					// Trend vs previous period; no previous figure = a dash (OPT-1636, OPT-2293)
+					const trendHTML = window.optiBehaviorRowTrendHTML(count, item.previous_count, notComparable);
 
 					const row = document.createElement('tr');
 					row.className = 'ob-metric-row';
@@ -5037,7 +5193,7 @@ x = Math.min(x, maxX);
 			})();
 
 			// Update referrers table
-			function updateReferrers(items) {
+			function updateReferrers(items, notComparable) {
 				const tbody = document.getElementById('referrers-table-body');
 				if (!tbody) return;
 
@@ -5293,8 +5449,8 @@ x = Math.min(x, maxX);
 					const faviconUrl = item.favicon_url || '';
 					const domain = item.domain || '';
 
-					// Trend vs previous period; no previous figure = a dash (OPT-1636)
-					const trendHTML = window.optiBehaviorRowTrendHTML(count, item.previous_count);
+					// Trend vs previous period; no previous figure = a dash (OPT-1636, OPT-2294)
+					const trendHTML = window.optiBehaviorRowTrendHTML(count, item.previous_count, notComparable);
 
 					const row = document.createElement('tr');
 					row.className = 'ob-metric-row';
@@ -5970,6 +6126,8 @@ x = Math.min(x, maxX);
 			if (!data || !data.dashboard || !data.dashboard.charts) return;
 
 			var resolutionData = data.dashboard.charts.screen_resolutions || [];
+			// OPT-2294: previous period incomplete (flag of the widget AJAX payload)
+			var notComparable = !!data.dashboard.charts.screen_resolutions_not_comparable;
 
 			// Resolution colors
 			var RESOLUTION_COLORS = ['#6366F1', '#10B981', '#F59E0B', '#EF4444', '#3B82F6', '#8B5CF6', '#14B8A6', '#F472B6', '#84CC16', '#06B6D4'];
@@ -6042,7 +6200,7 @@ x = Math.min(x, maxX);
 
 				validData.forEach(function(item, index) {
 					var count = parseInt(item.count) || 0;
-					var prevCount = parseInt(item.prevCount) || 0;
+					var prevCount = parseInt(item.previous_count != null ? item.previous_count : item.prevCount) || 0;
 					var percentage = total > 0 ? ((count / total) * 100).toFixed(1) : 0;
 					var color = RESOLUTION_COLORS[index % RESOLUTION_COLORS.length];
 
@@ -6057,7 +6215,7 @@ x = Math.min(x, maxX);
 						<td class="resolution-stats-cell">
 							<span class="visitor-count">${count}</span>
 							<span class="visitor-percentage">${percentage}%</span>
-							${getTrendHTML(count, prevCount)}
+							${getTrendHTML(count, prevCount, notComparable)}
 						</td>
 					`;
 					legendBody.appendChild(tr);
@@ -6140,15 +6298,200 @@ x = Math.min(x, maxX);
 		window.initScreenResolutionChart = initScreenResolutionChart;
 	})();
 
+	// AI row of the Traffic screen (OPT-2825): "Which AIs read your site" pie,
+	// the page table, and the "Why AIs visit" ring. Every label and every
+	// figure comes from the ai_bots widget answer, nothing is computed here.
+	const OB_AI_COMPANY_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#ef4444', '#64748b'];
+	const OB_AI_INTENT_COLORS = {
+		user_responses: '#10b981',
+		indexing_search: '#6366f1',
+		model_training: '#f59e0b',
+		data_collection: '#64748b'
+	};
+
+	function obAiEsc(value) {
+		return String(value == null ? '' : value).replace(/[&<>"']/g, function(c) {
+			return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+		});
+	}
+
+	function obAiNumber(value) {
+		const n = parseInt(value, 10) || 0;
+		return (typeof OptiBehaviorLocale === 'object' && OptiBehaviorLocale) ? OptiBehaviorLocale.number(n) : String(n);
+	}
+
+	function obAiRenderRows(tbodyId, rows, colorFor) {
+		const body = document.getElementById(tbodyId);
+		if (!body) return;
+		let html = '';
+		(rows || []).forEach(function(row, index) {
+			const color = colorFor(row, index);
+			// OPT-2859: same markup and same classes as Traffic Classification
+			// (`traffic-color-dot` is 12 px and styled, `legend-color-dot` had no
+			// CSS at all = an invisible dot), and the dot colour is the slice
+			// colour of the chart, so a line can be read against the ring.
+			html += '<tr>'
+				+ '<td class="traffic-type-cell"><span>'
+				+ '<span class="traffic-color-dot" style="background-color: ' + obAiEsc(color) + ';"></span>'
+				+ '<span class="traffic-type-name">' + obAiEsc(row.label) + '</span>'
+				+ '</span></td>'
+				+ '<td class="traffic-stats-cell">'
+				+ '<span class="visitor-count">' + obAiNumber(row.count) + '</span>'
+				+ '<span class="visitor-percentage">' + obAiEsc(row.percentage) + '%</span>'
+				+ '</td>'
+				+ '</tr>';
+		});
+		body.innerHTML = html;
+	}
+
+	function obAiRenderDonut(canvasId, rows, colorFor, total) {
+		const canvas = document.getElementById(canvasId);
+		if (!canvas || typeof Chart === 'undefined') return;
+		const existing = Chart.getChart(canvas);
+		if (existing) existing.destroy();
+		new Chart(canvas, {
+			type: 'doughnut',
+			data: {
+				labels: (rows || []).map(function(r) { return r.label; }),
+				datasets: [{
+					data: (rows || []).map(function(r) { return parseInt(r.count, 10) || 0; }),
+					backgroundColor: (rows || []).map(colorFor),
+					borderWidth: 0
+				}]
+			},
+			options: {
+				responsive: true,
+				maintainAspectRatio: false,
+				cutout: '70%',
+				plugins: {
+					legend: { display: false },
+					tooltip: {
+						callbacks: {
+							label: function(context) {
+								const count = context.parsed || 0;
+								const pct = total > 0 ? ((count / total) * 100).toFixed(1) : 0;
+								return context.label + ': ' + count + ' (' + pct + '%)';
+							}
+						}
+					}
+				}
+			}
+		});
+	}
+
+	function obAiSentUrl(row) {
+		const ids = (row.page_ids || []).filter(function(id) { return parseInt(id, 10) > 0; });
+		if (!ids.length) return '';
+		const period = (window.opti_behaviorData && window.opti_behaviorData.period) || 'last30days';
+		return 'admin.php?page=opti-behavior-recordings&page_ids=' + encodeURIComponent(ids.join(','))
+			+ '&traffic_channel=' + encodeURIComponent('AI Assistants')
+			+ '&date_range=' + encodeURIComponent(period);
+	}
+
+	function initAiRowWidgets() {
+		const store = window.opti_behaviorData && window.opti_behaviorData.dashboard;
+		if (!store || !store.ai_bots || Array.isArray(store.ai_bots)) return; // [] = page placeholder, not an answer
+
+		const data = store.ai_bots;
+		const total = parseInt(data.total, 10) || 0;
+		const widgets = ['ai-companies-widget', 'ai-pages-widget', 'ai-intents-widget'].map(function(id) {
+			return document.getElementById(id);
+		});
+
+		widgets.forEach(function(widget) {
+			if (!widget) return;
+			const empty = widget.querySelector('.optibehavior-empty-state');
+			const content = widget.querySelector('.user-intent-chart-container, .ob-ai-pages');
+			if (total === 0) {
+				if (empty) empty.classList.add('is-visible');
+				if (content) content.style.display = 'none';
+				return;
+			}
+			if (empty) empty.classList.remove('is-visible');
+			if (content) content.style.display = '';
+		});
+
+		// OPT-2881: ONE sentence for the whole row (it used to be printed under
+		// each of the three widgets, in orange, over the end of the legend), and
+		// the true "most-read of N pages" line under the list title.
+		const rowNote = document.getElementById('ai-row-note');
+		if (rowNote) {
+			const noteText = total > 0 ? String(data.retention_note || '') : '';
+			rowNote.textContent = noteText;
+			rowNote.style.display = noteText ? '' : 'none';
+		}
+		const countLine = document.getElementById('ai-pages-count');
+		if (countLine) {
+			const countText = total > 0 ? String(data.pages_line || '') : '';
+			countLine.textContent = countText;
+			countLine.style.display = countText ? '' : 'none';
+		}
+
+		const meta = document.getElementById('ai-companies-meta');
+		const totalSpan = document.getElementById('ai-companies-total');
+		if (meta) meta.style.display = total === 0 ? 'none' : '';
+		if (totalSpan) totalSpan.textContent = obAiNumber(total);
+
+		if (total === 0) return;
+
+		const companyColor = function(row, index) {
+			return OB_AI_COMPANY_COLORS[(index || 0) % OB_AI_COMPANY_COLORS.length];
+		};
+		obAiRenderRows('ai-companies-legend-body', data.companies, companyColor);
+		obAiRenderDonut('ai-companies-chart', data.companies, function(row, index) { return companyColor(row, index); }, total);
+
+		const intentColor = function(row) {
+			return OB_AI_INTENT_COLORS[row && row.key] || '#9ca3af';
+		};
+		obAiRenderRows('ai-intents-legend-body', data.intents, intentColor);
+		obAiRenderDonut('ai-intents-chart', data.intents, intentColor, total);
+
+		const body = document.getElementById('ai-pages-body');
+		if (body) {
+			let html = '';
+			(data.pages || []).forEach(function(row) {
+				let pills = '';
+				(data.intents || []).forEach(function(intent) {
+					const count = parseInt((row.counts || {})[intent.key], 10) || 0;
+					if (!count) return;
+					pills += '<span class="ob-ai-pill ob-ai-pill--' + obAiEsc(String(intent.key).replace(/_/g, '-')) + '"'
+						+ ' title="' + obAiEsc(intent.label) + '">'
+						+ obAiNumber(count) + '</span>';
+				});
+				const sent = parseInt(row.sent, 10) || 0;
+				const sentUrl = sent > 0 ? obAiSentUrl(row) : '';
+				const sentCell = sent > 0 && sentUrl
+					? '<a href="' + obAiEsc(sentUrl) + '">' + obAiNumber(sent) + '</a>'
+					: obAiNumber(sent);
+				// A page with no stored title answers its path as title: printing
+				// the path again under it wrote the same text twice.
+				const rowTitle = String(row.title || '').trim();
+				const rowPath = String(row.path || '').trim();
+				// OPT-2881: dir="auto" so an Arabic or Japanese title / path reads
+				// in its own direction inside the left-to-right table.
+				const pathLine = (rowPath && rowPath !== rowTitle)
+					? '<span class="ob-ai-page-path" dir="auto">' + obAiEsc(rowPath) + '</span>'
+					: '';
+				html += '<tr>'
+					+ '<td class="ob-ai-page-cell"><span class="ob-ai-page-title" dir="auto" title="' + obAiEsc(rowTitle) + '">' + obAiEsc(rowTitle) + '</span>'
+					+ pathLine + '</td>'
+					+ '<td class="ob-ai-pills">' + pills + '</td>'
+					+ '<td class="ob-ai-sent">' + sentCell + '</td>'
+					+ '</tr>';
+			});
+			body.innerHTML = html;
+		}
+	}
+
+	window.initAiRowWidgets = initAiRowWidgets;
+
 	// Bot Traffic Widget - Render bot traffic data
 	function initBotTrafficWidget() {
 		const data = window.opti_behaviorData;
-		if (!data || !data.dashboard || !data.dashboard.bot_traffic) return;
+		if (!data || !data.dashboard || !data.dashboard.bot_traffic || Array.isArray(data.dashboard.bot_traffic)) return; // OB-18: [] = page placeholder, not an answer
 
 		const botData = data.dashboard.bot_traffic;
 		const total = botData.total || 0;
-
-		if (total === 0) return; // No data, keep empty state visible
 
 		// Get widget elements
 		const widget = document.querySelector('.bot-traffic-widget');
@@ -6157,6 +6500,14 @@ x = Math.min(x, maxX);
 		const emptyState = widget.querySelector('.optibehavior-empty-state');
 		const botList = widget.querySelector('#bot-traffic-list');
 		const metaDiv = widget.querySelector('#bot-traffic-meta');
+
+		// OB-18: the empty state is no longer printed visible before the answer.
+		if (total === 0) {
+			if (emptyState) emptyState.classList.add('is-visible');
+			if (botList) botList.style.display = 'none';
+			if (metaDiv) metaDiv.style.display = 'none';
+			return;
+		}
 		const totalSpan = widget.querySelector('#bot-traffic-total');
 		const changeSpan = widget.querySelector('#bot-traffic-change');
 		const changeValueSpan = widget.querySelector('#bot-traffic-change-value');
@@ -6169,12 +6520,21 @@ x = Math.min(x, maxX);
 		// Update total count
 		if (totalSpan) totalSpan.textContent = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(total) : String(total));
 
-		// Update change percentage
-		const changePct = botData.change_percentage || 0;
-		if (changeSpan && changeValueSpan && changePct !== 0) {
-			changeSpan.style.display = '';
-			changeSpan.className = 'change-indicator ' + (changePct > 0 ? 'positive' : 'negative');
-			changeValueSpan.textContent = (changePct > 0 ? '↑' : '↓') + ' ' + Math.abs(changePct) + '%';
+		// Update change percentage. OPT-2824: null = no comparison at all (the
+		// crawler log only keeps 30 days), so a dash, never "↑ 100%".
+		const notComparable = botData.changes_not_comparable === true;
+		const changePct = typeof botData.change_percentage === 'number' ? botData.change_percentage : null;
+		if (changeSpan && changeValueSpan) {
+			if (changePct === null) {
+				changeSpan.style.display = '';
+				changeSpan.className = 'change-indicator';
+				window.optiBehaviorSetNoPreviousChange(changeValueSpan, null, notComparable);
+			} else if (changePct !== 0) {
+				changeSpan.style.display = '';
+				changeSpan.className = 'change-indicator ' + (changePct > 0 ? 'positive' : 'negative');
+				changeValueSpan.removeAttribute('title');
+				changeValueSpan.textContent = (changePct > 0 ? '↑' : '↓') + ' ' + Math.abs(changePct) + '%';
+			}
 		}
 
 		// Render bot list
@@ -6186,12 +6546,17 @@ x = Math.min(x, maxX);
 			botEntries.forEach(([botType, botInfo]) => {
 				const count = botInfo.count || 0;
 				const percentage = botInfo.percentage || 0;
-				const change = typeof botInfo.change === 'number' ? botInfo.change : parseInt(botInfo.change, 10) || 0;
+				// OPT-2824: null / absent = nothing to compare with, "—".
+				const hasChange = typeof botInfo.change === 'number' && isFinite(botInfo.change);
+				const change = hasChange ? botInfo.change : 0;
 				const botLabel = getBotLabel(botType);
 				const botIcon = getBotIcon(botType);
 
 				let trendClass, trendIcon;
-				if (change > 0) {
+				if (!hasChange) {
+					trendClass = 'trend-neutral';
+					trendIcon = '';
+				} else if (change > 0) {
 					trendClass = 'trend-up';
 					trendIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>';
 				} else if (change < 0) {
@@ -6210,7 +6575,9 @@ x = Math.min(x, maxX);
 				html += '  <div class="bot-stats ob-metric-values">';
 				html += '    <span class="visitor-count">' + (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(count) : String(count)) + '</span>';
 				html += '    <span class="visitor-percentage">' + percentage.toFixed(1) + '%</span>';
-				html += '    <span class="visitor-trend ' + trendClass + '">' + trendIcon + Math.abs(change) + '%</span>';
+				html += '    ' + (hasChange
+					? '<span class="visitor-trend ' + trendClass + '">' + trendIcon + Math.abs(change) + '%</span>'
+					: window.optiBehaviorRowTrendHTML(0, 0, notComparable));
 				html += '  </div>';
 				html += '</div>';
 			});

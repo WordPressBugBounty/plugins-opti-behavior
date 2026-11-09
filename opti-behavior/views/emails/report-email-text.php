@@ -47,15 +47,18 @@ echo esc_html( strtoupper( $schedule['name'] ) ) . "\n";
 echo esc_html( str_repeat( '=', strlen( $schedule['name'] ) ) ) . "\n\n";
 echo esc_html( $report['period_label'] ) . ' | ' . esc_html( $report['site_name'] ) . "\n\n";
 
-// Full e-mail (OPT-1647, design OPT-1646): the 3 most costly issues of the PDF site report first, then every block.
+// Full e-mail (OPT-1647, design OPT-1646): the 3 issues to look at first of the PDF site report first, then every block.
 // phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 $opti_behavior_s = ( ! empty( $report['site'] ) && is_array( $report['site'] ) ) ? $report['site'] : null;
 if ( $opti_behavior_s && $opti_behavior_s['visits'] <= 0 ) {
 	/* translators: 1: first day, 2: last day of the period. */
 	echo esc_html( sprintf( __( 'No visit recorded between %1$s and %2$s.', 'opti-behavior' ), Opti_Behavior_Report_Site::day_long( $opti_behavior_s['from'] ), Opti_Behavior_Report_Site::day_long( $opti_behavior_s['to'] ) ) ) . "\n\n";
 } elseif ( $opti_behavior_s ) {
-	echo esc_html( strtoupper( __( 'The 3 most costly issues', 'opti-behavior' ) ) ) . "\n";
+	echo esc_html( strtoupper( __( 'The 3 issues to look at first', 'opti-behavior' ) ) ) . "\n";
 	echo esc_html( str_repeat( '-', 30 ) ) . "\n";
+	if ( ! empty( $opti_behavior_s['issues_period'] ) ) {
+		echo esc_html( $opti_behavior_s['issues_period'] ) . "\n";
+	}
 	if ( empty( $opti_behavior_s['issues'] ) ) {
 		echo esc_html__( 'No costly issue detected for this period.', 'opti-behavior' ) . "\n";
 	}
@@ -65,12 +68,20 @@ if ( $opti_behavior_s && $opti_behavior_s['visits'] <= 0 ) {
 			echo '   ' . esc_html( $opti_behavior_it['headline'] ) . "\n";
 		}
 		$opti_behavior_parts = array();
-		if ( '' !== $opti_behavior_it['money'] ) {
-			$opti_behavior_parts[] = $opti_behavior_it['money'] . ' ' . __( 'lost, measured', 'opti-behavior' );
+		// OB-07: what the figure counts (Report_Site::issue_unit()), never "lost".
+		$opti_behavior_unit = isset( $opti_behavior_it['unit'] ) ? (string) $opti_behavior_it['unit'] : '';
+		if ( '' === $opti_behavior_unit && null !== $opti_behavior_it['lost'] ) {
+			$opti_behavior_unit = _n( 'visit concerned', 'visits concerned', $opti_behavior_it['lost'], 'opti-behavior' );
 		}
-		if ( null !== $opti_behavior_it['lost'] ) {
-			$opti_behavior_parts[] = number_format_i18n( $opti_behavior_it['lost'] ) . ' ' . _n( 'visit lost', 'visits lost', $opti_behavior_it['lost'], 'opti-behavior' );
-			$opti_behavior_parts[] = number_format_i18n( $opti_behavior_it['share'] ) . ' % ' . __( 'of all visits', 'opti-behavior' );
+		if ( '' !== $opti_behavior_it['money'] ) {
+			$opti_behavior_parts[] = $opti_behavior_it['money'] . ' ' . __( 'estimated loss', 'opti-behavior' );
+		}
+		if ( null !== $opti_behavior_it['lost'] && null !== $opti_behavior_it['share'] ) {
+			$opti_behavior_parts[] = number_format_i18n( $opti_behavior_it['lost'] ) . ' ' . $opti_behavior_unit;
+			$opti_behavior_parts[] = number_format_i18n( $opti_behavior_it['share'] ) . ' % ' . ( empty( $opti_behavior_it['own'] ) ? __( 'of all visits', 'opti-behavior' ) : __( 'of the visits of those days', 'opti-behavior' ) );
+		} elseif ( null !== $opti_behavior_it['lost'] ) {
+			// OPT-1940: estimated from an average gap, never a share of the visits.
+			$opti_behavior_parts[] = '~' . number_format_i18n( $opti_behavior_it['lost'] ) . ' ' . $opti_behavior_unit;
 		}
 		if ( $opti_behavior_parts ) {
 			echo '   ' . esc_html( implode( ' · ', $opti_behavior_parts ) ) . "\n";
@@ -81,7 +92,8 @@ if ( $opti_behavior_s && $opti_behavior_s['visits'] <= 0 ) {
 		}
 	}
 	$opti_behavior_n = count( $opti_behavior_s['issues'] );
-	if ( $opti_behavior_n > 0 && $opti_behavior_n < Opti_Behavior_Report_Site::TOP_ISSUES ) {
+	// Same rule as the PDF: "Only N" only when nothing else is open (Free alone leaves locked Pro cards out).
+	if ( $opti_behavior_n > 0 && $opti_behavior_n < Opti_Behavior_Report_Site::TOP_ISSUES && $opti_behavior_s['issues_total'] <= $opti_behavior_n ) {
 		/* translators: %s: number of issues. */
 		echo esc_html( sprintf( _n( 'Only %s open issue over this period.', 'Only %s open issues over this period.', $opti_behavior_n, 'opti-behavior' ), number_format_i18n( $opti_behavior_n ) ) ) . "\n";
 	} elseif ( $opti_behavior_n > 0 && $opti_behavior_s['issues_total'] > $opti_behavior_n ) {
@@ -90,6 +102,11 @@ if ( $opti_behavior_s && $opti_behavior_s['visits'] <= 0 ) {
 		echo esc_html( sprintf( _n( '%s other open issue in Smart Insights, with a smaller cost.', '%s other open issues in Smart Insights, with a smaller cost.', $opti_behavior_left, 'opti-behavior' ), number_format_i18n( $opti_behavior_left ) ) ) . "\n";
 	}
 	echo "\n";
+}
+// OPT-2860: one AI line (which AI companies read the site, pages read, visitors they sent).
+// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
+if ( ! empty( $opti_behavior_s['ai_line'] ) ) {
+	echo esc_html__( 'AI', 'opti-behavior' ) . ': ' . esc_html( $opti_behavior_s['ai_line'] ) . "\n\n";
 }
 // phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
@@ -227,12 +244,14 @@ if ( ! empty( $top_pages ) ) {
 		$title = mb_strimwidth( $page['title'], 0, 50, '...' );
 		$views = number_format( $page['views'] );
 		$time  = $page['avg_time_formatted'] ?? '-';
+		// Visits of the page, same figure as the HTML table (OPT-2488).
+		$visits = isset( $page['visits'] ) && null !== $page['visits'] ? number_format( (int) $page['visits'] ) : '-';
 		// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 
 		printf( "  %d. %s\n", intval( $i + 1 ), esc_html( $title ) );
 		printf(
 			/* translators: 1: view count, 2: average time on page */
-			'     ' . esc_html__( 'Views: %1$s | Avg. Time: %2$s', 'opti-behavior' ) . "\n\n",
+			'     ' . esc_html( __( 'Visits', 'opti-behavior' ) . ': ' . $visits . ' | ' ) . esc_html__( 'Views: %1$s | Avg. Time: %2$s', 'opti-behavior' ) . "\n\n",
 			esc_html( $views ),
 			esc_html( $time )
 		);

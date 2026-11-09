@@ -1343,7 +1343,7 @@
 		}
 		var lines = items.map(function(item) {
 			var lost = parseInt(item && item.users_lost, 10) || 0;
-			var figure = lost > 0 ? ' <span class="ob-si-also-seen__figure">' + escapeHtml(formatNumber(lost) + ' ' + (i18n.figureVisitsLost || 'visits lost')) + '</span>' : '';
+			var figure = lost > 0 ? ' <span class="ob-si-also-seen__figure">' + escapeHtml(formatNumber(lost) + ' ' + figureUnit('', lost)) + '</span>' : '';
 			return '<li>' + escapeHtml(item && item.title ? item.title : '') + figure + '</li>';
 		}).join('');
 
@@ -2673,14 +2673,32 @@
 		});
 	}
 
+	// OB-07: the units of the site report (Report_Site::issue_unit()): a step
+	// exit, a friction or a gap to a reference rate is never a "lost" visit.
 	var KEY_FIGURE_LABELS = {
-		funnel_dropoff: ['figureFunnelDropoff', 'visits lost at this step'],
-		form_abandonment: ['figureFormAbandonment', 'abandoned forms'],
-		error_impact: ['figureErrorImpact', 'visitors hit this error'],
-		conversion_gap: ['figureConversionGap', 'conversions lost vs. site average'],
-		engagement_gap: ['figureEngagementGap', 'visitors lost vs. site average'],
-		friction: ['figureFriction', 'visits with rage or dead clicks']
+		funnel_dropoff: ['figureFunnelDropoff', 'visits left at this step', 'visit left at this step'],
+		form_abandonment: ['figureFormAbandonment', 'forms started, not sent', 'form started, not sent'],
+		error_impact: ['figureErrorImpact', 'visits with an error', 'visit with an error'],
+		conversion_gap: ['figureConversionGap', 'conversions under the comparison rate, estimated', 'conversion under the comparison rate, estimated'],
+		engagement_gap: ['figureEngagementGap', 'visits under the average, estimated', 'visit under the average, estimated'],
+		friction: ['figureFriction', 'visits with rage or dead clicks', 'visit with rage or dead clicks']
 	};
+
+	// Unit printed after a count, by impact basis (unknown = "visits concerned").
+	function figureUnit(basis, count) {
+		var key = String(basis || '').toLowerCase();
+		var pair = KEY_FIGURE_LABELS[key] || ['figureVisitsLost', 'visits concerned', 'visit concerned'];
+		if (parseInt(count, 10) === 1) {
+			var one = i18n.figureUnitsOne || {};
+			return one[KEY_FIGURE_LABELS[key] ? key : 'default'] || pair[2];
+		}
+		return i18n[pair[0]] || pair[1];
+	}
+
+	function getImpactBasis(insight) {
+		var impact = getImpact(insight) || (insight && insight.scores && insight.scores.impact) || {};
+		return String(impact.basis || '').toLowerCase();
+	}
 
 	// THE numbers of a card, as plain text, for the card AND the detail:
 	// { main: { value, label } | null, context: '', observation: bool }.
@@ -2704,10 +2722,9 @@
 		}
 
 		if (!observation && usersLost !== null && usersLost > 0) {
-			var labelPair = KEY_FIGURE_LABELS[basis] || ['figureVisitsLost', 'visits lost'];
 			main = {
 				value: formatNumber(usersLost),
-				label: (i18n[labelPair[0]] || labelPair[1]) + ' · ' + getInsightPeriodText(insight)
+				label: figureUnit(basis, usersLost) + ' · ' + getInsightPeriodText(insight)
 			};
 		}
 
@@ -2896,6 +2913,40 @@
 		return '<p class="ob-si-figures__completion">' + escapeHtml(text) + '</p>';
 	}
 
+	// OPT-2884: the row never claims more than it measured. The level comes from
+	// PHP (Correlator::cause_level); an old stored payload without one is read as
+	// an observation unless it carries a measured figure.
+	var CAUSE_LEVELS = ['observation', 'proof', 'cause'];
+
+	function getCauseLevel(cause) {
+		var level = cause ? String(cause.level || '') : '';
+		if (CAUSE_LEVELS.indexOf(level) !== -1) {
+			return level;
+		}
+		var measured = cause && ((cause.value !== undefined && cause.value !== null && cause.value !== '') || cause.sample_size);
+		return measured ? 'proof' : 'observation';
+	}
+
+	function causeLevelWord(level) {
+		if ('cause' === level) {
+			return i18n.causeLevelCause || 'Measured cause';
+		}
+		if ('proof' === level) {
+			return i18n.causeLevelProof || 'Evidence';
+		}
+		return i18n.causeLevelObservation || 'Observation';
+	}
+
+	function causeLevelLine(level) {
+		if ('cause' === level) {
+			return i18n.measuredCauseLine || 'Measured cause: %s';
+		}
+		if ('proof' === level) {
+			return i18n.causeEvidenceLine || 'Evidence: %s';
+		}
+		return i18n.causeObservationLine || 'Observation: %s';
+	}
+
 	// Z5: the first MEASURED cause with its value, or nothing.
 	function renderLikelyCauseLine(insight) {
 		var cause = getStoryCauses(insight)[0];
@@ -2903,6 +2954,7 @@
 		if (!label) {
 			return '';
 		}
+		var level = getCauseLevel(cause);
 		var value = '';
 		if (cause.value !== undefined && cause.value !== null && cause.value !== '') {
 			var metricLabel = String(cause.metric_label || '').trim();
@@ -2910,8 +2962,8 @@
 		} else if (cause.sample_size) {
 			value = sprintfCount(i18n.causeSessions || '%s sessions', formatNumber(cause.sample_size));
 		}
-		var text = fillToken(i18n.likelyCauseLine || 'Likely cause: %s', '%s', value ? label + ' (' + value + ')' : label);
-		return '<p class="ob-si-cause">' + escapeHtml(text) + '</p>';
+		var text = fillToken(causeLevelLine(level), '%s', value ? label + ' (' + value + ')' : label);
+		return '<p class="ob-si-cause is-' + escapeHtml(level) + '">' + escapeHtml(text) + '</p>';
 	}
 
 	function renderBasedOnVisits(insight) {
@@ -3206,7 +3258,7 @@
 			parts.push((i18n.priorityShort || 'priority %s').replace('%s', String(getPriorityScore(child))));
 			var usersLost = getUsersLost(child);
 			if (usersLost) {
-				parts.push((i18n.sessionsLostShort || '%s sessions lost').replace('%s', formatNumber(usersLost)));
+				parts.push(formatNumber(usersLost) + ' ' + figureUnit(getImpactBasis(child), usersLost));
 			}
 
 			return '<li>' +
@@ -3305,6 +3357,11 @@
 
 
 	function loadSection(section, options) {
+		// Page X-Ray view open (OPT-2283): the list loads when its view shows.
+		if (section.getAttribute('data-ob-si-view-current') === 'pages') {
+			section._obSiPendingLoad = options || {};
+			return Promise.resolve();
+		}
 		var contextData = getContextData(section);
 		if (!hasCompleteCustomRange(contextData)) {
 			setAlert(section, i18n.selectCustomRange || 'Select a start and end date to use a custom range.', 'info');
@@ -3865,18 +3922,6 @@
 		return item.label || item.entity_label || item.signal_name || item.title || '';
 	}
 
-	function getSummaryMoverLabel(summary) {
-		var decline = summary.biggest_decline || null;
-		var improvement = summary.biggest_improvement || null;
-		var item = decline || improvement || null;
-		if (!item || !getSummaryItemTitle(item) || getSummaryItemTitle(item).toLowerCase().indexOf('no clear') !== -1) {
-			return i18n.noClearMover || 'No clear mover';
-		}
-		var direction = decline ? (i18n.worsening || 'Worsening') : (i18n.improving || 'Improving');
-		var title = getSummaryItemTitle(item);
-		return direction + ': ' + title;
-	}
-
 	// A card that has nothing to say is removed, not filled with "No notable
 	// items": the brief must be short enough to be read in full.
 	// "Wins this month": fixes the outcome cron measured as real improvements.
@@ -3916,14 +3961,14 @@
 			return !isLowValueSummaryItem(item);
 		});
 		if (movement.length) {
-			sections.push('<section class="ob-smart-insights-briefing-section is-watch"><h3>' + escapeHtml(i18n.movement || 'Trend watch') + '</h3>' + renderSummaryList(movement, 1, { compact: true }) + '</section>');
+			sections.push('<section class="ob-smart-insights-briefing-section is-watch"><h3>' + escapeHtml(i18n.movement || 'Trend watch') + renderSectionTooltip('trend_watch') + '</h3>' + renderSummaryList(movement, 1, { compact: true }) + '</section>');
 		}
 
 		var recurring = (Array.isArray(summary.recurring_issues) ? summary.recurring_issues : []).filter(function(item) {
 			return !isLowValueSummaryItem(item);
 		});
 		if (recurring.length) {
-			sections.push('<section class="ob-smart-insights-briefing-section is-recurring"><h3>' + escapeHtml(i18n.recurringPatterns || 'Recurring patterns') + '</h3>' + renderSummaryList(recurring, 1, { compact: true }) + '</section>');
+			sections.push('<section class="ob-smart-insights-briefing-section is-recurring"><h3>' + escapeHtml(i18n.recurringPatterns || 'Recurring patterns') + renderSectionTooltip('recurring_patterns') + '</h3>' + renderSummaryList(recurring, 1, { compact: true }) + '</section>');
 		}
 
 		return sections;
@@ -3982,9 +4027,8 @@
 
 		var usersLost = item && item.users_lost !== undefined && item.users_lost !== null ? parseInt(item.users_lost, 10) : NaN;
 		if (!isNaN(usersLost) && usersLost > 0) {
-			// OPT-588 (B): one unit on the card and in the brief = visits (the
-			// card says "N visits left", its figure "visits lost").
-			return formatNumber(usersLost) + ' ' + (i18n.figureVisitsLost || 'visits lost');
+			// OB-07: same unit as the card, by impact basis (Pro sends `basis`).
+			return formatNumber(usersLost) + ' ' + figureUnit(item.basis, usersLost);
 		}
 
 		return fillToken(i18n.briefSessionsMeasured || 'Measured on %s sessions', '%s', formatNumber(sessions));
@@ -4127,25 +4171,51 @@
 		var next = summary.recommended_next_action || {};
 		var highPriorityCount = counts.high_priority || 0;
 		var headline = summary.headline || (i18n.weeklyHeadline ? String(i18n.weeklyHeadline).replace('%d', highPriorityCount) : (highPriorityCount + ' high-priority issues need review this week'));
-		var moverLabel = getSummaryMoverLabel(summary);
 		var scopeNote = summary.scope_note || i18n.summaryScopeNote || 'Counts use deduplicated active insight groups for the selected range.';
 		// The lead is the brief: the three issues that cost the most, each with
 		// its number and what changed since the previous run. The counting
 		// headline is only the fallback when nothing could be listed.
+		// OPT-2179: one summary block — the row of counters (active / high
+		// priority / recurring / biggest mover) repeated the brief, the "How it
+		// works" strip and the Trend watch / Recurring sections; not printed.
 		var briefList = renderBriefList(summary.top_critical_insights);
 		var sections = renderBriefingSections(summary);
 		return '<div class="ob-smart-insights-summary-report is-briefing">' +
 			'<div class="ob-smart-insights-briefing-lead"><span>' + escapeHtml(i18n.analystBriefing || 'Analyst briefing') + '</span>' + (briefList || ('<strong>' + escapeHtml(headline) + '</strong>')) + '</div>' +
-			'<div class="ob-smart-insights-summary-metrics">' +
-				'<span><small>' + escapeHtml(i18n.activeInsights || 'Active') + '</small><strong>' + escapeHtml(counts.active || 0) + '</strong></span>' +
-				'<span><small>' + escapeHtml(i18n.highPriority || 'High priority') + '</small><strong>' + escapeHtml(counts.high_priority || 0) + '</strong></span>' +
-				'<span><small>' + escapeHtml(i18n.recurring || 'Recurring') + '</small><strong>' + escapeHtml(counts.recurring || 0) + '</strong></span>' +
-				'<span class="is-mover"><small>' + escapeHtml(i18n.biggestMover || 'Biggest mover') + '</small><strong title="' + escapeHtml(moverLabel) + '">' + escapeHtml(moverLabel) + '</strong></span>' +
-			'</div>' +
 			'<p class="description ob-smart-insights-summary-scope">' + escapeHtml(scopeNote) + '</p>' +
 			'<div class="ob-smart-insights-recommendation ob-smart-insights-summary-next-action"><span>' + escapeHtml(i18n.recommendedAction || 'Recommended action') + '</span><strong>' + escapeHtml(next.action || next.summary || next.title || (i18n.defaultRecommendedAction || 'Review the highest-priority issue and open the supporting report.')) + '</strong>' + renderSummaryInsightLink(next) + '</div>' +
 			(sections.length ? '<div class="ob-smart-insights-briefing-grid has-' + sections.length + '-sections">' + sections.join('') + '</div>' : '') +
 		'</div>';
+	}
+
+	// Design OPT-2209: one card, one foot. The scope note of the summary and the
+	// "Based on…" line of the top pages leave their column for the card's foot;
+	// a fresh copy (new render) replaces the one already there.
+	function mergeWeeklyFoot(summaryWidget) {
+		var foot = summaryWidget && summaryWidget.querySelector ? summaryWidget.querySelector('[data-ob-si-weekly-foot]') : null;
+		if (!foot) {
+			return;
+		}
+		['.ob-smart-insights-summary-scope', '.ob-si-top-pages__foot'].forEach(function(selector) {
+			var fresh = null;
+			Array.prototype.forEach.call(summaryWidget.querySelectorAll(selector), function(el) {
+				if (!foot.contains(el)) {
+					fresh = el;
+				}
+			});
+			if (!fresh) {
+				return;
+			}
+			Array.prototype.forEach.call(foot.querySelectorAll(selector), function(el) {
+				el.parentNode.removeChild(el);
+			});
+			foot.appendChild(fresh);
+		});
+		// Scope note first, then the period.
+		var scope = foot.querySelector('.ob-smart-insights-summary-scope');
+		if (scope && scope !== foot.firstChild) {
+			foot.insertBefore(scope, foot.firstChild);
+		}
 	}
 
 	function loadWeeklySummary(section) {
@@ -4168,6 +4238,7 @@
 					}
 				});
 			}
+			mergeWeeklyFoot(summaryWidget);
 			return;
 		}
 
@@ -4189,8 +4260,19 @@
 			.then(function(data) {
 				if (content) {
 					content.innerHTML = renderWeeklySummary(data.summary || {});
-					refreshIcons();
 				}
+				// OPT-2180: "Pages losing the most visitors", HTML escaped by the server.
+				var topPages = section ? section.querySelector('[data-ob-si-top-pages]') : null;
+				if (topPages && typeof data.top_pages_html === 'string' && data.top_pages_html) {
+					topPages.innerHTML = data.top_pages_html;
+					topPages.hidden = false;
+				} else if (topPages) {
+					// OPT-2503: no page for this period, drop the previous period's rows (summary takes the full width).
+					topPages.innerHTML = '';
+					topPages.hidden = true;
+				}
+				refreshIcons();
+				mergeWeeklyFoot(summaryWidget);
 			})
 			.catch(function(error) {
 				if (content) {
@@ -6090,7 +6172,11 @@
 				parts.push(sprintfCount(i18n.causeShareOfSessions || '%s of affected sessions', formatPercent(cause.share_pct)));
 			}
 
-			return '<li><strong>' + escapeHtml(label) + '</strong>' +
+			var level = getCauseLevel(cause);
+
+			return '<li class="is-' + escapeHtml(level) + '">' +
+				'<span class="ob-si-cause-level">' + escapeHtml(causeLevelWord(level)) + '</span>' +
+				'<strong>' + escapeHtml(label) + '</strong>' +
 				(parts.length ? '<span>' + escapeHtml(parts.join(' · ')) + '</span>' : '') +
 			'</li>';
 		}).filter(Boolean);
@@ -6126,7 +6212,7 @@
 			: '';
 	}
 
-	// "Measured on 140 lost and 118 continued sessions": the sample sizes
+	// "Measured on 140 sessions that left and 118 that continued": the sample sizes
 	// behind a verdict, shown only when both sides were counted.
 	function renderCheckSample(check) {
 		var evidence = check.evidence && typeof check.evidence === 'object' ? check.evidence : {};
@@ -6135,7 +6221,7 @@
 		if (!isFinite(base) || !isFinite(compareBase)) {
 			return '';
 		}
-		var text = String(i18n.checkSample || 'Measured on %1$s lost and %2$s continued sessions')
+		var text = String(i18n.checkSample || 'Measured on %1$s sessions that left and %2$s that continued')
 			.replace('%1$s', formatNumber(base))
 			.replace('%2$s', formatNumber(compareBase));
 		return '<span class="ob-si-check__sample">' + escapeHtml(text) + '</span>';
@@ -6222,12 +6308,20 @@
 		}
 		return '<p class="ob-si-checks__pro">' +
 			'<span class="ob-smart-insights-badge is-locked">' + escapeHtml(i18n.proLockedShort || 'Pro') + '</span>' +
-			'<span>' + escapeHtml(i18n.checkMoreWithPro || 'More checks with Pro: errors, form abandonment, rage clicks, mobile share and load time, compared between lost visitors and those who continued.') + '</span>' +
+			'<span>' + escapeHtml(i18n.checkMoreWithPro || 'More checks with Pro: errors, form abandonment, rage clicks, mobile share and load time, compared between visitors who left and those who continued.') + '</span>' +
 		'</p>';
 	}
 
 	function renderCausesSection(insight) {
-		var title = renderSectionHeading(i18n.likelyCauses || 'Likely causes', 'causes', { position: 'left' });
+		// OPT-2884: "Likely causes" only when a cause was really measured; a list
+		// of records to watch or of segment concentrations is named for what it is.
+		var measuredCause = getStoryCauses(insight).some(function(cause) {
+			return getCauseLevel(cause) === 'cause';
+		});
+		var heading = measuredCause
+			? (i18n.likelyCauses || 'Likely causes')
+			: (i18n.observationsAndEvidence || 'Observations and evidence');
+		var title = renderSectionHeading(heading, 'causes', { position: 'left' });
 		var generic = Array.isArray(insight.likely_causes) ? insight.likely_causes : [];
 		var groups = groupStoryChecks(insight);
 		var hasVerdict = groups.likely.length > 0 || groups.ruled_out.length > 0;
@@ -6555,6 +6649,9 @@
 			var applyButton = event.target.closest('.ob-smart-insights-apply');
 			if (applyButton) {
 				event.preventDefault();
+				if (xrayFiltersChanged(section)) {
+					return;
+				}
 				loadSection(section, { autoRefreshIfStale: true });
 				return;
 			}
@@ -6564,6 +6661,9 @@
 				event.preventDefault();
 				var isActive = !(excludeSpamButton.classList.contains('active') || excludeSpamButton.getAttribute('aria-pressed') === 'true');
 				setExcludeSpamFlag(section, isActive);
+				if (xrayFiltersChanged(section)) {
+					return;
+				}
 				syncActiveFilterState(section);
 				loadWeeklySummary(section);
 				refreshSection(section);
@@ -6628,6 +6728,9 @@
 		if (period) {
 			period.addEventListener('change', function() {
 				toggleCustomDateInputs(section);
+				if (period.value !== 'custom' && xrayFiltersChanged(section)) {
+					return;
+				}
 				syncActiveFilterState(section);
 				loadWeeklySummary(section);
 				loadSection(section, { autoRefreshIfStale: true });
@@ -6661,6 +6764,9 @@
 			var element = section.querySelector(selector);
 			if (element) {
 				element.addEventListener('change', function() {
+					if ((selector === '.ob-smart-insights-start-date' || selector === '.ob-smart-insights-end-date') && xrayFiltersChanged(section)) {
+						return;
+					}
 					syncActiveFilterState(section);
 					loadWeeklySummary(section);
 					loadSection(section, { autoRefreshIfStale: selector === '.ob-smart-insights-start-date' || selector === '.ob-smart-insights-end-date' });
@@ -6682,8 +6788,263 @@
 		loadSection(section, { autoRefreshIfStale: true });
 	}
 
+	// Tab bar (OPT-2280): Left / Right / Home / End move the focus between the
+	// tabs (roving tabindex); Enter or a click opens the view (each tab is a link).
+	function bindTabBar(bar) {
+		bar.addEventListener('keydown', function(event) {
+			var tabs = Array.prototype.slice.call(bar.querySelectorAll('[role="tab"]'));
+			var index = tabs.indexOf(document.activeElement);
+			if (index < 0) {
+				return;
+			}
+			var next = -1;
+			if (event.key === 'ArrowRight') {
+				next = (index + 1) % tabs.length;
+			} else if (event.key === 'ArrowLeft') {
+				next = (index - 1 + tabs.length) % tabs.length;
+			} else if (event.key === 'Home') {
+				next = 0;
+			} else if (event.key === 'End') {
+				next = tabs.length - 1;
+			}
+			if (next < 0) {
+				return;
+			}
+			event.preventDefault();
+			tabs.forEach(function(tab, i) {
+				tab.setAttribute('tabindex', i === next ? '0' : '-1');
+			});
+			tabs[next].focus();
+		});
+	}
+
+	// Tab switch without a page load (OPT-2283): "How it works", the Weekly CRO
+	// Summary and the scroll stay; only the view inside the tabpanel changes.
+	// The Page X-Ray view is fetched once (the screen's HTML, its view lifted
+	// out, the styles / scripts the page does not have yet added in order);
+	// the address follows the tab, so a reload or Back opens the same view.
+	function siView(section, name) {
+		return section.querySelector('[data-ob-si-view="' + name + '"]');
+	}
+
+	function siTabName(tab) {
+		return (tab.id || '').replace('ob-si-tab-', '');
+	}
+
+	function siTabHref(section, tab) {
+		var url = new URL(tab.href, window.location.href);
+		var data = getContextData(section);
+		url.searchParams.set('period', data.period);
+		url.searchParams.set('exclude_spam', data.excludeSpam);
+		if (data.period === 'custom' && data.startDate && data.endDate) {
+			url.searchParams.set('start_date', data.startDate);
+			url.searchParams.set('end_date', data.endDate);
+		} else {
+			url.searchParams.delete('start_date');
+			url.searchParams.delete('end_date');
+		}
+		return url.toString();
+	}
+
+	function paintTabs(bar, name) {
+		Array.prototype.forEach.call(bar.querySelectorAll('[role="tab"]'), function(tab) {
+			var id = siTabName(tab);
+			var on = id === name;
+			tab.setAttribute('aria-selected', on ? 'true' : 'false');
+			tab.setAttribute('tabindex', on ? '0' : '-1');
+			tab.classList.toggle('is-current', on);
+			if (id === 'pages') {
+				tab.classList.toggle('is-new', !on);
+			}
+			if (on) {
+				tab.setAttribute('aria-controls', 'ob-si-tabpanel');
+				tab.setAttribute('aria-current', 'page');
+			} else {
+				tab.removeAttribute('aria-controls');
+				tab.removeAttribute('aria-current');
+			}
+		});
+		var panel = document.getElementById('ob-si-tabpanel');
+		if (panel) {
+			panel.setAttribute('aria-labelledby', 'ob-si-tab-' + name);
+		}
+	}
+
+	function addMissingStyles(doc) {
+		Array.prototype.forEach.call(doc.querySelectorAll('link[rel="stylesheet"][id], style[id]'), function(el) {
+			if (!document.getElementById(el.id)) {
+				document.head.appendChild(document.importNode(el, true));
+			}
+		});
+	}
+
+	// One after the other, in the order of the page: a script may need the one before.
+	function addMissingScripts(doc) {
+		var chain = Promise.resolve();
+		Array.prototype.forEach.call(doc.querySelectorAll('script[id]'), function(el) {
+			if (document.getElementById(el.id)) {
+				return;
+			}
+			chain = chain.then(function() {
+				return new Promise(function(resolve) {
+					var script = document.createElement('script');
+					script.id = el.id;
+					if (el.type) {
+						script.type = el.type;
+					}
+					if (el.src) {
+						script.onload = resolve;
+						script.onerror = resolve;
+						script.src = el.src;
+						document.body.appendChild(script);
+					} else {
+						script.text = el.textContent;
+						document.body.appendChild(script);
+						resolve();
+					}
+				});
+			});
+		});
+		return chain;
+	}
+
+	function setViewMinHeight(view, value) {
+		if (view && view.style) {
+			view.style.minHeight = value;
+		}
+	}
+
+	function loadXrayView(section, view, href) {
+		if (!window.fetch || !window.DOMParser) {
+			window.location.assign(href);
+			return;
+		}
+		view._obSiLoading = true;
+		window.fetch(href, { credentials: 'same-origin' })
+			.then(function(response) {
+				if (!response.ok) {
+					throw new Error('http');
+				}
+				return response.text();
+			})
+			.then(function(html) {
+				var doc = new window.DOMParser().parseFromString(html, 'text/html');
+				var fresh = doc.querySelector('[data-ob-si-view="pages"]');
+				if (!fresh || fresh.getAttribute('data-ob-si-loaded') !== '1') {
+					throw new Error('view');
+				}
+				addMissingStyles(doc);
+				view.innerHTML = fresh.innerHTML;
+				setViewMinHeight(view, '');
+				view.setAttribute('data-ob-si-loaded', '1');
+				refreshIcons();
+				return addMissingScripts(doc);
+			})
+			.then(function() {
+				view._obSiLoading = false;
+			})
+			.catch(function() {
+				view._obSiLoading = false;
+				setViewMinHeight(view, '');
+				// Never a dead view: open it the old way.
+				if (section.getAttribute('data-ob-si-view-current') === 'pages') {
+					window.location.assign(href);
+				}
+			});
+	}
+
+	function showView(section, bar, name, href, push) {
+		var target = siView(section, name);
+		if (!target) {
+			window.location.assign(href);
+			return;
+		}
+		// Period or spam changed since the view was fetched: its scripts are
+		// already bound, so it opens with a page load.
+		if (name === 'pages' && target.getAttribute('data-ob-si-loaded') === 'stale') {
+			window.location.assign(href);
+			return;
+		}
+		// Skeleton as tall as the view it replaces: the page does not get shorter,
+		// so the scroll position stays (cleared when the Page X-Ray view arrives).
+		if (name === 'pages' && target.getAttribute('data-ob-si-loaded') !== '1') {
+			var shown = section.querySelector('[data-ob-si-view]:not([hidden])');
+			if (shown && shown !== target && shown.offsetHeight) {
+				setViewMinHeight(target, shown.offsetHeight + 'px');
+			}
+		}
+		Array.prototype.forEach.call(section.querySelectorAll('[data-ob-si-view]'), function(view) {
+			view.hidden = view !== target;
+		});
+		section.setAttribute('data-ob-si-view-current', name);
+		paintTabs(bar, name);
+		if (push && window.history && window.history.pushState) {
+			window.history.pushState({ obSiView: name }, '', href);
+		}
+		if (name === 'insights' && section._obSiPendingLoad) {
+			var options = section._obSiPendingLoad;
+			section._obSiPendingLoad = null;
+			loadSection(section, options);
+		}
+		if (name === 'pages' && target.getAttribute('data-ob-si-loaded') !== '1' && !target._obSiLoading) {
+			loadXrayView(section, target, href);
+		}
+	}
+
+	// Period / spam / dates changed. Page X-Ray open = reload it with the new
+	// filters (true: the caller stops); fetched but hidden = fetch again later.
+	function xrayFiltersChanged(section) {
+		var view = siView(section, 'pages');
+		var tab = document.getElementById('ob-si-tab-pages');
+		if (!view || !tab) {
+			return false;
+		}
+		if (section.getAttribute('data-ob-si-view-current') === 'pages') {
+			window.location.assign(siTabHref(section, tab));
+			return true;
+		}
+		if (view.getAttribute('data-ob-si-loaded') === '1') {
+			view.setAttribute('data-ob-si-loaded', 'stale');
+		}
+		return false;
+	}
+
+	function bindTabSwitch(bar) {
+		var section = bar.closest('[data-ob-smart-insights-context]');
+		if (!section || !siView(section, 'insights')) {
+			return;
+		}
+		bar.addEventListener('click', function(event) {
+			var tab = event.target.closest('[role="tab"]');
+			if (!tab || !bar.contains(tab) || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+				return;
+			}
+			var name = siTabName(tab);
+			if (!siView(section, name)) {
+				return;
+			}
+			event.preventDefault();
+			if (name !== section.getAttribute('data-ob-si-view-current')) {
+				showView(section, bar, name, siTabHref(section, tab), true);
+			}
+		});
+		window.addEventListener('popstate', function() {
+			var params = new URLSearchParams(window.location.search);
+			if (params.get('page') !== 'opti-behavior-smart-insights' || params.get('page_id')) {
+				window.location.reload();
+				return;
+			}
+			var name = params.get('tab') === 'pages' ? 'pages' : 'insights';
+			if (name !== section.getAttribute('data-ob-si-view-current')) {
+				showView(section, bar, name, window.location.href, false);
+			}
+		});
+	}
+
 	ready(function() {
 		var sections = document.querySelectorAll('[data-ob-smart-insights-context]');
 		Array.prototype.forEach.call(sections, bindSection);
+		Array.prototype.forEach.call(document.querySelectorAll('.ob-si-tabs[role="tablist"]'), bindTabBar);
+		Array.prototype.forEach.call(document.querySelectorAll('.ob-si-tabs[role="tablist"]'), bindTabSwitch);
 	});
 })();

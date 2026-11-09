@@ -457,6 +457,43 @@
 		var selectedCategories = [];
 		var $sizeBadges = $('.danger-category-size');
 		var $totalSizeEl = $('#opti-behavior-danger-total-size');
+		var $selectedSizeEl = $('#opti-behavior-danger-selected-size');
+		// Bytes per category (DB + files), filled by loadDangerZoneSizes().
+		var categoryBytes = {};
+
+		/**
+		 * Same units as the PHP format_danger_zone_size().
+		 *
+		 * @param {number} bytes Size in bytes.
+		 * @return {string}
+		 */
+		function formatDangerZoneSize(bytes) {
+			var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+			bytes = Math.max(parseInt(bytes, 10) || 0, 0);
+			var pow = bytes ? Math.floor(Math.log(bytes) / Math.log(1024)) : 0;
+			pow = Math.min(pow, units.length - 1);
+			return (Math.round((bytes / Math.pow(1024, pow)) * 100) / 100) + ' ' + units[pow];
+		}
+
+		/**
+		 * "Selected: N" = storage of the checked categories (0 when none).
+		 */
+		function updateSelectedSize() {
+			if (!$selectedSizeEl.length) {
+				return;
+			}
+			var total = 0;
+			var known = true;
+			$categoryChecks.filter(':checked').each(function() {
+				var key = $(this).data('category');
+				if (Object.prototype.hasOwnProperty.call(categoryBytes, key)) {
+					total += categoryBytes[key];
+				} else {
+					known = false;
+				}
+			});
+			$selectedSizeEl.text(known ? (S.sizeSelectedLabel || 'Selected:') + ' ' + formatDangerZoneSize(total) : '');
+		}
 
 		/**
 		 * Fetch per-category storage sizes (DB + files) asynchronously so the
@@ -486,6 +523,8 @@
 					}
 
 					var categories = response.data.categories;
+					var filesPending = !!response.data.files_pending;
+					var pendingText = S.sizeFilesPending || 'calculating…';
 					$sizeBadges.removeClass('is-loading').each(function() {
 						var $badge = $(this);
 						var info = categories[$badge.data('category')];
@@ -493,16 +532,28 @@
 							$badge.text('');
 							return;
 						}
+						if (!(filesPending && info.has_files)) {
+							categoryBytes[$badge.data('category')] = parseInt(info.total_bytes, 10) || 0;
+						}
 
 						var parts = [(S.sizeDbLabel || 'DB') + ' ' + info.db_human];
 						if (info.has_files) {
-							parts.push((S.sizeFilesLabel || 'Files') + ' ' + info.files_human);
+							parts.push((S.sizeFilesLabel || 'Files') + ' ' + (filesPending ? pendingText : info.files_human));
 						}
 						$badge.text(parts.join(' · '));
 					});
 
+					updateSelectedSize();
+
 					var totals = response.data.totals;
-					if ($totalSizeEl.length && totals && totals.total_human) {
+					if (filesPending) {
+						// OPT-1944: the folder scan is not finished; finish it in
+						// steps, then ask for the sizes again (served from cache).
+						if ($totalSizeEl.length) {
+							$totalSizeEl.text((S.sizeTotalLabel || 'Total storage:') + ' ' + (S.sizeDbLabel || 'DB') + ' ' + totals.db_human + ' · ' + (S.sizeFilesLabel || 'Files') + ' ' + pendingText);
+						}
+						finishDangerZoneFileScan(0);
+					} else if ($totalSizeEl.length && totals && totals.total_human) {
 						$totalSizeEl.text(
 							(S.sizeTotalLabel || 'Total storage:') + ' ' + totals.total_human +
 							' (' + (S.sizeDbLabel || 'DB') + ' ' + totals.db_human +
@@ -514,6 +565,37 @@
 					// Silent fail: sizes are informational, never break the page.
 					$sizeBadges.removeClass('is-loading').text('');
 				}
+			});
+		}
+
+		/**
+		 * Run the batched folder scan to its end (same endpoint as Storage
+		 * Stats), then reload the sizes. Failure = the badges keep "calculating"
+		 * replaced by "—": sizes are informational, never block the page.
+		 */
+		var dangerZoneScanReloads = 0;
+
+		function finishDangerZoneFileScan(tries) {
+			if (!opti_behaviorSettings.storageStatsNonce || tries > 400) {
+				$sizeBadges.each(function() { $(this).text($(this).text().replace(S.sizeFilesPending || 'calculating…', '—')); });
+				return;
+			}
+			$.ajax({
+				url: opti_behaviorSettings.ajaxUrl || ajaxurl,
+				type: 'POST',
+				data: { action: 'optibehavior_storage_stats_files', nonce: opti_behaviorSettings.storageStatsNonce, restart: '0' }
+			}).done(function(response) {
+				var state = response && response.data ? response.data.state : '';
+				if (response && response.success && (state === 'done' || !state)) {
+					// Guard: a result the server cannot keep must not loop forever.
+					if (++dangerZoneScanReloads <= 3) { loadDangerZoneSizes(false); }
+				} else if (state === 'running' || state === 'busy') {
+					setTimeout(function() { finishDangerZoneFileScan(tries + 1); }, state === 'busy' ? 1500 : 0);
+				} else {
+					finishDangerZoneFileScan(401);
+				}
+			}).fail(function() {
+				finishDangerZoneFileScan(401);
 			});
 		}
 
@@ -1270,8 +1352,12 @@
 			});
 		}
 
-		// Open modal when delete button is clicked
+		// Open modal when delete button is clicked (never with nothing checked:
+		// the server reads a missing category list as "everything").
 		$deleteBtn.on('click', function() {
+			if ($categoryChecks.filter(':checked').length === 0) {
+				return;
+			}
 			showDeleteModal();
 		});
 
@@ -1319,12 +1405,17 @@
 			$deleteBtn.prop('disabled', checkedCount === 0);
 
 			// Update button label while preserving the icon element
-			if (checkedCount > 0) {
-				var btnText = allChecked ? (S.deleteAllData || 'Delete All Analytics Data') : (S.deleteSelectedData || 'Delete Selected Data');
-				$deleteBtn.contents().filter(function() {
-					return this.nodeType === 3; // text nodes only
-				}).last().replaceWith(document.createTextNode(' ' + btnText));
-			}
+			var btnText = allChecked ? (S.deleteAllData || 'Delete All Analytics Data') : (S.deleteSelectedData || 'Delete Selected Data');
+			$deleteBtn.contents().filter(function() {
+				return this.nodeType === 3; // text nodes only
+			}).last().replaceWith(document.createTextNode(' ' + btnText));
+
+			updateSelectedSize();
+		}
+
+		// First paint: nothing checked, button off, "Selected: 0 B".
+		if ($categoryChecks.length) {
+			updateDeleteButtonState();
 		}
 
 		/**
@@ -1381,6 +1472,10 @@
 			$categoryChecks.filter(':checked').each(function() {
 				selectedCategories.push($(this).data('category'));
 			});
+			if (selectedCategories.length === 0) {
+				hideDeleteModal();
+				return;
+			}
 
 			// Show progress step
 			$confirmStep.hide();
@@ -2360,6 +2455,8 @@
 		}
 
 		var COUNT_BATCH_SIZE = 5;
+		var TABLES_TIMEOUT_MS = 30000; // OPT-2526: same limit as the Traffic widgets (OB-18)
+		var tablesRequestId = 0;       // only the latest tables request may paint
 		var $tablesBody = $('#ob-storage-tables-body');
 		var countsDone = false;
 		var exactRows = {};   // suffix -> exact count (raw)
@@ -2386,15 +2483,18 @@
 			$root.find('[data-file-stat="' + name + '"]').removeClass('ob-skeleton').text(value);
 		}
 
-		function ajaxRequest(action, data) {
-			return $.ajax({
+		/** timeoutMs: optional; 0 / absent = no limit (counts + file scan keep theirs). */
+		function ajaxRequest(action, data, timeoutMs) {
+			var options = {
 				url: opti_behaviorSettings.ajaxUrl || ajaxurl,
 				type: 'POST',
 				data: $.extend({
 					action: action,
 					nonce: opti_behaviorSettings.storageStatsNonce
 				}, data || {})
-			});
+			};
+			if (timeoutMs > 0) { options.timeout = timeoutMs; }
+			return $.ajax(options);
 		}
 
 		function skeletonRowsHtml(count) {
@@ -2409,11 +2509,14 @@
 			return new Array((count || 6) + 1).join(row);
 		}
 
-		function errorRowHtml() {
+		function errorRowHtml(isTimeout) {
+			var message = isTimeout
+				? (S.storageTimeout || 'This block took too long to load.')
+				: (S.storageLoadFailed || 'Could not load storage data.');
 			return '<tr class="ob-storage-error-row"><td colspan="6">'
 				+ '<div class="ob-storage-error">'
 				+ '<i data-lucide="alert-circle"></i>'
-				+ '<span>' + escapeHtml(S.storageLoadFailed || 'Could not load storage data.') + '</span>'
+				+ '<span>' + escapeHtml(message) + '</span>'
 				+ '<button type="button" class="button ob-storage-retry" data-retry="tables">' + escapeHtml(S.storageRetry || 'Retry') + '</button>'
 				+ '</div>'
 				+ '</td></tr>';
@@ -2509,9 +2612,11 @@
 
 		function loadTables() {
 			$tablesBody.html(skeletonRowsHtml(6));
+			var requestId = ++tablesRequestId;
 
-			ajaxRequest('optibehavior_storage_stats_tables')
+			ajaxRequest('optibehavior_storage_stats_tables', null, TABLES_TIMEOUT_MS)
 				.done(function(response) {
+					if (requestId !== tablesRequestId) { return; }
 					if (!response || !response.success || !response.data || !response.data.tables) {
 						tablesFailed();
 						return;
@@ -2550,27 +2655,90 @@
 					updateRecordsTotal();
 					loadCounts(suffixes);
 				})
-				.fail(tablesFailed);
+				.fail(function(xhr, textStatus) {
+					if (requestId !== tablesRequestId) { return; }
+					tablesFailed(textStatus === 'timeout');
+				});
 		}
 
-		function tablesFailed() {
+		function tablesFailed(isTimeout) {
 			$root.find('[data-stat]').removeClass('ob-skeleton').filter('[data-stat!="file_size"]').text('—');
-			$tablesBody.html(errorRowHtml());
+			$tablesBody.html(errorRowHtml(isTimeout === true));
 			refreshIcons();
 		}
 
-		function loadFiles() {
-			$root.find('[data-file-stat]').addClass('ob-skeleton').html('&nbsp;');
-			$root.find('.ob-storage-error--files').remove();
+		/**
+		 * Batched file scan (OPT-1944): one server step per request, repeated
+		 * until state "done"; progress line under the file card; the server
+		 * caches the result 12 h ("Recalculate" = restart).
+		 */
+		var filesBusyTries = 0;
+		var filesAskedCause = false;
 
-			ajaxRequest('optibehavior_storage_stats_files')
+		function filesProgress(data) {
+			var $line = $root.find('.ob-storage-files-progress');
+			if (!$line.length) {
+				$line = $('<div class="ob-storage-files-progress" role="status" aria-live="polite">'
+					+ '<div class="storage-bar-wrapper"><div class="storage-bar storage-bar-low"></div></div>'
+					+ '<span class="ob-storage-files-progress-text"></span></div>');
+				$root.find('.storage-file-info').append($line);
+			}
+			$line.find('.storage-bar').css('width', Math.max(2, parseInt(data.progress, 10) || 0) + '%');
+			$line.find('.ob-storage-files-progress-text').text(data.progress_text || '');
+		}
+
+		function loadFiles(restart) {
+			if (restart) {
+				$root.find('[data-file-stat]').addClass('ob-skeleton').html('&nbsp;');
+			}
+			$root.find('.ob-storage-error--files, .ob-storage-files-note').remove();
+			filesBusyTries = 0;
+			filesAskedCause = false;
+			filesStep(restart ? '1' : '0');
+		}
+
+		function filesStep(restart) {
+			ajaxRequest('optibehavior_storage_stats_files', { restart: restart })
 				.done(function(response) {
-					if (!response || !response.success || !response.data) {
-						filesFailed();
+					if (!response || !response.data) {
+						filesFailed('');
 						return;
 					}
-
 					var data = response.data;
+					if (!response.success || data.state === 'error') {
+						filesFailed(data.message || '', data.resumable !== false);
+						return;
+					}
+					if (data.state === 'busy') {
+						// Another tab is scanning: wait for it (about 2 minutes at most).
+						if (++filesBusyTries > 80) { filesFailed(S.storageFilesBusy || ''); return; }
+						setTimeout(function() { filesStep('0'); }, 1500);
+						return;
+					}
+					if (data.state === 'running') {
+						filesProgress(data);
+						filesStep('0');
+						return;
+					}
+					filesDone(data);
+				})
+				.fail(function(xhr) {
+					var status = xhr && xhr.status ? xhr.status : 0;
+					var why = (status === 504 || status === 502 || status === 524)
+						? (S.storageFilesProxyTimeout || '')
+						: (status === 500 ? (S.storageFilesServerError || '') : '');
+					// A step killed by PHP left its cause on the server: ask once.
+					if (!filesAskedCause) {
+						filesAskedCause = true;
+						filesStep('0');
+						return;
+					}
+					filesFailed(why, true);
+				});
+		}
+
+		function filesDone(data) {
+					$root.find('.ob-storage-files-progress').remove();
 					setStat('file_size', data.total_size_fmt || '');
 					setFileStat('path', data.path || '');
 					setFileStat('total_size', data.total_size_fmt || '');
@@ -2583,19 +2751,32 @@
 						.text(data.exists ? (S.storageStatusActive || 'Active') : (S.storageStatusEmpty || 'Empty'));
 					$root.find('[data-file-stat-icon="status"]').html('<i data-lucide="' + (data.exists ? 'check-circle' : 'x-circle') + '"></i>');
 					$('#ob-storage-file-notice').toggle(!data.exists);
+
+					var note = (data.computed_text || '');
+					if (data.unreadable_text) { note += (note ? ' · ' : '') + data.unreadable_text; }
+					$root.find('.storage-file-info').append(
+						'<div class="ob-storage-files-note">'
+						+ '<span>' + escapeHtml(note) + '</span> '
+						+ '<button type="button" class="button-link ob-storage-retry" data-retry="files-restart">' + escapeHtml(S.storageRecalculate || 'Recalculate') + '</button>'
+						+ '</div>'
+					);
 					refreshIcons();
-				})
-				.fail(filesFailed);
 		}
 
-		function filesFailed() {
+		/**
+		 * @param {string}  why       Cause sentence from the server (or the HTTP status), '' = generic.
+		 * @param {boolean} resumable Retry continues the scan (true) or restarts it.
+		 */
+		function filesFailed(why, resumable) {
+			$root.find('.ob-storage-files-progress').remove();
 			setStat('file_size', '—');
 			$root.find('[data-file-stat]').removeClass('ob-skeleton').text('—');
 			$root.find('.storage-file-info').append(
 				'<div class="ob-storage-error ob-storage-error--files">'
 				+ '<i data-lucide="alert-circle"></i>'
-				+ '<span>' + escapeHtml(S.storageLoadFailed || 'Could not load storage data.') + '</span>'
-				+ '<button type="button" class="button ob-storage-retry" data-retry="files">' + escapeHtml(S.storageRetry || 'Retry') + '</button>'
+				+ '<span>' + escapeHtml(S.storageLoadFailed || 'Could not load storage data.')
+				+ (why ? ' ' + escapeHtml(why) : '') + '</span>'
+				+ '<button type="button" class="button ob-storage-retry" data-retry="' + (resumable === false ? 'files-restart' : 'files') + '">' + escapeHtml(S.storageRetry || 'Retry') + '</button>'
 				+ '</div>'
 			);
 			refreshIcons();
@@ -2603,8 +2784,9 @@
 
 		// Retry re-fires only the failed request.
 		$root.on('click', '.ob-storage-retry', function() {
-			if ($(this).data('retry') === 'files') {
-				loadFiles();
+			var retry = $(this).data('retry');
+			if (retry === 'files' || retry === 'files-restart') {
+				loadFiles(retry === 'files-restart');
 			} else {
 				$root.find('[data-stat!="file_size"][data-stat]').addClass('ob-skeleton').html('&nbsp;');
 				loadTables();

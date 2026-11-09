@@ -418,13 +418,34 @@ class Opti_Behavior_Setup_Guide {
 		if ( null === $last ) {
 			$last = self::last_visit();
 		}
-		$mismatches = class_exists( 'Opti_Behavior_Tracker_Heartbeat' ) ? Opti_Behavior_Tracker_Heartbeat::instance()->get_cached_mismatches() : array();
+		$diagnosis = class_exists( 'Opti_Behavior_Tracker_Heartbeat' ) ? Opti_Behavior_Tracker_Heartbeat::instance()->get_diagnosis() : array();
 		if ( ! class_exists( 'Opti_Behavior_Tracker_Heartbeat' ) ) {
 			require_once __DIR__ . '/class-opti-behavior-tracker-heartbeat.php';
 		}
 		$doc_url = Opti_Behavior_Tracker_Heartbeat::DOC_URL;
+		// Blocked = confirmed by the collection test; quiet = no event, nothing wrong seen (OPT-1943).
+		$mismatches = wp_list_pluck( wp_list_filter( $diagnosis, array( 'state' => 'blocked' ) ), 'label' );
+		$quiet      = wp_list_filter( $diagnosis, array( 'state' => 'quiet' ) );
 		if ( '' === $last ) {
 			$rows['tracker'] = array( 'info', __( 'Waiting for your first visit', 'opti-behavior' ), __( 'Open your site in a private window: your visit shows up here within a minute.', 'opti-behavior' ), home_url( '/' ), __( 'Open your site', 'opti-behavior' ) );
+		} elseif ( empty( $mismatches ) && ! empty( $quiet ) ) {
+			$lines = array();
+			foreach ( $quiet as $row ) {
+				$lines[] = Opti_Behavior_Tracker_Heartbeat::diagnosis_text( $row );
+			}
+			$tested          = 'untested' !== $quiet[ array_key_first( $quiet ) ]['reception'];
+			$rows['tracker'] = array(
+				'info',
+				__( 'Visits are received', 'opti-behavior' ),
+				sprintf(
+					/* translators: 1: comma-separated module names, 2: one line of facts per module. */
+					__( 'No activity in 24 h on %1$s: normal on a low-traffic site, nothing blocked seen. %2$s', 'opti-behavior' ),
+					implode( ', ', wp_list_pluck( $quiet, 'label' ) ),
+					implode( ' ', $lines )
+				),
+				Opti_Behavior_Tracker_Heartbeat::probe_url(),
+				$tested ? __( 'Test collection again', 'opti-behavior' ) : __( 'Test collection', 'opti-behavior' ),
+			);
 		} elseif ( ! empty( $mismatches ) ) {
 			$culprits        = class_exists( 'Opti_Behavior_Tracker_Heartbeat' ) ? Opti_Behavior_Tracker_Heartbeat::instance()->detect_culprit_plugins() : array();
 			$rows['tracker'] = array(
@@ -627,6 +648,8 @@ class Opti_Behavior_Setup_Guide {
 			</div>
 			<?php if ( $has_link && $is_ok ) : ?>
 				<a class="ob-firstday__link" href="<?php echo esc_url( $row[3] ); ?>"><?php echo esc_html( $row[4] ); ?> →</a>
+			<?php elseif ( $has_link && 0 === strpos( $row[3], admin_url() ) ) : // "Test collection" (OPT-1943): an action of this site, same tab. ?>
+				<a class="ob-firstday__btn" href="<?php echo esc_url( $row[3] ); ?>"><?php echo esc_html( $row[4] ); ?></a>
 			<?php elseif ( $has_link ) : ?>
 				<a class="ob-firstday__btn" href="<?php echo esc_url( $row[3] ); ?>" target="_blank" rel="noopener"><?php echo esc_html( $row[4] ); ?><span class="screen-reader-text"> <?php esc_html_e( '(opens in a new tab)', 'opti-behavior' ); ?></span></a>
 			<?php endif; ?>

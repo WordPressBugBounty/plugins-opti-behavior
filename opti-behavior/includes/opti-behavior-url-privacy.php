@@ -37,6 +37,10 @@ if ( ! function_exists( 'opti_behavior_default_sensitive_query_params' ) ) {
 			'sig', 'otp', 'phone', 'tel',
 			// Address of a visitor's own site (download / licence links, OPT-602).
 			'site_url', 'siteurl', 'home_url', 'website', 'domain',
+			// Our own A/B page-split marker (OPT-2978): added by the redirect of
+			// Opti_Behavior_AB_Test_Renderer, read before the URL is cleaned, and
+			// never part of the address the visitor's page really has.
+			'opti_ab_variant',
 		);
 	}
 }
@@ -387,6 +391,8 @@ if ( ! function_exists( 'opti_behavior_page_identity_strip_params' ) ) {
 			'utm_*', '_x_tr_*', 'fbclid', 'gclid', 'msclkid', 'srsltid', 'gbraid', 'wbraid', 'dclid',
 			'yclid', 'ttclid', 'twclid', 'li_fat_id', 'mc_eid', 'mc_cid', 'igshid', '_gl', 'hl',
 			'removed_item', 'add-to-cart', 'added-to-cart',
+			// Our own A/B page-split marker (OPT-2978): the B page is one page.
+			'opti_ab_variant',
 		);
 		if ( function_exists( 'apply_filters' ) ) {
 			$params = apply_filters( 'opti_behavior_traffic_page_strip_params', $params );

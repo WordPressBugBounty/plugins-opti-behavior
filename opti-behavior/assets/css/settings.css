@@ -5133,6 +5133,20 @@ body.opti-behavior_page_opti-behavior-settings #wpfooter {
 }
 
 /* Inline error state with Retry button */
+/* OPT-1944: batched file scan progress + "Measured …" line. */
+.ob-storage-files-progress,
+.ob-storage-files-note {
+	margin-top: 10px;
+	font-size: 12px;
+	color: #50575e;
+}
+.ob-storage-files-progress .storage-bar-wrapper {
+	margin-bottom: 6px;
+}
+.ob-storage-files-progress .storage-bar {
+	transition: width 0.3s ease;
+}
+
 .ob-storage-error {
 	display: flex;
 	align-items: center;

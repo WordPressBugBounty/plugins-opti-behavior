@@ -19,7 +19,9 @@
  *   cases    3 sentences "What you'll find out"
  *   compare  rows array( feature, in Free (bool), in Pro (bool) )
  *   faq      rows array( question, answer ); the install question is added here
- *   cta_text sentence above the Download button
+ *
+ * The old `cta_text` key is gone (OPT-3042): the offer above the button is the
+ * one of `Opti_Behavior_Trial_Invite`, the same on every page.
  *
  * @package OptiBehavior
  */
@@ -44,7 +46,6 @@ $opti_behavior_pp = wp_parse_args(
 		'cases'    => array(),
 		'compare'  => array(),
 		'faq'      => array(),
-		'cta_text' => '',
 	)
 );
 
@@ -55,9 +56,13 @@ $opti_behavior_pp['faq'][] = array(
 
 // The single Pro trial page (OPT-764): a plain link, nothing is sent from
 // WordPress, the browser opens the page on click.
-$opti_behavior_download_url = class_exists( 'Opti_Behavior_Trial_Invite' )
+$opti_behavior_pp_trial     = class_exists( 'Opti_Behavior_Trial_Invite' );
+$opti_behavior_download_url = $opti_behavior_pp_trial
 	? Opti_Behavior_Trial_Invite::link_url( $opti_behavior_pp['placement'] )
 	: '';
+
+// Trial form of the Pro button: the fields (email of the admin, site address)
+// are filled by Opti_Behavior_Trial_Signup::render_form() since OPT-3054.
 
 $opti_behavior_pp_image = ( '' !== $opti_behavior_pp['image'] && defined( 'OPTI_BEHAVIOR_HEATMAP_ASSETS_URL' ) )
 	? OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'images/pro-preview/' . $opti_behavior_pp['image']
@@ -82,32 +87,58 @@ $opti_behavior_pp_image = ( '' !== $opti_behavior_pp['image'] && defined( 'OPTI_
 	<div class="ob-pro-page__body">
 		<?php /* CTA first (OPT-758): visible without scrolling, before the example preview. */ ?>
 		<div class="upgrade-card ob-pro-cta" id="ob-pro-cta">
-			<h2 class="upgrade-title"><?php esc_html_e( 'Try Pro free for 6 months', 'opti-behavior' ); ?></h2>
-
+			<?php
+			/*
+			 * OPT-3051 (HX 2026-11-07): the title "Try Pro free for 6 months"
+			 * and the green "6-Month Free Trial!" badge said the same thing as
+			 * the offer box and as the button right under them. The button is
+			 * the only place that announces the trial now.
+			 */
+			?>
 			<div class="upgrade-cta">
-				<div class="free-badge">
-					<i data-lucide="gift"></i>
-					<span><?php esc_html_e( '6-Month Free Trial!', 'opti-behavior' ); ?></span>
-				</div>
-
-				<p class="cta-text"><?php echo esc_html( $opti_behavior_pp['cta_text'] ); ?></p>
-
-				<div class="ob-pro-cta__actions">
-					<a href="<?php echo esc_url( $opti_behavior_download_url ); ?>" class="button button-primary button-hero opti-behavior-download-cta" target="_blank" rel="noopener noreferrer">
-						<i data-lucide="download"></i>
-						<?php esc_html_e( 'Download Pro — Free for 6 Months', 'opti-behavior' ); ?>
-					</a>
-					<a href="https://demo.optiuser.com/?demo_login=go" class="ob-pro-demo-btn is-pulse" target="_blank" rel="noopener">
-						<i data-lucide="play-circle"></i>
-						<?php esc_html_e( 'See it live in the demo', 'opti-behavior' ); ?><span class="screen-reader-text"> <?php esc_html_e( '(opens in a new tab)', 'opti-behavior' ); ?></span>
-					</a>
-				</div>
-
 				<?php
-				if ( class_exists( 'Opti_Behavior_Trial_Invite' ) ) {
-					Opti_Behavior_Trial_Invite::render_info_lines( 'download' );
+				/*
+				 * The warm box and the offer, word for word as on the welcome
+				 * screen (OPT-3026 / OPT-3042): one function renders each, so
+				 * there is one place to change and never two different
+				 * messages. The old per-page `cta_text` sentence is gone.
+				 */
+				// OPT-3109: ONE Pro block (the amber "needs Pro" box is gone).
+				if ( $opti_behavior_pp_trial ) {
+					Opti_Behavior_Trial_Invite::render_offer();
 				}
 				?>
+
+				<?php if ( $opti_behavior_pp_trial ) : ?>
+				<?php
+				/*
+				 * OPT-3054 (HX 2026-11-07), "Pro in one click": THE form of the
+				 * plugin is printed by `Opti_Behavior_Trial_Signup` and this is
+				 * the only page that shows it — every "Get Pro free" button
+				 * (upsell banner, site report) leads here. The click asks
+				 * WordPress, which asks the API for the account + the licence,
+				 * and the answer is a readable message on this page. Nothing is
+				 * sent before the click and the email is never stored (Juriste,
+				 * OPT-2983).
+				 */
+				?>
+				<?php
+				if ( class_exists( 'Opti_Behavior_Trial_Signup' ) ) {
+					Opti_Behavior_Trial_Signup::render_form( $opti_behavior_pp['placement'] );
+				}
+				?>
+
+				<?php Opti_Behavior_Trial_Invite::render_trust_strip(); ?>
+
+				<p class="ob-pro-cta__download">
+					<a href="<?php echo esc_url( $opti_behavior_download_url ); ?>" class="opti-behavior-download-cta" target="_blank" rel="noopener noreferrer">
+						<i data-lucide="download"></i>
+						<?php esc_html_e( 'Already have a licence? Download Pro', 'opti-behavior' ); ?>
+					</a>
+				</p>
+
+				<?php Opti_Behavior_Trial_Invite::render_info_lines( 'download' ); ?>
+				<?php endif; ?>
 
 				<p class="help-text">
 					<?php esc_html_e( 'Need help installing? Visit our documentation or contact support.', 'opti-behavior' ); ?>

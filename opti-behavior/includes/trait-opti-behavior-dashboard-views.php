@@ -686,7 +686,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     </div>
 
                 <?php $this->render_dashboard_section_close(); ?>
-                <?php $this->render_dashboard_section_open( 3, 'audience', __( 'Audience Insights', 'opti-behavior' ), false ); ?>
+                <?php $this->render_dashboard_section_open( 3, 'audience', __( 'Audience Insights / AI', 'opti-behavior' ), false ); ?>
                     <!-- LEVEL 5.5: New vs Returning Visitors + Visited Directories + New Registered Users -->
                     <!-- New vs Returning Visitors Widget -->
                     <?php
@@ -738,6 +738,12 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                             <?php $this->render_user_intent_chart(); ?>
                         </div>
                     </div>
+
+                    <!-- LEVEL 6b: AI row (OPT-2825) — which AIs read the site, what they read, why they visit -->
+                    <?php $this->render_ai_companies_widget(); ?>
+                    <?php $this->render_ai_pages_widget(); ?>
+                    <?php $this->render_ai_intents_widget(); ?>
+                    <?php $this->render_ai_row_note(); ?>
 
                 <?php $this->render_dashboard_section_close(); ?>
                 <?php $this->render_dashboard_section_open( 4, 'tech-acquisition', __( 'Visitor Environment', 'opti-behavior' ), false ); ?>
@@ -1508,6 +1514,9 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
             }
 
             $has_data = ! empty( $data ) && ( ( isset( $data['total'] ) && $data['total'] > 0 ) || $spam_count > 0 );
+            // OB-18: the page renders before the AJAX answer (empty array = not loaded yet):
+            // "no data" only for data actually given and empty. dashboard.js shows it after the answer.
+            $show_empty = ! empty( $data ) && ! $has_data;
 
             if ( isset( $data['spam']['detected_percentage'] ) ) {
                 $spam_percentage = (float) $data['spam']['detected_percentage'];
@@ -1531,7 +1540,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     </h3>
                 </div>
                 <div class="widget-content">
-                    <div class="optibehavior-empty-state <?php echo $has_data ? '' : 'is-visible'; ?>">
+                    <div class="optibehavior-empty-state <?php echo $show_empty ? 'is-visible' : ''; ?>">
                         <i data-lucide="traffic-cone" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
                         <div class="optibehavior-empty-title"><?php esc_html_e( 'No data available', 'opti-behavior' ); ?></div>
                         <div class="optibehavior-empty-sub"><?php esc_html_e( 'Try broadening the date range or check back later.', 'opti-behavior' ); ?></div>
@@ -1567,16 +1576,234 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
         }
 
         /**
+         * The four AI intent names, same words as the data helper (OPT-2825).
+         *
+         * @since 1.11.0
+         * @return array<string,string>
+         */
+        private function get_ai_row_intent_labels() {
+            return array(
+                'user_responses'  => __( 'User responses', 'opti-behavior' ),
+                'indexing_search' => __( 'Indexing & search', 'opti-behavior' ),
+                'model_training'  => __( 'Model training', 'opti-behavior' ),
+                'data_collection' => __( 'Data collection', 'opti-behavior' ),
+            );
+        }
+
+        /**
+         * The one note of the AI row (OPT-2881).
+         *
+         * OPT-2859 kept the "older period" line inside each of the three
+         * widgets: it was printed three times, in orange, and it covered the end
+         * of the legend. It now sits once UNDER the whole row, with the real
+         * first day counted on this site (`retention_note` of the answer), so it
+         * can never hide a legend. Text filled by dashboard.js.
+         *
+         * @since 1.11.0
+         */
+        private function render_ai_row_note() {
+            ?>
+            <p class="ob-ai-row-note" id="ai-row-note" style="display: none;"></p>
+            <?php
+        }
+
+        /**
+         * The two standing sentences of the AI row, for the "?" help only
+         * (OPT-2859).
+         *
+         * @since 1.11.0
+         * @return string
+         */
+        private function get_ai_row_help_note() {
+            return __( 'Cached pages are not counted.', 'opti-behavior' ) . ' '
+                . __( 'AI passes are counted per day and kept 12 months.', 'opti-behavior' ) . ' '
+                . __( 'A robot has no country, no device and no traffic channel: the AI passes follow the chosen period only, while "Visitors sent" follows every filter of the screen.', 'opti-behavior' );
+        }
+
+        /**
+         * Render the "Which AIs read your site" widget (OPT-2825).
+         *
+         * Nothing is computed here: dashboard.js fills the chart and the figure
+         * rows from the `ai_bots` widget answer.
+         *
+         * @since 1.11.0
+         */
+        private function render_ai_companies_widget() {
+            ?>
+            <div id="ai-companies-widget" class="dashboard-widget ai-companies-widget">
+                <?php opti_behavior_render_widget_loading(); ?>
+                <div class="widget-header">
+                    <h3 class="widget-title">
+                        <span class="widget-icon"><i data-lucide="brain-circuit"></i></span>
+                        <?php esc_html_e( 'Which AIs read your site', 'opti-behavior' ); ?>
+                        <?php
+                        opti_behavior_tooltip_e(
+                            __( 'Which AIs read your site', 'opti-behavior' ),
+                            __( 'Every AI bot pass on your pages in this period, grouped by the company behind the bot. Classic search engines (Googlebot, bingbot, Applebot) are not counted here.', 'opti-behavior' ) . ' ' . $this->get_ai_row_help_note(),
+                            __( 'Who, among the AI companies, is reading your site.', 'opti-behavior' ),
+                            '',
+                            array( 'position' => 'bottom' )
+                        );
+                        ?>
+                    </h3>
+                    <div class="widget-meta" id="ai-companies-meta" style="display: none;">
+                        <span class="total-count"><span id="ai-companies-total">0</span> <?php esc_html_e( 'AI visits', 'opti-behavior' ); ?></span>
+                    </div>
+                </div>
+                <div class="widget-content">
+                    <div class="optibehavior-empty-state">
+                        <i data-lucide="brain-circuit" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
+                        <div class="optibehavior-empty-title"><?php esc_html_e( 'No AI bot visits detected', 'opti-behavior' ); ?></div>
+                        <div class="optibehavior-empty-sub"><?php esc_html_e( 'AI bot visits will appear here when detected.', 'opti-behavior' ); ?></div>
+                    </div>
+                    <div class="user-intent-chart-container" id="ai-companies-chart-container" style="display: none;">
+                        <canvas id="ai-companies-chart" width="300" height="300"></canvas>
+                        <!-- OPT-2859: the list scrolls like .bot-traffic-widget
+                             .bot-traffic-list, so 13 companies no longer make the
+                             widget twice as tall as the row above. -->
+                        <div class="ob-ai-legend-scroll">
+                            <table class="traffic-classification-legend">
+                                <tbody id="ai-companies-legend-body">
+                                    <!-- Populated by dashboard.js -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <?php
+        }
+
+        /**
+         * Render the "What AI reads and who it sends" table widget (OPT-2825).
+         *
+         * @since 1.11.0
+         */
+        private function render_ai_pages_widget() {
+            $labels = $this->get_ai_row_intent_labels();
+            ?>
+            <div id="ai-pages-widget" class="dashboard-widget ai-pages-widget">
+                <?php opti_behavior_render_widget_loading(); ?>
+                <div class="widget-header">
+                    <h3 class="widget-title">
+                        <span class="widget-icon"><i data-lucide="file-search"></i></span>
+                        <?php esc_html_e( 'What AI reads and who it sends', 'opti-behavior' ); ?>
+                        <?php
+                        opti_behavior_tooltip_e(
+                            __( 'What AI reads and who it sends', 'opti-behavior' ),
+                            __( 'For each page: how many times AI bots read it, split by why they came, and how many visitors an AI assistant then sent to that page. Search pages, sitemaps, robots.txt and feeds are left out.', 'opti-behavior' ) . ' ' . $this->get_ai_row_help_note(),
+                            __( 'The pages AIs read, and the visits they bring back.', 'opti-behavior' ),
+                            '',
+                            array( 'position' => 'bottom' )
+                        );
+                        ?>
+                    </h3>
+                    <!-- OPT-2881: how many pages the 50 rows are taken from
+                         ("The 50 most-read of 312 pages"), filled by dashboard.js
+                         from the answer (`pages_line`). -->
+                    <p class="ob-ai-pages-count" id="ai-pages-count" style="display: none;"></p>
+                </div>
+                <div class="widget-content">
+                    <div class="optibehavior-empty-state">
+                        <i data-lucide="file-search" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
+                        <div class="optibehavior-empty-title"><?php esc_html_e( 'No AI bot visits detected', 'opti-behavior' ); ?></div>
+                        <div class="optibehavior-empty-sub"><?php esc_html_e( 'AI bot visits will appear here when detected.', 'opti-behavior' ); ?></div>
+                    </div>
+                    <div class="ob-ai-pages" id="ai-pages-container" style="display: none;">
+                        <div class="ob-ai-pages-scroll">
+                            <table class="ob-ai-pages-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col"><?php esc_html_e( 'Page', 'opti-behavior' ); ?></th>
+                                        <th scope="col"><?php esc_html_e( 'AI passes', 'opti-behavior' ); ?></th>
+                                        <th scope="col"><?php esc_html_e( 'Visitors sent', 'opti-behavior' ); ?></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ai-pages-body">
+                                    <!-- Populated by dashboard.js -->
+                                </tbody>
+                            </table>
+                        </div>
+                        <ul class="ob-ai-legend">
+                            <?php foreach ( $labels as $intent_key => $label ) : ?>
+                            <li class="ob-ai-legend-item">
+                                <span class="ob-ai-dot ob-ai-dot--<?php echo esc_attr( str_replace( '_', '-', $intent_key ) ); ?>" aria-hidden="true"></span>
+                                <?php echo esc_html( $label ); ?>
+                            </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <?php
+        }
+
+        /**
+         * Render the "Why AIs visit" ring widget (OPT-2825).
+         *
+         * @since 1.11.0
+         */
+        private function render_ai_intents_widget() {
+            ?>
+            <div id="ai-intents-widget" class="dashboard-widget ai-intents-widget">
+                <?php opti_behavior_render_widget_loading(); ?>
+                <div class="widget-header">
+                    <h3 class="widget-title">
+                        <span class="widget-icon"><i data-lucide="target"></i></span>
+                        <?php esc_html_e( 'Why AIs visit', 'opti-behavior' ); ?>
+                        <?php
+                        opti_behavior_tooltip_e(
+                            __( 'Why AIs visit', 'opti-behavior' ),
+                            __( 'User responses = an AI read this page to answer someone right now. Indexing & search = it builds an AI search index. Model training = it collects text to train a model. Data collection = it gathers content for other uses.', 'opti-behavior' ) . ' ' . $this->get_ai_row_help_note(),
+                            __( 'Why the AI bots came to your pages.', 'opti-behavior' ),
+                            '',
+                            array( 'position' => 'bottom' )
+                        );
+                        ?>
+                    </h3>
+                </div>
+                <div class="widget-content">
+                    <div class="optibehavior-empty-state">
+                        <i data-lucide="target" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
+                        <div class="optibehavior-empty-title"><?php esc_html_e( 'No AI bot visits detected', 'opti-behavior' ); ?></div>
+                        <div class="optibehavior-empty-sub"><?php esc_html_e( 'AI bot visits will appear here when detected.', 'opti-behavior' ); ?></div>
+                    </div>
+                    <div class="user-intent-chart-container" id="ai-intents-chart-container" style="display: none;">
+                        <canvas id="ai-intents-chart" width="300" height="300"></canvas>
+                        <div class="ob-ai-legend-scroll">
+                            <table class="traffic-classification-legend">
+                                <tbody id="ai-intents-legend-body">
+                                    <!-- Populated by dashboard.js -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <?php
+        }
+
+        /**
          * Render bot traffic widget
          *
          * @param array $data Bot traffic data.
          */
         private function render_bot_traffic_widget( $data ) {
             $has_data = ! empty( $data ) && isset( $data['total'] ) && $data['total'] > 0;
+            // OB-18: the page renders before the AJAX answer (empty array = not loaded yet):
+            // "no data" only for data actually given and empty. dashboard.js shows it after the answer.
+            $show_empty = ! empty( $data ) && ! $has_data;
 
             $total = $has_data ? intval( $data['total'] ) : 0;
             $bots = $has_data && isset( $data['bots'] ) ? $data['bots'] : array();
-            $change_pct = $has_data && isset( $data['change_percentage'] ) ? intval( $data['change_percentage'] ) : 0;
+            // OPT-2824: a null change = nothing to compare with (the crawler log
+            // keeps 30 days), printed as "—", never as "↑ 100%".
+            $has_change     = $has_data && isset( $data['change_percentage'] ) && null !== $data['change_percentage'];
+            $change_pct     = $has_change ? intval( $data['change_percentage'] ) : 0;
+            $not_comparable = $has_data && ! empty( $data['changes_not_comparable'] );
+            $no_change_tip  = $not_comparable
+                ? __( 'Not comparable: previous period incomplete', 'opti-behavior' )
+                : __( 'No data for the previous period', 'opti-behavior' );
             ?>
             <div id="bot-traffic-widget" class="dashboard-widget bot-traffic-widget">
                 <?php opti_behavior_render_widget_loading(); ?>
@@ -1589,13 +1816,19 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     </h3>
                     <div class="widget-meta" id="bot-traffic-meta" style="<?php echo $has_data ? '' : 'display: none;'; ?>">
                         <span class="total-count"><span id="bot-traffic-total"><?php echo esc_html( number_format_i18n( $total ) ); ?></span> <?php esc_html_e( 'visits', 'opti-behavior' ); ?></span>
+                        <?php if ( $has_data && ! $has_change ) : ?>
+                        <span class="change-indicator" id="bot-traffic-change">
+                            <span id="bot-traffic-change-value" class="neutral" title="<?php echo esc_attr( $no_change_tip ); ?>">—</span>
+                        </span>
+                        <?php else : ?>
                         <span class="change-indicator <?php echo $change_pct > 0 ? 'positive' : 'negative'; ?>" id="bot-traffic-change" style="<?php echo $change_pct !== 0 ? '' : 'display: none;'; ?>">
                             <span id="bot-traffic-change-value"><?php echo $change_pct > 0 ? '↑' : '↓'; ?> <?php echo esc_html( abs( $change_pct ) ); ?>%</span>
                         </span>
+                        <?php endif; ?>
                     </div>
                 </div>
                 <div class="widget-content">
-                    <div class="optibehavior-empty-state <?php echo $has_data ? '' : 'is-visible'; ?>">
+                    <div class="optibehavior-empty-state <?php echo $show_empty ? 'is-visible' : ''; ?>">
                         <i data-lucide="bot" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
                         <div class="optibehavior-empty-title"><?php esc_html_e( 'No bot visits detected', 'opti-behavior' ); ?></div>
                         <div class="optibehavior-empty-sub"><?php esc_html_e( 'Bot visits will appear here when detected.', 'opti-behavior' ); ?></div>
@@ -1606,10 +1839,14 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                 <?php
                                 $count      = intval( $bot_data['count'] );
                                 $percentage = floatval( $bot_data['percentage'] );
-                                $bot_change = isset( $bot_data['change'] ) ? intval( $bot_data['change'] ) : 0;
+                                $bot_has_change = isset( $bot_data['change'] ) && null !== $bot_data['change'];
+                                $bot_change = $bot_has_change ? intval( $bot_data['change'] ) : 0;
                                 $bot_label  = $this->get_bot_label( $bot_type );
                                 $bot_icon   = $this->get_bot_icon( $bot_type );
-                                if ( $bot_change > 0 ) {
+                                if ( ! $bot_has_change ) {
+                                    $trend_class = 'trend-neutral';
+                                    $trend_points = '';
+                                } elseif ( $bot_change > 0 ) {
                                     $trend_class = 'trend-up';
                                     $trend_points = '18 15 12 9 6 15';
                                 } elseif ( $bot_change < 0 ) {
@@ -1628,6 +1865,9 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                     <div class="bot-stats ob-metric-values">
                                         <span class="visitor-count"><?php echo esc_html( number_format_i18n( $count ) ); ?></span>
                                         <span class="visitor-percentage"><?php echo esc_html( $percentage ); ?>%</span>
+                                        <?php if ( ! $bot_has_change ) : ?>
+                                        <span class="visitor-trend trend-neutral" title="<?php echo esc_attr( $no_change_tip ); ?>">—</span>
+                                        <?php else : ?>
                                         <span class="visitor-trend <?php echo esc_attr( $trend_class ); ?>">
                                             <?php if ( '' !== $trend_points ) : ?>
                                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1640,6 +1880,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                                             <?php endif; ?>
                                             <?php echo esc_html( abs( $bot_change ) ); ?>%
                                         </span>
+                                        <?php endif; ?>
                                     </div>
                                 </div>
                             <?php endforeach; ?>
@@ -1819,6 +2060,9 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
          */
         private function render_new_vs_returning_widget( $data ) {
             $has_data = ! empty( $data ) && isset( $data['total'] ) && $data['total'] > 0;
+            // OB-18: the page renders before the AJAX answer (empty array = not loaded yet):
+            // "no data" only for data actually given and empty. dashboard.js shows it after the answer.
+            $show_empty = ! empty( $data ) && ! $has_data;
 
             ?>
             <div id="new-vs-returning-widget" class="dashboard-widget new-vs-returning-widget">
@@ -1832,7 +2076,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     </h3>
                 </div>
                 <div class="widget-content">
-                    <div class="optibehavior-empty-state <?php echo $has_data ? '' : 'is-visible'; ?>">
+                    <div class="optibehavior-empty-state <?php echo $show_empty ? 'is-visible' : ''; ?>">
                         <i data-lucide="users-round" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
                         <div class="optibehavior-empty-title"><?php esc_html_e( 'No visitor data available', 'opti-behavior' ); ?></div>
                         <div class="optibehavior-empty-sub"><?php esc_html_e( 'Try broadening the date range or check back later.', 'opti-behavior' ); ?></div>
@@ -1857,6 +2101,9 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
          */
         private function render_visited_directories_widget( $data ) {
             $has_data = ! empty( $data ) && isset( $data['directories'] ) && ! empty( $data['directories'] );
+            // OB-18: the page renders before the AJAX answer (empty array = not loaded yet):
+            // "no data" only for data actually given and empty. dashboard.js shows it after the answer.
+            $show_empty = ! empty( $data ) && ! $has_data;
             ?>
             <div id="visited-directories-widget" class="dashboard-widget visited-directories-widget">
                 <?php opti_behavior_render_widget_loading(); ?>
@@ -1869,7 +2116,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     </h3>
                 </div>
                 <div class="widget-content">
-                    <div class="optibehavior-empty-state <?php echo $has_data ? '' : 'is-visible'; ?>">
+                    <div class="optibehavior-empty-state <?php echo $show_empty ? 'is-visible' : ''; ?>">
                         <i data-lucide="folder-tree" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
                         <div class="optibehavior-empty-title"><?php esc_html_e( 'No directory data available', 'opti-behavior' ); ?></div>
                         <div class="optibehavior-empty-sub"><?php esc_html_e( 'Try broadening the date range or check back later.', 'opti-behavior' ); ?></div>
@@ -1893,6 +2140,9 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
          */
         private function render_new_registered_users_widget( $data ) {
             $has_data = ! empty( $data ) && isset( $data['total'] ) && $data['total'] > 0;
+            // OB-18: the page renders before the AJAX answer (empty array = not loaded yet):
+            // "no data" only for data actually given and empty. dashboard.js shows it after the answer.
+            $show_empty = ! empty( $data ) && ! $has_data;
             ?>
             <div id="new-registered-users-widget" class="dashboard-widget new-registered-users-widget">
                 <?php opti_behavior_render_widget_loading(); ?>
@@ -1905,7 +2155,7 @@ if ( ! trait_exists( 'opti_behavior_Dashboard_Views_Trait' ) ) {
                     </h3>
                 </div>
                 <div class="widget-content">
-                    <div class="optibehavior-empty-state <?php echo $has_data ? '' : 'is-visible'; ?>">
+                    <div class="optibehavior-empty-state <?php echo $show_empty ? 'is-visible' : ''; ?>">
                         <i data-lucide="user-plus" style="width: 48px; height: 48px; color: #9ca3af; stroke-width: 1.5;"></i>
                         <div class="optibehavior-empty-title"><?php esc_html_e( 'No visitors data', 'opti-behavior' ); ?></div>
                         <div class="optibehavior-empty-sub"><?php esc_html_e( 'Visitor and registration data will appear here.', 'opti-behavior' ); ?></div>

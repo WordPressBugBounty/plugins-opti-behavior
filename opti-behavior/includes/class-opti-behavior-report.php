@@ -66,6 +66,51 @@ class Opti_Behavior_Report {
 		'page' => 'page-xray',
 	);
 
+	/**
+	 * Built in the background (OPT-1862): the route answers at once with a
+	 * waiting page, which asks admin-ajax to build the document and follows
+	 * its steps, then opens the stored document (`&job=<token>`).
+	 */
+	const BUILD_ACTION  = 'opti_behavior_report_build';
+	const STATUS_ACTION = 'opti_behavior_report_status';
+
+	/** Life of a job and of its stored document, in seconds. */
+	const JOB_TTL = 1800;
+
+	// Second click on the same report: seconds before it is built again.
+	const REUSE_PARTIAL = 60;  // Not complete: the missing parts are being calculated.
+	const REUSE_DONE    = 600; // Complete: the life of the read cache of the site report.
+
+	// OPT-2876: pages scored per preparation step, seconds a request spends on
+	// them, and how many times one page is tried before the report says it
+	// could not be measured.
+	const PREPARE_CHUNK  = 2;
+	const PREPARE_TRIES  = 2;
+	const PREPARE_BUDGET = 10;
+
+	// OPT-3054: a queued job nobody builds any more is an error after this many
+	// seconds, so the waiting page never spins without an answer.
+	const ORPHAN_SECS = 25;
+
+	/**
+	 * A provider left something out of the report being built.
+	 *
+	 * @var bool
+	 */
+	private static $incomplete = false;
+
+	/**
+	 * Page ids that could not be scored for the report being built (OPT-2876).
+	 *
+	 * @var array
+	 */
+	private static $prepare_failed = array();
+
+	/** Transients of a job: state, document, "same request" key => token. */
+	const JOB_PREFIX = 'opti_behavior_rjob_';
+	const DOC_PREFIX = 'opti_behavior_rdoc_';
+	const KEY_PREFIX = 'opti_behavior_rkey_';
+
 	/** Period keys of the screens (same as the Page X-Ray period form). */
 	const PERIODS = array(
 		'last7days'  => 7,
@@ -82,6 +127,8 @@ class Opti_Behavior_Report {
 	public static function init() {
 		add_action( 'admin_post_' . self::ACTION, array( __CLASS__, 'handle_request' ) );
 		add_action( 'admin_post_' . self::LEGACY_ACTION, array( __CLASS__, 'handle_legacy_request' ) );
+		add_action( 'wp_ajax_' . self::BUILD_ACTION, array( __CLASS__, 'ajax_build' ) );
+		add_action( 'wp_ajax_' . self::STATUS_ACTION, array( __CLASS__, 'ajax_status' ) );
 		if ( defined( 'WP_CLI' ) && WP_CLI && class_exists( 'WP_CLI' ) ) {
 			WP_CLI::add_command( 'opti-behavior report', array( __CLASS__, 'cli_report' ) );
 			WP_CLI::add_command( 'opti-behavior xray-report', array( __CLASS__, 'cli_xray_report' ) );
@@ -97,19 +144,39 @@ class Opti_Behavior_Report {
 	 */
 	public static function url( $args = array() ) {
 		$query = array( 'action' => self::ACTION );
+		foreach ( self::query_args( $args ) as $key => $value ) {
+			$query[ $key ] = is_int( $value ) ? $value : rawurlencode( $value );
+		}
+		$query['_wpnonce'] = wp_create_nonce( self::NONCE );
+
+		return add_query_arg( $query, admin_url( 'admin-post.php' ) );
+	}
+
+	/**
+	 * The arguments of a report as request fields (raw values, not encoded):
+	 * what url() puts in the address and the waiting page sends back to
+	 * admin-ajax. clean_args() of them gives the same arguments again.
+	 *
+	 * @param array $args Arguments.
+	 * @return array Key => string, or int for a yes / no.
+	 */
+	public static function query_args( $args ) {
+		$query = array();
 		foreach ( array( 'pages', 'posts' ) as $key ) {
 			if ( isset( $args[ $key ] ) ) {
 				$args[ $key ] = implode( ',', self::clean_page_ids( $args[ $key ] ) );
 			}
 		}
 		foreach ( array( 'type', 'page_id', 'period', 'from', 'to', 'exclude_spam', 'device', 'version', 'pages', 'posts' ) as $key ) {
-			if ( isset( $args[ $key ] ) && '' !== (string) $args[ $key ] ) {
-				$query[ $key ] = is_bool( $args[ $key ] ) ? (int) $args[ $key ] : rawurlencode( (string) $args[ $key ] );
+			if ( isset( $args[ $key ] ) && is_bool( $args[ $key ] ) ) {
+				// A "no" is kept too (before OPT-1862 `exclude_spam` false fell out of the address = spam excluded).
+				$query[ $key ] = (int) $args[ $key ];
+			} elseif ( isset( $args[ $key ] ) && '' !== (string) $args[ $key ] ) {
+				$query[ $key ] = (string) $args[ $key ];
 			}
 		}
-		$query['_wpnonce'] = wp_create_nonce( self::NONCE );
 
-		return add_query_arg( $query, admin_url( 'admin-post.php' ) );
+		return $query;
 	}
 
 	/**
@@ -301,13 +368,23 @@ class Opti_Behavior_Report {
 		$type     = isset( $args['type'] ) ? (string) $args['type'] : 'page';
 		$sections = self::get_sections( $type, $args );
 		$body     = '';
-		foreach ( $sections as $section ) {
+		$total    = count( $sections );
+		foreach ( $sections as $i => $section ) {
 			$body .= self::render_section( $section, $args );
+			/** This action is documented in includes/class-opti-behavior-report-site.php */
+			do_action( 'opti_behavior_report_progress', 'section', $i + 1, $total );
 		}
+		/** This action is documented in includes/class-opti-behavior-report-site.php */
+		do_action( 'opti_behavior_report_progress', 'finish', $total, $total );
 		if ( '' === $body ) {
 			$body = 'page' === $type
-				? '<section class="obr-section obr-state"><h2>' . esc_html__( 'This report needs Opti-Behavior Pro', 'opti-behavior' ) . '</h2><p>' . esc_html__( 'The report of one page is part of Opti-Behavior Pro. Activate Pro with a valid licence to print it.', 'opti-behavior' ) . '</p></section>'
+				? '<section class="obr-section obr-state"><h2>' . esc_html__( 'Nothing measured for this page yet', 'opti-behavior' ) . '</h2><p>' . esc_html__( 'This page has no visit with data in this period. Come back when it has been visited, or choose another period.', 'opti-behavior' ) . '</p></section>'
 				: '<section class="obr-section obr-state"><p>' . esc_html__( 'No section yet.', 'opti-behavior' ) . '</p></section>';
+		}
+		// OPT-3054: no report is blocked; a report missing the Pro modules says so
+		// at the top, with one button to the Pro trial.
+		if ( class_exists( 'Opti_Behavior_Report_Pro_Notice' ) ) {
+			$body = Opti_Behavior_Report_Pro_Notice::box_html() . $body;
 		}
 		/**
 		 * Title of a report document.
@@ -632,6 +709,10 @@ class Opti_Behavior_Report {
 	 * Request: `admin-post.php?action=opti_behavior_report`.
 	 * Order of the checks: capability, nonce, then the arguments.
 	 *
+	 * Then (OPT-1862): `job=<token>` = the document that job stored (same user,
+	 * same arguments); `sync=1` = built in this request, as before (link of the
+	 * `<noscript>`); else the waiting page, at once, with nothing computed.
+	 *
 	 * @return void
 	 */
 	public static function handle_request() {
@@ -646,9 +727,726 @@ class Opti_Behavior_Report {
 		if ( is_wp_error( $args ) ) {
 			wp_die( esc_html( $args->get_error_message() ), '', array( 'response' => 400 ) );
 		}
+		$token = isset( $_GET['job'] ) ? self::clean_token( wp_unslash( $_GET['job'] ) ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- clean_token() keeps 32 letters / digits or nothing.
+		if ( '' !== $token ) {
+			$html = self::stored_document( $token, $args );
+			if ( null !== $html ) {
+				self::send_headers();
+				echo $html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Document built by render_document(), every part escaped where it is built.
+				exit;
+			}
+			// Job gone (JOB_TTL) or not this user's: the waiting page builds it again.
+		}
+		if ( empty( $_GET['sync'] ) ) {
+			self::send_wait_headers();
+			echo self::render_wait_page( $args, $nonce ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Every part is escaped where it is built.
+			exit;
+		}
 		self::send_headers();
 		echo self::render_document( $args ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Every part is escaped where it is built.
 		exit;
+	}
+
+	/**
+	 * Waiting page of a report (OPT-1862, design OPT-1864): brand band, title,
+	 * a progress bar, the four steps, an error box and a `<noscript>` link to the old route. Nothing computed.
+	 * Everything assets/js/report-wait.js needs is in `data-ob-config`.
+	 *
+	 * @param array  $args  clean_args() result.
+	 * @param string $nonce Nonce of the request (already checked).
+	 * @return string Complete HTML5 page.
+	 */
+	public static function render_wait_page( $args, $nonce ) {
+		$link   = self::url( $args );
+		$config = array(
+			'ajax'   => admin_url( 'admin-ajax.php' ),
+			'build'  => self::BUILD_ACTION,
+			'status' => self::STATUS_ACTION,
+			'nonce'  => $nonce,
+			'args'   => self::query_args( $args ),
+			'report' => $link,
+			'texts'  => array(
+				/* translators: 1: number of the section being written, 2: number of sections. */
+				'section' => __( 'Section %1$s of %2$s', 'opti-behavior' ),
+				/* translators: 1: number of the page being scored, 2: number of pages. OPT-2876. */
+				'pages'   => __( 'Page %1$s of %2$s', 'opti-behavior' ),
+				'expired' => __( 'This report link has expired. Open it again from the plugin.', 'opti-behavior' ),
+			),
+		);
+		$steps  = array(
+			__( 'Reading sessions…', 'opti-behavior' ),
+			__( 'Counting clicks and scroll…', 'opti-behavior' ),
+			__( 'Looking for problems…', 'opti-behavior' ),
+			__( 'Preparing the action plan…', 'opti-behavior' ),
+		);
+		/**
+		 * Work to do in this page before the report is built: a frame of this site
+		 * that answers with a message `ob-xray-capture` (Pro: the heatmap picture).
+		 *
+		 * @param array|null $capture { url, timeout (ms), label } or null.
+		 * @param array      $args    Report args.
+		 */
+		// OPT-3054: the report is written anyway; while it is, say what the Pro
+		// modules do not measure, with one button to the Pro trial.
+		$notice = class_exists( 'Opti_Behavior_Report_Pro_Notice' ) ? Opti_Behavior_Report_Pro_Notice::wait_notice() : null;
+		$capture = apply_filters( 'opti_behavior_report_wait_capture', null, $args );
+		if ( is_array( $capture ) && ! empty( $capture['url'] ) && ! empty( $capture['label'] ) ) {
+			$config['capture'] = array(
+				'url'     => (string) $capture['url'],
+				'timeout' => isset( $capture['timeout'] ) ? absint( $capture['timeout'] ) : 45000,
+			);
+			array_unshift( $steps, (string) $capture['label'] );
+		}
+		$title  = __( 'Preparing your report', 'opti-behavior' );
+		$assets = defined( 'OPTI_BEHAVIOR_HEATMAP_ASSETS_URL' ) ? OPTI_BEHAVIOR_HEATMAP_ASSETS_URL : plugins_url( 'assets/', dirname( __FILE__ ) );
+		$ver    = defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '1';
+
+		$html  = "<!DOCTYPE html>\n";
+		$html .= '<html lang="' . esc_attr( str_replace( '_', '-', determine_locale() ) ) . '">';
+		$html .= '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow">';
+		$html .= '<title>' . esc_html( $title . ' — ' . self::site_name() ) . '</title>';
+		$html .= '<link rel="stylesheet" href="' . esc_url( self::wait_asset( 'css/report-wait.css', $assets, $ver ) ) . '"></head>'; // phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedStylesheet -- Standalone document sent by admin-post, no wp_head(); its CSP allows only this file.
+		$html .= '<body class="obw"><main class="obw-box" data-ob-report-wait data-ob-config="' . esc_attr( (string) wp_json_encode( $config ) ) . '">';
+		$html .= '<header class="obw-head"><img class="obw-logo" src="' . esc_url( $assets . 'images/256x256.png' ) . '" width="40" height="40" alt=""><span class="obw-brand">Opti-Behavior</span></header>';
+		$html .= '<div class="obw-body"><h1 id="obw-title">' . esc_html( $title ) . '</h1>';
+		$html .= '<p class="obw-lead">' . esc_html__( 'Large sites can take a minute or two. Keep this tab open: the report opens here when it is ready.', 'opti-behavior' ) . '</p>';
+		// OPT-3054: the Pro modules missing from this report, said while it is
+		// written (the finished document repeats it in a box at the top).
+		if ( is_array( $notice ) ) {
+			// OPT-3055: same Pro pill as the upsell banner, so the three Pro
+			// places of the plugin read as one family.
+			$html .= '<aside class="obw-pro" role="note"><p class="obw-pro__t"><span class="obw-pro__badge">Pro</span>' . esc_html( $notice['headline'] ) . '</p>';
+			$html .= '<p class="obw-pro__l">' . esc_html( $notice['line'] ) . '</p>';
+			if ( '' !== $notice['url'] ) {
+				$html .= '<p class="obw-pro__a"><a class="obw-pro__cta" href="' . esc_url( $notice['url'] ) . '" target="_blank" rel="noopener noreferrer">' . esc_html( $notice['cta'] ) . '</a></p>';
+			}
+			$html .= '</aside>';
+		}
+		// Width set by report-wait.js from the server step, never a timer.
+		$html .= '<div class="obw-bar" role="progressbar" aria-labelledby="obw-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="obw-bar__fill"></span></div>';
+		$html .= '<ol class="obw-steps">';
+		foreach ( $steps as $i => $text ) {
+			$html .= '<li data-ob-step="' . (int) $i . '"' . ( 0 === $i ? ' class="is-now"' : '' ) . '>' . esc_html( $text ) . '</li>';
+		}
+		$html .= '</ol><p class="obw-count" aria-live="polite"></p>';
+		$html .= '<div class="obw-error" role="alert" hidden><p data-ob-error>' . esc_html__( 'The report took too long or failed.', 'opti-behavior' ) . '</p>';
+		$html .= '<button type="button" data-ob-retry>' . esc_html__( 'Try again', 'opti-behavior' ) . '</button></div>';
+		$html .= '<noscript><p class="obw-noscript">' . esc_html__( 'JavaScript is off in this browser.', 'opti-behavior' ) . ' <a href="' . esc_url( add_query_arg( 'sync', 1, $link ) ) . '">' . esc_html__( 'Open the report without this page', 'opti-behavior' ) . '</a></p></noscript>';
+		$html .= '</div></main><script src="' . esc_url( self::wait_asset( 'js/report-wait.js', $assets, $ver ) ) . '"></script></body></html>'; // phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedScript -- Standalone document sent by admin-post, no wp_footer(); its CSP allows only this file.
+
+		return $html;
+	}
+
+	/**
+	 * Address of a file of the waiting page, versioned by its date.
+	 *
+	 * @param string $file   Path under assets/.
+	 * @param string $assets Assets address (ends with /).
+	 * @param string $ver    Plugin version.
+	 * @return string
+	 */
+	private static function wait_asset( $file, $assets, $ver ) {
+		$path = dirname( __DIR__ ) . '/assets/' . $file;
+
+		return add_query_arg( 'ver', file_exists( $path ) ? $ver . '.' . filemtime( $path ) : $ver, $assets . $file );
+	}
+
+	/**
+	 * Headers of the waiting page: like send_headers(), plus our own script,
+	 * stylesheet and image (by address) and admin-ajax calls on this site.
+	 *
+	 * @return void
+	 */
+	public static function send_wait_headers() {
+		if ( headers_sent() ) {
+			return;
+		}
+		$assets = defined( 'OPTI_BEHAVIOR_HEATMAP_ASSETS_URL' ) ? OPTI_BEHAVIOR_HEATMAP_ASSETS_URL : plugins_url( 'assets/', dirname( __FILE__ ) );
+		$script = strtok( $assets . 'js/report-wait.js', '?' );
+		$style  = strtok( $assets . 'css/report-wait.css', '?' );
+		$origin = self::origin_of( $assets );
+		nocache_headers();
+		header( 'Content-Type: text/html; charset=utf-8' );
+		header( 'X-Robots-Tag: noindex, nofollow' );
+		header( 'Referrer-Policy: no-referrer' );
+		header( "Content-Security-Policy: default-src 'none'; script-src " . $script . "; style-src 'self' " . $style . "; img-src 'self' data: " . $origin . "; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'" );
+	}
+
+	/**
+	 * "scheme://host[:port]" of an address, for the policy ('' when unreadable).
+	 *
+	 * @param string $url Address.
+	 * @return string
+	 */
+	private static function origin_of( $url ) {
+		$parts = wp_parse_url( $url );
+		if ( empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+			return "'self'";
+		}
+
+		return $parts['scheme'] . '://' . $parts['host'] . ( isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '' );
+	}
+
+	/**
+	 * A job token: 32 letters / digits, else ''.
+	 *
+	 * @param mixed $raw Raw value.
+	 * @return string
+	 */
+	public static function clean_token( $raw ) {
+		$raw = is_scalar( $raw ) ? (string) $raw : '';
+
+		return preg_match( '/^[A-Za-z0-9]{32}$/', $raw ) ? $raw : '';
+	}
+
+	/**
+	 * Key of "the same report for the same user": a second click, a second tab
+	 * or a reload joins the job already running.
+	 *
+	 * @param int   $user User id.
+	 * @param array $args clean_args() result.
+	 * @return string
+	 */
+	public static function job_key( $user, $args ) {
+		return md5( (int) $user . '|' . wp_json_encode( $args ) );
+	}
+
+	/**
+	 * A job of the current user, or null.
+	 *
+	 * @param string $token Token.
+	 * @return array|null
+	 */
+	private static function get_job( $token ) {
+		$job = get_transient( self::JOB_PREFIX . $token );
+
+		return is_array( $job ) && isset( $job['user'] ) && (int) $job['user'] === get_current_user_id() ? $job : null;
+	}
+
+	/**
+	 * Save a job (its life starts again).
+	 *
+	 * @param string $token Token.
+	 * @param array  $job   Job.
+	 * @return void
+	 */
+	private static function save_job( $token, $job ) {
+		$job['updated'] = time();
+		set_transient( self::JOB_PREFIX . $token, $job, self::JOB_TTL );
+	}
+
+	/**
+	 * What the waiting page reads of a job. `stage` = the step shown (0 to 3).
+	 *
+	 * @param string $token Token.
+	 * @param array  $job   Job.
+	 * @return array { token, state queued|running|done|error, step, done, total, stage }
+	 */
+	public static function job_view( $token, $job ) {
+		$step  = isset( $job['step'] ) ? (string) $job['step'] : '';
+		$done  = isset( $job['done'] ) ? (int) $job['done'] : 0;
+		$total = isset( $job['total'] ) ? (int) $job['total'] : 0;
+		$state = isset( $job['state'] ) ? (string) $job['state'] : 'queued';
+
+		$plan = isset( $job['plan'] ) && is_array( $job['plan'] ) ? $job['plan'] : array();
+
+		return array(
+			'token' => $token,
+			'state' => $state,
+			'step'  => $step,
+			'done'  => $done,
+			'total' => $total,
+			'stage' => self::stage( $state, $step, $done, $total ),
+			// OPT-2876: pages still to score. True = the waiting page asks for
+			// another step, so the document is only written once every page is
+			// ready and the user never clicks a second time.
+			'more'  => 'pages' === $step && ! empty( $plan['todo'] ),
+		);
+	}
+
+	/**
+	 * Step shown for a progress point (pure): 0 sessions, 1 clicks and scroll,
+	 * 2 problems (journeys, Pro blocks, sections), 3 action plan.
+	 *
+	 * @param string $state Job state.
+	 * @param string $step  Last progress point.
+	 * @param int    $done  Sections written.
+	 * @param int    $total Sections.
+	 * @return int
+	 */
+	public static function stage( $state, $step, $done, $total ) {
+		if ( 'done' === $state || 'finish' === $step || ( 'section' === $step && $total > 0 && $done >= $total ) ) {
+			return 3;
+		}
+		if ( in_array( $step, array( 'clicks', 'journeys', 'pro', 'section' ), true ) ) {
+			return 2;
+		}
+
+		return 'sessions' === $step ? 1 : 0;
+	}
+
+	/**
+	 * Admin-ajax `opti_behavior_report_build` (POST). Without `token`: the job
+	 * of these arguments (the running / finished one of the same user, else a
+	 * new one), answered at once. With `token`: builds that job in this
+	 * request; a second request for a job already being built answers its
+	 * state and builds nothing.
+	 *
+	 * The action rides in the address, not in the posted fields, so the
+	 * plugin language of the admin screens is not applied: the document is
+	 * written in the language of the admin-post route.
+	 *
+	 * @return void
+	 */
+	public static function ajax_build() {
+		self::check_job_request();
+		$token = isset( $_POST['token'] ) ? self::clean_token( wp_unslash( $_POST['token'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Nonce checked by check_job_request(); clean_token() keeps 32 letters / digits.
+		if ( '' === $token ) {
+			$args = self::clean_args( wp_unslash( $_POST ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Nonce checked by check_job_request(); every key is whitelisted / sanitized by clean_args().
+			if ( is_wp_error( $args ) ) {
+				wp_send_json_error( array( 'code' => 'args' ), 400 );
+			}
+			wp_send_json_success( self::start_job( $args ) );
+		}
+		$job = self::get_job( $token );
+		if ( null === $job ) {
+			wp_send_json_error( array( 'code' => 'gone' ), 404 );
+		}
+		wp_send_json_success( self::run_job( $token, $job ) );
+	}
+
+	/**
+	 * Admin-ajax `opti_behavior_report_status` (GET): job_view() of a job of
+	 * the current user. A job "running" whose builder holds no lock any more
+	 * (request killed, fatal error) is an error.
+	 *
+	 * @return void
+	 */
+	public static function ajax_status() {
+		self::check_job_request();
+		$token = isset( $_GET['token'] ) ? self::clean_token( wp_unslash( $_GET['token'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Nonce checked by check_job_request(); clean_token() keeps 32 letters / digits.
+		$job   = '' !== $token ? self::get_job( $token ) : null;
+		if ( null === $job ) {
+			wp_send_json_error( array( 'code' => 'gone' ), 404 );
+		}
+		if ( 'running' === $job['state'] && self::builder_gone( $token ) ) {
+			$job['state'] = 'error';
+			self::save_job( $token, $job );
+		}
+		// OPT-3054: a job left `queued` with no builder (the build request died
+		// between two preparation steps) used to keep the waiting page spinning
+		// until the browser gave up after five minutes. Nobody building and
+		// nothing moving for ORPHAN_SECS = the error message, in under 30 s.
+		if ( 'queued' === $job['state']
+			&& time() - ( isset( $job['updated'] ) ? (int) $job['updated'] : 0 ) >= self::ORPHAN_SECS
+			&& self::builder_gone( $token )
+		) {
+			$job['state'] = 'error';
+			self::save_job( $token, $job );
+		}
+		wp_send_json_success( self::job_view( $token, $job ) );
+	}
+
+	/**
+	 * Capability + nonce of both job endpoints (403 `forbidden` / `expired`).
+	 *
+	 * @return void
+	 */
+	private static function check_job_request() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'code' => 'forbidden' ), 403 );
+		}
+		$nonce = isset( $_REQUEST['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['_wpnonce'] ) ) : '';
+		if ( ! wp_verify_nonce( $nonce, self::NONCE ) ) {
+			wp_send_json_error( array( 'code' => 'expired' ), 403 );
+		}
+	}
+
+	/**
+	 * The job of these arguments for the current user: the queued / running /
+	 * finished one, else a new queued job.
+	 *
+	 * @param array $args clean_args() result.
+	 * @return array job_view().
+	 */
+	public static function start_job( $args ) {
+		$user = get_current_user_id();
+		$key  = self::job_key( $user, $args );
+		$lock = 'ob_rkey_' . $key;
+		$held = class_exists( 'Opti_Behavior_Heatmap_DB_Lock' ) ? Opti_Behavior_Heatmap_DB_Lock::acquire( $lock, 5 ) : '';
+		try {
+			$token = self::clean_token( get_transient( self::KEY_PREFIX . $key ) );
+			$job   = '' !== $token ? self::get_job( $token ) : null;
+			$alive = self::job_reusable( $job, time() );
+			if ( $alive && 'done' === $job['state'] && false === get_transient( self::DOC_PREFIX . $token ) ) {
+				$alive = false; // Document evicted (object cache): build it again.
+			}
+			if ( $alive ) {
+				return self::job_view( $token, $job );
+			}
+			$token = wp_generate_password( 32, false, false );
+			$job   = array(
+				'user'  => $user,
+				'key'   => $key,
+				'args'  => $args,
+				'state' => 'queued',
+				'step'  => '',
+				'done'  => 0,
+				'total' => 0,
+				'at'    => time(),
+			);
+			self::save_job( $token, $job );
+			set_transient( self::KEY_PREFIX . $key, $token, self::JOB_TTL );
+
+			return self::job_view( $token, $job );
+		} finally {
+			if ( class_exists( 'Opti_Behavior_Heatmap_DB_Lock' ) ) {
+				Opti_Behavior_Heatmap_DB_Lock::release( $lock, $held );
+			}
+		}
+	}
+
+	/**
+	 * A provider says the report being built is not complete.
+	 *
+	 * @param bool $yes False = reset.
+	 * @return void
+	 */
+	public static function mark_incomplete( $yes = true ) {
+		self::$incomplete = (bool) $yes;
+	}
+
+	/**
+	 * Whether the report being built was marked not complete.
+	 *
+	 * @return bool
+	 */
+	public static function is_incomplete() {
+		return self::$incomplete;
+	}
+
+	/**
+	 * One preparation step of a job (OPT-2876): the pages the document needs are
+	 * scored a few at a time, each in its own request.
+	 *
+	 * A page that fails is tried again (`PREPARE_TRIES` times in all); after that
+	 * it is named in `failed_pages()` and the rest of the report is delivered.
+	 *
+	 * @param string $token Token.
+	 * @param array  $job   Job (updated in place).
+	 * @return array|null job_view() while there is more to do, null when the
+	 *                    document can be written in this request.
+	 */
+	private static function prepare_tick( $token, &$job ) {
+		if ( ! isset( $job['plan'] ) || ! is_array( $job['plan'] ) ) {
+			/**
+			 * Pages the document needs before it can be written (OPT-2876).
+			 *
+			 * A provider (Pro Page X-Ray) answers the page ids whose score is not
+			 * ready; an empty answer = nothing to prepare, the old one-request
+			 * build.
+			 *
+			 * @param array $ids  Page ids.
+			 * @param array $args clean_args() result.
+			 */
+			$ids = apply_filters( 'opti_behavior_report_prepare_plan', array(), $job['args'] );
+			$ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $ids ) ) ) );
+
+			$job['plan'] = array(
+				'todo'   => $ids,
+				'total'  => count( $ids ),
+				'done'   => 0,
+				'failed' => array(),
+				'tries'  => array(),
+			);
+			self::save_job( $token, $job );
+		}
+		$plan = $job['plan'];
+		if ( empty( $plan['todo'] ) ) {
+			self::$prepare_failed = isset( $plan['failed'] ) ? (array) $plan['failed'] : array();
+
+			return null;
+		}
+
+		/**
+		 * How many pages one preparation step scores (OPT-2876).
+		 *
+		 * @param int   $chunk Pages per step.
+		 * @param array $args  clean_args() result.
+		 */
+		$chunk = max( 1, absint( apply_filters( 'opti_behavior_report_prepare_chunk', self::PREPARE_CHUNK, $job['args'] ) ) );
+		$batch = array_slice( array_values( $plan['todo'] ), 0, $chunk );
+
+		/**
+		 * Score these pages now (OPT-2876). The provider answers the ids it got
+		 * ready; an id it does not answer is tried again, then named as failed.
+		 *
+		 * @param array $done  Page ids made ready.
+		 * @param array $batch Page ids to prepare.
+		 * @param array $args  clean_args() result.
+		 */
+		$ready = apply_filters( 'opti_behavior_report_prepare_step', array(), $batch, $job['args'] );
+		$ready = array_map( 'absint', (array) $ready );
+
+		foreach ( $batch as $id ) {
+			if ( in_array( $id, $ready, true ) ) {
+				$plan['todo'] = array_values( array_diff( $plan['todo'], array( $id ) ) );
+				++$plan['done'];
+				continue;
+			}
+			$tries              = isset( $plan['tries'][ $id ] ) ? (int) $plan['tries'][ $id ] + 1 : 1;
+			$plan['tries'][ $id ] = $tries;
+			if ( $tries >= self::PREPARE_TRIES ) {
+				$plan['todo']     = array_values( array_diff( $plan['todo'], array( $id ) ) );
+				$plan['failed'][] = $id;
+				++$plan['done'];
+				continue;
+			}
+			// Tried again at the end of the list: the ready pages come first.
+			$plan['todo'] = array_values( array_diff( $plan['todo'], array( $id ) ) );
+			$plan['todo'][] = $id;
+		}
+
+		$job['plan']  = $plan;
+		$job['step']  = 'pages';
+		$job['done']  = (int) $plan['done'];
+		$job['total'] = (int) $plan['total'];
+
+		if ( empty( $plan['todo'] ) ) {
+			self::$prepare_failed = (array) $plan['failed'];
+			self::save_job( $token, $job );
+
+			return null;
+		}
+		// Between two steps nobody is building: `queued` again, so the status
+		// endpoint does not read a running job without a builder as an error,
+		// and a reader who leaves and comes back resumes this plan.
+		$job['state'] = 'queued';
+		self::save_job( $token, $job );
+
+		return self::job_view( $token, $job );
+	}
+
+	/**
+	 * Pages that could not be scored for the report being written (OPT-2876):
+	 * page ids, already tried `PREPARE_TRIES` times.
+	 *
+	 * @return array
+	 */
+	public static function failed_pages() {
+		return self::$prepare_failed;
+	}
+
+	/**
+	 * Whether a new click on the same report gets this job (pure): one being
+	 * built always; a done one for REUSE_PARTIAL / REUSE_DONE seconds, so a double
+	 * click builds once and "generate it again" really does.
+	 *
+	 * @param array|null $job Job.
+	 * @param int        $now Timestamp.
+	 * @return bool
+	 */
+	public static function job_reusable( $job, $now ) {
+		$state = is_array( $job ) && isset( $job['state'] ) ? $job['state'] : '';
+		if ( in_array( $state, array( 'queued', 'running' ), true ) ) {
+			return true;
+		}
+		if ( 'done' !== $state ) {
+			return false;
+		}
+		$at = isset( $job['done_at'] ) ? (int) $job['done_at'] : ( isset( $job['at'] ) ? (int) $job['at'] : 0 );
+
+		return (int) $now - $at <= ( ! empty( $job['partial'] ) ? self::REUSE_PARTIAL : self::REUSE_DONE );
+	}
+
+	/**
+	 * Build a job in this request, unless another request already builds it
+	 * (database lock of the job, held until the end of the build).
+	 *
+	 * @param string $token Token.
+	 * @param array  $job   Job of the current user.
+	 * @return array job_view().
+	 */
+	public static function run_job( $token, $job ) {
+		if ( in_array( $job['state'], array( 'done', 'error' ), true ) ) {
+			return self::job_view( $token, $job );
+		}
+		$lock = 'ob_rjob_' . $token;
+		$held = class_exists( 'Opti_Behavior_Heatmap_DB_Lock' ) ? Opti_Behavior_Heatmap_DB_Lock::acquire( $lock, 0 ) : '';
+		if ( class_exists( 'Opti_Behavior_Heatmap_DB_Lock' ) && Opti_Behavior_Heatmap_DB_Lock::BUSY === $held ) {
+			$fresh = self::get_job( $token );
+
+			return self::job_view( $token, null !== $fresh ? $fresh : $job );
+		}
+		try {
+			$fresh = self::get_job( $token );
+			$job   = null !== $fresh ? $fresh : $job;
+			if ( 'done' === $job['state'] ) {
+				return self::job_view( $token, $job );
+			}
+			ignore_user_abort( true );
+			if ( function_exists( 'set_time_limit' ) ) {
+				// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, Squiz.PHP.DiscouragedFunctions.Discouraged -- One report built on the administrator's request.
+				@set_time_limit( 300 );
+			}
+			wp_raise_memory_limit( 'admin' );
+			$job['state'] = 'running';
+			$job['step']  = '';
+			$job['done']  = 0;
+			$job['total'] = 0;
+			$job['runs']  = ( isset( $job['runs'] ) ? (int) $job['runs'] : 0 ) + 1;
+			self::save_job( $token, $job );
+
+			// OPT-2876: the pages the document needs are scored in small steps,
+			// one request each, before anything is written. The waiting page comes
+			// back for the next step (`more`), so a slow host never has to answer
+			// one long request and the reader never sees a report to generate again.
+			/**
+			 * Seconds one request spends preparing pages before it answers the
+			 * waiting page (OPT-2876): a fast site prepares everything at once,
+			 * a slow one answers and is asked for the next step.
+			 *
+			 * @param float $budget Seconds.
+			 * @param array $args   clean_args() result.
+			 */
+			$budget   = (float) apply_filters( 'opti_behavior_report_prepare_budget', self::PREPARE_BUDGET, $job['args'] );
+			$deadline = microtime( true ) + max( 1.0, $budget );
+			do {
+				$view = self::prepare_tick( $token, $job );
+			} while ( null !== $view && microtime( true ) < $deadline );
+			if ( null !== $view ) {
+				return $view;
+			}
+			// Pages ready: this request writes the document.
+			$job['state'] = 'running';
+			self::save_job( $token, $job );
+
+			$listener = function ( $step, $done = 0, $total = 0 ) use ( $token ) {
+				self::progress( $token, $step, $done, $total );
+			};
+			add_action( 'opti_behavior_report_progress', $listener, 10, 3 );
+			$level = ob_get_level();
+			ob_start();
+			self::mark_incomplete( false );
+			try {
+				$html = self::render_document( $job['args'] );
+			} catch ( Throwable $e ) {
+				$html = '';
+			}
+			while ( ob_get_level() > $level ) {
+				ob_end_clean();
+			}
+			remove_action( 'opti_behavior_report_progress', $listener, 10 );
+
+			$stored = '' !== $html && set_transient( self::DOC_PREFIX . $token, self::pack( $html ), self::JOB_TTL );
+			$fresh  = self::get_job( $token );
+			$job    = null !== $fresh ? $fresh : $job;
+
+			$job['state']   = $stored ? 'done' : 'error';
+			$job['done_at'] = time();
+			$job['partial'] = self::is_incomplete();
+			self::save_job( $token, $job );
+
+			return self::job_view( $token, $job );
+		} finally {
+			if ( class_exists( 'Opti_Behavior_Heatmap_DB_Lock' ) ) {
+				Opti_Behavior_Heatmap_DB_Lock::release( $lock, $held );
+			}
+		}
+	}
+
+	/**
+	 * Listener of `opti_behavior_report_progress` during a build: the step
+	 * reached, written to the job.
+	 *
+	 * @param string $token Token.
+	 * @param string $step  Progress point.
+	 * @param int    $done  Sections written.
+	 * @param int    $total Sections.
+	 * @return void
+	 */
+	private static function progress( $token, $step, $done, $total ) {
+		$job = self::get_job( $token );
+		if ( null === $job ) {
+			return;
+		}
+		$job['step']  = sanitize_key( (string) $step );
+		$job['done']  = (int) $done;
+		$job['total'] = (int) $total;
+		self::save_job( $token, $job );
+	}
+
+	/**
+	 * The builder of a "running" job is gone: its lock is free (MySQL only;
+	 * without lock support, never).
+	 *
+	 * @param string $token Token.
+	 * @return bool
+	 */
+	private static function builder_gone( $token ) {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Advisory lock state, nothing to cache.
+		$free = $wpdb->get_var( $wpdb->prepare( 'SELECT IS_FREE_LOCK(%s)', 'ob_rjob_' . $token ) );
+
+		return '1' === (string) $free;
+	}
+
+	/**
+	 * The stored document of a finished job of the current user, for exactly
+	 * these arguments; null otherwise.
+	 *
+	 * @param string $token Token.
+	 * @param array  $args  clean_args() result of the request.
+	 * @return string|null
+	 */
+	public static function stored_document( $token, $args ) {
+		$job = self::get_job( $token );
+		if ( null === $job || 'done' !== $job['state'] || ! isset( $job['key'] ) || self::job_key( get_current_user_id(), $args ) !== $job['key'] ) {
+			return null;
+		}
+
+		return self::unpack( get_transient( self::DOC_PREFIX . $token ) );
+	}
+
+	/**
+	 * Stored form of a document: deflated + base64 when zlib is there
+	 * (a full report with annexes is a few hundred KB of HTML).
+	 *
+	 * @param string $html Document.
+	 * @return string
+	 */
+	public static function pack( $html ) {
+		if ( function_exists( 'gzdeflate' ) ) {
+			$z = gzdeflate( $html, 6 );
+			if ( false !== $z ) {
+				return 'z:' . base64_encode( $z ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Binary deflate stored as text in a transient.
+			}
+		}
+
+		return 'r:' . $html;
+	}
+
+	/**
+	 * Document of pack(), or null.
+	 *
+	 * @param mixed $stored Stored value.
+	 * @return string|null
+	 */
+	public static function unpack( $stored ) {
+		if ( ! is_string( $stored ) || strlen( $stored ) < 2 ) {
+			return null;
+		}
+		$body = substr( $stored, 2 );
+		if ( 'r:' === substr( $stored, 0, 2 ) ) {
+			return $body;
+		}
+		if ( 'z:' !== substr( $stored, 0, 2 ) || ! function_exists( 'gzinflate' ) ) {
+			return null;
+		}
+		$z    = base64_decode( $body, true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- Reverse of pack().
+		$html = false !== $z ? gzinflate( $z ) : false;
+
+		return false !== $html ? $html : null;
 	}
 
 	/**
@@ -1511,10 +2309,26 @@ thead{display:table-header-group}
 .obr-summary .xr-first h3{font-size:10pt}
 .obr-do{display:grid;grid-template-columns:auto 1fr;gap:2mm;align-items:baseline;margin-top:2.5mm;padding:1.6mm 3mm;border-left:.9mm solid var(--xr-brand);background:var(--xr-brand-soft);border-radius:0 1.2mm 1.2mm 0;font-size:8.5pt;color:var(--xr-ink);break-inside:avoid}
 .obr-do>b{font-size:6.5pt;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#4338ca;white-space:nowrap}
+/* OPT-3054: Pro modules missing from this report, at the top of page 1. */
+.obr-prowarn{padding:0;border:0;background:none}
+.obr-prowarn__in{padding:3mm 3.5mm;border:.6pt solid #f0c070;border-left:1.2mm solid #e09b2d;border-radius:1mm;background:#fdf6e7;break-inside:avoid}
+.obr-prowarn__t{display:flex;align-items:baseline;gap:2mm;margin:0 0 1mm;font-size:9pt;font-weight:700;color:#6b4306}
+/* OPT-3055: PRO pill, same shape as .obr-pro-line, ink of the box. */
+.obr-prowarn__badge{flex:none;padding:0 1.2mm;border:.6pt solid #d89b3c;border-radius:.8mm;background:#f7e3bd;font-size:6pt;font-weight:700;letter-spacing:.08em;line-height:1.7;color:#6b4306}
+.obr-prowarn__l{margin:0;font-size:8.5pt;color:#6b4306}
+.obr-prowarn__a{margin:2mm 0 0;font-size:8.5pt}
+.obr-prowarn__a a{font-weight:600;color:#6b4306}
 .obr-pro-line{display:flex;align-items:baseline;gap:2mm;margin-top:2.5mm;font-size:8pt;color:var(--xr-faint);break-inside:avoid}
 .obr-pro-line>span:first-child{flex:none;padding:0 1.2mm;border:.6pt solid var(--xr-line);border-radius:.8mm;font-size:6pt;font-weight:700;letter-spacing:.08em;line-height:1.6}
 .obr-pro-line b{font-weight:600;color:var(--xr-muted)}
 .obr-pro-line--sec{margin-top:6mm;padding:2mm 0;border-top:.5pt solid var(--xr-line-soft);border-bottom:.5pt solid var(--xr-line-soft)}
+.obr-signals{break-inside:avoid;page-break-inside:avoid}
+.obr-signals a{color:var(--xr-brand);text-decoration:none}
+.obr-signals .obr-pro-line--sec{margin-top:0;border-top:0;padding:1.6mm 0}
+.obr-signals-table+.obr-pro-line--sec{border-top:0}
+.obr-signals-table td:first-child{width:36mm;white-space:nowrap}
+.obr-signals-table td:first-child .obr-tag{margin-right:1.5mm}
+.obr-tag{display:inline-block;padding:0 1.2mm;border:.6pt solid var(--xr-line);border-radius:.8mm;font-size:6pt;font-weight:700;letter-spacing:.08em;line-height:1.6;color:var(--xr-faint);vertical-align:.3mm}
 .obr-block{margin-top:4mm;break-inside:avoid}
 .xr-sec-head+.obr-block{margin-top:0}
 .xr-table span.xr-rank{font-weight:800;font-size:10pt}

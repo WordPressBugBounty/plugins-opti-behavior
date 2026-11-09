@@ -280,20 +280,34 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 case 'sessions_chart':
                     return array( 'sessions_chart' => $this->get_sessions_chart_data( $start_date, $end_date, $filters ) );
 
+                // Rows carry previous_count; previous_not_comparable = the previous
+                // period is incomplete (OPT-2293, rule of the KPI tiles OPT-1624).
                 case 'browsers':
-                    return array( 'browsers' => $this->get_browsers_data( $start_date, $end_date, $filters ) );
+                    return array(
+                        'browsers'                => $this->get_browsers_data( $start_date, $end_date, $filters ),
+                        'previous_not_comparable' => $this->is_dimension_previous_not_comparable( $start_date, $end_date ),
+                    );
 
                 case 'device_types':
-                    return array( 'device_types' => $this->get_device_types_data( $start_date, $end_date, $filters ) );
+                    return array(
+                        'device_types'            => $this->get_device_types_data( $start_date, $end_date, $filters ),
+                        'previous_not_comparable' => $this->is_dimension_previous_not_comparable( $start_date, $end_date ),
+                    );
 
                 case 'operating_systems':
-                    return array( 'operating_systems' => $this->get_operating_systems_data( $start_date, $end_date, $filters ) );
+                    return array(
+                        'operating_systems'       => $this->get_operating_systems_data( $start_date, $end_date, $filters ),
+                        'previous_not_comparable' => $this->is_dimension_previous_not_comparable( $start_date, $end_date ),
+                    );
 
                 case 'user_intent':
                     return array( 'user_intent' => method_exists( $this, 'get_user_intent_data' ) ? $this->get_user_intent_data( $start_date, $end_date, $filters ) : array() );
 
                 case 'countries':
-                    return array( 'countries' => $this->get_countries_data( $start_date, $end_date, $filters ) );
+                    return array(
+                        'countries'               => $this->get_countries_data( $start_date, $end_date, $filters ),
+                        'previous_not_comparable' => $this->is_dimension_previous_not_comparable( $start_date, $end_date ),
+                    );
 
                 case 'realtime':
                     // Realtime stays exempt from advanced filters (inherently "right now" data).
@@ -305,17 +319,29 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 case 'top_pages':
                     return array( 'top_pages' => $this->get_top_pages_data( $start_date, $end_date, $filters ) );
 
+                // Same row trend contract as the dimension widgets above (OPT-2294).
                 case 'referrers':
-                    return array( 'referrers' => $this->get_referrers_data( $start_date, $end_date, $filters ) );
+                    return array(
+                        'referrers'               => $this->get_referrers_data( $start_date, $end_date, $filters ),
+                        'previous_not_comparable' => $this->is_dimension_previous_not_comparable( $start_date, $end_date ),
+                    );
 
                 case 'screen_resolutions':
-                    return array( 'screen_resolutions' => $this->get_screen_resolution_data( $start_date, $end_date, $filters ) );
+                    return array(
+                        'screen_resolutions'      => $this->get_screen_resolution_data( $start_date, $end_date, $filters ),
+                        'previous_not_comparable' => $this->is_dimension_previous_not_comparable( $start_date, $end_date ),
+                    );
 
                 case 'traffic_classification':
                     return array( 'traffic_classification' => method_exists( $this, 'get_traffic_classification_data_impl' ) ? $this->get_traffic_classification_data_impl( $start_date, $end_date, $filters ) : array() );
 
                 case 'bot_traffic':
                     return array( 'bot_traffic' => method_exists( $this, 'get_bot_traffic_data_impl' ) ? $this->get_bot_traffic_data_impl( $start_date, $end_date ) : array() );
+
+                case 'ai_bots':
+                    // OPT-2859: "Visitors sent" are visitors, so the widget
+                    // follows every dashboard filter like its neighbours.
+                    return array( 'ai_bots' => method_exists( $this, 'get_ai_bots_data_impl' ) ? $this->get_ai_bots_data_impl( $start_date, $end_date, $filters ) : array() );
 
                 case 'new_vs_returning':
                     return array( 'new_vs_returning' => method_exists( $this, 'get_new_vs_returning_visitors_data_impl' ) ? $this->get_new_vs_returning_visitors_data_impl( $start_date, $end_date, $filters ) : array() );
@@ -1493,6 +1519,7 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 array( 'name' => 'optibehavior_daily_dimension_stats', 'category' => 'sessions',    'label' => __( 'Daily Dimension Stats', 'opti-behavior' ), 'date_column' => 'stat_date', 'range_delete' => true ),
                 array( 'name' => 'optibehavior_visitors',            'category' => 'visitors',       'label' => __( 'Visitors', 'opti-behavior' ),              'date_column' => 'first_visit' ),
                 array( 'name' => 'optibehavior_bot_visits',          'category' => 'visitors',       'label' => __( 'Bot Visits', 'opti-behavior' ),            'date_column' => 'visit_time', 'range_delete' => true ),
+                array( 'name' => 'optibehavior_ai_bot_daily',        'category' => 'visitors',       'label' => __( 'AI Bot Daily Counters', 'opti-behavior' ), 'date_column' => 'day', 'range_delete' => true ),
                 array( 'name' => 'optibehavior_shop_daily',          'category' => 'events',         'label' => __( 'Shop Events', 'opti-behavior' ),           'date_column' => 'day', 'range_delete' => true ),
                 array( 'name' => 'optibehavior_shop_session_events', 'category' => 'events',         'label' => __( 'Shop Session Events', 'opti-behavior' ),   'date_column' => 'event_time', 'range_delete' => true ),
                 array( 'name' => 'optibehavior_events',              'category' => 'events',         'label' => __( 'Events & Interactions', 'opti-behavior' ), 'date_column' => 'insert_at', 'range_delete' => true ),
@@ -1777,6 +1804,22 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
             $total_db_bytes    = 0;
             $total_files_bytes = 0;
 
+            // OPT-1944: file sizes come from the batched folder scan (Storage
+            // Stats, cached 12 h); one step at most here. Not finished = the
+            // badges say "calculating", settings.js finishes the scan and asks
+            // again; this payload is then not cached.
+            $scan_by_top   = null;
+            $files_pending = false;
+            if ( class_exists( 'Opti_Behavior_Stats_File_Scan' ) ) {
+                $scan = Opti_Behavior_Stats_File_Scan::step( $force );
+                if ( 'done' === $scan['status'] ) {
+                    $scan_by_top = (array) $scan['result']['by_top'];
+                } else {
+                    $files_pending = true;
+                }
+                $payload['files_pending'] = $files_pending;
+            }
+
             foreach ( $categories_map as $category_key => $tables ) {
                 $db_bytes = 0;
                 foreach ( $tables as $table ) {
@@ -1788,7 +1831,15 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 
                 $files_bytes = 0;
                 $has_files   = isset( $file_dir_map[ $category_key ] );
-                if ( $has_files ) {
+                if ( $has_files && null !== $scan_by_top ) {
+                    // Every mapped folder is a direct child of the data folder.
+                    foreach ( $file_dir_map[ $category_key ] as $dir ) {
+                        $top = basename( $dir );
+                        if ( isset( $scan_by_top[ $top ] ) ) {
+                            $files_bytes += (int) $scan_by_top[ $top ];
+                        }
+                    }
+                } elseif ( $has_files && ! $files_pending ) {
                     foreach ( $file_dir_map[ $category_key ] as $dir ) {
                         $files_bytes += $this->calculate_danger_zone_dir_size( $dir );
                     }
@@ -1824,7 +1875,9 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
              * @param int $ttl Cache lifetime. Default 900 (15 minutes).
              */
             $ttl = (int) apply_filters( 'opti_behavior_danger_zone_sizes_ttl', 900 );
-            set_transient( $cache_key, $payload, max( 60, $ttl ) );
+            if ( ! $files_pending ) {
+                set_transient( $cache_key, $payload, max( 60, $ttl ) );
+            }
 
             return $payload;
         }
@@ -2019,13 +2072,93 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
                 wp_send_json_error( array( 'message' => __( 'Unauthorized', 'opti-behavior' ) ) );
             }
 
-            $stats = $this->get_file_storage_stats();
+            // OPT-1944: batched scan (one step per call, result cached 12 h).
+            // Without the class (standalone tests) = the old one-request walk.
+            if ( ! class_exists( 'Opti_Behavior_Stats_File_Scan' ) ) {
+                $stats = $this->get_file_storage_stats();
 
-            $stats['total_size_fmt']   = $this->format_bytes( $stats['total_size'] );
-            $stats['file_count_fmt']   = number_format_i18n( $stats['file_count'] );
-            $stats['folder_count_fmt'] = number_format_i18n( $stats['folder_count'] );
+                $stats['total_size_fmt']   = $this->format_bytes( $stats['total_size'] );
+                $stats['file_count_fmt']   = number_format_i18n( $stats['file_count'] );
+                $stats['folder_count_fmt'] = number_format_i18n( $stats['folder_count'] );
 
-            wp_send_json_success( $stats );
+                wp_send_json_success( $stats );
+            }
+
+            $restart = isset( $_POST['restart'] ) && '1' === sanitize_key( wp_unslash( $_POST['restart'] ) );
+            $step    = Opti_Behavior_Stats_File_Scan::step( $restart );
+
+            wp_send_json_success( $this->format_file_scan_step( $step ) );
+        }
+
+        /**
+         * Shape one file-scan step for settings.js (OPT-1944).
+         *
+         * @param array $step Opti_Behavior_Stats_File_Scan::step() answer.
+         * @return array
+         */
+        private function format_file_scan_step( array $step ) {
+            $status = isset( $step['status'] ) ? (string) $step['status'] : 'error';
+            $out    = array( 'state' => $status );
+
+            if ( 'error' === $status ) {
+                $cause             = isset( $step['cause'] ) ? (string) $step['cause'] : 'fatal';
+                $out['cause']      = $cause;
+                $out['message']    = Opti_Behavior_Stats_File_Scan::cause_message( $cause );
+                $out['resumable']  = ! empty( $step['resumable'] );
+                $out['progress']   = isset( $step['progress'] ) ? (int) $step['progress'] : 0;
+                return $out;
+            }
+
+            if ( 'busy' === $status ) {
+                return $out;
+            }
+
+            $counts = 'done' === $status ? $step['result'] : $step['counts'];
+
+            $out['total_size']       = (int) $counts['total_size'];
+            $out['file_count']       = (int) $counts['file_count'];
+            $out['folder_count']     = (int) $counts['folder_count'];
+            $out['total_size_fmt']   = $this->format_bytes( $out['total_size'] );
+            $out['file_count_fmt']   = number_format_i18n( $out['file_count'] );
+            $out['folder_count_fmt'] = number_format_i18n( $out['folder_count'] );
+
+            if ( 'running' === $status ) {
+                $out['progress'] = (int) $step['progress'];
+                $out['progress_text'] = sprintf(
+                    /* translators: 1: files read so far, 2: size read so far. */
+                    __( 'Calculating… %1$s files read (%2$s)', 'opti-behavior' ),
+                    $out['file_count_fmt'],
+                    $out['total_size_fmt']
+                );
+                return $out;
+            }
+
+            $result = $step['result'];
+
+            $out['path']     = str_replace( wp_normalize_path( ABSPATH ), '', wp_normalize_path( $result['root'] ) );
+            $out['exists']   = ! empty( $result['exists'] );
+            $out['cached']   = ! empty( $step['cached'] );
+            $out['progress'] = 100;
+            $out['computed_text'] = sprintf(
+                /* translators: %s: date and time the folder was last measured. */
+                __( 'Measured %s', 'opti-behavior' ),
+                wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $result['finished_at'] )
+            );
+            if ( ! empty( $result['unreadable'] ) ) {
+                $out['unreadable_text'] = sprintf(
+                    /* translators: 1: number of folders, 2: one of those folders. */
+                    _n(
+                        '%1$s folder could not be read (permissions) and is not counted, for example: %2$s',
+                        '%1$s folders could not be read (permissions) and are not counted, for example: %2$s',
+                        (int) $result['unreadable'],
+                        'opti-behavior'
+                    ),
+                    number_format_i18n( (int) $result['unreadable'] ),
+                    (string) $result['unreadable_example']
+                );
+            }
+
+            return $out;
         }
 
         /**
@@ -5741,12 +5874,28 @@ if ( ! trait_exists( 'opti_behavior_Ajax_Handlers_Trait' ) ) {
 				)
 			);
 
+			// OPT-2180: "Pages losing the most visitors" of a Pro brief, printed by
+			// the same Free markup as the Free preview (an older Pro sends no key).
+			$top_pages_html = '';
+			if ( is_array( $summary ) && empty( $summary['is_locked_preview'] ) && isset( $summary['top_pages'] ) && is_array( $summary['top_pages'] ) && class_exists( 'Opti_Behavior_Smart_Insights_Page' ) && method_exists( 'Opti_Behavior_Smart_Insights_Page', 'render_top_pages' ) ) {
+				$top_pages_html = Opti_Behavior_Smart_Insights_Page::render_top_pages(
+					$summary['top_pages'],
+					array(
+						'from'         => $range['from'],
+						'to'           => $range['to'],
+						'period'       => $period,
+						'exclude_spam' => $exclude_spam,
+					)
+				);
+			}
+
 			wp_send_json_success(
 				array(
 					'summary'    => $summary,
 					'date_range' => $range,
 					'exclude_spam' => $exclude_spam,
 					'generation' => $generation,
+					'top_pages_html' => $top_pages_html,
 				)
 			);
 		}

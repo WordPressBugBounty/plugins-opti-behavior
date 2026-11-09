@@ -116,6 +116,9 @@ class Opti_Behavior_Shop_Screen {
 			return OPTI_BEHAVIOR_HEATMAP_VERSION . '.' . (int) @filemtime( $dir . $rel ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- A missing file only drops the cache buster.
 		};
 		wp_enqueue_style( 'opti-behavior-dashboard-styles', OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/dashboard_styles.css', array(), $ver( 'css/dashboard_styles.css' ) );
+		if ( function_exists( 'opti_behavior_enqueue_tooltips' ) ) {
+			opti_behavior_enqueue_tooltips();
+		}
 		wp_enqueue_style( 'opti-behavior-shop', OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'css/shop.css', array( 'opti-behavior-dashboard-styles' ), $ver( 'css/shop.css' ) );
 		wp_enqueue_script( 'opti-behavior-shop', OPTI_BEHAVIOR_HEATMAP_ASSETS_URL . 'js/shop.js', array(), $ver( 'js/shop.js' ), true );
 		wp_localize_script(
@@ -166,18 +169,27 @@ class Opti_Behavior_Shop_Screen {
 	 * @param string $to   Last day (Y-m-d).
 	 * @return array[] { product_id, event_type, count, qty, amount }.
 	 */
-	public static function query_counts( $from, $to ) {
+	public static function query_counts( $from, $to, $guard_since = null ) {
 		global $wpdb;
 		if ( ! class_exists( 'Opti_Behavior_Shop_Events' ) || ! Opti_Behavior_Shop_Events::table_ready() ) {
 			return array();
 		}
-		$table = Opti_Behavior_Shop_Events::table();
+		if ( null === $guard_since ) {
+			$guard_since = Opti_Behavior_Shop_Events::guard_since();
+		}
+		$guard_since = is_string( $guard_since ) ? $guard_since : '';
+		$table       = Opti_Behavior_Shop_Events::table();
+		// Rows older than the day the origin guard went live carry no origin at all
+		// (OPT-2999): they are grouped apart, never deleted, never in the total.
+		$unverified = '' !== $guard_since
+			? $wpdb->prepare( 'CASE WHEN day < %s THEN 1 ELSE 0 END', $guard_since )
+			: '0';
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Plugin's own table, read once per screen.
-		$rows = $wpdb->get_results(
+		$rows = $wpdb->get_results( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Plugin's own table name; values go through prepare().
 			$wpdb->prepare(
-				"SELECT product_id, event_type, SUM(count) AS count, SUM(qty) AS qty, SUM(amount) AS amount
-				FROM {$table} WHERE day BETWEEN %s AND %s AND event_type IN ('product_view', 'add_to_cart', 'order_paid')
-				GROUP BY product_id, event_type",
+				"SELECT product_id, event_type, {$unverified} AS unverified, SUM(count) AS count, SUM(qty) AS qty, SUM(amount) AS amount
+				FROM {$table} WHERE day BETWEEN %s AND %s AND event_type IN ('product_view', 'add_to_cart', 'add_to_cart_refused', 'order_paid', 'order_free')
+				GROUP BY product_id, event_type, unverified",
 				$from,
 				$to
 			),
@@ -194,26 +206,57 @@ class Opti_Behavior_Shop_Screen {
 	 * made from a list page can exceed the views: never below 0). Paid orders
 	 * of the totals = whole-order rows (product 0); of a product = order lines.
 	 *
-	 * @param array[] $counts Rows of query_counts().
-	 * @return array { totals{ views, atc, orders, amount, lost }, rows[] }
+	 * Orders with a total of 0 (`order_free`: free product, free trial) are
+	 * only counted in the report key `free`: never in the totals orders, amount or the average (OB-03).
+	 *
+	 * Lost visits and the rates built on them are counted on the days the origin
+	 * guard covers only (verified views AND verified adds of those days, OPT-3004):
+	 * `views` stays the raw total of the table, `views_covered` is what `lost` and
+	 * `rate` are built on, and `lost_measured` says whether the period holds a
+	 * covered day at all.
+	 *
+	 * @param array[] $counts      Rows of query_counts().
+	 * @param string  $guard_since Day the origin guard went live ('' = none).
+	 * @param string  $to          Last day of the period (Y-m-d, '' = read it from the rows).
+	 * @return array { totals{ views, views_covered, views_unverified, atc, orders, amount, lost }, rows[], count, unmeasured[], free, lost_measured }
 	 */
-	public static function build_report( $counts ) {
-		$by     = array();
-		$totals = array(
-			'views'  => 0,
-			'atc'    => 0,
-			'orders' => 0,
-			'amount' => 0.0,
-			'lost'   => 0,
+	public static function build_report( $counts, $guard_since = '', $to = '' ) {
+		$by            = array();
+		$lost_measured = self::lost_measured( $counts, $guard_since, $to );
+		$totals        = array(
+			'views'            => 0,
+			'views_covered'    => 0,
+			'views_unverified' => 0,
+			'atc'              => 0,
+			'orders'           => 0,
+			'amount'           => 0.0,
+			'lost'             => 0,
 		);
+		$free       = 0;
+		$unverified = 0;
+		$refused    = 0;
 		foreach ( (array) $counts as $row ) {
 			$pid   = isset( $row['product_id'] ) ? absint( $row['product_id'] ) : 0;
 			$type  = isset( $row['event_type'] ) ? (string) $row['event_type'] : '';
 			$count = isset( $row['count'] ) ? max( 0, (int) $row['count'] ) : 0;
+			// Adds refused by the origin guard: counted apart, never a rate, never
+			// a lost visit (OPT-2999).
+			if ( 'add_to_cart_refused' === $type ) {
+				$refused += $count;
+				continue;
+			}
+			// Adds written before the guard was live: shown apart, kept in the table.
+			if ( 'add_to_cart' === $type && ! empty( $row['unverified'] ) ) {
+				$unverified += $count;
+				continue;
+			}
 			if ( 0 === $pid ) {
 				if ( 'order_paid' === $type ) {
 					$totals['orders'] += $count;
 					$totals['amount'] += isset( $row['amount'] ) ? (float) $row['amount'] : 0.0;
+				}
+				if ( 'order_free' === $type ) {
+					$free += $count;
 				}
 				if ( 'add_to_cart' === $type ) {
 					$totals['atc'] += $count;
@@ -222,14 +265,20 @@ class Opti_Behavior_Shop_Screen {
 			}
 			if ( ! isset( $by[ $pid ] ) ) {
 				$by[ $pid ] = array(
-					'product_id' => $pid,
-					'views'      => 0,
-					'atc'        => 0,
-					'orders'     => 0,
+					'product_id'    => $pid,
+					'views'         => 0,
+					'views_covered' => 0,
+					'atc'           => 0,
+					'orders'        => 0,
 				);
 			}
 			if ( 'product_view' === $type ) {
 				$by[ $pid ]['views'] += $count;
+				// Views of the days the guard covers: the only ones a verified add
+				// can be compared with (OPT-3004).
+				if ( empty( $row['unverified'] ) ) {
+					$by[ $pid ]['views_covered'] += $count;
+				}
 			} elseif ( 'add_to_cart' === $type ) {
 				$by[ $pid ]['atc'] += $count;
 			} elseif ( 'order_paid' === $type ) {
@@ -240,8 +289,9 @@ class Opti_Behavior_Shop_Screen {
 		$rows       = array();
 		$unmeasured = array();
 		foreach ( $by as $row ) {
-			$totals['views'] += $row['views'];
-			$totals['atc']   += $row['atc'];
+			$totals['views']         += $row['views'];
+			$totals['views_covered'] += $row['views_covered'];
+			$totals['atc']           += $row['atc'];
 			if ( $row['views'] < 1 ) {
 				// Added to the cart without a product page view (link, list button):
 				// "Not measured", never 0 views, no rate, no lost visits (OPT-1735).
@@ -250,10 +300,14 @@ class Opti_Behavior_Shop_Screen {
 				}
 				continue; // The table lists product PAGES with views.
 			}
-			$row['lost']     = max( 0, $row['views'] - $row['atc'] );
-			$row['rate']     = round( min( 100, 100 * $row['atc'] / $row['views'] ), 1 );
-			$totals['lost'] += $row['lost'];
-			$rows[]          = $row;
+			// Lost visits and the rate are built on the covered days only: a row
+			// whose views are all older than the guard cannot be measured (OPT-3004).
+			$row_measured         = $lost_measured && $row['views_covered'] > 0;
+			$row['lost_measured'] = $row_measured;
+			$row['lost']          = $row_measured ? max( 0, $row['views_covered'] - $row['atc'] ) : 0;
+			$row['rate']          = $row_measured ? round( min( 100, 100 * $row['atc'] / $row['views_covered'] ), 1 ) : 0.0;
+			$totals['lost']      += $row['lost'];
+			$rows[]               = $row;
 		}
 		usort(
 			$rows,
@@ -275,12 +329,61 @@ class Opti_Behavior_Shop_Screen {
 			}
 		);
 
+		$totals['views_unverified'] = max( 0, $totals['views'] - $totals['views_covered'] );
+		// The period can hold covered days and still carry no view on them: there
+		// is nothing to compare the verified adds with, so the figure is not
+		// measured either (it would read "0 lost of N views").
+		if ( $lost_measured && $totals['views'] > 0 && $totals['views_covered'] < 1 ) {
+			$lost_measured = false;
+		}
+
 		return array(
 			'totals'     => $totals,
 			'rows'       => array_slice( $rows, 0, self::MAX_ROWS ),
 			'count'      => count( $rows ),
 			'unmeasured' => array_slice( $unmeasured, 0, self::MAX_ROWS ),
+			'free'       => $free,
+			// OPT-2999: adds whose origin was never checked, adds refused by the
+			// guard, and the day the guard started on this site.
+			'atc_unverified' => $unverified,
+			'atc_refused'    => $refused,
+			'guard_since'    => is_string( $guard_since ) ? $guard_since : '',
+			// OPT-3004: the period holds at least one day the guard covers, so
+			// lost visits and the rates built on them mean something.
+			'lost_measured'  => $lost_measured,
 		);
+	}
+
+	/**
+	 * Whether the period holds at least one day the origin guard covers, so a
+	 * lost visit can be counted (OPT-3004). Pure.
+	 *
+	 * The counter rows carry the `unverified` flag of query_counts() whatever the
+	 * `$guard_since` the caller passed, so a row of a covered day is the proof;
+	 * `$to` answers without reading them. No row at all = nothing was counted,
+	 * which is measured 0, not an absence.
+	 *
+	 * @param array[] $counts      Rows of query_counts().
+	 * @param string  $guard_since Day the guard went live ('' = none).
+	 * @param string  $to          Last day of the period (Y-m-d, '' = read the rows).
+	 * @return bool
+	 */
+	public static function lost_measured( $counts, $guard_since = '', $to = '' ) {
+		$guard_since = is_string( $guard_since ) ? $guard_since : '';
+		$to          = is_string( $to ) ? $to : '';
+		if ( '' === $guard_since ) {
+			return true;
+		}
+		if ( '' !== $to ) {
+			return $to >= $guard_since;
+		}
+		foreach ( (array) $counts as $row ) {
+			if ( empty( $row['unverified'] ) ) {
+				return true;
+			}
+		}
+
+		return array() === (array) $counts;
 	}
 
 	/**
@@ -385,10 +488,11 @@ class Opti_Behavior_Shop_Screen {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only GET period of a report.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Read-only GET period of a report; clean_period() = sanitize_key() + whitelist.
 		$period = self::clean_period( isset( $_GET['period'] ) ? wp_unslash( $_GET['period'] ) : '' );
 		list( $from, $to ) = self::period_range( $period );
-		$report            = self::build_report( self::query_counts( $from, $to ) );
+		$guard_since       = class_exists( 'Opti_Behavior_Shop_Events' ) ? Opti_Behavior_Shop_Events::guard_since() : '';
+		$report            = self::build_report( self::query_counts( $from, $to, $guard_since ), $guard_since, $to );
 		$report['period']  = $period;
 		$report['from']    = $from;
 		$report['to']      = $to;
@@ -413,7 +517,7 @@ class Opti_Behavior_Shop_Screen {
 		}
 		$pro = is_array( $pro ) ? $pro : null;
 
-		$empty = 0 === $report['totals']['views'] && 0 === $report['totals']['orders'] && 0 === $report['totals']['atc'];
+		$empty = 0 === $report['totals']['views'] && 0 === $report['totals']['orders'] && 0 === $report['totals']['atc'] && 0 === $report['free'];
 		?>
 		<div class="wrap opti-behavior-dashboard-page ob-shop-page">
 			<?php self::render_header( $period ); ?>
@@ -428,7 +532,10 @@ class Opti_Behavior_Shop_Screen {
 						if ( 'full' !== $report['mode'] ) {
 							self::render_mode_line();
 						}
+						self::render_suspect_line( $report, $from, $to );
+						self::render_add_origins();
 						self::render_tiles( $report, $pro );
+						self::render_add_notes( $report );
 						self::render_table( $report, $pro );
 					}
 					?>
@@ -460,6 +567,16 @@ class Opti_Behavior_Shop_Screen {
 	}
 
 	/**
+	 * Help mark of a part of the screen.
+	 *
+	 * @param string $key Key of opti_behavior_get_shop_reports_tooltips().
+	 * @return string HTML, escaped by opti_behavior_tooltip().
+	 */
+	private static function help( $key ) {
+		return function_exists( 'opti_behavior_shop_reports_help' ) ? opti_behavior_shop_reports_help( $key ) : '';
+	}
+
+	/**
 	 * Purple header + period form.
 	 *
 	 * @param string $period Period key.
@@ -472,7 +589,7 @@ class Opti_Behavior_Shop_Screen {
 				<?php Opti_Behavior_Admin_Brand::render_mark(); ?>
 				<div class="dashboard-title-text">
 					<?php Opti_Behavior_Admin_Brand::render_name(); ?>
-					<h1 class="dashboard-title"><?php esc_html_e( 'Shop', 'opti-behavior' ); ?></h1>
+					<h1 class="dashboard-title"><?php esc_html_e( 'Shop', 'opti-behavior' ); ?><?php echo self::help( 'shop' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></h1>
 					<div class="dashboard-subtitle"><span class="subtitle-text"><?php esc_html_e( 'Product pages that get views but no add to cart.', 'opti-behavior' ); ?></span></div>
 				</div>
 			</div>
@@ -530,6 +647,173 @@ class Opti_Behavior_Shop_Screen {
 	}
 
 	/**
+	 * Adds to cart too many for the visits of the period: said above the figures,
+	 * which stay (same rule as the reports: Shop_Report::adds_look_suspect()).
+	 *
+	 * @param array  $report build_report() result.
+	 * @param string $from   First day.
+	 * @param string $to     Last day.
+	 * @return void
+	 */
+	private static function render_suspect_line( $report, $from, $to ) {
+		if ( (int) $report['totals']['atc'] < Opti_Behavior_Shop_Report::SUSPECT_MIN_ADDS || ! class_exists( 'Opti_Behavior_Stats_Repository' ) ) {
+			return;
+		}
+		$visits = (int) Opti_Behavior_Stats_Repository::count_sessions_in_range( $from . ' 00:00:00', $to . ' 23:59:59', array( 'exclude_spam' => true ) );
+		if ( ! Opti_Behavior_Shop_Report::adds_look_suspect( $report['totals']['atc'], $visits ) ) {
+			return;
+		}
+		?>
+		<p class="ob-shop__mode"><?php echo esc_html( Opti_Behavior_Shop_Report::suspect_sentence( $report['totals']['atc'], $visits ) ); ?></p>
+		<?php
+	}
+
+	/**
+	 * Grey lines under the total: adds nobody could check, adds refused (OPT-2999).
+	 * Pure, '' when there is nothing to say.
+	 *
+	 * @param array $report build_report() result.
+	 * @return string[] Sentences, already translated.
+	 */
+	public static function add_notes( $report ) {
+		$notes      = array();
+		$unverified = isset( $report['atc_unverified'] ) ? max( 0, (int) $report['atc_unverified'] ) : 0;
+		$refused    = isset( $report['atc_refused'] ) ? max( 0, (int) $report['atc_refused'] ) : 0;
+		$since      = isset( $report['guard_since'] ) ? (string) $report['guard_since'] : '';
+
+		if ( $unverified > 0 && '' !== $since ) {
+			$notes[] = sprintf(
+				/* translators: 1: number of adds to cart, 2: date from which the origin of an add is checked. */
+				__( '%1$s adds before %2$s are not shown: their origin was not checked.', 'opti-behavior' ),
+				number_format_i18n( $unverified ),
+				self::day_label( $since )
+			);
+		}
+		if ( $refused > 0 ) {
+			$notes[] = sprintf(
+				/* translators: %s: number of adds to cart refused. */
+				__( '%s adds refused: they did not come from a page of this site.', 'opti-behavior' ),
+				number_format_i18n( $refused )
+			);
+		}
+		// Period partly covered by the guard, or nothing measurable at all: say from
+		// when lost visits are counted (OPT-3004). The e-mail block has no "Lost
+		// visits" tile, so this line is the only place that can say it there.
+		if ( self::has_uncovered_days( $report ) || ! self::lost_shown( $report ) ) {
+			$sentence = self::lost_from_sentence( $report );
+			if ( '' !== $sentence ) {
+				$notes[] = $sentence;
+			}
+		}
+		return $notes;
+	}
+
+	/**
+	 * Whether a lost visit can be shown for this report (OPT-3004). Pure.
+	 * A report built before this card has no key: it is shown as before.
+	 *
+	 * @param array $report build_report() result.
+	 * @return bool
+	 */
+	public static function lost_shown( $report ) {
+		return ! isset( $report['lost_measured'] ) || ! empty( $report['lost_measured'] );
+	}
+
+	/**
+	 * Whether the period also holds days the guard does not cover (OPT-3004). Pure.
+	 *
+	 * @param array $report build_report() result.
+	 * @return bool
+	 */
+	public static function has_uncovered_days( $report ) {
+		$totals = isset( $report['totals'] ) ? (array) $report['totals'] : array();
+		$views  = isset( $totals['views_unverified'] ) ? (int) $totals['views_unverified'] : 0;
+		$adds   = isset( $report['atc_unverified'] ) ? (int) $report['atc_unverified'] : 0;
+
+		return $views > 0 || $adds > 0;
+	}
+
+	/**
+	 * "Lost visits are counted from <date>." ('' without a guard day). Pure but
+	 * for the site date format (OPT-3004).
+	 *
+	 * @param array $report build_report() result.
+	 * @return string
+	 */
+	public static function lost_from_sentence( $report ) {
+		$since = isset( $report['guard_since'] ) ? (string) $report['guard_since'] : '';
+		if ( '' === $since ) {
+			return '';
+		}
+
+		/* translators: %s: date from which the origin of an add to cart is checked. */
+		return sprintf( __( 'Lost visits are counted from %s.', 'opti-behavior' ), self::day_label( $since ) );
+	}
+
+	/**
+	 * A `Y-m-d` day in the site format.
+	 *
+	 * @param string $day Day.
+	 * @return string
+	 */
+	private static function day_label( $day ) {
+		$stamp = strtotime( $day . ' 00:00:00' );
+		if ( ! $stamp ) {
+			return $day;
+		}
+		$format = get_option( 'date_format' );
+		return date_i18n( is_string( $format ) && '' !== $format ? $format : 'Y-m-d', $stamp );
+	}
+
+	/**
+	 * Print the lines of add_notes() under the figures.
+	 *
+	 * @param array $report build_report() result.
+	 * @return void
+	 */
+	private static function render_add_notes( $report ) {
+		// Nothing measurable: the "Lost visits" tile already carries the sentence,
+		// so the grey line would say it twice on this screen (the e-mail block has
+		// no such tile and keeps it) — OPT-3004.
+		$skip = self::lost_shown( $report ) ? '' : self::lost_from_sentence( $report );
+		foreach ( self::add_notes( $report ) as $note ) {
+			if ( '' !== $skip && $note === $skip ) {
+				continue;
+			}
+			echo '<p class="ob-shop__mode ob-shop__add-note">' . esc_html( $note ) . '</p>';
+		}
+	}
+
+	/**
+	 * Origin of the last adds counted: a support table, only with
+	 * &ob_add_origins=1 in the address.
+	 *
+	 * @return void
+	 */
+	private static function render_add_origins() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only display switch.
+		if ( empty( $_GET['ob_add_origins'] ) ) {
+			return;
+		}
+		$rows = get_option( Opti_Behavior_Shop_Events::ORIGINS_OPTION, array() );
+		$keys = array( 'at', 'counted', 'product', 'method', 'kind', 'path', 'get', 'post', 'fetch', 'site', 'same', 'logged', 'plugins', 'ua' );
+		echo '<table class="widefat" id="ob-shop-add-origins"><thead><tr>';
+		foreach ( $keys as $key ) {
+			echo '<th>' . esc_html( $key ) . '</th>';
+		}
+		echo '</tr></thead><tbody>';
+		foreach ( array_reverse( is_array( $rows ) ? $rows : array() ) as $row ) {
+			echo '<tr>';
+			foreach ( $keys as $key ) {
+				$value = isset( $row[ $key ] ) ? $row[ $key ] : '';
+				echo '<td>' . esc_html( 'at' === $key ? wp_date( 'd/m H:i:s', (int) $value ) : ( is_bool( $value ) ? (int) $value : (string) $value ) ) . '</td>';
+			}
+			echo '</tr>';
+		}
+		echo '</tbody></table>';
+	}
+
+	/**
 	 * State 5: Cookieless line (daily totals only).
 	 *
 	 * @return void
@@ -548,25 +832,47 @@ class Opti_Behavior_Shop_Screen {
 	 * @return void
 	 */
 	private static function render_tiles( $report, $pro ) {
-		$t     = $report['totals'];
-		$share = $t['views'] > 0 ? (int) round( 100 * $t['lost'] / $t['views'] ) : 0;
-		$tile  = null !== $pro && ! empty( $pro['tile_html'] ) ? (string) $pro['tile_html'] : '';
-		$nm    = self::views_not_measured( $t['views'], $t['atc'] );
+		$t = $report['totals'];
+		// Share of the covered days only: comparing a verified add with views of
+		// days nobody could check gave "100 % lost" (OPT-3004).
+		$covered = isset( $t['views_covered'] ) ? (int) $t['views_covered'] : (int) $t['views'];
+		$share   = $covered > 0 ? (int) round( 100 * $t['lost'] / $covered ) : 0;
+		$tile    = null !== $pro && ! empty( $pro['tile_html'] ) ? (string) $pro['tile_html'] : '';
+		$nm      = self::views_not_measured( $t['views'], $t['atc'] );
+		$lost_nm = $nm || ! self::lost_shown( $report );
 		?>
 		<ul class="ob-shop__tiles<?php echo '' !== $tile ? ' has-pro' : ''; ?>">
 			<li class="ob-shop__tile is-lead">
-				<span class="ob-shop__tile-label"><?php esc_html_e( 'Lost visits', 'opti-behavior' ); ?></span>
-				<span class="ob-shop__tile-value"><?php echo esc_html( $nm ? self::not_measured_label() : number_format_i18n( $t['lost'] ) ); ?></span>
+				<span class="ob-shop__tile-label"><?php esc_html_e( 'Lost visits', 'opti-behavior' ); ?><?php echo self::help( 'lost' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></span>
+				<span class="ob-shop__tile-value"><?php echo esc_html( $lost_nm ? self::not_measured_label() : number_format_i18n( $t['lost'] ) ); ?></span>
 				<span class="ob-shop__tile-note">
 					<?php
-					/* translators: %d: share of the product page views, in percent. */
-					echo esc_html( $nm ? self::not_measured_note() : sprintf( __( '%d%% of product page views, no add to cart', 'opti-behavior' ), $share ) );
+					if ( $lost_nm ) {
+						// OPT-3004: no day of the period is covered by the guard = no
+						// share, no 0, the sentence says from when they are counted.
+						// Views exist but none on a covered day: say from when lost
+							// visits are counted, never "pages were not visited".
+							$note = $nm ? self::not_measured_note() : self::lost_from_sentence( $report );
+						echo esc_html( '' !== $note ? $note : self::not_measured_note() );
+					} else {
+						/* translators: %d: share of the product page views, in percent. */
+						echo esc_html( sprintf( __( '%d%% of product page views, no add to cart', 'opti-behavior' ), $share ) );
+					}
 					?>
 				</span>
 			</li>
-			<li class="ob-shop__tile is-views<?php echo $nm ? ' is-not-measured' : ''; ?>"><span class="ob-shop__tile-label"><?php esc_html_e( 'Product page views', 'opti-behavior' ); ?></span><span class="ob-shop__tile-value"><?php echo esc_html( $nm ? self::not_measured_label() : number_format_i18n( $t['views'] ) ); ?></span></li>
-			<li class="ob-shop__tile"><span class="ob-shop__tile-label"><?php esc_html_e( 'Added to cart', 'opti-behavior' ); ?></span><span class="ob-shop__tile-value"><?php echo esc_html( number_format_i18n( $t['atc'] ) ); ?></span></li>
-			<li class="ob-shop__tile"><span class="ob-shop__tile-label"><?php esc_html_e( 'Paid orders', 'opti-behavior' ); ?></span><span class="ob-shop__tile-value"><?php echo esc_html( number_format_i18n( $t['orders'] ) ); ?></span></li>
+			<li class="ob-shop__tile is-views<?php echo $nm ? ' is-not-measured' : ''; ?>"><span class="ob-shop__tile-label"><?php esc_html_e( 'Product page views', 'opti-behavior' ); ?><?php echo self::help( 'views' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></span><span class="ob-shop__tile-value"><?php echo esc_html( $nm ? self::not_measured_label() : number_format_i18n( $t['views'] ) ); ?></span></li>
+			<li class="ob-shop__tile"><span class="ob-shop__tile-label"><?php esc_html_e( 'Added to cart', 'opti-behavior' ); ?><?php echo self::help( 'added' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></span><span class="ob-shop__tile-value"><?php echo esc_html( number_format_i18n( $t['atc'] ) ); ?></span></li>
+			<li class="ob-shop__tile"><span class="ob-shop__tile-label"><?php esc_html_e( 'Paid orders', 'opti-behavior' ); ?><?php echo self::help( 'orders' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></span><span class="ob-shop__tile-value"><?php echo esc_html( number_format_i18n( $t['orders'] ) ); ?></span>
+				<?php if ( ! empty( $report['free'] ) ) : ?>
+					<span class="ob-shop__tile-note">
+						<?php
+						/* translators: %s: number of orders with a total of 0. */
+						echo esc_html( sprintf( _n( '+ %s order at 0 (free), not counted', '+ %s orders at 0 (free), not counted', (int) $report['free'], 'opti-behavior' ), number_format_i18n( (int) $report['free'] ) ) );
+						?>
+					</span>
+				<?php endif; ?>
+			</li>
 			<?php echo $tile; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by the Pro plugin (filter contract). ?>
 		</ul>
 		<?php
@@ -579,11 +885,12 @@ class Opti_Behavior_Shop_Screen {
 	 * @param string $sort   aria-sort value or ''.
 	 * @param string $extra  Extra classes.
 	 * @param string $title  Title attribute.
+	 * @param string $help   Key of the help mark.
 	 * @return void
 	 */
-	private static function th( $label, $sort = '', $extra = '', $title = '' ) {
+	private static function th( $label, $sort = '', $extra = '', $title = '', $help = '' ) {
 		?>
-		<th scope="col" class="ob-shop__th-num<?php echo esc_attr( $extra ); ?>" data-sortable<?php echo '' !== $sort ? ' aria-sort="' . esc_attr( $sort ) . '"' : ''; ?><?php echo '' !== $title ? ' title="' . esc_attr( $title ) . '"' : ''; ?>><button type="button" class="ob-shop__sort"><?php echo esc_html( $label ); ?><span class="ob-shop__sort-arrow" aria-hidden="true"></span></button></th>
+		<th scope="col" class="ob-shop__th-num<?php echo esc_attr( $extra ); ?>" data-sortable<?php echo '' !== $sort ? ' aria-sort="' . esc_attr( $sort ) . '"' : ''; ?><?php echo '' !== $title ? ' title="' . esc_attr( $title ) . '"' : ''; ?>><button type="button" class="ob-shop__sort"><?php echo esc_html( $label ); ?><span class="ob-shop__sort-arrow" aria-hidden="true"></span></button><?php echo '' !== $help ? self::help( $help ) : ''; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></th>
 		<?php
 	}
 
@@ -611,7 +918,7 @@ class Opti_Behavior_Shop_Screen {
 		?>
 		<section class="ob-shop__panel" aria-labelledby="ob-shop-title">
 			<div class="ob-shop__panel-head">
-				<h2 class="ob-shop__panel-title" id="ob-shop-title"><?php esc_html_e( 'Product pages, the most lost visits first', 'opti-behavior' ); ?></h2>
+				<h2 class="ob-shop__panel-title" id="ob-shop-title"><?php esc_html_e( 'Product pages, the most lost visits first', 'opti-behavior' ); ?><?php echo self::help( 'products' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></h2>
 				<span class="ob-shop__panel-sub">
 					<?php
 					/* translators: 1: number of products, 2: period ("last 30 days"). */
@@ -628,15 +935,15 @@ class Opti_Behavior_Shop_Screen {
 			<div class="ob-shop__scroll" role="region" tabindex="0" aria-labelledby="ob-shop-title">
 				<table class="ob-shop__table">
 					<thead><tr>
-						<th scope="col"><?php esc_html_e( 'Product', 'opti-behavior' ); ?></th>
+						<th scope="col"><?php esc_html_e( 'Product', 'opti-behavior' ); ?><?php echo self::help( 'product' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></th>
 						<?php
-						self::th( $l_views );
-						self::th( $l_atc );
-						self::th( $l_orders );
-						self::th( $l_lost, 'descending', '', __( 'Views of the product page without add to cart', 'opti-behavior' ) );
-						self::th( $l_rate );
+						self::th( $l_views, '', '', '', 'views' );
+						self::th( $l_atc, '', '', '', 'added' );
+						self::th( $l_orders, '', '', '', 'orders' );
+						self::th( $l_lost, 'descending', '', __( 'Views of the product page without add to cart', 'opti-behavior' ), 'lost' );
+						self::th( $l_rate, '', '', '', 'rate' );
 						if ( '' !== $column ) {
-							self::th( $column, '', ' ob-shop__th-est' );
+							self::th( $column, '', ' ob-shop__th-est', '', 'estimate' );
 						}
 						?>
 					</tr></thead>
@@ -650,6 +957,8 @@ class Opti_Behavior_Shop_Screen {
 						$thumb = has_post_thumbnail( $pid ) ? get_the_post_thumbnail_url( $pid, 'thumbnail' ) : '';
 						$width = $max > 0 ? (int) round( 100 * $row['lost'] / $max ) : 0;
 						$est   = isset( $cells[ $pid ] ) ? (array) $cells[ $pid ] : array( '', 0 );
+						// OPT-3004: a row whose lost visits could not be measured.
+						$measured = ! isset( $row['lost_measured'] ) || ! empty( $row['lost_measured'] );
 						?>
 						<tr>
 							<td class="ob-shop__product-cell" data-sort="<?php echo esc_attr( $title ); ?>"><div class="ob-shop__product">
@@ -663,8 +972,14 @@ class Opti_Behavior_Shop_Screen {
 							<td class="ob-shop__num" data-label="<?php echo esc_attr( $l_views ); ?>" data-sort="<?php echo esc_attr( $row['views'] ); ?>"><?php echo esc_html( number_format_i18n( $row['views'] ) ); ?></td>
 							<td class="ob-shop__num" data-label="<?php echo esc_attr( $l_atc ); ?>" data-sort="<?php echo esc_attr( $row['atc'] ); ?>"><?php echo esc_html( number_format_i18n( $row['atc'] ) ); ?></td>
 							<td class="ob-shop__num" data-label="<?php echo esc_attr( $l_orders ); ?>" data-sort="<?php echo esc_attr( $row['orders'] ); ?>"><?php echo esc_html( number_format_i18n( $row['orders'] ) ); ?></td>
-							<td class="ob-shop__lost" data-label="<?php echo esc_attr( $l_lost ); ?>" data-sort="<?php echo esc_attr( $row['lost'] ); ?>"><strong><?php echo esc_html( number_format_i18n( $row['lost'] ) ); ?></strong><span class="ob-shop__bar" aria-hidden="true"><i style="width:<?php echo esc_attr( $width ); ?>%"></i></span></td>
-							<td class="ob-shop__rate" data-label="<?php echo esc_attr( $l_rate ); ?>" data-sort="<?php echo esc_attr( $row['rate'] ); ?>"><span class="is-<?php echo esc_attr( self::rate_tone( $row['rate'] ) ); ?>"><?php echo esc_html( number_format_i18n( $row['rate'], 1 ) ); ?>%</span></td>
+							<?php if ( $measured ) : ?>
+								<td class="ob-shop__lost" data-label="<?php echo esc_attr( $l_lost ); ?>" data-sort="<?php echo esc_attr( $row['lost'] ); ?>"><strong><?php echo esc_html( number_format_i18n( $row['lost'] ) ); ?></strong><span class="ob-shop__bar" aria-hidden="true"><i style="width:<?php echo esc_attr( $width ); ?>%"></i></span></td>
+								<td class="ob-shop__rate" data-label="<?php echo esc_attr( $l_rate ); ?>" data-sort="<?php echo esc_attr( $row['rate'] ); ?>"><span class="is-<?php echo esc_attr( self::rate_tone( $row['rate'] ) ); ?>"><?php echo esc_html( number_format_i18n( $row['rate'], 1 ) ); ?>%</span></td>
+							<?php else : ?>
+								<?php // OPT-3004: every view of this product is older than the guard: nothing to compare a verified add with. ?>
+								<td class="ob-shop__lost" data-label="<?php echo esc_attr( $l_lost ); ?>" data-sort="-1"><?php echo esc_html( self::not_measured_label() ); ?></td>
+								<td class="ob-shop__rate" data-label="<?php echo esc_attr( $l_rate ); ?>" data-sort="-1">&#8212;</td>
+							<?php endif; ?>
 							<?php if ( '' !== $column ) : ?>
 								<td class="ob-shop__est" data-label="<?php echo esc_attr( $column ); ?>" data-sort="<?php echo esc_attr( isset( $est[1] ) ? (float) $est[1] : 0 ); ?>"><?php echo esc_html( isset( $est[0] ) ? (string) $est[0] : '' ); ?></td>
 							<?php endif; ?>
@@ -697,7 +1012,8 @@ class Opti_Behavior_Shop_Screen {
 				</table>
 			</div>
 			<?php endif; ?>
-			<?php if ( null === $pro && self::show_pro_band() && $report['totals']['lost'] > 0 ) : ?>
+			<?php // OPT-3004: never offer to turn lost visits into money while they are not measured. ?>
+			<?php if ( null === $pro && self::show_pro_band() && self::lost_shown( $report ) && $report['totals']['lost'] > 0 ) : ?>
 				<p class="ob-shop__pro-band"><em class="ob-shop__chip">Pro</em><span><strong><?php esc_html_e( 'Estimated lost sales', 'opti-behavior' ); ?></strong> — <?php
 				/* translators: %s: number of lost visits of the period. */
 				echo esc_html( sprintf( __( 'Pro turns your %s lost visits of this period into an estimated range in your currency, with the formula.', 'opti-behavior' ), number_format_i18n( $report['totals']['lost'] ) ) );
@@ -716,7 +1032,7 @@ class Opti_Behavior_Shop_Screen {
 		?>
 		<section class="ob-shop__panel ob-shop__pay" aria-labelledby="ob-shop-pay-title">
 			<div class="ob-shop__panel-head">
-				<div class="ob-shop__pay-title-line"><h2 class="ob-shop__panel-title" id="ob-shop-pay-title"><?php esc_html_e( 'Payment errors', 'opti-behavior' ); ?></h2><em class="ob-shop__chip">Pro</em></div>
+				<div class="ob-shop__pay-title-line"><h2 class="ob-shop__panel-title" id="ob-shop-pay-title"><?php esc_html_e( 'Payment errors', 'opti-behavior' ); ?><?php echo self::help( 'payments' ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by opti_behavior_tooltip(). ?></h2><em class="ob-shop__chip">Pro</em></div>
 			</div>
 			<p class="ob-shop__pro-band"><span><?php esc_html_e( 'Pro groups your failed payments by gateway and error code, shows how many were paid later and what they cost, with a recording of the visit when there is one.', 'opti-behavior' ); ?></span><a href="<?php echo esc_url( self::pro_url() ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'See what Pro adds', 'opti-behavior' ); ?></a></p>
 		</section>

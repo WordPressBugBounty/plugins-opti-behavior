@@ -43,7 +43,6 @@ $opti_behavior_pro_page = array(
 			__( 'Any date range within the data you keep (raw data is kept 365 days by default).', 'opti-behavior' ),
 		),
 	),
-	'cta_text' => __( 'Download the Pro version now and get access to User Journeys and all premium features for 6 months — completely free. No credit card, no commitment.', 'opti-behavior' ),
 );
 
 include __DIR__ . '/partials/pro-feature-page.php';

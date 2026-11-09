@@ -47,7 +47,6 @@ $opti_behavior_pro_page = array(
 			__( 'Partly. A Funnel can count a form submission as its goal. The field-by-field analysis needs Pro.', 'opti-behavior' ),
 		),
 	),
-	'cta_text' => __( 'Download the Pro version now and get access to Form Analytics and all premium features for 6 months — completely free. No credit card, no commitment.', 'opti-behavior' ),
 );
 
 include __DIR__ . '/partials/pro-feature-page.php';

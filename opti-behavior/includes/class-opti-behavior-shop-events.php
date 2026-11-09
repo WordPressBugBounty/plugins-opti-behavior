@@ -31,6 +31,12 @@ class Opti_Behavior_Shop_Events {
 	/** Schema version of the table; bump on any schema change. */
 	const DB_VERSION = '1';
 
+	/** Last adds counted, with their origin (non-autoloaded). */
+	const ORIGINS_OPTION = 'opti_behavior_shop_add_origins';
+
+	/** Adds kept in ORIGINS_OPTION. */
+	const ORIGINS_MAX = 60;
+
 	/** Option holding the installed schema version (autoloaded: read on every event). */
 	const DB_VERSION_OPTION = 'opti_behavior_shop_db_version';
 
@@ -59,8 +65,21 @@ class Opti_Behavior_Shop_Events {
 		'coupon_refused',
 		'payment_failed',
 		'order_paid',
+		'order_free',
 		'payment_recovered',
+		'add_to_cart_refused',
 	);
+
+	/**
+	 * Day (site time, `Y-m-d`) from which the origin of an add to cart is
+	 * checked on this site (OPT-2999). Adds counted BEFORE that day went
+	 * through no origin guard, so the Shop screen shows them apart instead of
+	 * adding them to the total. Written once, never autoloaded.
+	 */
+	const GUARD_SINCE_OPTION = 'opti_behavior_shop_add_guard_since';
+
+	/** Seconds a request waits for the lock of an order being counted (OB-03). */
+	const ORDER_LOCK_WAIT = 5;
 
 	/**
 	 * Order meta: gateway:code of the FIRST failed payment of this order
@@ -71,6 +90,9 @@ class Opti_Behavior_Shop_Events {
 
 	/** Event types sent by the tracker (cache-safe page events). */
 	const TRACKER_TYPES = array( 'product_view', 'checkout_start' );
+
+	/** Request headers read to tell a clicked add-to-cart link from a prefetch / robot (never stored). */
+	const LINK_HEADERS = array( 'REQUEST_METHOD', 'HTTP_SEC_PURPOSE', 'HTTP_PURPOSE', 'HTTP_X_PURPOSE', 'HTTP_X_MOZ', 'HTTP_SEC_FETCH_USER', 'HTTP_SEC_FETCH_MODE' );
 
 	/**
 	 * Hooks registered once.
@@ -88,6 +110,16 @@ class Opti_Behavior_Shop_Events {
 	private static $seen_refusals = array();
 
 	/**
+	 * Cart item keys whose quantity rise was already counted in this request
+	 * (OPT-2516): WC_Cart::add_to_cart() on a line already in the cart raises
+	 * its quantity THEN fires woocommerce_add_to_cart, which must not count it
+	 * a second time.
+	 *
+	 * @var array
+	 */
+	private static $raised_keys = array();
+
+	/**
 	 * Register the hooks. Called once from Opti-Behavior.php.
 	 *
 	 * @return void
@@ -102,6 +134,7 @@ class Opti_Behavior_Shop_Events {
 
 		if ( is_admin() ) {
 			add_action( 'admin_init', array( __CLASS__, 'maybe_create_table' ) );
+			add_action( 'admin_init', array( __CLASS__, 'maybe_set_guard_since' ) );
 			add_action( 'admin_post_' . self::ACTION_NAME, array( __CLASS__, 'handle_settings_save' ) );
 		}
 	}
@@ -209,6 +242,67 @@ class Opti_Behavior_Shop_Events {
 	}
 
 	/* ---------------------------------------------------------------------
+	 * Origin guard: since when adds to cart are checked (OPT-2999)
+	 * ------------------------------------------------------------------- */
+
+	/**
+	 * Write the first day the origin guard runs on this site, once.
+	 *
+	 * The guard (`add_request_counted()` → `is_site_request()`) refuses an add
+	 * that no page of this site asked for. Rows written before it was live
+	 * carry no origin at all, so the Shop screen must not add them to the
+	 * total: this day tells them apart. When the origin journal already holds
+	 * entries, its oldest one wins (the guard was already running then).
+	 *
+	 * @return void
+	 */
+	public static function maybe_set_guard_since() {
+		if ( '' !== self::guard_since() ) {
+			return;
+		}
+		$day  = self::site_day();
+		$rows = get_option( self::ORIGINS_OPTION, array() );
+		if ( is_array( $rows ) ) {
+			foreach ( $rows as $row ) {
+				$at = ( is_array( $row ) && isset( $row['at'] ) ) ? (int) $row['at'] : 0;
+				if ( $at <= 0 ) {
+					continue;
+				}
+				$row_day = self::site_day( $at );
+				if ( '' !== $row_day && $row_day < $day ) {
+					$day = $row_day;
+				}
+			}
+		}
+		update_option( self::GUARD_SINCE_OPTION, $day, false );
+	}
+
+	/**
+	 * Day from which adds to cart are checked ('' = not stored yet: every row
+	 * is read as before this card).
+	 *
+	 * @return string `Y-m-d` or ''.
+	 */
+	public static function guard_since() {
+		$day = get_option( self::GUARD_SINCE_OPTION, '' );
+		$day = is_string( $day ) ? trim( $day ) : '';
+		return preg_match( '/^\d{4}-\d{2}-\d{2}$/', $day ) ? $day : '';
+	}
+
+	/**
+	 * A day in site time, like the counter rows.
+	 *
+	 * @param int|null $stamp Unix time, null = now.
+	 * @return string `Y-m-d`.
+	 */
+	private static function site_day( $stamp = null ) {
+		if ( function_exists( 'wp_date' ) ) {
+			return (string) wp_date( 'Y-m-d', $stamp );
+		}
+		return gmdate( 'Y-m-d', null === $stamp ? time() : (int) $stamp );
+	}
+
+	/* ---------------------------------------------------------------------
 	 * WooCommerce hooks
 	 * ------------------------------------------------------------------- */
 
@@ -223,7 +317,9 @@ class Opti_Behavior_Shop_Events {
 		}
 
 		add_action( 'woocommerce_add_to_cart', array( __CLASS__, 'on_add_to_cart' ), 10, 4 );
+		add_action( 'woocommerce_after_cart_item_quantity_update', array( __CLASS__, 'on_quantity_update' ), 10, 4 );
 		add_action( 'woocommerce_remove_cart_item', array( __CLASS__, 'on_remove_cart_item' ), 10, 2 );
+		add_action( 'woocommerce_cart_emptied', array( __CLASS__, 'on_cart_emptied' ), 10, 0 );
 		add_action( 'woocommerce_applied_coupon', array( __CLASS__, 'on_applied_coupon' ), 10, 1 );
 		add_filter( 'woocommerce_coupon_error', array( __CLASS__, 'on_coupon_error' ), 10, 3 );
 		add_action( 'woocommerce_payment_complete', array( __CLASS__, 'on_order_paid' ), 10, 1 );
@@ -240,6 +336,10 @@ class Opti_Behavior_Shop_Events {
 	 * @return bool
 	 */
 	public static function visitor_counted() {
+		// A cart filled by a scheduled task is no visitor action (OB-03).
+		if ( function_exists( 'wp_doing_cron' ) && wp_doing_cron() ) {
+			return false;
+		}
 		if ( class_exists( 'Opti_Behavior_Ingest_Gate' ) && Opti_Behavior_Ingest_Gate::should_reject( 'shop_event' ) ) {
 			return false;
 		}
@@ -263,22 +363,185 @@ class Opti_Behavior_Shop_Events {
 	 * @return void
 	 */
 	public static function on_add_to_cart( $cart_item_key, $product_id, $quantity = 1, $variation_id = 0 ) {
-		unset( $cart_item_key, $variation_id );
+		unset( $variation_id );
+		// Line already in the cart: its quantity rise was handled by
+		// on_quantity_update() a moment ago (counted, or refused by the same rules).
+		if ( is_string( $cart_item_key ) && isset( self::$raised_keys[ $cart_item_key ] ) ) {
+			unset( self::$raised_keys[ $cart_item_key ] );
+			return;
+		}
 		if ( ! self::visitor_counted() ) {
 			return;
 		}
-		// A plain link `?add-to-cart=ID` counts only when the visitor comes from a
-		// page of this site: robots and mail clients follow such links (OPT-1735).
-		if ( self::is_direct_link_request() && ! self::same_site_referer( self::request_referer() ) ) {
+		// A plain link `?add-to-cart=ID` counts only when a person clicked it on a
+		// page of this site: robots, mail clients and link prefetch follow such
+		// links too (OPT-1735, OPT-1931).
+		$counted = self::add_request_counted();
+		self::note_add_origin( absint( $product_id ), $counted );
+		if ( ! $counted ) {
+			// Refused adds are counted apart (OPT-2999): a daily counter only,
+			// never in `add_to_cart`, nothing about the request kept.
+			self::record( 'add_to_cart_refused', absint( $product_id ), max( 1, absint( $quantity ) ) );
 			return;
 		}
 		self::record( 'add_to_cart', absint( $product_id ), max( 1, absint( $quantity ) ) );
 	}
 
 	/**
-	 * Whether this request is a plain add-to-cart link: GET with `add-to-cart`
-	 * in the query, not the AJAX button (wc-ajax / admin-ajax) nor the Store
-	 * API (blocks). The product form posts, so it is not a link either.
+	 * Quantity of a line already in the cart changed (OPT-2516). The Store API
+	 * (block "Add to cart" buttons, cart and mini-cart blocks) raises the
+	 * quantity of an existing line without firing woocommerce_add_to_cart: a
+	 * rise counts as an add of the added units, a fall counts nothing (a line
+	 * set to 0 is a removal, counted by on_remove_cart_item()). The classic
+	 * add of a product already in the cart passes here first, then through
+	 * on_add_to_cart(), which skips the key marked here: counted once.
+	 *
+	 * @param string    $cart_item_key Cart item key.
+	 * @param int|float $quantity      New quantity.
+	 * @param int|float $old_quantity  Quantity before.
+	 * @param object    $cart          WC_Cart.
+	 * @return void
+	 */
+	public static function on_quantity_update( $cart_item_key, $quantity, $old_quantity = 0, $cart = null ) {
+		$added = (int) round( (float) $quantity - (float) $old_quantity );
+		if ( $added < 1 || ! is_string( $cart_item_key ) || '' === $cart_item_key ) {
+			return;
+		}
+		self::$raised_keys[ $cart_item_key ] = true;
+		if ( ! self::visitor_counted() ) {
+			return;
+		}
+		$counted    = self::add_request_counted();
+		$product_id = 0;
+		if ( is_object( $cart ) && isset( $cart->cart_contents ) && is_array( $cart->cart_contents ) && isset( $cart->cart_contents[ $cart_item_key ]['product_id'] ) ) {
+			$product_id = absint( $cart->cart_contents[ $cart_item_key ]['product_id'] );
+		}
+		self::note_add_origin( $product_id, $counted );
+		if ( ! $counted ) {
+			self::record( 'add_to_cart_refused', $product_id, $added );
+			return;
+		}
+		self::record( 'add_to_cart', $product_id, $added );
+	}
+
+	/**
+	 * Keep the origin of an add and its verdict (external audit 2026-11-03):
+	 * thousands of adds passed the link filter and nothing told where they came
+	 * from. Last ORIGINS_MAX adds, in one non-autoloaded option. Never an IP, a
+	 * cookie, a query value or a referer address.
+	 *
+	 * @param int  $product_id Product.
+	 * @param bool $counted    Whether the add is counted.
+	 * @return void
+	 */
+	private static function note_add_origin( $product_id, $counted ) {
+		$rows   = get_option( self::ORIGINS_OPTION, array() );
+		$rows   = is_array( $rows ) ? $rows : array();
+		$rows[] = self::describe_add_origin(
+			$_SERVER, // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- Reduced to safe labels by describe_add_origin().
+			array_keys( (array) $_GET ), // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Names only, no value.
+			array_keys( (array) $_POST ), // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Names only, no value.
+			wp_list_pluck( debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS, 30 ), 'file' ), // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_debug_backtrace -- File names only.
+			array(
+				'product' => (int) $product_id,
+				'at'      => time(),
+				'ajax'    => function_exists( 'wp_doing_ajax' ) && wp_doing_ajax(),
+				'rest'    => defined( 'REST_REQUEST' ) && REST_REQUEST,
+				'user'    => function_exists( 'is_user_logged_in' ) && is_user_logged_in(),
+				'same'    => self::same_site_referer( self::request_referer() ),
+				'counted' => (bool) $counted,
+			)
+		);
+		update_option( self::ORIGINS_OPTION, array_slice( $rows, -self::ORIGINS_MAX ), false );
+	}
+
+	/**
+	 * Safe description of one request (pure): the path, the NAMES of its
+	 * parameters, the plugins in the call stack, the kind of browser headers.
+	 *
+	 * @param array $server Request headers ($_SERVER).
+	 * @param array $get    Names of the query parameters.
+	 * @param array $post   Names of the posted fields.
+	 * @param array $files  Files of the call stack.
+	 * @param array $facts  { product, at, ajax, rest, user, same, counted }.
+	 * @return array
+	 */
+	public static function describe_add_origin( $server, $get, $post, $files, $facts ) {
+		$plugins = array();
+		foreach ( (array) $files as $file ) {
+			if ( preg_match( '#[/\\\\](?:plugins|mu-plugins|themes)[/\\\\]([^/\\\\]+)#', (string) $file, $m ) ) {
+				$plugins[ $m[1] ] = true;
+			}
+		}
+		$names = function ( $list ) {
+			return implode( ',', array_slice( array_map( 'sanitize_key', array_map( 'strval', (array) $list ) ), 0, 12 ) );
+		};
+		$uri   = isset( $server['REQUEST_URI'] ) ? (string) $server['REQUEST_URI'] : '';
+
+		return array(
+			'at'      => isset( $facts['at'] ) ? (int) $facts['at'] : 0,
+			'product' => isset( $facts['product'] ) ? (int) $facts['product'] : 0,
+			'method'  => isset( $server['REQUEST_METHOD'] ) ? substr( sanitize_key( $server['REQUEST_METHOD'] ), 0, 8 ) : '',
+			'path'    => substr( sanitize_text_field( (string) strtok( $uri, '?' ) ), 0, 80 ),
+			'get'     => $names( $get ),
+			'post'    => $names( $post ),
+			'kind'    => ! empty( $facts['rest'] ) ? 'rest' : ( ! empty( $facts['ajax'] ) ? 'ajax' : 'page' ),
+			'plugins' => implode( ',', array_keys( $plugins ) ),
+			'ua'      => isset( $server['HTTP_USER_AGENT'] ) ? substr( sanitize_text_field( (string) $server['HTTP_USER_AGENT'] ), 0, 110 ) : '',
+			'fetch'   => isset( $server['HTTP_SEC_FETCH_USER'] ) ? 'user' : ( isset( $server['HTTP_SEC_FETCH_MODE'] ) ? sanitize_key( $server['HTTP_SEC_FETCH_MODE'] ) : 'none' ),
+			// What the browser says about where the request came from (OPT-2999):
+			// the value the guard reads, so the journal shows why it refused.
+			'site'    => isset( $server['HTTP_SEC_FETCH_SITE'] ) ? sanitize_key( $server['HTTP_SEC_FETCH_SITE'] ) : 'none',
+			'same'    => ! empty( $facts['same'] ),
+			'logged'  => ! empty( $facts['user'] ),
+			'counted' => ! empty( $facts['counted'] ),
+		);
+	}
+
+	/**
+	 * Whether the add of this request counts: a plain link only on a person's
+	 * click (OPT-1931), anything else only from a page of this site (form, AJAX
+	 * button, Store API). Filter `opti_behavior_shop_add_counted` changes the verdict.
+	 *
+	 * @return bool
+	 */
+	public static function add_request_counted() {
+		if ( self::is_direct_link_request() ) {
+			return self::link_add_requested();
+		}
+		$site = isset( $_SERVER['HTTP_SEC_FETCH_SITE'] ) ? sanitize_key( wp_unslash( $_SERVER['HTTP_SEC_FETCH_SITE'] ) ) : '';
+		$ok   = self::is_site_request( isset( $_SERVER['REQUEST_METHOD'] ), $site, self::request_referer() );
+
+		return (bool) apply_filters( 'opti_behavior_shop_add_counted', $ok, $site );
+	}
+
+	/**
+	 * Pure verdict on a form, AJAX or Store API add: the browser says it came
+	 * from this site (`Sec-Fetch-Site`), or, in a browser without this header,
+	 * the referer does. A script posting directly sends neither. No web request
+	 * at all (WP-CLI, a code call) is not judged here.
+	 *
+	 * @param bool   $web     A web request.
+	 * @param string $site    Sec-Fetch-Site value ('' = absent).
+	 * @param string $referer Referer address.
+	 * @return bool
+	 */
+	public static function is_site_request( $web, $site, $referer ) {
+		if ( ! $web ) {
+			return true;
+		}
+		if ( '' !== $site ) {
+			return in_array( $site, array( 'same-origin', 'same-site' ), true );
+		}
+
+		return self::same_site_referer( $referer );
+	}
+
+	/**
+	 * Whether this request is a plain add-to-cart link: any non-POST request
+	 * (GET, HEAD…) with `add-to-cart` in the query, not the AJAX button
+	 * (wc-ajax / admin-ajax) nor the Store API (blocks). The product form
+	 * posts, so it is not a link either.
 	 *
 	 * @return bool
 	 */
@@ -288,7 +551,54 @@ class Opti_Behavior_Shop_Events {
 		}
 		$method = isset( $_SERVER['REQUEST_METHOD'] ) ? strtoupper( sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) ) : 'GET';
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only test of the WooCommerce query argument.
-		return 'GET' === $method && isset( $_GET['add-to-cart'] ) && ! isset( $_GET['wc-ajax'] );
+		return 'POST' !== $method && isset( $_GET['add-to-cart'] ) && ! isset( $_GET['wc-ajax'] );
+	}
+
+	/**
+	 * Whether the add-to-cart link of this request was clicked by a person:
+	 * request headers read once, never stored. Filter
+	 * `opti_behavior_shop_link_add_counted` can change the verdict.
+	 *
+	 * @return bool
+	 */
+	public static function link_add_requested() {
+		$headers = array();
+		foreach ( self::LINK_HEADERS as $key ) {
+			if ( isset( $_SERVER[ $key ] ) ) {
+				$headers[ $key ] = sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) );
+			}
+		}
+		$ok = self::is_human_link_click( $headers, self::request_referer() );
+		return (bool) apply_filters( 'opti_behavior_shop_link_add_counted', $ok, $headers );
+	}
+
+	/**
+	 * Pure verdict on an add-to-cart link request (OPT-1931): a GET (HEAD =
+	 * link checkers), no prefetch / prerender / preview header, a navigation
+	 * started by the user (`Sec-Fetch-User: ?1`, sent by browsers on a click,
+	 * never by robots, prefetch or curl) and a referer of this site.
+	 *
+	 * @param array  $server  Request headers ($_SERVER keys of LINK_HEADERS).
+	 * @param string $referer Referer address.
+	 * @return bool
+	 */
+	public static function is_human_link_click( array $server, $referer ) {
+		$method = isset( $server['REQUEST_METHOD'] ) ? strtoupper( trim( (string) $server['REQUEST_METHOD'] ) ) : 'GET';
+		if ( 'GET' !== $method ) {
+			return false;
+		}
+		foreach ( array( 'HTTP_SEC_PURPOSE', 'HTTP_PURPOSE', 'HTTP_X_PURPOSE', 'HTTP_X_MOZ' ) as $key ) {
+			if ( isset( $server[ $key ] ) && preg_match( '/prefetch|prerender|preview/i', (string) $server[ $key ] ) ) {
+				return false;
+			}
+		}
+		if ( ! isset( $server['HTTP_SEC_FETCH_USER'] ) || '?1' !== trim( (string) $server['HTTP_SEC_FETCH_USER'] ) ) {
+			return false;
+		}
+		if ( isset( $server['HTTP_SEC_FETCH_MODE'] ) && 'navigate' !== strtolower( trim( (string) $server['HTTP_SEC_FETCH_MODE'] ) ) ) {
+			return false;
+		}
+		return self::same_site_referer( $referer );
 	}
 
 	/**
@@ -323,6 +633,15 @@ class Opti_Behavior_Shop_Events {
 	}
 
 	/**
+	 * Cart emptied: no line left, so no quantity rise is pending (OPT-2516).
+	 *
+	 * @return void
+	 */
+	public static function on_cart_emptied() {
+		self::$raised_keys = array();
+	}
+
+	/**
 	 * Product removed from the cart (fired before the line leaves the cart).
 	 *
 	 * @param string $cart_item_key Cart item key.
@@ -330,6 +649,10 @@ class Opti_Behavior_Shop_Events {
 	 * @return void
 	 */
 	public static function on_remove_cart_item( $cart_item_key, $cart ) {
+		// The line leaves the cart: a later add with the same key is a new line.
+		if ( is_string( $cart_item_key ) ) {
+			unset( self::$raised_keys[ $cart_item_key ] );
+		}
 		if ( ! self::visitor_counted() ) {
 			return;
 		}
@@ -382,17 +705,42 @@ class Opti_Behavior_Shop_Events {
 	}
 
 	/**
-	 * Paid order: counted ONCE per order (flag in the order meta), one row for
-	 * the whole order (product 0) + one row per product line. code = currency.
-	 * Not filtered by visitor: a payment gateway calls back from its own server.
+	 * Confirmed order (payment_complete, or status processing / completed):
+	 * counted ONCE per order (flag in the order meta, checked under a lock per
+	 * order: a gateway callback and the return page can confirm the same order
+	 * at the same time), one row for the whole order (product 0) + one row per
+	 * product line. code = currency. An order with a total of 0 (free product,
+	 * free trial, 100 % coupon) is no sale: one `order_free` row, never in paid
+	 * orders, revenue or the average order (OB-03). Not filtered by visitor: a
+	 * payment gateway calls back from its own server.
 	 *
 	 * @param int $order_id Order id (never stored by us).
 	 * @return void
 	 */
 	public static function on_order_paid( $order_id ) {
-		if ( ! function_exists( 'wc_get_order' ) ) {
+		if ( ! function_exists( 'wc_get_order' ) || ! self::table_ready() ) {
 			return;
 		}
+		$lock = 'ob_shop_order_' . absint( $order_id );
+		$held = self::get_lock( $lock );
+		try {
+			self::count_order( absint( $order_id ) );
+		} finally {
+			if ( $held ) {
+				self::release_lock( $lock );
+			}
+		}
+	}
+
+	/**
+	 * Count one confirmed order unless its flag is already set (see on_order_paid()).
+	 *
+	 * @param int $order_id Order id.
+	 * @return void
+	 */
+	private static function count_order( $order_id ) {
+		// Another request may have set the flag while this one waited.
+		self::forget_order_cache( $order_id );
 		$order = wc_get_order( $order_id );
 		if ( ! $order || ! is_object( $order ) || ! method_exists( $order, 'get_items' ) ) {
 			return;
@@ -400,14 +748,12 @@ class Opti_Behavior_Shop_Events {
 		if ( '' !== (string) $order->get_meta( self::COUNTED_META ) ) {
 			return;
 		}
-		if ( ! self::table_ready() ) {
-			return;
-		}
 		// Flag first: the next status hook of the same request sees it.
 		$order->update_meta_data( self::COUNTED_META, '1' );
 		$order->save_meta_data();
 
 		$currency = self::normalize_code( (string) $order->get_currency() );
+		$lines    = array();
 		$qty_all  = 0;
 		foreach ( $order->get_items( 'line_item' ) as $item ) {
 			if ( ! is_object( $item ) || ! method_exists( $item, 'get_product_id' ) ) {
@@ -415,7 +761,16 @@ class Opti_Behavior_Shop_Events {
 			}
 			$qty      = max( 0, (int) $item->get_quantity() );
 			$qty_all += $qty;
-			self::record( 'order_paid', absint( $item->get_product_id() ), $qty, (float) $item->get_total(), $currency, array( 'order' => $order ) );
+			$lines[]  = array( absint( $item->get_product_id() ), $qty, (float) $item->get_total() );
+		}
+
+		if ( (float) $order->get_total() <= 0 ) {
+			self::record( 'order_free', 0, $qty_all, 0.0, $currency, array( 'order' => $order ) );
+			return;
+		}
+
+		foreach ( $lines as $line ) {
+			self::record( 'order_paid', $line[0], $line[1], $line[2], $currency, array( 'order' => $order ) );
 		}
 		self::record( 'order_paid', 0, $qty_all, (float) $order->get_total(), $currency, array( 'order' => $order ) );
 
@@ -461,6 +816,54 @@ class Opti_Behavior_Shop_Events {
 		}
 
 		self::record( 'payment_failed', 0, $first ? 1 : 0, $first ? (float) $order->get_total() : 0.0, $code, array( 'order' => $order, 'notice_type' => 'error' ) );
+	}
+
+	/**
+	 * MySQL named lock (waits ORDER_LOCK_WAIT seconds at most).
+	 *
+	 * @param string $name Lock name.
+	 * @return bool True when held (false = counted without the lock, as before).
+	 */
+	private static function get_lock( $name ) {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Named lock, no table read.
+		return '1' === (string) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $name, self::ORDER_LOCK_WAIT ) );
+	}
+
+	/**
+	 * Release a MySQL named lock.
+	 *
+	 * @param string $name Lock name.
+	 * @return void
+	 */
+	private static function release_lock( $name ) {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Named lock, no table read.
+		$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $name ) );
+	}
+
+	/**
+	 * Drop the copies of an order kept by this request, so its meta is read
+	 * again from the database (posts and HPOS storage).
+	 *
+	 * @param int $order_id Order id.
+	 * @return void
+	 */
+	private static function forget_order_cache( $order_id ) {
+		wp_cache_delete( $order_id, 'post_meta' );
+		wp_cache_delete( $order_id, 'posts' );
+		try {
+			// WC_Data keeps the meta of an object under this prefix (group "orders").
+			if ( class_exists( 'WC_Cache_Helper' ) && method_exists( 'WC_Cache_Helper', 'invalidate_cache_group' ) ) {
+				WC_Cache_Helper::invalidate_cache_group( 'object_' . $order_id );
+			}
+			$cache_class = 'Automattic\WooCommerce\Caches\OrderCache';
+			if ( function_exists( 'wc_get_container' ) && class_exists( $cache_class ) ) {
+				wc_get_container()->get( $cache_class )->remove( $order_id );
+			}
+		} catch ( Throwable $e ) {
+			unset( $e ); // The meta flag still guards the same request.
+		}
 	}
 
 	/* ---------------------------------------------------------------------
@@ -559,7 +962,7 @@ class Opti_Behavior_Shop_Events {
 		$table  = self::table();
 
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Counter upsert on the plugin's own table.
-		$done = $wpdb->query(
+		$done = $wpdb->query( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- Plugin's own table name; values go through prepare().
 			$wpdb->prepare(
 				"INSERT INTO {$table} (day, product_id, event_type, code, count, qty, amount) VALUES (%s, %d, %s, %s, 1, %d, %f)
 				ON DUPLICATE KEY UPDATE count = count + 1, qty = qty + VALUES(qty), amount = amount + VALUES(amount)",
@@ -647,7 +1050,7 @@ class Opti_Behavior_Shop_Events {
 		if ( $raw_days > 0 && self::table_ready() ) {
 			$cutoff = gmdate( 'Y-m-d', ( function_exists( 'current_time' ) ? current_time( 'timestamp' ) : time() ) - ( $raw_days * DAY_IN_SECONDS ) ); // phpcs:ignore WordPress.DateTime.CurrentTimeTimestamp.Requested -- Site-local day, same as the stored `day`.
 			$table  = self::table();
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Retention on the plugin's own table.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Retention on the plugin's own table.
 			$deleted = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE day < %s", $cutoff ) );
 		}
 

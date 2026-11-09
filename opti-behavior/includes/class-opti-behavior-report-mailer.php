@@ -701,6 +701,13 @@ class Opti_Behavior_Report_Mailer {
 				break;
 
 			case 'shop':
+				// Adds to cart to check first: no product advice can rest on them.
+				if ( ! empty( $section['atc_suspect'] ) && class_exists( 'Opti_Behavior_Shop_Report' ) ) {
+					return array(
+						'kind' => 'means',
+						'text' => Opti_Behavior_Shop_Report::suspect_sentence( (int) ( $section['totals']['atc'] ?? 0 ), (int) ( $section['visits'] ?? 0 ) ),
+					);
+				}
 				// Shop block (OPT-1735): product losing the most visits, else failed payments.
 				$top    = isset( $section['products'][0] ) && is_array( $section['products'][0] ) ? $section['products'][0] : array();
 				$name   = self::hint_name( $top['name'] ?? '' );

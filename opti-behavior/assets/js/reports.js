@@ -428,7 +428,9 @@
 			e.preventDefault();
 			return;
 		}
-		// The form opens the new tab first; the button changes right after.
+		// The form opens the new tab first; the button changes right after. The
+		// tab shows its own waiting page at once (OPT-1862): the button stays
+		// off until this tab gets the focus back, 3 s at most (no double click).
 		window.setTimeout( function () {
 			go.disabled = true;
 			go.innerHTML = '<span class="ob-reports__spin" aria-hidden="true"></span><span></span>';
@@ -443,7 +445,7 @@
 			window.setTimeout( function () {
 				window.addEventListener( 'focus', back );
 			}, 1500 );
-			window.setTimeout( back, 30000 );
+			window.setTimeout( back, 3000 );
 		}, 0 );
 	} );
 

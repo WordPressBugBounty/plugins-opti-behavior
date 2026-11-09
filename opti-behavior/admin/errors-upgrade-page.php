@@ -47,7 +47,6 @@ $opti_behavior_pro_page = array(
 			__( 'Error and performance data is kept 30 days by default, on your WordPress site.', 'opti-behavior' ),
 		),
 	),
-	'cta_text' => __( 'Download the Pro version now and get access to Errors Tracking and all premium features for 6 months — completely free. No credit card, no commitment.', 'opti-behavior' ),
 );
 
 include __DIR__ . '/partials/pro-feature-page.php';

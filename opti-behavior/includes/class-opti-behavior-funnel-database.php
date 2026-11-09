@@ -156,7 +156,7 @@ class Opti_Behavior_Funnel_Database {
 			return 0;
 		}
 		$table = $wpdb->prefix . 'opti_behavior_funnels';
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Schema migration on the plugin table, no input.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Schema migration on the plugin table, no input.
 		$done = $wpdb->query( "UPDATE {$table} SET confirmed = 0, updated_at = updated_at WHERE source = 'auto' AND confirmed = 1 AND status IN ( 'active', 'suspended' ) AND ( updated_at IS NULL OR created_at IS NULL OR updated_at <= DATE_ADD( created_at, INTERVAL 60 SECOND ) )" );
 		self::$suggested_ids = null;
 
@@ -175,7 +175,7 @@ class Opti_Behavior_Funnel_Database {
 
 		if ( null === self::$confirmed_column ) {
 			$table = $wpdb->prefix . 'opti_behavior_funnels';
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Schema probe of the plugin table, memoized per request.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Schema probe of the plugin table, memoized per request.
 			self::$confirmed_column = (bool) $wpdb->get_var( "SHOW COLUMNS FROM {$table} LIKE 'confirmed'" );
 		}
 
@@ -211,7 +211,7 @@ class Opti_Behavior_Funnel_Database {
 			self::$suggested_ids = array();
 			if ( self::has_confirmed_column() ) {
 				$table = $wpdb->prefix . 'opti_behavior_funnels';
-				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Plugin table, no input, memoized per request.
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Plugin table, no input, memoized per request.
 				self::$suggested_ids = array_map( 'intval', (array) $wpdb->get_col( "SELECT id FROM {$table} WHERE confirmed = 0 AND status <> 'deleted'" ) );
 			}
 		}

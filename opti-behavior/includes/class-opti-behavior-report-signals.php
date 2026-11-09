@@ -443,18 +443,21 @@ class Opti_Behavior_Report_Signals {
 	}
 
 	/**
-	 * Trial page link of a locked block (UTM: report_email / email / signal).
+	 * Trial page link of a locked block (UTM: source / medium / signal).
+	 * OPT-2560: `report_pdf` = PDF site report (medium pdf); anything else = the e-mail.
 	 *
 	 * @param string $signal Signal id.
+	 * @param string $source 'report_email' (default) or 'report_pdf'.
 	 * @return string
 	 */
-	public static function trial_url( $signal ) {
+	public static function trial_url( $signal, $source = 'report_email' ) {
 		$base = class_exists( 'Opti_Behavior_Trial_Invite' ) ? Opti_Behavior_Trial_Invite::TRIAL_PAGE_URL : 'https://optiuser.com/opti-behavior/pro-trial/';
+		$pdf  = 'report_pdf' === $source;
 		return add_query_arg(
 			array(
 				'site'         => rawurlencode( home_url() ),
-				'utm_source'   => 'report_email',
-				'utm_medium'   => 'email',
+				'utm_source'   => $pdf ? 'report_pdf' : 'report_email',
+				'utm_medium'   => $pdf ? 'pdf' : 'email',
 				'utm_campaign' => sanitize_key( (string) $signal ),
 			),
 			$base

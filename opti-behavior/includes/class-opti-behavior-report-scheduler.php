@@ -818,7 +818,9 @@ class Opti_Behavior_Report_Scheduler {
 			'enabled'      => (int) $enabled,
 			'disabled'     => (int) $total - (int) $enabled,
 			'last_sent'    => $last_sent,
-			'success_rate' => $success_rate ? (float) $success_rate : 100.0,
+			// OB-22: no send logged = no rate (null), never "100 %". The rate is
+			// the share of sends the mail system accepted, not a delivery rate.
+			'success_rate' => null === $success_rate ? null : (float) $success_rate,
 		);
 	}
 

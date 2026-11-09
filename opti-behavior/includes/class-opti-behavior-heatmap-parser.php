@@ -727,14 +727,23 @@ class Opti_Behavior_Heatmap_Parser {
 		// Extract reference page dimensions from the first scroll event with page dimensions
 		$reference_width = 1920;  // Default reference width
 		$reference_height = 5000; // Default reference height
+		$page_heights = array();
 
 		foreach ( $scroll_data as $scroll ) {
 			if ( isset( $scroll['page_width'] ) && $scroll['page_width'] > 0 ) {
 				$reference_width = max( $reference_width, (int) $scroll['page_width'] );
 			}
 			if ( isset( $scroll['page_height'] ) && $scroll['page_height'] > 0 ) {
-				$reference_height = max( $reference_height, (int) $scroll['page_height'] );
+				$page_heights[] = (int) $scroll['page_height'];
 			}
+		}
+
+		// OPT-2296: robust page height (median, outliers out), never the max: one
+		// aberrant page height used to set the scale of the whole page.
+		if ( ! empty( $page_heights ) && method_exists( 'Opti_Behavior_Heatmap_Storage', 'robust_page_height' ) ) {
+			$reference_height = max( $reference_height, Opti_Behavior_Heatmap_Storage::robust_page_height( $page_heights ) );
+		} elseif ( ! empty( $page_heights ) ) {
+			$reference_height = max( $reference_height, max( $page_heights ) );
 		}
 
 		$this->debug_log( '[Opti-Behavior-Heatmap] Reference dimensions for rendering: ' . $reference_width . 'x' . $reference_height );

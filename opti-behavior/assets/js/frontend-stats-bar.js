@@ -419,6 +419,39 @@
 	}
 
 	/* ------------------------------------------------------------------
+	   Page X-Ray button (OPT-2024) — dossier of this page, or the locked
+	   tab view when Pro is closed; disabled while the page has no id.
+	   ------------------------------------------------------------------ */
+	function getXrayUrl(pageId) {
+		if (!config.xray_url || !pageId || pageId <= 0) {
+			return '';
+		}
+
+		return appendQueryParam(config.xray_url, 'page_id', String(pageId));
+	}
+
+	function updateXrayLink(pageId) {
+		var link = bar.querySelector('.opti-stats-bar__xray');
+		if (!link) {
+			return;
+		}
+
+		var url = getXrayUrl(pageId);
+		var tip = url ? (link.getAttribute('data-tip') || '') : (config.xray_no_data || '');
+		if (url) {
+			link.setAttribute('href', url);
+			link.removeAttribute('aria-disabled');
+		} else {
+			link.removeAttribute('href');
+			link.setAttribute('aria-disabled', 'true');
+		}
+		link.classList.toggle('is-disabled', !url);
+		if (tip) {
+			link.setAttribute('title', tip);
+		}
+	}
+
+	/* ------------------------------------------------------------------
 	   Responsive layout — fit enabled Free/Pro stats to the admin viewport
 	   ------------------------------------------------------------------ */
 	function layoutOverflows(inner, stats) {
@@ -579,6 +612,7 @@
 		updateHeatmapsLinks(data && data.page_id ? parseInt(data.page_id, 10) : 0, data && data.page_ids ? data.page_ids : []);
 		updateRecordingsLinks(data && data.page_ids ? data.page_ids : [], data);
 		updateErrorsLinks(data);
+		updateXrayLink(data && data.page_id ? parseInt(data.page_id, 10) : 0);
 		scheduleResponsiveLayout();
 	}
 

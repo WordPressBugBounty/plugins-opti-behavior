@@ -3187,3 +3187,10 @@ iframe.opti-interactive-preview {
 	}
 }
 
+/* One message per screen: the bar #ob-heatmap-status says it, the veil over the preview stays silent. */
+.heatmap-loading .loading-spinner,
+.heatmap-loading p,
+.heatmap-loading .opti-heatmap-stop-loading-btn {
+	display: none !important;
+}
+

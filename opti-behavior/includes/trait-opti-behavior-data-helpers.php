@@ -227,6 +227,8 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				'new_vs_returning_visitors' => 300,
 				'visited_directories'       => 300,
 				'bot_traffic'               => 300,
+				// OPT-2825: the AI row reads a big crawler log, 1 h is enough.
+				'ai_bots'                   => 3600,
 			);
 
 			$ttl = isset( $default_ttls[ $widget_key ] ) ? $default_ttls[ $widget_key ] : 300;
@@ -1917,7 +1919,7 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			// Shared cache gate (Bug #4): bypass below the should_use_dashboard_cache()
 			// record threshold or on an explicit force-refresh, so this widget never
 			// serves a stale/empty value while the rest of the dashboard is live.
-			$cache_key = opti_behavior_dashboard_cache_key( 'opti_behavior_bot_traffic_' . md5( 'per-bot-change-v2|' . $start_date . $end_date ) );
+			$cache_key = opti_behavior_dashboard_cache_key( 'opti_behavior_bot_traffic_' . md5( 'per-bot-change-v3|' . $start_date . $end_date ) );
 			$cached    = $this->get_dashboard_widget_cached_data( $cache_key, $start_date, $end_date, 'bot_traffic' );
 			if ( false !== $cached ) {
 				return $cached;
@@ -1972,9 +1974,24 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			$prev_end = gmdate( 'Y-m-d H:i:s', strtotime( $start_date ) - 1 );
 			$prev_start = gmdate( 'Y-m-d H:i:s', strtotime( $start_date ) - $duration );
 
+			/*
+			 * OPT-2824: the crawler log is pruned after
+			 * opti_behavior_bot_visits_retention_days (30 by default), so for a
+			 * period as long as that window the previous period is always empty.
+			 * An empty previous period is NOT a +100 % rise: it is unknown. Then
+			 * no query is made and every change stays null, which the dashboard
+			 * prints as "—".
+			 */
+			$retention_days = absint( apply_filters( 'opti_behavior_bot_visits_retention_days', 30 ) );
+			$comparable     = true;
+			if ( $retention_days > 0 ) {
+				$kept_from  = time() - ( $retention_days * DAY_IN_SECONDS );
+				$comparable = strtotime( $prev_start ) >= $kept_from;
+			}
+
 			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name safely derived from $wpdb->prefix.
 			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-			$prev_bot_counts = $wpdb->get_results(
+			$prev_bot_counts = ! $comparable ? array() : $wpdb->get_results(
 				$wpdb->prepare(
 					"SELECT
 						COALESCE(NULLIF(TRIM(bot_type), ''), %s) AS bot_type,
@@ -1998,20 +2015,26 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				$prev_total                   += $prev_count;
 			}
 
-			// Per-bot change vs. previous period.
+			// Per-bot change vs. previous period (null = not comparable, "—").
 			foreach ( $data as $bot_type => $info ) {
+				if ( ! $comparable ) {
+					$data[ $bot_type ]['change'] = null;
+					continue;
+				}
 				$prev_count = isset( $prev_by_bot[ $bot_type ] ) ? $prev_by_bot[ $bot_type ] : 0;
 				if ( $prev_count > 0 ) {
 					$data[ $bot_type ]['change'] = intval( round( ( ( $info['count'] - $prev_count ) / $prev_count ) * 100 ) );
 				} else {
-					$data[ $bot_type ]['change'] = $info['count'] > 0 ? 100 : 0;
+					$data[ $bot_type ]['change'] = null;
 				}
 			}
 
-			if ( $prev_total > 0 ) {
+			if ( ! $comparable ) {
+				$change_percentage = null;
+			} elseif ( $prev_total > 0 ) {
 				$change_percentage = round( ( ( $total - $prev_total ) / $prev_total ) * 100 );
 			} else {
-				$change_percentage = $total > 0 ? 100 : 0;
+				$change_percentage = null;
 			}
 
 			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
@@ -2019,6 +2042,9 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 				'total' => $total,
 				'bots' => $data,
 				'change_percentage' => $change_percentage,
+				// OPT-2824: true = no comparison at all (crawler log pruned).
+				'changes_not_comparable' => ! $comparable,
+				'bot_log_retention_days' => $retention_days,
 				'human_sessions_baseline' => absint( $this->get_sessions_count( $start_date, $end_date ) ),
 				'bot_sessions' => absint(
 					$wpdb->get_var(
@@ -2043,6 +2069,590 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			// Never freeze a zero-bot result (Bug #4): that's the state most likely
 			// to change on the very next bot visit.
 			return $this->set_dashboard_widget_cached_data( $cache_key, $result, 0 === $total, $start_date, $end_date, 'bot_traffic' );
+		}
+
+		/**
+		 * Page identity of the AI row (OPT-2825).
+		 *
+		 * `get_traffic_page_key()` keeps every unknown parameter apart on purpose
+		 * (Top Pages: `?s=`, pagination, A/B). A crawler asks for the SAME page
+		 * with whatever parameter rides on the link it followed, so that rule
+		 * printed one row per address: four passes of chatgpt-user on the home
+		 * page gave four lines all showing `/`. Here one page = host + path, the
+		 * whole query dropped, the rest of the rule (www., trailing slash,
+		 * personal data) unchanged.
+		 *
+		 * @since 1.11.0
+		 * @param string $url Visited address.
+		 * @return string Grouping key ('' when there is none).
+		 */
+		private function get_ai_row_page_key( $url ) {
+			$base = (string) $url;
+			$cut  = strcspn( $base, '?#' );
+			$base = substr( $base, 0, $cut );
+			if ( '' === trim( $base ) ) {
+				return '';
+			}
+
+			return method_exists( $this, 'get_traffic_page_key' ) ? $this->get_traffic_page_key( $base ) : strtolower( $base );
+		}
+
+		/**
+		 * AI row of the Traffic screen: which AIs read the site, what they read,
+		 * why they visit (OPT-2825).
+		 *
+		 * Nothing new is stored: three reads of `optibehavior_bot_visits`
+		 * (always filtered on the date AND on the AI bot types) plus one read of
+		 * the sessions table for the visitors the AI assistants sent. Company
+		 * and intent come from the PHP map next to get_known_bot_patterns().
+		 *
+		 * @since 1.11.0
+		 * OPT-2859: `$filters` (the dashboard filter panel) applies to "Visitors
+		 * sent", which counts visitors like every other widget. The AI passes
+		 * themselves follow the period only: a robot has no country, no device
+		 * and no channel, so a visitor filter cannot narrow them (the "?" help
+		 * of the three widgets says it). The filters are part of the cache key,
+		 * so a filtered view never shows the figures of the previous one.
+		 *
+		 * @param string $start_date Start date (Y-m-d H:i:s).
+		 * @param string $end_date   End date (Y-m-d H:i:s).
+		 * @param array  $filters    Optional advanced filters (allow-listed, see build_advanced_filters_sql()).
+		 * @return array AI bot data.
+		 */
+		private function get_ai_bots_data_impl( $start_date, $end_date, array $filters = array() ) {
+			global $wpdb;
+
+			$exclude_spam = $this->is_spam_excluded() ? '1' : '0';
+			$has_filters  = ! empty( $filters );
+			$filter_sql   = $has_filters ? $this->build_advanced_filters_sql( $filters ) : array( 'where' => '', 'params' => array() );
+			$cache_key    = opti_behavior_dashboard_cache_key( 'opti_behavior_ai_bots_' . md5( 'v3|' . $start_date . '|' . $end_date . '|' . $exclude_spam . '|' . determine_locale() . '|' . wp_json_encode( $filters ) ) );
+			$cached       = $this->get_dashboard_widget_cached_data( $cache_key, $start_date, $end_date, 'ai_bots' );
+			if ( false !== $cached ) {
+				return $cached;
+			}
+
+			$map         = class_exists( 'Opti_Behavior_Heatmap_Bot_Tracker' ) ? Opti_Behavior_Heatmap_Bot_Tracker::get_ai_bot_map() : array();
+			$intent_keys = class_exists( 'Opti_Behavior_Heatmap_Bot_Tracker' ) ? Opti_Behavior_Heatmap_Bot_Tracker::get_ai_intent_keys() : array();
+			$bot_types   = array_keys( $map );
+
+			// OPT-2859: the three widgets read the AI daily counters (12 months)
+			// when they are installed; `optibehavior_bot_visits` (30 days) stays
+			// the source on a site whose table is not created yet.
+			$daily     = class_exists( 'Opti_Behavior_AI_Bot_Daily' ) && Opti_Behavior_AI_Bot_Daily::table_ready();
+			$oldest    = $daily ? Opti_Behavior_AI_Bot_Daily::oldest_day() : '';
+			$retention = $daily
+				? absint( Opti_Behavior_AI_Bot_Daily::retention_days() )
+				: absint( apply_filters( 'opti_behavior_bot_visits_retention_days', 30 ) );
+
+			$retention_days = $retention;
+			$kept_from      = $retention_days > 0 ? time() - ( $retention_days * DAY_IN_SECONDS ) : 0;
+			// The "older period" line must only show when it is TRUE. With the
+			// counters the kept data starts at the oldest day actually stored (an
+			// empty table says nothing: the widget shows its empty state).
+			$period_too_old = $retention_days > 0 && strtotime( $start_date ) < $kept_from;
+			if ( $daily ) {
+				$period_too_old = '' !== $oldest && strtotime( $start_date ) < strtotime( $oldest . ' 00:00:00' );
+			}
+			// OPT-2881: ONE neutral sentence for the whole AI row, with the real
+			// first day counted on this site. It used to be an orange warning
+			// repeated under each of the three widgets, where it covered the end
+			// of the legend.
+			$retention_note = '';
+			if ( $period_too_old ) {
+				$first_day = $daily && '' !== $oldest ? $oldest : gmdate( 'Y-m-d', (int) $kept_from );
+				$first_ts  = strtotime( $first_day . ' 00:00:00' );
+				if ( $first_ts ) {
+					$retention_note = sprintf(
+						/* translators: %s: date of the first day with AI bot data on this site. */
+						__( 'AI data from %s, the first day counted on this site.', 'opti-behavior' ),
+						date_i18n( (string) get_option( 'date_format' ), $first_ts )
+					);
+				}
+			}
+			$result         = array(
+				'total'            => 0,
+				'companies'        => array(),
+				'intents'          => array(),
+				'pages'            => array(),
+				// OPT-2874: real number of pages read over the period (the `pages`
+				// list is capped), whether that count hit its own scan cap, and the
+				// visitors those read pages received.
+				'pages_total'      => 0,
+				'pages_capped'     => false,
+				'sent_total'       => 0,
+				'sent_pages'       => 0,
+				'retention_days'   => $retention_days,
+				// True when the asked period starts before the kept data: the
+				// figures then cover the kept days only, and the screen says so.
+				'period_too_old'   => $period_too_old,
+				// OPT-2881: the one sentence of the row ('' = nothing to say) and
+				// the small true line under the page list title.
+				'retention_note'   => $retention_note,
+				'pages_line'       => '',
+				'intent_labels'    => $this->get_ai_intent_labels(),
+			);
+
+			if ( empty( $bot_types ) ) {
+				return $result;
+			}
+
+			$type_placeholders = implode( ', ', array_fill( 0, count( $bot_types ), '%s' ) );
+
+			// 1) One GROUP BY bot_type for the pie (company) and the ring (intent).
+			if ( $daily ) {
+				$type_rows = Opti_Behavior_AI_Bot_Daily::query_types( $start_date, $end_date );
+			} else {
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics table; identifier from $wpdb->prefix, values bound via $wpdb->prepare(); direct real-time query cached by the widget transient.
+			$type_rows = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT bot_type, COUNT(*) AS cnt
+					FROM " . $wpdb->prefix . "optibehavior_bot_visits
+					WHERE visit_time BETWEEN %s AND %s
+					AND bot_type IN (" . $type_placeholders . ")
+					GROUP BY bot_type",
+					array_merge( array( $start_date, $end_date ), $bot_types )
+				),
+				ARRAY_A
+			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter
+			}
+
+			$companies = array();
+			$intents   = array_fill_keys( $intent_keys, 0 );
+			$total     = 0;
+			foreach ( (array) $type_rows as $row ) {
+				$bot_type = (string) $row['bot_type'];
+				if ( ! isset( $map[ $bot_type ] ) ) {
+					continue;
+				}
+				$count   = absint( $row['cnt'] );
+				$total  += $count;
+				$company = (string) $map[ $bot_type ]['company'];
+				$intent  = (string) $map[ $bot_type ]['intent'];
+
+				$companies[ $company ] = ( isset( $companies[ $company ] ) ? $companies[ $company ] : 0 ) + $count;
+				if ( isset( $intents[ $intent ] ) ) {
+					$intents[ $intent ] += $count;
+				}
+			}
+
+			$result['total'] = $total;
+
+			arsort( $companies );
+			foreach ( $companies as $company => $count ) {
+				$result['companies'][] = array(
+					'label'      => $company,
+					'count'      => $count,
+					'percentage' => $total > 0 ? round( ( $count / $total ) * 100, 1 ) : 0,
+				);
+			}
+
+			// The four pills are always printed, even at 0: "User responses" is
+			// the most useful figure of the row (HX 04/11).
+			foreach ( $intent_keys as $intent_key ) {
+				$count                = absint( $intents[ $intent_key ] ?? 0 );
+				$result['intents'][]  = array(
+					'key'        => $intent_key,
+					'label'      => $result['intent_labels'][ $intent_key ] ?? $intent_key,
+					'count'      => $count,
+					'percentage' => $total > 0 ? round( ( $count / $total ) * 100, 1 ) : 0,
+				);
+			}
+
+			if ( 0 === $total ) {
+				return $this->set_dashboard_widget_cached_data( $cache_key, $result, true, $start_date, $end_date, 'ai_bots' );
+			}
+
+			// 2) Page x bot type, always filtered on the date AND the AI types.
+			$page_limit = absint( apply_filters( 'opti_behavior_ai_bots_page_rows_scanned', 400 ) );
+			if ( $daily ) {
+				$page_rows = Opti_Behavior_AI_Bot_Daily::query_pages( $start_date, $end_date, max( 50, $page_limit ) );
+			} else {
+			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics table; identifier from $wpdb->prefix, values bound via $wpdb->prepare(); direct real-time query cached by the widget transient.
+			$page_rows = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT visited_url, bot_type, COUNT(*) AS cnt
+					FROM " . $wpdb->prefix . "optibehavior_bot_visits
+					WHERE visit_time BETWEEN %s AND %s
+					AND bot_type IN (" . $type_placeholders . ")
+					GROUP BY visited_url, bot_type
+					ORDER BY cnt DESC
+					LIMIT %d",
+					array_merge( array( $start_date, $end_date ), $bot_types, array( max( 50, $page_limit ) ) )
+				),
+				ARRAY_A
+			);
+			// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter
+			}
+
+			$pages = array();
+			foreach ( (array) $page_rows as $row ) {
+				$url = (string) $row['visited_url'];
+				if ( '' === $url || $this->is_ai_row_url_skipped( $url ) ) {
+					continue;
+				}
+				$bot_type = (string) $row['bot_type'];
+				if ( ! isset( $map[ $bot_type ] ) ) {
+					continue;
+				}
+				$key = $this->get_ai_row_page_key( $url );
+				if ( '' === $key ) {
+					continue;
+				}
+				if ( ! isset( $pages[ $key ] ) ) {
+					$pages[ $key ] = array(
+						'total'  => 0,
+						'counts' => array_fill_keys( $intent_keys, 0 ),
+						'urls'   => array(),
+					);
+				}
+				$count                     = absint( $row['cnt'] );
+				$pages[ $key ]['total']   += $count;
+				$intent                    = (string) $map[ $bot_type ]['intent'];
+				if ( isset( $pages[ $key ]['counts'][ $intent ] ) ) {
+					$pages[ $key ]['counts'][ $intent ] += $count;
+				}
+				$pages[ $key ]['urls'][ $url ] = true;
+			}
+
+			uasort(
+				$pages,
+				static function ( $a, $b ) {
+					return $b['total'] <=> $a['total'];
+				}
+			);
+			// OPT-2881: 50 rows. The list already scrolls inside the widget, so the
+			// card keeps the height of its neighbours; the read-pages scan above is
+			// capped at 400, which stays the real limit of the widget.
+			$max_rows = absint( apply_filters( 'opti_behavior_ai_bots_page_rows', 50 ) );
+
+			// OPT-2874: the REAL number of pages read over the period. The list
+			// above is capped (top rows only), so it can never answer "how many
+			// pages did AI read" — one address-only read does, folded by the same
+			// page key and with the same skipped addresses as the rows.
+			$read_keys  = array();
+			$url_limit  = absint( apply_filters( 'opti_behavior_ai_bots_page_urls_scanned', 5000 ) );
+			$read_urls  = array();
+			if ( $daily ) {
+				$read_urls = Opti_Behavior_AI_Bot_Daily::query_page_urls( $start_date, $end_date, $url_limit );
+			} else {
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics table; identifier from $wpdb->prefix, values bound via $wpdb->prepare(); direct real-time query cached by the widget transient.
+				$read_urls = $wpdb->get_col(
+					$wpdb->prepare(
+						"SELECT DISTINCT visited_url
+						FROM " . $wpdb->prefix . "optibehavior_bot_visits
+						WHERE visit_time BETWEEN %s AND %s
+						AND bot_type IN (" . $type_placeholders . ")
+						LIMIT %d",
+						array_merge( array( $start_date, $end_date ), $bot_types, array( max( 50, $url_limit ) ) )
+					)
+				);
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter
+			}
+			foreach ( (array) $read_urls as $read_url ) {
+				$read_url = (string) $read_url;
+				if ( '' === $read_url || $this->is_ai_row_url_skipped( $read_url ) ) {
+					continue;
+				}
+				$read_key = $this->get_ai_row_page_key( $read_url );
+				if ( '' === $read_key ) {
+					continue;
+				}
+				$read_keys[ $read_key ] = true;
+			}
+			// A page in the rows is always counted, even if the address read did
+			// not reach it (cap): the two figures can never contradict.
+			foreach ( array_keys( $pages ) as $page_key ) {
+				$read_keys[ $page_key ] = true;
+			}
+			$result['pages_total']  = count( $read_keys );
+			$result['pages_capped'] = count( (array) $read_urls ) >= max( 50, $url_limit );
+
+			$pages    = array_slice( $pages, 0, max( 1, $max_rows ), true );
+
+			// OPT-2881: a true line under the title of the page list, so a reader
+			// knows the list is the top of a longer set.
+			$shown_rows = count( $pages );
+			if ( $result['pages_total'] > $shown_rows ) {
+				$result['pages_line'] = $result['pages_capped']
+					? sprintf(
+						/* translators: 1: number of pages shown, 2: number of pages read over the period. */
+						__( 'The %1$s most-read of more than %2$s pages', 'opti-behavior' ),
+						number_format_i18n( $shown_rows ),
+						number_format_i18n( $result['pages_total'] )
+					)
+					: sprintf(
+						/* translators: 1: number of pages shown, 2: number of pages read over the period. */
+						__( 'The %1$s most-read of %2$s pages', 'opti-behavior' ),
+						number_format_i18n( $shown_rows ),
+						number_format_i18n( $result['pages_total'] )
+					);
+			} else {
+				$result['pages_line'] = sprintf(
+					/* translators: %s: number of pages AI read over the period. */
+					_n( '%s page read in this period', '%s pages read in this period', $shown_rows, 'opti-behavior' ),
+					number_format_i18n( $shown_rows )
+				);
+			}
+
+			// 3) Visitors the AI assistants sent, per landing page (same channel
+			// rule as the Traffic Channel filter, "Excluding Spam" respected).
+			$sent_by_key = array();
+			$channel_sql = method_exists( $this, 'build_traffic_channel_case_sql' ) ? $this->build_traffic_channel_case_sql() : '';
+			if ( '' !== $channel_sql ) {
+				$spam_clause = $this->get_spam_exclusion_clause( 's' );
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics table; identifier from $wpdb->prefix, channel CASE built from internal allow-lists, values bound via $wpdb->prepare().
+					// The visitors table is joined because a filter of the panel
+					// (visitor type) reads the alias `v`, like the other widgets.
+					$sent_rows = $wpdb->get_results(
+						$wpdb->prepare(
+							"SELECT s.entry_page AS url, COUNT(DISTINCT s.id) AS cnt
+						FROM " . $wpdb->prefix . "optibehavior_sessions s
+						LEFT JOIN " . $wpdb->prefix . "optibehavior_visitors v ON s.visitor_id = v.id
+						WHERE s.start_time BETWEEN %s AND %s" . $spam_clause . "
+						AND ( " . $channel_sql . " ) = 'AI Assistants'
+						AND s.entry_page IS NOT NULL AND s.entry_page <> ''" . $filter_sql['where'] . "
+						GROUP BY s.entry_page",
+							array_merge( array( $start_date, $end_date ), $filter_sql['params'] )
+						),
+						ARRAY_A
+					);
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+				foreach ( (array) $sent_rows as $row ) {
+					$key = $this->get_ai_row_page_key( (string) $row['url'] );
+					if ( '' === $key ) {
+						continue;
+					}
+					$sent_by_key[ $key ]  = ( isset( $sent_by_key[ $key ] ) ? $sent_by_key[ $key ] : 0 ) + absint( $row['cnt'] );
+					$result['sent_total'] += absint( $row['cnt'] );
+					// OPT-2874: visitors who landed on a page AI actually read, so
+					// "those pages received N visitors" names the same pages as the
+					// count beside it.
+					if ( isset( $read_keys[ $key ] ) ) {
+						$result['sent_pages'] += absint( $row['cnt'] );
+					}
+				}
+			}
+
+			// Titles + page ids of the kept rows (one read of the page registry).
+			$urls = array();
+			foreach ( $pages as $page ) {
+				foreach ( array_keys( $page['urls'] ) as $url ) {
+					$urls[] = $url;
+				}
+			}
+			$titles   = array();
+			$page_ids = array();
+			if ( ! empty( $urls ) ) {
+				// OPT-2881: the registry is asked for every spelling of the same
+				// address (http / https, with and without the trailing slash). The
+				// rows are grouped by page key, so a registry row written with
+				// another spelling used to answer nothing and the line showed its
+				// path instead of its title.
+				$urls         = $this->get_ai_row_url_variants( array_unique( $urls ), max( 60, $max_rows * 2 ) );
+				$placeholders = implode( ', ', array_fill( 0, count( $urls ), '%s' ) );
+				// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics table; identifier from $wpdb->prefix, values bound via $wpdb->prepare().
+				$registry_rows = $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT id, url, title
+						FROM " . $wpdb->prefix . "optibehavior_pages
+						WHERE url IN (" . $placeholders . ")",
+						$urls
+					),
+					ARRAY_A
+				);
+				// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+				foreach ( (array) $registry_rows as $row ) {
+					$row_key = $this->get_ai_row_page_key( (string) $row['url'] );
+					if ( '' === $row_key ) {
+						continue;
+					}
+					$title = trim( (string) $row['title'] );
+					if ( '' !== $title && ! isset( $titles[ $row_key ] ) ) {
+						$titles[ $row_key ] = $title;
+					}
+					$page_ids[ $row_key ][] = absint( $row['id'] );
+				}
+			}
+
+			// OPT-2881: last resort for a page the registry does not name (address
+			// never tracked, or row without a title): the title of the WordPress
+			// content at that address. One indexed read per missing row at most.
+			$title_lookups = 0;
+			foreach ( $pages as $key => $page ) {
+				if ( isset( $titles[ $key ] ) || $title_lookups >= 50 ) {
+					continue;
+				}
+				++$title_lookups;
+				$post_id = url_to_postid( (string) key( $page['urls'] ) );
+				if ( $post_id > 0 ) {
+					$post_title = trim( (string) get_the_title( $post_id ) );
+					if ( '' !== $post_title ) {
+						$titles[ $key ] = $post_title;
+					}
+				}
+			}
+
+			foreach ( $pages as $key => $page ) {
+				// One row = one page, so its link and its path carry no parameter
+				// either (the grouped addresses only differ by their query).
+				$url  = (string) key( $page['urls'] );
+				$cut  = strcspn( $url, '?#' );
+				$url  = substr( $url, 0, $cut );
+				$path = (string) wp_parse_url( $url, PHP_URL_PATH );
+				if ( '' === $path ) {
+					$path = '/';
+				}
+				// OPT-2881: a non-latin address is percent-encoded in the log; the
+				// row shows it decoded, so an Arabic or Japanese path reads as it
+				// does in the address bar.
+				$path = $this->get_ai_row_readable_path( $path );
+				$result['pages'][] = array(
+					'title'    => isset( $titles[ $key ] ) ? $titles[ $key ] : $path,
+					'path'     => $path,
+					'url'      => $url,
+					'counts'   => $page['counts'],
+					'total'    => absint( $page['total'] ),
+					'sent'     => absint( $sent_by_key[ $key ] ?? 0 ),
+					'page_ids' => isset( $page_ids[ $key ] ) ? array_values( array_unique( $page_ids[ $key ] ) ) : array(),
+				);
+			}
+
+			return $this->set_dashboard_widget_cached_data( $cache_key, $result, 0 === $total, $start_date, $end_date, 'ai_bots' );
+		}
+
+		/**
+		 * Every spelling of the given addresses, for the page-registry read of
+		 * the AI row (OPT-2881).
+		 *
+		 * The rows are grouped by page key (no query, no trailing slash, no
+		 * scheme), but the registry is read on its `url` column: a row written
+		 * with another spelling than the one the bot log holds answered nothing,
+		 * so the line printed its path instead of its title.
+		 *
+		 * @since 1.11.0
+		 * @param array $urls  Addresses read by the AI bots.
+		 * @param int   $limit How many addresses to expand.
+		 * @return array List of addresses to ask the registry for.
+		 */
+		private function get_ai_row_url_variants( array $urls, $limit = 60 ) {
+			$out   = array();
+			$limit = max( 1, absint( $limit ) );
+			$urls  = array_slice( array_values( $urls ), 0, $limit );
+
+			foreach ( $urls as $url ) {
+				$url = (string) $url;
+				if ( '' === trim( $url ) ) {
+					continue;
+				}
+				$out[ $url ] = true;
+
+				$cut   = strcspn( $url, '?#' );
+				$base  = substr( $url, 0, $cut );
+				$forms = array( $base );
+				if ( '' !== $base ) {
+					$forms[] = '/' === substr( $base, -1 ) ? rtrim( $base, '/' ) : $base . '/';
+				}
+				foreach ( $forms as $form ) {
+					if ( '' === trim( $form ) ) {
+						continue;
+					}
+					$out[ $form ] = true;
+					if ( 0 === strpos( $form, 'https://' ) ) {
+						$out[ 'http://' . substr( $form, 8 ) ] = true;
+					} elseif ( 0 === strpos( $form, 'http://' ) ) {
+						$out[ 'https://' . substr( $form, 7 ) ] = true;
+					}
+				}
+				if ( count( $out ) >= 400 ) {
+					break;
+				}
+			}
+
+			return array_keys( $out );
+		}
+
+		/**
+		 * The path of an AI row as a reader reads it (OPT-2881).
+		 *
+		 * A non-latin address is percent-encoded in the log (`/%D8%A7…/`): it is
+		 * decoded here, and only when the result is valid UTF-8 (a broken decode
+		 * keeps the stored text). Long paths are cut with an ellipsis; nothing
+		 * else is touched, so a right-to-left path still reads right to left.
+		 *
+		 * @since 1.11.0
+		 * @param string $path Path of the address.
+		 * @return string
+		 */
+		private function get_ai_row_readable_path( $path ) {
+			$path = (string) $path;
+			$text = rawurldecode( $path );
+			$good = function_exists( 'mb_check_encoding' ) ? mb_check_encoding( $text, 'UTF-8' ) : seems_utf8( $text );
+			if ( '' === $text || ! $good ) {
+				$text = $path;
+			}
+
+			$max = 70;
+			if ( function_exists( 'mb_strlen' ) && function_exists( 'mb_substr' ) ) {
+				if ( mb_strlen( $text, 'UTF-8' ) > $max ) {
+					$text = mb_substr( $text, 0, $max - 1, 'UTF-8' ) . '…';
+				}
+
+				return $text;
+			}
+			if ( strlen( $text ) > $max ) {
+				$text = rtrim( substr( $text, 0, $max - 1 ) ) . '…';
+			}
+
+			return $text;
+		}
+
+		/**
+		 * Translated names of the four AI intents (same words everywhere).
+		 *
+		 * @since 1.11.0
+		 * @return array<string,string>
+		 */
+		private function get_ai_intent_labels() {
+			return array(
+				'user_responses'   => __( 'User responses', 'opti-behavior' ),
+				'indexing_search'  => __( 'Indexing & search', 'opti-behavior' ),
+				'model_training'   => __( 'Model training', 'opti-behavior' ),
+				'data_collection'  => __( 'Data collection', 'opti-behavior' ),
+			);
+		}
+
+		/**
+		 * Addresses left out of the AI table at READ time: search, sitemaps,
+		 * robots.txt and feeds are not pages a reader lands on (OPT-2825).
+		 *
+		 * @since 1.11.0
+		 * @param string $url Visited URL.
+		 * @return bool
+		 */
+		private function is_ai_row_url_skipped( $url ) {
+			$path  = strtolower( (string) wp_parse_url( $url, PHP_URL_PATH ) );
+			$query = strtolower( (string) wp_parse_url( $url, PHP_URL_QUERY ) );
+
+			if ( '' !== $query && preg_match( '/(^|&)s=/', $query ) ) {
+				return true;
+			}
+			if ( '' === $path ) {
+				return false;
+			}
+			if ( false !== strpos( $path, '/search/' ) || '/search' === rtrim( $path, '/' ) ) {
+				return true;
+			}
+			if ( false !== strpos( $path, 'robots.txt' ) || false !== strpos( $path, 'sitemap' ) ) {
+				return true;
+			}
+			if ( preg_match( '#/(feed|rss|rss2|atom|rdf)/?$#', $path ) ) {
+				return true;
+			}
+
+			return false;
 		}
 
 		/**
@@ -2424,17 +3034,20 @@ if ( ! trait_exists( 'opti_behavior_Data_Helpers_Trait' ) ) {
 			// The bot_visits log (hits, not sessions) is no longer mixed in.
 			$bot_label = $this->get_spam_session_share_label( $sessions_tbl, $start_date, $end_date, $filter_join, $filter_sql );
 			// Say where the share goes (OPT-1633): users read "22 %" next to
-			// Visitors as bots counted in Visitors.
+			// Visitors as bots counted in Visitors. OB-22: the share counts
+			// sessions only; robots stopped before any session (bot_visits log,
+			// hits) are another base, so "0 %" next to thousands of logged bot
+			// visits is not a contradiction: the tip names both bases.
 			$bot_tip = '';
 			if ( '' !== $bot_label ) {
 				if ( $exclude_spam ) {
 					/* translators: %s: share of the period's sessions classified as bots / spam, e.g. "22%" */
 					$bot_label = sprintf( __( '%s filtered out', 'opti-behavior' ), $bot_label );
-					$bot_tip   = __( 'Sessions classified as bots / spam over the period. They are not counted in Visitors while Excluding Spam is on.', 'opti-behavior' );
+					$bot_tip   = __( 'Share of the period\'s sessions classified as bots / spam. They are not counted in Visitors while Excluding Spam is on. Robots recognised by the server before any session started (bot visits log) are counted apart and are not part of this share.', 'opti-behavior' );
 				} else {
 					/* translators: %s: share of the period's sessions classified as bots / spam, e.g. "22%" */
 					$bot_label = sprintf( __( '%s (included)', 'opti-behavior' ), $bot_label );
-					$bot_tip   = __( 'Sessions classified as bots / spam over the period. They are counted in Visitors while Excluding Spam is off.', 'opti-behavior' );
+					$bot_tip   = __( 'Share of the period\'s sessions classified as bots / spam. They are counted in Visitors while Excluding Spam is off. Robots recognised by the server before any session started (bot visits log) are counted apart and are not part of this share.', 'opti-behavior' );
 				}
 			}
 

@@ -2273,6 +2273,8 @@ class Opti_Behavior_Heatmap_Core {
 			'opti_behavior_shop_weekly_report',              // Opti_Behavior_Shop_Report::CRON_HOOK (weekly shop e-mail, OPT-1229; stopped OPT-1735, kept for a clean uninstall).
 			// --- One-off events ---------------------------------------------------
 			'opti_behavior_debug_auto_disable',              // Opti_Behavior_Heatmap_Debug_Manager::AUTO_DISABLE_CRON_HOOK.
+			'opti_behavior_wporg_info_refresh',              // Opti_Behavior_Trial_Invite::REFRESH_HOOK (wordpress.org rating / installs, OPT-3042).
+			'opti_behavior_heartbeat_probe_run',             // Opti_Behavior_Tracker_Heartbeat::PROBE_CRON (collection test, OPT-1943).
 			'opti_behavior_smart_insights_scheduler_batch',  // Opti_Behavior_Smart_Insights_Scheduler::BATCH_HOOK.
 			'opti_behavior_smart_insights_upgrade_regenerate', // Opti_Behavior_Smart_Insights_Scheduler::UPGRADE_REGENERATE_HOOK (once per plugin update).
 			'opti_behavior_heatmap_agg_sync',                // Aggregate-index sync worker.
@@ -2293,6 +2295,7 @@ class Opti_Behavior_Heatmap_Core {
 			'opti_behavior_page_type_prune_run',             // 1.9.5 archive-page prune run-now + continuation.
 			'opti_behavior_spam_few_scrolls_repair',         // Opti_Behavior_Stats_Spam_Filter::FEW_SCROLLS_REPAIR_HOOK (one-time repair).
 			'opti_behavior_spam_referrer_repair',            // Opti_Behavior_Stats_Spam_Filter::REFERRER_REPAIR_HOOK (one-time repair, OPT-562).
+			'opti_behavior_spam_referrer_list_repair',       // Opti_Behavior_Stats_Spam_Filter::SPAM_REFERRER_REPAIR_HOOK (one-time repair, OPT-2810).
 			'opti_behavior_page_type_prune_restore',         // 1.9.5 archive-page prune restore pass.
 			'opti_behavior_page_type_prune_purge',           // 1.9.5 archive-page prune purge pass.
 			'opti_behavior_geo_db_check',                    // 1.10.0.1 monthly update of the local country database.

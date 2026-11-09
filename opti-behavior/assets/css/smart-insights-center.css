@@ -2717,6 +2717,18 @@
 	color: var(--ob-si-text);
 }
 
+.ob-smart-insights-center-page .ob-si-loop__pages {
+	display: flex;
+	flex-direction: column;
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid var(--ob-si-border);
+}
+
+.ob-smart-insights-center-page .ob-si-loop__pages[hidden] {
+	display: none;
+}
+
 .ob-smart-insights-center-page .ob-si-loop__caption {
 	font-size: 12.5px;
 	line-height: 1.4;
@@ -4270,6 +4282,7 @@
 /* Heights measured on the real screen at 1440 px (a card 322 to 333 px, the
    weekly summary 381 px) and on a phone-wide pane (cards stack their zones). */
 .ob-smart-insights-center-page .ob-si-skel > i {
+	position: relative;
 	display: block;
 	height: 328px;
 	border: 1px solid var(--ob-si-border);
@@ -4291,6 +4304,28 @@
 	}
 }
 
+/* Load icon in the middle of each grey block: an empty block read as a block
+   with nothing to show. */
+.ob-smart-insights-center-page .ob-si-skel > i::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 28px;
+	height: 28px;
+	margin: -14px 0 0 -14px;
+	border: 3px solid var(--ob-si-border);
+	border-top-color: var(--ob-si-accent-strong);
+	border-radius: 50%;
+	animation: ob-si-skel-spin 0.9s linear infinite;
+}
+
+@keyframes ob-si-skel-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
 @keyframes ob-si-skel-sweep {
 	from {
 		background-position: 100% 0;
@@ -4305,4 +4340,610 @@
 	.ob-smart-insights-center-page .ob-si-skel > i {
 		animation: none;
 	}
+}
+
+/* OPT-2180 / design OPT-2182: "Pages losing the most visitors" under the
+   Weekly CRO Summary (markup: Opti_Behavior_Smart_Insights_Page::render_top_pages()).
+   Same card as the summary (header with icon, 12px corners); one row per
+   page: rank, page + path, figure on the right, problem #1 under it. */
+.ob-smart-insights-center-page .ob-si-top-pages {
+	margin: 0 0 var(--ob-si-space-4);
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__box {
+	overflow: hidden;
+	padding: 0;
+	border: 1px solid #e8ebf2;
+	border-radius: 12px;
+	background: var(--ob-si-surface);
+	box-shadow: 0 4px 12px rgba(2, 6, 23, 0.06);
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__title {
+	display: flex;
+	gap: var(--ob-si-space-2);
+	align-items: center;
+	margin: 0;
+	padding: 10px 16px;
+	border-bottom: 1px solid #f1f3f4;
+	color: #111827;
+	font-size: 16px;
+	font-weight: 650;
+	line-height: 1.4;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__icon {
+	flex: 0 0 auto;
+	width: 22px;
+	height: 22px;
+	color: var(--ob-si-critical);
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__list {
+	margin: 0;
+	padding: var(--ob-si-space-2) var(--ob-si-space-4) 0;
+	list-style: none;
+	counter-reset: ob-si-top-page;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__row {
+	display: grid;
+	grid-template-columns: 28px auto minmax(0, 1fr) auto;
+	grid-template-areas:
+		"rank page path figure"
+		"rank problem problem money";
+	gap: 2px var(--ob-si-space-3);
+	align-items: baseline;
+	margin: 0;
+	padding: var(--ob-si-space-3) 0;
+	border-top: 1px solid var(--ob-si-surface-sunken);
+	counter-increment: ob-si-top-page;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__row:first-child {
+	border-top: 0;
+}
+
+/* Rank pill from the list counter (the <ol> is already numbered for readers). */
+.ob-smart-insights-center-page .ob-si-top-pages__row::before {
+	content: counter(ob-si-top-page);
+	grid-area: rank;
+	align-self: start;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border: 1px solid var(--ob-si-critical-border);
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-critical-soft);
+	color: var(--ob-si-critical);
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__page {
+	grid-area: page;
+	display: inline-flex;
+	gap: 6px;
+	align-items: center;
+	min-height: 26px;
+	border-radius: var(--ob-si-radius-sm);
+	color: var(--ob-si-accent);
+	font-size: 14px;
+	font-weight: 650;
+	text-decoration: none;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__page:hover {
+	color: var(--ob-si-accent-strong);
+	text-decoration: underline;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__page:focus {
+	box-shadow: none;
+	outline: none;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__page:focus-visible {
+	outline: 2px solid var(--ob-si-accent);
+	outline-offset: 2px;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__path {
+	grid-area: path;
+	overflow-wrap: anywhere;
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__figure {
+	grid-area: figure;
+	justify-self: end;
+	color: var(--ob-si-text);
+	font-size: 14px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__money {
+	grid-area: money;
+	justify-self: end;
+	padding: 1px 8px;
+	border: 1px solid var(--ob-si-high-border);
+	border-radius: var(--ob-si-radius-pill);
+	background: var(--ob-si-high-soft);
+	color: #9a3412;
+	font-size: var(--ob-si-fs-meta);
+	font-weight: 650;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__problem {
+	grid-area: problem;
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-body);
+	line-height: 1.5;
+}
+
+/* OB-06: goal used by Page X-Ray + its state, last line of the row, every layout. */
+.ob-smart-insights-center-page .ob-si-top-pages__goal {
+	grid-column: 2 / -1;
+	color: var(--ob-si-text-muted);
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__problem.is-none {
+	color: var(--ob-si-text-faint);
+	font-style: italic;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__problem-label {
+	display: inline-block;
+	margin-right: 4px;
+	padding: 0 6px;
+	border-radius: var(--ob-si-radius-sm);
+	background: var(--ob-si-surface-sunken);
+	color: var(--ob-si-text-muted);
+	font-size: var(--ob-si-fs-label);
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	line-height: 18px;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__more,
+.ob-smart-insights-center-page .ob-si-top-pages__foot {
+	margin: 0;
+	padding: 10px var(--ob-si-space-4);
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__more {
+	border-top: 1px dashed var(--ob-si-border);
+	font-style: italic;
+}
+
+.ob-smart-insights-center-page .ob-si-top-pages__foot {
+	border-top: 1px solid var(--ob-si-surface-sunken);
+	background: var(--ob-si-surface-muted);
+}
+
+@media (max-width: 782px) {
+	.ob-smart-insights-center-page .ob-si-top-pages__row {
+		grid-template-columns: 28px minmax(0, 1fr);
+		grid-template-areas:
+			"rank page"
+			"rank path"
+			"rank figure"
+			"rank money"
+			"rank problem";
+		gap: 4px var(--ob-si-space-3);
+	}
+
+	.ob-smart-insights-center-page .ob-si-top-pages__figure,
+	.ob-smart-insights-center-page .ob-si-top-pages__money {
+		justify-self: start;
+		text-align: left;
+	}
+
+	.ob-smart-insights-center-page .ob-si-top-pages__page {
+		flex-wrap: wrap;
+	}
+}
+
+/* Design OPT-2209: Weekly CRO Summary and "Pages losing the most visitors"
+   in ONE card. Card of 900 px or more: summary left, pages right (~55 / 45);
+   narrower: one under the other. One header (the card's), one foot under
+   both columns ([data-ob-si-weekly-foot], filled by mergeWeeklyFoot()).
+   Container queries follow the real card width (WP menu folded or not). */
+.ob-smart-insights-center-page .ob-smart-insights-weekly-summary {
+	container: ob-si-weekly / inline-size;
+}
+
+.ob-smart-insights-center-page .ob-si-weekly-split {
+	display: grid;
+	flex: 1 1 auto;
+	grid-template-columns: minmax(0, 1fr);
+	gap: var(--ob-si-space-3);
+	align-items: stretch;
+	padding: 10px 16px 12px;
+}
+
+.ob-smart-insights-center-page .ob-si-weekly-split > .widget-content {
+	container: ob-si-weekly-main / inline-size;
+	padding: 0;
+}
+
+@container ob-si-weekly (min-width: 900px) {
+	.ob-smart-insights-center-page .ob-si-weekly-split:has(> .ob-si-top-pages:not([hidden])) {
+		grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+	}
+}
+
+/* Right column: a panel of the summary (same shell as "Analyst briefing"). */
+.ob-smart-insights-center-page .ob-si-weekly-split > .ob-si-top-pages:not([hidden]) {
+	container: ob-si-top / inline-size;
+	display: flex;
+	flex-direction: column;
+	margin: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-weekly-split .ob-si-top-pages__box {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	padding: var(--ob-si-panel-padding);
+	border: 1px solid var(--ob-si-border);
+	border-radius: var(--ob-si-radius-lg);
+	background: linear-gradient(180deg, var(--ob-si-surface-muted) 0%, var(--ob-si-surface) 46%);
+	box-shadow: var(--ob-si-shadow-rest);
+	box-sizing: border-box;
+}
+
+/* Column title = an eyebrow like "Analyst briefing" (the card has the title). */
+.ob-smart-insights-center-page .ob-si-weekly-split .ob-si-top-pages__title {
+	gap: 6px;
+	padding: 0 0 var(--ob-si-space-1);
+	border-bottom: 0;
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-label);
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	line-height: 1.2;
+	text-transform: uppercase;
+}
+
+.ob-smart-insights-center-page .ob-si-weekly-split .ob-si-top-pages__icon {
+	width: 16px;
+	height: 16px;
+}
+
+.ob-smart-insights-center-page .ob-si-weekly-split .ob-si-top-pages__list {
+	padding: 0;
+}
+
+.ob-smart-insights-center-page .ob-si-weekly-split .ob-si-top-pages__row {
+	padding: var(--ob-si-space-2) 0;
+}
+
+/* Design OPT-2527: fewer than 3 pages = the "Not enough visits" line is the
+   slot of the missing rows (dashed tile filling the rest of the column),
+   never a white gap between the list and a line pushed to the bottom. */
+.ob-smart-insights-center-page .ob-si-weekly-split .ob-si-top-pages__more {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: center;
+	justify-content: center;
+	min-height: 44px;
+	margin-top: var(--ob-si-space-2);
+	padding: var(--ob-si-space-2) var(--ob-si-space-3);
+	border: 1px dashed #cbd5e1;
+	border-radius: var(--ob-si-radius-md);
+	background: var(--ob-si-surface-muted);
+	text-align: center;
+}
+
+/* Narrow column: figure beside the page name, path and problem under it. */
+@container ob-si-top (max-width: 560px) {
+	.ob-smart-insights-center-page .ob-si-top-pages__row {
+		grid-template-columns: 28px minmax(0, 1fr) auto;
+		grid-template-areas:
+			"rank page figure"
+			"rank path path"
+			"rank problem problem"
+			"rank money money";
+	}
+
+	.ob-smart-insights-center-page .ob-si-top-pages__money {
+		justify-self: start;
+	}
+}
+
+/* Phone-wide column: everything stacks. */
+@container ob-si-top (max-width: 400px) {
+	.ob-smart-insights-center-page .ob-si-top-pages__row {
+		grid-template-columns: 28px minmax(0, 1fr);
+		grid-template-areas:
+			"rank page"
+			"rank path"
+			"rank figure"
+			"rank money"
+			"rank problem";
+		gap: 4px var(--ob-si-space-3);
+	}
+
+	.ob-smart-insights-center-page .ob-si-top-pages__figure {
+		justify-self: start;
+		text-align: left;
+	}
+}
+
+/* Narrow summary column: the phone layout of the brief rows and bands. */
+@container ob-si-weekly-main (max-width: 680px) {
+	.ob-smart-insights-center-page .ob-smart-insights-brief-list li {
+		flex-wrap: wrap;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-brief-list li.has-meter .ob-smart-insights-brief-title,
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-lead .ob-smart-insights-brief-title {
+		flex: 1 1 100%;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-brief-meter {
+		flex: 1 1 120px;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-lead .ob-smart-insights-brief-amount {
+		min-width: 0;
+	}
+
+	/* Row that wraps (label on its own line), also on a phone. */
+	.ob-smart-insights-center-page .ob-smart-insights-summary-next-action,
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-section {
+		align-items: center;
+		flex-direction: row;
+		flex-wrap: wrap;
+		gap: var(--ob-si-space-2) var(--ob-si-space-3);
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-summary-next-action > span,
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-section h3 {
+		flex: 1 1 100%;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-summary-next-action strong {
+		flex: 1 1 200px;
+	}
+
+	.ob-smart-insights-center-page .ob-smart-insights-briefing-section .ob-smart-insights-summary-list {
+		flex: 1 1 100%;
+	}
+
+	/* Free: the locked summary stacks (message, 2 x 2 preview, button). */
+	.ob-smart-insights-center-page .ob-smart-insights-weekly-lock-card {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+/* The card's one foot: scope note, then the period of the pages. */
+.ob-smart-insights-center-page .ob-si-weekly-foot {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px var(--ob-si-space-4);
+	margin: 0 16px;
+	padding: var(--ob-si-space-2) 0 12px;
+	border-top: 1px solid var(--ob-si-border);
+	color: var(--ob-si-text-faint);
+	font-size: var(--ob-si-fs-meta);
+	line-height: 1.5;
+}
+
+.ob-smart-insights-center-page .ob-si-weekly-foot:empty {
+	display: none;
+}
+
+.ob-smart-insights-center-page .ob-si-weekly-foot > p {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	font-size: inherit;
+}
+
+/* Design OPT-2182: the tab bar names the list (no second title under it).
+   Larger pills, white current tab, the "?" of the cards inside the
+   Behavior opportunities pill (a sibling of the link, never inside it). */
+.ob-smart-insights-center-page .ob-si-tabs {
+	flex-wrap: wrap;
+	gap: var(--ob-si-space-3);
+	align-items: center;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab {
+	min-height: 44px;
+	padding: 10px 20px;
+	border-radius: var(--ob-si-radius-lg);
+	font-size: var(--ob-si-fs-title);
+	font-weight: 650;
+	box-sizing: border-box;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-current {
+	border-color: var(--ob-si-accent-border);
+	background: var(--ob-si-surface);
+	color: var(--ob-si-text);
+	box-shadow: 0 0 0 3px var(--ob-si-accent-soft), var(--ob-si-shadow-rest);
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-new:not(.is-current) {
+	background: var(--ob-si-surface);
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab:focus {
+	box-shadow: none;
+	outline: none;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-current:focus {
+	box-shadow: 0 0 0 3px var(--ob-si-accent-soft), var(--ob-si-shadow-rest);
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab:focus-visible {
+	outline: 2px solid var(--ob-si-accent);
+	outline-offset: 2px;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__with-help {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab.has-help {
+	padding-right: 46px;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__with-help > .ob-tooltip {
+	position: absolute;
+	top: 50%;
+	right: 14px;
+	margin: 0;
+	transform: translateY(-50%);
+}
+
+@media (max-width: 600px) {
+	.ob-smart-insights-center-page .ob-si-tabs {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.ob-smart-insights-center-page .ob-si-tabs__with-help,
+	.ob-smart-insights-center-page .ob-si-tabs__tab {
+		width: 100%;
+	}
+
+	.ob-smart-insights-center-page .ob-si-tabs__tab {
+		justify-content: center;
+	}
+}
+
+/* Design OPT-2280: a real tab bar (HX 26/10, "like 2 tabs"), not two pills.
+   One grey base line under both tabs; current tab = indigo text + thick
+   indigo underline; no halo (the Page X-Ray scanner line stays). */
+.ob-smart-insights-center-page .ob-si-tabs {
+	flex-wrap: nowrap;
+	gap: var(--ob-si-space-1);
+	align-items: stretch;
+	border-bottom: 1px solid var(--ob-si-border);
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__with-help {
+	align-items: stretch;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab,
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-current,
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-new:not(.is-current) {
+	margin-bottom: -1px;
+	padding: 10px 16px;
+	border: 0;
+	border-bottom: 3px solid transparent;
+	border-radius: var(--ob-si-radius-md) var(--ob-si-radius-md) 0 0;
+	background: transparent;
+	color: var(--ob-si-text-muted);
+	font-weight: 600;
+	box-shadow: none;
+	animation: none;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab:not(.is-current):hover {
+	border-bottom-color: var(--ob-si-border-strong);
+	background: var(--ob-si-surface-muted);
+	color: var(--ob-si-text);
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-current,
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-current:hover,
+.ob-smart-insights-center-page .ob-si-tabs__tab.is-current:focus {
+	border-bottom-color: var(--ob-si-accent);
+	background: transparent;
+	color: var(--ob-si-accent);
+	font-weight: 650;
+	box-shadow: none;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab.has-help,
+.ob-smart-insights-center-page .ob-si-tabs__tab.has-help.is-new:not(.is-current) {
+	padding-right: 44px;
+}
+
+.ob-smart-insights-center-page .ob-si-tabs__tab:focus-visible {
+	outline: 2px solid var(--ob-si-accent);
+	outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.ob-smart-insights-center-page .ob-si-tabs__tab {
+		transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+	}
+}
+
+/* Phone: the two tabs stay side by side, half the width each; a long
+   label wraps on two lines (never cut). */
+@media (max-width: 600px) {
+	.ob-smart-insights-center-page .ob-si-tabs {
+		display: flex;
+	}
+
+	.ob-smart-insights-center-page .ob-si-tabs__with-help,
+	.ob-smart-insights-center-page .ob-si-tabs > .ob-si-tabs__tab {
+		flex: 1 1 0;
+		min-width: 0;
+		width: auto;
+	}
+
+	.ob-smart-insights-center-page .ob-si-tabs__tab,
+	.ob-smart-insights-center-page .ob-si-tabs__tab.is-current,
+	.ob-smart-insights-center-page .ob-si-tabs__tab.is-new:not(.is-current) {
+		padding: 8px 10px;
+		font-size: 14px;
+		line-height: 1.25;
+		text-align: center;
+	}
+
+	.ob-smart-insights-center-page .ob-si-tabs__tab.has-help,
+	.ob-smart-insights-center-page .ob-si-tabs__tab.has-help.is-new:not(.is-current) {
+		padding-right: 36px;
+	}
+
+	.ob-smart-insights-center-page .ob-si-tabs__with-help > .ob-tooltip {
+		right: 8px;
+	}
+}
+
+/* OPT-2283: the two views of the tabpanel, one shown at a time. */
+.ob-smart-insights-center-page .ob-si-view[hidden] {
+	display: none !important;
+}
+
+.ob-si-xray-locked__chosen {
+	align-items: center;
+	background: #eef2ff;
+	border-radius: 8px;
+	color: #111827;
+	display: flex;
+	gap: 6px;
+	margin: 0 0 12px;
+	padding: 6px 10px;
+}
+
+.ob-si-xray-preview__card.is-chosen {
+	box-shadow: 0 0 0 2px #4f46e5;
 }

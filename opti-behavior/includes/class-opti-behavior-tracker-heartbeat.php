@@ -91,6 +91,43 @@ class Opti_Behavior_Tracker_Heartbeat {
 	const DOC_URL = 'https://optiuser.com/docs/tracking-not-working-checklist/';
 
 	/**
+	 * Collection test (OPT-1943): last result, autoload no.
+	 * { at, page (HTTP code, 0 = no answer), scripts { key: yes|no|na }, reception ok|failed }.
+	 */
+	const OPTION_PROBE = 'opti_behavior_heartbeat_probe';
+
+	/** admin-post action of the "Test collection" button. */
+	const PROBE_ACTION = 'opti_behavior_heartbeat_probe';
+
+	/** Single WP-Cron event: the test run in the background when a module is quiet. */
+	const PROBE_CRON = 'opti_behavior_heartbeat_probe_run';
+
+	/** admin-ajax action answered to a visitor (the reception test posts to it). */
+	const PING_ACTION = 'opti_behavior_collect_ping';
+
+	/** Answer of the ping: the reception test passes only when it comes back. */
+	const PING_ANSWER = 'ob-collect-ok';
+
+	/** A test older than this says nothing any more. */
+	const PROBE_MAX_AGE = 2 * DAY_IN_SECONDS;
+
+	/**
+	 * What Free knows of each module (OPT-1943), Pro ones included so an older
+	 * Pro needs no change: table + date column of its events (history), file
+	 * name of its tracker, and whether that tracker is on every page (a
+	 * missing script then means it is blocked; funnel / A/B trackers load
+	 * only where a funnel or a test runs).
+	 */
+	const KNOWN = array(
+		'funnel'            => array( 'opti_behavior_funnel_tracking', 'last_activity', 'funnel-tracker', false ),
+		'ab_test'           => array( 'optibehavior_ab_impressions', 'created_at', 'ab-test-tracker', false ),
+		'heatmap'           => array( 'optibehavior_events', 'insert_at', 'opti-behavior-heatmap-simple', true ),
+		'session_recording' => array( 'optibehavior_recordings', 'start_time', 'session-recorder', true ),
+		'errors_tracking'   => array( 'optibehavior_errors', 'occurred_at', 'errors-tracker', true ),
+		'form_analytics'    => array( 'optibehavior_form_interactions', 'created_at', 'form-analytics-tracker', true ),
+	);
+
+	/**
 	 * Per-request cache of the resolved module registry.
 	 *
 	 * @since 1.7.1
@@ -141,6 +178,10 @@ class Opti_Behavior_Tracker_Heartbeat {
 	private function register_hooks() {
 		add_action( 'admin_notices', array( $this, 'render_notice' ) );
 		add_action( 'admin_post_' . self::ACTION_NAME, array( $this, 'handle_dismiss' ) );
+		add_action( 'admin_post_' . self::PROBE_ACTION, array( $this, 'handle_probe' ) );
+		add_action( self::PROBE_CRON, array( $this, 'run_probe' ) );
+		add_action( 'wp_ajax_nopriv_' . self::PING_ACTION, array( __CLASS__, 'answer_ping' ) );
+		add_action( 'wp_ajax_' . self::PING_ACTION, array( __CLASS__, 'answer_ping' ) );
 	}
 
 	// -------------------------------------------------------------------------
@@ -430,7 +471,269 @@ class Opti_Behavior_Tracker_Heartbeat {
 		$mismatches = $this->evaluate();
 		set_transient( self::TRANSIENT_RESULT, $mismatches, self::CHECK_INTERVAL );
 
+		// A quiet module is only a suspicion (OPT-1943): test the collection
+		// in the background, never during the admin request.
+		if ( $mismatches && null === self::get_probe() && ! wp_next_scheduled( self::PROBE_CRON ) ) {
+			wp_schedule_single_event( time(), self::PROBE_CRON );
+		}
+
 		return $mismatches;
+	}
+
+	// -------------------------------------------------------------------------
+	// Collection diagnosis (OPT-1943): a suspicion is not a failure.
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Diagnosis of every quiet module, 4 separate facts each.
+	 *
+	 * @since 1.10.0
+	 * @return array[] { key, label, last_event (site-local datetime, '' = never),
+	 *                   recent (events in 24 h), script yes|no|na|untested,
+	 *                   reception ok|failed|untested, state blocked|quiet }.
+	 */
+	public function get_diagnosis() {
+		$labels = $this->get_cached_mismatches();
+		if ( empty( $labels ) ) {
+			return array();
+		}
+		$probe = self::get_probe();
+		$rows  = array();
+		foreach ( $this->get_modules() as $module ) {
+			if ( ! in_array( $module['label'], $labels, true ) ) {
+				continue;
+			}
+			$rows[] = self::diagnose(
+				$module['key'],
+				$module['label'],
+				$this->last_event( $module ),
+				$probe
+			);
+		}
+
+		return $rows;
+	}
+
+	/**
+	 * One module (pure): blocked only when the test saw its script missing
+	 * or the reception refused; else a quiet module (no visitor used it).
+	 *
+	 * @since 1.10.0
+	 * @param string     $key        Module key.
+	 * @param string     $label      Module label.
+	 * @param string     $last_event Last event, site-local datetime ('' = none).
+	 * @param array|null $probe      get_probe() result.
+	 * @return array
+	 */
+	public static function diagnose( $key, $label, $last_event, $probe ) {
+		$script    = 'untested';
+		$reception = 'untested';
+		if ( is_array( $probe ) ) {
+			$script    = isset( $probe['scripts'][ $key ] ) ? (string) $probe['scripts'][ $key ] : 'na';
+			$reception = isset( $probe['reception'] ) ? (string) $probe['reception'] : 'untested';
+		}
+
+		return array(
+			'key'        => (string) $key,
+			'label'      => (string) $label,
+			'last_event' => (string) $last_event,
+			'recent'     => 0,
+			'script'     => $script,
+			'reception'  => $reception,
+			'state'      => ( 'no' === $script || 'failed' === $reception ) ? 'blocked' : 'quiet',
+		);
+	}
+
+	/**
+	 * Labels of the modules whose block is confirmed by the test.
+	 *
+	 * @since 1.10.0
+	 * @return string[]
+	 */
+	public function get_confirmed_blocks() {
+		$labels = array();
+		foreach ( $this->get_diagnosis() as $row ) {
+			if ( 'blocked' === $row['state'] ) {
+				$labels[] = $row['label'];
+			}
+		}
+
+		return $labels;
+	}
+
+	/**
+	 * Date of the module's newest event (history), '' when none or unknown.
+	 * Newest row by primary key: no scan of a big events table.
+	 *
+	 * @since 1.10.0
+	 * @param array $module Module descriptor.
+	 * @return string Site-local datetime.
+	 */
+	private function last_event( $module ) {
+		if ( isset( $module['last_event'] ) && is_callable( $module['last_event'] ) ) {
+			return (string) call_user_func( $module['last_event'] );
+		}
+		if ( ! isset( self::KNOWN[ $module['key'] ] ) ) {
+			return '';
+		}
+		global $wpdb;
+		list( $table, $column ) = self::KNOWN[ $module['key'] ];
+		$table                  = esc_sql( $wpdb->prefix . $table );
+		$column                 = esc_sql( $column );
+		$suppress               = $wpdb->suppress_errors( true );
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Hard-coded plugin table and column names from $wpdb->prefix, escaped above; no dynamic values.
+		$last = $wpdb->get_var( "SELECT {$column} FROM {$table} ORDER BY id DESC LIMIT 1" );
+		$wpdb->suppress_errors( $suppress );
+
+		return $last ? (string) $last : '';
+	}
+
+	/**
+	 * Last collection test, null when none or older than PROBE_MAX_AGE.
+	 *
+	 * @since 1.10.0
+	 * @return array|null
+	 */
+	public static function get_probe() {
+		$probe = get_option( self::OPTION_PROBE, null );
+		if ( ! is_array( $probe ) || empty( $probe['at'] ) || (int) $probe['at'] < time() - self::PROBE_MAX_AGE ) {
+			return null;
+		}
+
+		return $probe;
+	}
+
+	/**
+	 * Collection test, as a visitor: (1) the home page served without any
+	 * cookie (page cache included) carries each tracker, (2) admin-ajax, where
+	 * every tracker sends, answers a visitor. Stores and returns the result.
+	 *
+	 * @since 1.10.0
+	 * @return array
+	 */
+	public function run_probe() {
+		$args = array(
+			'timeout'     => 10,
+			'redirection' => 3,
+			'sslverify'   => apply_filters( 'https_local_ssl_verify', false ), // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Core filter of loopback requests.
+			'cookies'     => array(),
+			'user-agent'  => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Opti-Behavior-Check',
+		);
+		$page = wp_remote_get( home_url( '/' ), $args );
+		$code = is_wp_error( $page ) ? 0 : (int) wp_remote_retrieve_response_code( $page );
+		$html = ( $code >= 200 && $code < 400 ) ? (string) wp_remote_retrieve_body( $page ) : '';
+		$ping = wp_remote_post( admin_url( 'admin-ajax.php' ), $args + array( 'body' => array( 'action' => self::PING_ACTION ) ) );
+
+		$probe = array(
+			'at'        => time(),
+			'page'      => $code,
+			'scripts'   => self::scripts_seen( '' === $html ? null : $html, wp_list_pluck( $this->get_modules(), 'key' ) ),
+			'reception' => ( ! is_wp_error( $ping ) && 200 === (int) wp_remote_retrieve_response_code( $ping ) && false !== strpos( (string) wp_remote_retrieve_body( $ping ), self::PING_ANSWER ) ) ? 'ok' : 'failed',
+		);
+		update_option( self::OPTION_PROBE, $probe, false );
+
+		return $probe;
+	}
+
+	/**
+	 * Which trackers the page carries (pure). yes = file named in the page;
+	 * no = absent although it loads on every page; na = absent, but it loads
+	 * only where a funnel / a test runs, or the module is unknown, or the
+	 * page could not be read (null).
+	 *
+	 * @since 1.10.0
+	 * @param string|null $html Page HTML, null = not read.
+	 * @param string[]    $keys Module keys.
+	 * @return array key => yes|no|na
+	 */
+	public static function scripts_seen( $html, $keys ) {
+		$seen = array();
+		foreach ( $keys as $key ) {
+			if ( null === $html || ! isset( self::KNOWN[ $key ] ) ) {
+				$seen[ $key ] = 'na';
+				continue;
+			}
+			if ( false !== stripos( $html, self::KNOWN[ $key ][2] ) ) {
+				$seen[ $key ] = 'yes';
+			} else {
+				$seen[ $key ] = self::KNOWN[ $key ][3] ? 'no' : 'na';
+			}
+		}
+
+		return $seen;
+	}
+
+	/**
+	 * Visitor end of the reception test.
+	 *
+	 * @since 1.10.0
+	 * @return void
+	 */
+	public static function answer_ping() {
+		wp_send_json_success( self::PING_ANSWER );
+	}
+
+	/**
+	 * "Test collection" button: runs the test now, back to the screen.
+	 *
+	 * @since 1.10.0
+	 * @return void
+	 */
+	public function handle_probe() {
+		check_admin_referer( self::PROBE_ACTION );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die(
+				esc_html__( 'You are not allowed to perform this action.', 'opti-behavior' ),
+				esc_html__( 'Unauthorized', 'opti-behavior' ),
+				array( 'response' => 403 )
+			);
+		}
+		$this->run_probe();
+		$redirect_url = wp_get_referer();
+		wp_safe_redirect( $redirect_url ? $redirect_url : admin_url() );
+		exit;
+	}
+
+	/**
+	 * Address of the "Test collection" button.
+	 *
+	 * @since 1.10.0
+	 * @return string
+	 */
+	public static function probe_url() {
+		return wp_nonce_url( add_query_arg( array( 'action' => self::PROBE_ACTION ), admin_url( 'admin-post.php' ) ), self::PROBE_ACTION );
+	}
+
+	/**
+	 * The 4 facts of a module in one line (plain text).
+	 *
+	 * @since 1.10.0
+	 * @param array $row diagnose() row.
+	 * @return string
+	 */
+	public static function diagnosis_text( $row ) {
+		$last    = '' === $row['last_event'] ? __( 'never', 'opti-behavior' ) : date_i18n( get_option( 'date_format' ), strtotime( $row['last_event'] ) );
+		$scripts = array(
+			'yes'      => __( 'yes', 'opti-behavior' ),
+			'no'       => __( 'no', 'opti-behavior' ),
+			'na'       => __( 'not on the home page', 'opti-behavior' ),
+			'untested' => __( 'not tested yet', 'opti-behavior' ),
+		);
+		$tests   = array(
+			'ok'       => __( 'OK', 'opti-behavior' ),
+			'failed'   => __( 'failed', 'opti-behavior' ),
+			'untested' => __( 'not tested yet', 'opti-behavior' ),
+		);
+
+		return sprintf(
+			/* translators: 1: module name, 2: date of its last event (or "never"), 3: tracker seen on the page (yes / no / …), 4: result of the reception test, 5: events in the last 24 hours. */
+			__( '%1$s — last event: %2$s · script on the page: %3$s · reception test: %4$s · last 24 h: %5$s events.', 'opti-behavior' ),
+			$row['label'],
+			$last,
+			isset( $scripts[ $row['script'] ] ) ? $scripts[ $row['script'] ] : $scripts['na'],
+			isset( $tests[ $row['reception'] ] ) ? $tests[ $row['reception'] ] : $tests['untested'],
+			number_format_i18n( (int) $row['recent'] )
+		);
 	}
 
 	// -------------------------------------------------------------------------
@@ -657,7 +960,9 @@ class Opti_Behavior_Tracker_Heartbeat {
 			return;
 		}
 
-		$mismatches = $this->get_cached_mismatches();
+		// Only a block confirmed by the collection test (OPT-1943): a module
+		// without events on a quiet site is said in the Setup check, not here.
+		$mismatches = $this->get_confirmed_blocks();
 		if ( empty( $mismatches ) ) {
 			return;
 		}
@@ -697,6 +1002,11 @@ class Opti_Behavior_Tracker_Heartbeat {
 				}
 				?>
 			</p>
+			<?php foreach ( $this->get_diagnosis() as $row ) : ?>
+				<?php if ( 'blocked' === $row['state'] ) : ?>
+					<p><small><?php echo esc_html( self::diagnosis_text( $row ) ); ?></small></p>
+				<?php endif; ?>
+			<?php endforeach; ?>
 			<p>
 				<a href="<?php echo esc_url( self::DOC_URL ); ?>" target="_blank" rel="noopener noreferrer">
 					<?php esc_html_e( 'Learn how to fix this', 'opti-behavior' ); ?>

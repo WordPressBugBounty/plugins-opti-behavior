@@ -47,16 +47,16 @@ $opti_behavior_hint_ctx = array(
  *
  * Guarded: this template is included once per rendered report, so a worker that
  * sends several due schedules in one PHP process would otherwise hit a fatal
- * "Cannot redeclare opti_get_change_html()" on the second report.
+ * "Cannot redeclare opti_behavior_get_change_html()" on the second report.
  */
-if ( ! function_exists( 'opti_get_change_html' ) ) {
+if ( ! function_exists( 'opti_behavior_get_change_html' ) ) {
 	/**
 	 * Get arrow indicator based on direction.
 	 *
 	 * @param array $change Change descriptor (value, direction, positive).
 	 * @return string HTML markup, or an empty string when there is nothing to show.
 	 */
-	function opti_get_change_html( $change ) {
+	function opti_behavior_get_change_html( $change ) {
 		$direction = $change['direction'] ?? 'neutral';
 
 		// Previous period empty: nothing to compare with, no arrow, no percent (OPT-1510).
@@ -119,6 +119,8 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 			.ob-btn-cell table { width: 100% !important; }
 			.ob-btn-cell a { display: block !important; text-align: center; }
 			.ob-t th, .ob-t td { padding: 10px 8px !important; }
+			<?php // Top pages: 3 figure columns narrower on a phone, so the Page column keeps room (OPT-2488). ?>
+			.ob-t .ob-tp-n { width: 52px !important; padding: 10px 4px !important; letter-spacing: 0 !important; }
 		}
 	</style>
 	<?php // Dark clients (Apple Mail, iOS Mail, Outlook mac): own block, so a client that rejects it keeps the phone layout. ?>
@@ -139,8 +141,8 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 			.ob-card [style*="color: #6b7280"], .ob-card [style*="color: #71717a"], .ob-card [style*="color: #4b5563"], .ob-card [style*="color: #a1a1aa"] { color: #a1a1aa !important; }
 			.ob-card [style*="color: #166534"] { color: #86efac !important; }
 			.ob-card [style*="color: #991b1b"], .ob-card [style*="color: #dc2626"] { color: #fca5a5 !important; }
-			.ob-card [style*="color: #92400e"], .ob-card [style*="color: #d97706"] { color: #fcd34d !important; }
-			.ob-card [style*="color: #16a34a"] { color: #4ade80 !important; }
+			.ob-card [style*="color: #92400e"], .ob-card [style*="color: #d97706"], .ob-card [style*="color: #b45309"], .ob-card [style*="color: #a16207"] { color: #fcd34d !important; }
+			.ob-card [style*="color: #16a34a"], .ob-card [style*="color: #15803d"], .ob-card [style*="color: #047857"] { color: #4ade80 !important; }
 			.ob-card [style*="color: #4338ca"] { color: #c7d2fe !important; }
 			.ob-card a[style*="color: #4f46e5"] { color: #a5b4fc !important; }
 			.ob-card .ob-btn, .ob-card .ob-btn a { color: #ffffff !important; }
@@ -186,7 +188,7 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 					</tr>
 
 					<?php
-					// Full e-mail (OPT-1647, design OPT-1646): the 3 most costly issues of the PDF site report first, then every block.
+					// Full e-mail (OPT-1647, design OPT-1646): the 3 issues to look at first of the PDF site report first, then every block.
 					$opti_behavior_s    = ( ! empty( $report['site'] ) && is_array( $report['site'] ) ) ? $report['site'] : null;
 					$opti_behavior_font = "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;";
 					$opti_behavior_sev  = array(
@@ -209,10 +211,13 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 						</td>
 					</tr>
 					<?php elseif ( $opti_behavior_s ) : ?>
-					<!-- The 3 most costly issues, as in the PDF (OPT-1553) -->
+					<!-- The 3 issues to look at first, as in the PDF (OPT-1553) -->
 					<tr>
 						<td style="padding: 32px 40px 4px;">
-							<h2 style="margin: 0 0 14px 0; font-size: 16px; font-weight: 600; color: #18181b; <?php echo esc_attr( $opti_behavior_font ); ?>"><?php esc_html_e( 'The 3 most costly issues', 'opti-behavior' ); ?></h2>
+							<h2 style="margin: 0 0 14px 0; font-size: 16px; font-weight: 600; color: #18181b; <?php echo esc_attr( $opti_behavior_font ); ?>"><?php esc_html_e( 'The 3 issues to look at first', 'opti-behavior' ); ?></h2>
+								<?php if ( ! empty( $opti_behavior_s['issues_period'] ) ) : ?>
+								<p style="margin: -8px 0 14px; font-size: 12px; color: #71717a; <?php echo esc_attr( $opti_behavior_font ); ?>"><?php echo esc_html( $opti_behavior_s['issues_period'] ); ?></p>
+								<?php endif; ?>
 							<?php if ( empty( $opti_behavior_s['issues'] ) ) : ?>
 							<p style="margin: 0 0 24px; font-size: 13px; color: #6b7280; <?php echo esc_attr( $opti_behavior_font ); ?>"><?php esc_html_e( 'No costly issue detected for this period.', 'opti-behavior' ); ?></p>
 							<?php else : ?>
@@ -235,12 +240,17 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 										<div style="margin-top: 6px; font-size: 13px; color: #18181b; <?php echo esc_attr( $opti_behavior_font ); ?>">
 											<?php
 											$opti_behavior_parts = array();
+											// OB-07: what the figure counts (Report_Site::issue_unit()), never "lost".
+											$opti_behavior_unit = isset( $opti_behavior_it['unit'] ) ? (string) $opti_behavior_it['unit'] : '';
 											if ( '' !== $opti_behavior_it['money'] ) {
-												$opti_behavior_parts[] = '<strong>' . esc_html( $opti_behavior_it['money'] ) . '</strong> ' . esc_html__( 'lost, measured', 'opti-behavior' );
+												$opti_behavior_parts[] = '<strong>' . esc_html( $opti_behavior_it['money'] ) . '</strong> ' . esc_html__( 'estimated loss', 'opti-behavior' );
 											}
-											if ( null !== $opti_behavior_it['lost'] ) {
-												$opti_behavior_parts[] = '<strong>' . esc_html( number_format_i18n( $opti_behavior_it['lost'] ) ) . '</strong> ' . esc_html( _n( 'visit lost', 'visits lost', $opti_behavior_it['lost'], 'opti-behavior' ) );
-												$opti_behavior_parts[] = '<strong>' . esc_html( number_format_i18n( $opti_behavior_it['share'] ) . ' %' ) . '</strong> ' . esc_html__( 'of all visits', 'opti-behavior' );
+											if ( null !== $opti_behavior_it['lost'] && null !== $opti_behavior_it['share'] ) {
+												$opti_behavior_parts[] = '<strong>' . esc_html( number_format_i18n( $opti_behavior_it['lost'] ) ) . '</strong> ' . esc_html( '' !== $opti_behavior_unit ? $opti_behavior_unit : _n( 'visit concerned', 'visits concerned', $opti_behavior_it['lost'], 'opti-behavior' ) );
+												$opti_behavior_parts[] = '<strong>' . esc_html( number_format_i18n( $opti_behavior_it['share'] ) . ' %' ) . '</strong> ' . ( empty( $opti_behavior_it['own'] ) ? esc_html__( 'of all visits', 'opti-behavior' ) : esc_html__( 'of the visits of those days', 'opti-behavior' ) );
+											} elseif ( null !== $opti_behavior_it['lost'] ) {
+												// OPT-1940: estimated from an average gap, never a share of the visits.
+												$opti_behavior_parts[] = '<strong>&#8776; ' . esc_html( number_format_i18n( $opti_behavior_it['lost'] ) ) . '</strong> ' . esc_html( '' !== $opti_behavior_unit ? $opti_behavior_unit : _n( 'visit concerned', 'visits concerned', $opti_behavior_it['lost'], 'opti-behavior' ) );
 											}
 											echo wp_kses( implode( ' &#183; ', $opti_behavior_parts ), array( 'strong' => array() ) );
 											?>
@@ -256,7 +266,8 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 								<?php endforeach; ?>
 								<?php
 								$opti_behavior_n = count( $opti_behavior_s['issues'] );
-								if ( $opti_behavior_n < Opti_Behavior_Report_Site::TOP_ISSUES ) {
+								if ( $opti_behavior_n < Opti_Behavior_Report_Site::TOP_ISSUES && $opti_behavior_s['issues_total'] <= $opti_behavior_n ) {
+										// Same rule as the PDF: "Only N" only when nothing else is open (Free alone leaves locked Pro cards out).
 									/* translators: %s: number of issues. */
 									$opti_behavior_more = sprintf( _n( 'Only %s open issue over this period.', 'Only %s open issues over this period.', $opti_behavior_n, 'opti-behavior' ), number_format_i18n( $opti_behavior_n ) );
 								} elseif ( $opti_behavior_s['issues_total'] > $opti_behavior_n ) {
@@ -271,6 +282,15 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 							<p style="margin: 2px 0 0; font-size: 12px; color: #71717a; <?php echo esc_attr( $opti_behavior_font ); ?>"><?php echo esc_html( $opti_behavior_more ); ?></p>
 								<?php endif; ?>
 							<?php endif; ?>
+						</td>
+					</tr>
+					<?php endif; ?>
+
+					<?php // OPT-2860: one AI line (which AI companies read the site, pages read, visitors they sent). ?>
+					<?php if ( ! empty( $opti_behavior_s['ai_line'] ) ) : ?>
+					<tr>
+						<td style="padding: 0 40px 24px;">
+							<p style="margin: 0; font-size: 13px; color: #3f3f46; line-height: 1.45; <?php echo esc_attr( $opti_behavior_font ); ?>"><strong><?php esc_html_e( 'AI', 'opti-behavior' ); ?>:</strong> <?php echo esc_html( $opti_behavior_s['ai_line'] ); ?></p>
 						</td>
 					</tr>
 					<?php endif; ?>
@@ -326,11 +346,11 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 									'suffix' => '%',
 								),
 								'avg_session_time' => array(
-									'label'     => __( 'Avg. Time', 'opti-behavior' ),
+									'label'     => __( 'Avg. Session Time', 'opti-behavior' ),
 									'formatted' => true,
 								),
 								'avg_scroll_depth' => array(
-									'label'  => __( 'Scroll Depth', 'opti-behavior' ),
+									'label'  => __( 'Avg. Scroll Depth', 'opti-behavior' ),
 									'suffix' => '%',
 								),
 							);
@@ -365,7 +385,7 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 												<div class="ob-kpi-val" style="font-size: 28px; font-weight: 700; color: #18181b; line-height: 1.2; letter-spacing: -0.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
 													<?php echo esc_html( $opti_behavior_kpi_value ); ?>
 												</div>
-												<div style="min-height: 22px;"><?php echo wp_kses_post( opti_get_change_html( $opti_behavior_kpi['change'] ?? array() ) ); ?></div>
+												<div style="min-height: 22px;"><?php echo wp_kses_post( opti_behavior_get_change_html( $opti_behavior_kpi['change'] ?? array() ) ); ?></div>
 											</td>
 										</tr>
 									</table>
@@ -459,23 +479,28 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 							<table class="ob-t" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border: 1px solid #e5e7eb; border-radius: 8px; border-collapse: separate;">
 								<tr style="background-color: #f9fafb;">
 									<th style="padding: 14px 16px; text-align: left; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Page', 'opti-behavior' ); ?></th>
-									<th style="padding: 14px 16px; text-align: right; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; width: 80px; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Views', 'opti-behavior' ); ?></th>
-									<th style="padding: 14px 16px; text-align: right; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; width: 80px; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Time', 'opti-behavior' ); ?></th>
+									<?php // Visits of the page, same figure as the Heatmaps list and the site report (OPT-2484 / OPT-2488). ?>
+									<th class="ob-tp-n" style="padding: 14px 16px; text-align: right; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; width: 80px; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Visits', 'opti-behavior' ); ?></th>
+									<th class="ob-tp-n" style="padding: 14px 16px; text-align: right; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; width: 80px; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Views', 'opti-behavior' ); ?></th>
+									<th class="ob-tp-n" style="padding: 14px 16px; text-align: right; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; width: 80px; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Time', 'opti-behavior' ); ?></th>
 								</tr>
 								<?php foreach ( array_slice( $top_pages, 0, 5 ) as $page ) : ?>
 								<tr>
 									<td style="padding: 14px 16px; font-size: 14px; color: #18181b; word-break: break-word; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
 										<?php if ( ! empty( $page['page_id'] ) ) : ?>
 											<?php // Same address as the page title link of the Heatmaps list (admin/class-opti-behavior-heatmap-dashboard.php) (OPT-1514). ?>
-											<a href="<?php echo esc_url( admin_url( 'admin.php?page=opti-behavior-heatmap-detail&page_id=' . (int) $page['page_id'] . '&type=click&device=desktop' ) ); ?>" style="color: #4f46e5; text-decoration: none;"><?php echo esc_html( mb_strimwidth( $page['title'], 0, 45, '...' ) ); ?></a>
+											<a href="<?php echo esc_url( admin_url( 'admin.php?page=opti-behavior-heatmap-detail&page_id=' . (int) $page['page_id'] . '&type=click&device=desktop' ) ); ?>" style="color: #4f46e5; text-decoration: none;"><?php echo esc_html( $page['title'] ); ?></a>
 										<?php else : ?>
-											<?php echo esc_html( mb_strimwidth( $page['title'], 0, 45, '...' ) ); ?>
+											<?php echo esc_html( $page['title'] ); ?>
 										<?php endif; ?>
 									</td>
-									<td style="padding: 14px 16px; text-align: right; font-size: 14px; color: #18181b; font-weight: 600; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
+									<td class="ob-tp-n" style="padding: 14px 16px; text-align: right; font-size: 14px; color: #18181b; font-weight: 600; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
+										<?php echo esc_html( isset( $page['visits'] ) && null !== $page['visits'] ? number_format( (int) $page['visits'] ) : '—' ); ?>
+									</td>
+									<td class="ob-tp-n" style="padding: 14px 16px; text-align: right; font-size: 14px; color: #18181b; font-weight: 600; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
 										<?php echo esc_html( number_format( $page['views'] ) ); ?>
 									</td>
-									<td style="padding: 14px 16px; text-align: right; font-size: 14px; color: #6b7280; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
+									<td class="ob-tp-n" style="padding: 14px 16px; text-align: right; font-size: 14px; color: #6b7280; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
 										<?php echo esc_html( $page['avg_time_formatted'] ?? '—' ); ?>
 									</td>
 								</tr>
@@ -628,9 +653,9 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 								<tr>
 									<td style="padding: 14px 16px; font-size: 14px; color: #18181b; word-break: break-word; border-bottom: 1px solid #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
 										<?php if ( ! empty( $opti_behavior_clicked['page_id'] ) ) : ?>
-											<a href="<?php echo esc_url( admin_url( 'admin.php?page=opti-behavior-heatmap-detail&page_id=' . (int) $opti_behavior_clicked['page_id'] . '&type=click&device=desktop' ) ); ?>" style="color: #4f46e5; text-decoration: none;"><?php echo esc_html( mb_strimwidth( (string) $opti_behavior_clicked['title'], 0, 45, '...' ) ); ?></a>
+											<a href="<?php echo esc_url( admin_url( 'admin.php?page=opti-behavior-heatmap-detail&page_id=' . (int) $opti_behavior_clicked['page_id'] . '&type=click&device=desktop' ) ); ?>" style="color: #4f46e5; text-decoration: none;"><?php echo esc_html( (string) $opti_behavior_clicked['title'] ); ?></a>
 										<?php else : ?>
-											<?php echo esc_html( mb_strimwidth( (string) $opti_behavior_clicked['title'], 0, 45, '...' ) ); ?>
+											<?php echo esc_html( (string) $opti_behavior_clicked['title'] ); ?>
 										<?php endif; ?>
 										<?php if ( ! empty( $opti_behavior_clicked['element'] ) ) : ?>
 										<div style="margin-top: 4px; font-size: 12px; color: #71717a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
@@ -676,13 +701,13 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 								</tr>
 								<?php foreach ( $funnels['funnels'] as $opti_behavior_funnel ) : ?>
 								<tr>
-									<td style="padding: 10px 14px; font-size: 13px; color: #18181b; word-break: break-word; border-top: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( mb_strimwidth( $opti_behavior_funnel['name'], 0, 40, '...' ) ); ?></td>
+									<td style="padding: 10px 14px; font-size: 13px; color: #18181b; word-break: break-word; border-top: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( $opti_behavior_funnel['name'] ); ?></td>
 									<td style="padding: 10px 14px; font-size: 13px; color: #18181b; border-top: 1px solid #f3f4f6; text-align: right; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $opti_behavior_funnel['total_entries'] ) ); ?></td>
 									<td style="padding: 10px 14px; font-size: 13px; color: #18181b; border-top: 1px solid #f3f4f6; text-align: right; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $opti_behavior_funnel['completions'] ) ); ?></td>
 									<td style="padding: 10px 14px; font-size: 13px; color: #18181b; border-top: 1px solid #f3f4f6; text-align: right; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
 										<?php
 										// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
-										$conv_color = ( $opti_behavior_funnel['conversion_rate'] ?? 0 ) >= 50 ? '#16a34a' : ( ( $opti_behavior_funnel['conversion_rate'] ?? 0 ) >= 20 ? '#ca8a04' : '#dc2626' );
+										$conv_color = ( $opti_behavior_funnel['conversion_rate'] ?? 0 ) >= 50 ? '#15803d' : ( ( $opti_behavior_funnel['conversion_rate'] ?? 0 ) >= 20 ? '#a16207' : '#dc2626' );
 										?>
 										<span style="color: <?php echo esc_attr( $conv_color ); ?>; font-weight: 600;"><?php echo esc_html( number_format( $opti_behavior_funnel['conversion_rate'] ?? 0, 1 ) ); ?>%</span>
 									</td>
@@ -830,10 +855,11 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 					<tr>
 						<td style="padding: 0 40px 32px;">
 							<h2 style="margin: 0 0 16px 0; font-size: 16px; font-weight: 600; color: #18181b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">								<?php esc_html_e( 'JavaScript Errors', 'opti-behavior' ); ?>
+								<span style="display: inline-block; background-color: #4f46e5; color: #fff; font-size: 10px; padding: 2px 8px; border-radius: 10px; margin-left: 8px; vertical-align: middle; font-weight: 600;">PRO</span>
 							</h2>
 							<table width="100%" cellpadding="0" cellspacing="0" border="0">
 								<tr>
-									<td width="50%" style="padding-right: 8px;">
+									<td width="50%" style="padding: 4px;">
 										<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#fef2f2" style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px;">
 											<tr>
 												<td style="padding: 24px; text-align: center;">
@@ -843,11 +869,11 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 											</tr>
 										</table>
 									</td>
-									<td width="50%" style="padding-left: 8px;">
+									<td width="50%" style="padding: 4px;">
 										<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#fef3c7" style="background-color: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px;">
 											<tr>
 												<td style="padding: 24px; text-align: center;">
-													<div style="font-size: 36px; font-weight: 700; color: #d97706; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $errors['unresolved'] ) ); ?></div>
+													<div style="font-size: 36px; font-weight: 700; color: #b45309; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $errors['unresolved'] ) ); ?></div>
 													<div style="font-size: 12px; color: #92400e; margin-top: 6px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Unresolved', 'opti-behavior' ); ?></div>
 												</td>
 											</tr>
@@ -895,7 +921,7 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 									// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 									foreach ( $vitals as $key => $config ) :
 										$value        = $performance[ $key ] ?? 0;
-										$status_color = $value <= $config['good'] ? '#16a34a' : ( $value <= $config['good'] * 2 ? '#d97706' : '#dc2626' );
+										$status_color = $value <= $config['good'] ? '#15803d' : ( $value <= $config['good'] * 2 ? '#b45309' : '#dc2626' );
 										// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound
 									?>
 									<td class="ob-col" width="25%" style="padding: 4px;">
@@ -941,7 +967,7 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 										<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#fef3c7" style="background-color: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px;">
 											<tr>
 												<td style="padding: 16px; text-align: center;">
-													<div style="font-size: 28px; font-weight: 700; color: #d97706; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $friction['rage_clicks'] ) ); ?></div>
+													<div style="font-size: 28px; font-weight: 700; color: #b45309; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $friction['rage_clicks'] ) ); ?></div>
 													<div style="font-size: 11px; color: #92400e; margin-top: 4px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Rage Clicks', 'opti-behavior' ); ?></div>
 												</td>
 											</tr>
@@ -986,7 +1012,7 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 										<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#fef3c7" style="background-color: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px;">
 											<tr>
 												<td style="padding: 16px; text-align: center;">
-													<div style="font-size: 28px; font-weight: 700; color: #d97706; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $broken_links['open'] ) ); ?></div>
+													<div style="font-size: 28px; font-weight: 700; color: #b45309; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $broken_links['open'] ) ); ?></div>
 													<div style="font-size: 11px; color: #92400e; margin-top: 4px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Open', 'opti-behavior' ); ?></div>
 												</td>
 											</tr>
@@ -996,7 +1022,7 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 										<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#dcfce7" style="background-color: #dcfce7; border: 1px solid #86efac; border-radius: 8px;">
 											<tr>
 												<td style="padding: 16px; text-align: center;">
-													<div style="font-size: 28px; font-weight: 700; color: #16a34a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $broken_links['fixed'] ) ); ?></div>
+													<div style="font-size: 28px; font-weight: 700; color: #15803d; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $broken_links['fixed'] ) ); ?></div>
 													<div style="font-size: 11px; color: #166534; margin-top: 4px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Fixed', 'opti-behavior' ); ?></div>
 												</td>
 											</tr>
@@ -1078,7 +1104,7 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 								</tr>
 								<?php foreach ( $user_journeys['entry_pages'] as $opti_behavior_uj_page ) : ?>
 								<tr>
-									<td style="padding: 10px 16px; font-size: 13px; color: #18181b; word-break: break-word; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( mb_strimwidth( $opti_behavior_uj_page['name'] ?? $opti_behavior_uj_page['url'], 0, 45, '...' ) ); ?></td>
+									<td style="padding: 10px 16px; font-size: 13px; color: #18181b; word-break: break-word; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( $opti_behavior_uj_page['name'] ?? $opti_behavior_uj_page['url'] ); ?></td>
 									<td style="padding: 10px 16px; text-align: right; font-size: 13px; color: #18181b; font-weight: 600; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $opti_behavior_uj_page['sessions'] ) ); ?></td>
 								</tr>
 								<?php endforeach; ?>
@@ -1094,7 +1120,7 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 								</tr>
 								<?php foreach ( $user_journeys['exit_pages'] as $opti_behavior_uj_page ) : ?>
 								<tr>
-									<td style="padding: 10px 16px; font-size: 13px; color: #18181b; word-break: break-word; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( mb_strimwidth( $opti_behavior_uj_page['name'] ?? $opti_behavior_uj_page['url'], 0, 45, '...' ) ); ?></td>
+									<td style="padding: 10px 16px; font-size: 13px; color: #18181b; word-break: break-word; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( $opti_behavior_uj_page['name'] ?? $opti_behavior_uj_page['url'] ); ?></td>
 									<td style="padding: 10px 16px; text-align: right; font-size: 13px; color: #18181b; font-weight: 600; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $opti_behavior_uj_page['sessions'] ) ); ?></td>
 									<td style="padding: 10px 16px; text-align: right; font-size: 13px; color: #6b7280; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( $opti_behavior_uj_page['exit_rate'] ); ?>%</td>
 								</tr>
@@ -1151,7 +1177,7 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 										<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px;">
 											<tr><td style="padding: 14px; text-align: center;">
 												<div style="font-size: 22px; font-weight: 700; color: #dc2626; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $form_analytics['abandonments'] ) ); ?></div>
-												<div style="font-size: 11px; color: #6b7280; margin-top: 4px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Abandoned', 'opti-behavior' ); ?></div>
+												<div style="font-size: 11px; color: #52525b; margin-top: 4px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php esc_html_e( 'Abandoned', 'opti-behavior' ); ?></div>
 											</td></tr>
 										</table>
 									</td>
@@ -1168,13 +1194,13 @@ if ( ! function_exists( 'opti_get_change_html' ) ) {
 								<?php foreach ( $form_analytics['top_forms'] as $opti_behavior_fa_form ) : ?>
 								<tr>
 									<td style="padding: 10px 16px; font-size: 13px; color: #18181b; word-break: break-word; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;">
-										<?php echo esc_html( mb_strimwidth( $opti_behavior_fa_form['form_name'] ?: $opti_behavior_fa_form['form_id'], 0, 35, '...' ) ); ?>
+										<?php echo esc_html( $opti_behavior_fa_form['form_name'] ?: $opti_behavior_fa_form['form_id'] ); ?>
 										<?php if ( ! empty( $opti_behavior_fa_form['form_plugin'] ) ) : ?>
-											<span style="font-size: 10px; color: #a1a1aa;">(<?php echo esc_html( $opti_behavior_fa_form['form_plugin'] ); ?>)</span>
+											<span style="font-size: 10px; color: #71717a;">(<?php echo esc_html( $opti_behavior_fa_form['form_plugin'] ); ?>)</span>
 										<?php endif; ?>
 									</td>
 									<td style="padding: 10px 16px; text-align: right; font-size: 13px; color: #18181b; font-weight: 600; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( number_format( $opti_behavior_fa_form['form_views'] ) ); ?></td>
-									<td style="padding: 10px 16px; text-align: right; font-size: 13px; color: #059669; font-weight: 600; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( $opti_behavior_fa_form['conversion_rate'] ); ?>%</td>
+									<td style="padding: 10px 16px; text-align: right; font-size: 13px; color: #047857; font-weight: 600; border-bottom: 1px solid #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;"><?php echo esc_html( $opti_behavior_fa_form['conversion_rate'] ); ?>%</td>
 								</tr>
 								<?php endforeach; ?>
 							</table>

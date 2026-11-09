@@ -351,18 +351,18 @@ class Opti_Behavior_Smart_Insights_Recommendations {
 				/* translators: %s: page title. */
 				$copy['card_title'] = sprintf( __( 'Visits often end on %s', 'opti-behavior' ), $page );
 				/* translators: %s: page title. */
-				$copy['action_short'] = sprintf( __( 'Add a clear link to the next step on %s where visitors stop reading.', 'opti-behavior' ), $page );
+				$copy['action_short'] = sprintf( __( 'Add a clear link to the next step on %s, in the part of the page visitors reach.', 'opti-behavior' ), $page );
 				break;
 			case 'high_traffic_low_engagement':
 			case 'low_scroll_depth_important_page':
 				/* translators: %s: page title. */
-				$copy['card_title'] = sprintf( __( 'Most visitors never reach the middle of %s', 'opti-behavior' ), $page );
+				$copy['card_title'] = sprintf( __( 'The average scroll depth of %s is low', 'opti-behavior' ), $page );
 				$scroll             = isset( $metrics['avg_scroll_depth'] ) && is_numeric( $metrics['avg_scroll_depth'] ) && $metrics['avg_scroll_depth'] > 0 ? self::copy_percent( $metrics['avg_scroll_depth'] ) : '';
 				$copy['action_short'] = '' !== $scroll
 					/* translators: 1: page title, 2: average scroll depth, e.g. 34%. */
-					? sprintf( __( 'Move the main button or key message of %1$s above %2$s of the page, where most visitors stop.', 'opti-behavior' ), $page, $scroll )
+					? sprintf( __( 'Check the scroll map of %1$s (average %2$s of the page) before moving the main button.', 'opti-behavior' ), $page, $scroll )
 					/* translators: %s: page title. */
-					: sprintf( __( 'Move the main button or key message of %s higher, where most visitors still read.', 'opti-behavior' ), $page );
+					: sprintf( __( 'Check the scroll map of %s and where the main button sits before moving it.', 'opti-behavior' ), $page );
 				break;
 			case 'traffic_spike_observation':
 				$delta = isset( $detection['sessions_relative_delta_pct'] ) && is_numeric( $detection['sessions_relative_delta_pct'] ) && $detection['sessions_relative_delta_pct'] > 0 ? self::copy_percent( $detection['sessions_relative_delta_pct'] ) : '';

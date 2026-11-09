@@ -500,7 +500,7 @@ trait Opti_Behavior_AI_Insights_Views_Trait {
 					<li class="ob-hiw-step ob-hiw-card" style="--sc:#2563eb">
 						<span class="ob-hiw-n" aria-hidden="true">1</span>
 						<h3><?php esc_html_e( 'Collect', 'opti-behavior' ); ?></h3>
-						<p><?php esc_html_e( 'Every visit is recorded on your server: pages, clicks, scroll, forms, errors and paths.', 'opti-behavior' ); ?></p>
+						<p><?php esc_html_e( 'Eligible visits are recorded on your server (according to your privacy and consent settings): pages, clicks, scroll, forms, errors and paths.', 'opti-behavior' ); ?></p>
 						<span class="ob-hiw-state <?php echo $collecting > 0 ? 'is-good' : ''; ?>"><i aria-hidden="true"></i>
 							<?php
 							echo esc_html(

@@ -56,6 +56,13 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 	const TARGET_PLUGIN_BASENAME = 'opti-behavior/Opti-Behavior.php';
 
 	/**
+	 * Pro plugin basename: its row gets the same survey when Pro is installed (OPT-2250).
+	 *
+	 * @var string
+	 */
+	const PRO_PLUGIN_BASENAME = 'opti-behavior-pro/opti-behavior-pro.php';
+
+	/**
 	 * How long the modal waits for the survey AJAX before following the
 	 * Deactivate link (milliseconds). The server finishes the relay on its own
 	 * (ignore_user_abort), so a slow or unreachable API never holds the click
@@ -147,6 +154,7 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 				'ajaxAction'     => self::AJAX_ACTION,
 				'nonce'          => wp_create_nonce( self::NONCE_ACTION ),
 				'pluginFile'     => self::TARGET_PLUGIN_BASENAME,
+				'targets'        => array_keys( $this->get_survey_targets() ),
 				'requestTimeout' => self::AJAX_TIMEOUT_MS,
 				'reasons'        => $this->get_survey_reasons(),
 				'i18n'           => $this->get_modal_i18n(),
@@ -212,6 +220,7 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 	 */
 	private function build_payload_from_request() {
 		// phpcs:disable WordPress.Security.NonceVerification.Missing -- Nonce verified in ajax_submit_survey().
+		$plugin_file_raw  = isset( $_POST['plugin_file'] ) ? sanitize_text_field( wp_unslash( $_POST['plugin_file'] ) ) : '';
 		$reason_key_raw   = isset( $_POST['reason_key'] ) ? sanitize_key( wp_unslash( $_POST['reason_key'] ) ) : '';
 		$reason_label_raw = isset( $_POST['reason_label'] ) ? sanitize_text_field( wp_unslash( $_POST['reason_label'] ) ) : '';
 		$feedback_raw     = isset( $_POST['feedback'] ) ? sanitize_textarea_field( wp_unslash( $_POST['feedback'] ) ) : '';
@@ -250,11 +259,21 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 			$domain = '';
 		}
 
+		// Row the admin clicked (OPT-2250): only a known target, anything else = the Free row.
+		$targets = $this->get_survey_targets();
+		if ( self::TARGET_PLUGIN_BASENAME !== $plugin_file_raw && isset( $targets[ $plugin_file_raw ] ) ) {
+			$plugin_slug    = $plugin_file_raw;
+			$plugin_version = $targets[ $plugin_file_raw ];
+		} else {
+			$plugin_slug    = plugin_basename( OPTI_BEHAVIOR_HEATMAP );
+			$plugin_version = defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '';
+		}
+
 		// No site_url (OPT-1385): the API counts sites by domain and needs nothing more.
 		return array(
 			'domain'         => sanitize_text_field( strtolower( $domain ) ),
-			'plugin_slug'     => plugin_basename( OPTI_BEHAVIOR_HEATMAP ),
-			'plugin_version'  => defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '',
+			'plugin_slug'     => $plugin_slug,
+			'plugin_version'  => $plugin_version,
 			'wp_version'      => get_bloginfo( 'version' ),
 			'php_version'     => PHP_VERSION,
 			'admin_language'  => $this->get_selected_admin_language(),
@@ -265,6 +284,39 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 			'follow_up_email' => $follow_up_email,
 			'submitted_at_utc' => gmdate( 'c' ),
 		);
+	}
+
+	/**
+	 * Plugin rows that get the survey: basename => version (OPT-2250).
+	 *
+	 * Free always; Pro only when its main file is installed.
+	 *
+	 * @return array
+	 */
+	public function get_survey_targets() {
+		$targets = array(
+			self::TARGET_PLUGIN_BASENAME => defined( 'OPTI_BEHAVIOR_HEATMAP_VERSION' ) ? OPTI_BEHAVIOR_HEATMAP_VERSION : '',
+		);
+
+		$pro_installed = file_exists( trailingslashit( WP_PLUGIN_DIR ) . self::PRO_PLUGIN_BASENAME );
+		if ( ! apply_filters( 'opti_behavior_deactivation_survey_pro_installed', $pro_installed ) ) {
+			return $targets;
+		}
+
+		$pro_version = defined( 'OPTI_BEHAVIOR_PRO_VERSION' ) ? (string) OPTI_BEHAVIOR_PRO_VERSION : '';
+		if ( '' === $pro_version ) {
+			if ( ! function_exists( 'get_plugins' ) ) {
+				require_once ABSPATH . 'wp-admin/includes/plugin.php';
+			}
+			$plugins = get_plugins();
+			if ( isset( $plugins[ self::PRO_PLUGIN_BASENAME ]['Version'] ) ) {
+				$pro_version = (string) $plugins[ self::PRO_PLUGIN_BASENAME ]['Version'];
+			}
+		}
+
+		$targets[ self::PRO_PLUGIN_BASENAME ] = $pro_version;
+
+		return $targets;
 	}
 
 	/**
@@ -340,6 +392,7 @@ class Opti_Behavior_Heatmap_Deactivation_Survey {
 	private function get_modal_i18n() {
 		return array(
 			'title'            => __( 'Quick feedback before you deactivate Opti-Behavior', 'opti-behavior' ),
+			'titlePro'         => __( 'Quick feedback before you deactivate Opti-Behavior Pro', 'opti-behavior' ),
 			'intro'            => __( 'Could you tell us why you are deactivating? This helps us improve.', 'opti-behavior' ),
 			// Wording validated by the legal review (OPT-1385), keep it whole.
 			'dataNotice'       => __( 'Submitting sends your answer (reason and comment), your site\'s domain and language, and your WordPress, PHP and plugin versions to optiuser.com. Your email is sent only if you type it, so we can reply to you. Skip to deactivate without sending anything.', 'opti-behavior' ),

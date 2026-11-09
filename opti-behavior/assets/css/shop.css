@@ -1080,3 +1080,12 @@
 		transition: none !important;
 	}
 }
+
+/* Help marks: same size everywhere, whatever the label around them. */
+.ob-shop__tile-label .ob-tooltip,
+.ob-shop__table th .ob-tooltip {
+	margin-left: 4px;
+	letter-spacing: 0;
+	text-transform: none;
+	vertical-align: middle;
+}

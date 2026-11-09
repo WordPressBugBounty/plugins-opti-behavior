@@ -513,8 +513,9 @@ class Opti_Behavior_Smart_Insights_Page_Checks {
 			$id,
 			$label,
 			$m_time < $t['time_ratio'] * $d_time ? 'likely' : 'ruled_out',
-			/* translators: 1: seconds on mobile, 2: timed mobile views, 3: seconds on computers, 4: timed computer views. */
-			sprintf( __( '%1$s s on mobile (n=%2$s) vs %3$s s on computers (n=%4$s).', 'opti-behavior' ), number_format_i18n( $m_time, 1 ), number_format_i18n( (int) $m_samples ), number_format_i18n( $d_time, 1 ), number_format_i18n( (int) $d_samples ) ),
+			// OPT-2613: n counts timed page views, not visits (the visits are the n of the click check).
+			/* translators: 1: seconds on mobile, 2: timed mobile page views, 3: seconds on computers, 4: timed computer page views. */
+			sprintf( __( '%1$s s per page view on mobile (n=%2$s page views) vs %3$s s on computers (n=%4$s page views).', 'opti-behavior' ), number_format_i18n( $m_time, 1 ), number_format_i18n( (int) $m_samples ), number_format_i18n( $d_time, 1 ), number_format_i18n( (int) $d_samples ) ),
 			array( $m_time, (int) $m_samples, $d_time ),
 			'',
 			''
@@ -554,8 +555,9 @@ class Opti_Behavior_Smart_Insights_Page_Checks {
 			$id,
 			$label,
 			$m_scroll <= $d_scroll - $t['scroll_gap_points'] ? 'likely' : 'ruled_out',
-			/* translators: 1: average scroll on mobile, 2: measured mobile views, 3: average scroll on computers, 4: measured computer views. */
-			sprintf( __( '%1$s average scroll on mobile (n=%2$s) vs %3$s on computers (n=%4$s).', 'opti-behavior' ), self::percent( $m_scroll ), number_format_i18n( (int) $m_samples ), self::percent( $d_scroll ), number_format_i18n( (int) $d_samples ) ),
+			// OPT-2613: n counts measured page views, not visits.
+			/* translators: 1: average scroll on mobile, 2: measured mobile page views, 3: average scroll on computers, 4: measured computer page views. */
+			sprintf( __( '%1$s average scroll on mobile (n=%2$s page views) vs %3$s on computers (n=%4$s page views).', 'opti-behavior' ), self::percent( $m_scroll ), number_format_i18n( (int) $m_samples ), self::percent( $d_scroll ), number_format_i18n( (int) $d_samples ) ),
 			array( $m_scroll, (int) $m_samples, $d_scroll ),
 			'',
 			''

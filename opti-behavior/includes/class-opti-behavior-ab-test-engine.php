@@ -23,6 +23,85 @@ class Opti_Behavior_AB_Test_Engine {
 	const DEFAULT_CONFIDENCE = 0.95;
 
 	/**
+	 * Visitors a variant needs before "no clear winner" can be said (OPT-1941).
+	 * Below it, with no significant result, the verdict is "not enough data".
+	 *
+	 * @var int
+	 */
+	const VERDICT_MIN_VISITORS = 100;
+
+	/**
+	 * Visitors of the whole test after which a primary goal with 0 conversion,
+	 * while other goals convert, means "check the primary goal tracking".
+	 *
+	 * @var int
+	 */
+	const GOAL_CHECK_MIN_VISITORS = 300;
+
+	/**
+	 * THE verdict of an A/B test, shared by the A/B screen (Decision engine)
+	 * and the site report (OPT-1941). Pure.
+	 *
+	 * States: winner (a variant beats the original, significant), loser (the
+	 * original wins, significant), check_goal (0 primary conversion after
+	 * GOAL_CHECK_MIN_VISITORS visitors while other goals convert),
+	 * not_enough_data (no primary conversion, or a variant under
+	 * VERDICT_MIN_VISITORS), no_clear_winner (enough data, nothing significant).
+	 * Never two states at once: "winner" is never said with "keep running".
+	 *
+	 * @param array $results         calculate_results() of the primary goal.
+	 * @param int   $other_converted Unique visitors who converted on the other goals.
+	 * @return array { state, index (row of the winner, -1 = none), variant_id, visitors, conversions }.
+	 */
+	public static function verdict( $results, $other_converted = 0 ) {
+		$out = array(
+			'state'       => 'not_enough_data',
+			'index'       => -1,
+			'variant_id'  => 0,
+			'visitors'    => 0,
+			'conversions' => 0,
+		);
+		if ( ! is_array( $results ) || count( $results ) < 2 ) {
+			return $out;
+		}
+		$results      = array_values( $results );
+		$min_visitors = PHP_INT_MAX;
+		$best         = -1;
+		$loser        = false;
+		foreach ( $results as $i => $r ) {
+			$visitors             = (int) $r->visitors;
+			$out['visitors']     += $visitors;
+			$out['conversions']  += (int) $r->conversions;
+			$min_visitors         = min( $min_visitors, $visitors );
+			if ( ! empty( $r->is_control ) || empty( $r->is_significant ) ) {
+				continue;
+			}
+			if ( (float) $r->improvement > 0 ) {
+				if ( $best < 0 || (float) $r->conversion_rate > (float) $results[ $best ]->conversion_rate ) {
+					$best = $i;
+				}
+			} else {
+				$loser = true;
+			}
+		}
+		if ( $best >= 0 ) {
+			$out['state']      = 'winner';
+			$out['index']      = $best;
+			$out['variant_id'] = (int) $results[ $best ]->variant_id;
+		} elseif ( $loser ) {
+			$out['state'] = 'loser';
+		} elseif ( 0 === $out['conversions'] && $out['visitors'] >= self::GOAL_CHECK_MIN_VISITORS && (int) $other_converted > 0 ) {
+			$out['state'] = 'check_goal';
+		} elseif ( 0 === $out['conversions'] || $min_visitors < self::VERDICT_MIN_VISITORS ) {
+			$out['state'] = 'not_enough_data';
+		} else {
+			$out['state'] = 'no_clear_winner';
+		}
+
+		return $out;
+	}
+
+	/**
 	 * Calculate complete test results for all variants.
 	 *
 	 * @since 1.3.0
@@ -422,10 +501,44 @@ class Opti_Behavior_AB_Test_Engine {
 
 		// Factor 1: Sample size progress.
 		$min_visitors = PHP_INT_MAX;
+		$short        = null;
 		foreach ( $variant_stats as $stat ) {
-			$min_visitors = min( $min_visitors, (int) $stat->unique_visitors );
+			$visitors     = (int) $stat->unique_visitors;
+			$min_visitors = min( $min_visitors, $visitors );
+
+			// OPT-2978: a variant under the minimum sample size makes every
+			// confidence figure meaningless (0 visitors on B gave "91.7%").
+			if ( $min_sample_size > 0 && $visitors < (int) $min_sample_size ) {
+				if ( null === $short || $visitors < $short['visitors'] ) {
+					$short = array(
+						'name'     => isset( $stat->variant_name ) ? (string) $stat->variant_name : '',
+						'visitors' => $visitors,
+					);
+				}
+			}
 		}
 		$sample_progress = min( 100, ( $min_visitors / max( 1, $min_sample_size ) ) * 100 );
+
+		if ( null !== $short ) {
+			return array(
+				'bar_pct'        => round( $sample_progress * 0.4, 1 ),
+				'confidence'     => 0,
+				'target'         => round( $confidence_level * 100, 1 ),
+				'sample_pct'     => round( $sample_progress, 1 ),
+				'is_significant' => false,
+				'not_enough'     => true,
+				'needed'         => (int) $min_sample_size,
+				'short_variant'  => $short['name'],
+				'short_visitors' => $short['visitors'],
+				'message'        => sprintf(
+					/* translators: 1: variant name, 2: visitors so far, 3: visitors needed per variant. */
+					__( 'Not enough data yet: variant "%1$s" has %2$s of the %3$s visitors needed per variant. No confidence figure before that.', 'opti-behavior' ),
+					$short['name'],
+					number_format_i18n( $short['visitors'] ),
+					number_format_i18n( (int) $min_sample_size )
+				),
+			);
+		}
 
 		// Factor 2: Confidence progress.
 		$results         = self::calculate_results( $variant_stats, $confidence_level );

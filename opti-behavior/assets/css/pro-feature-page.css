@@ -358,6 +358,128 @@
 	gap: 12px;
 }
 
+/* OPT-3109: why Pro has to be installed by hand, right under the button. */
+.ob-pro-page .ob-pro-signup__why {
+	max-width: 520px;
+	margin: 0 auto 8px;
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: #374151;
+	text-align: left;
+}
+
+/* Answer of the one-click trial form (OPT-3054): one readable line, never a
+   spinner that stays. `is-ok` green, `is-error` red, `is-wait` neutral. */
+.ob-pro-signup__msg {
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	gap: 8px;
+	margin: 12px auto 0;
+	max-width: 520px;
+	padding: 10px 14px;
+	border-radius: 8px;
+	border: 1px solid #e5e7eb;
+	background: #f9fafb;
+	color: #374151;
+	font-size: 13px;
+	line-height: 1.5;
+	text-align: left;
+}
+
+/* OPT-3055 (design): each state also carries a sign, never the colour alone
+   (a red-green blind reader must see which answer it is). */
+.ob-pro-signup__msg::before {
+	flex: none;
+	width: 18px;
+	height: 18px;
+	border-radius: 999px;
+	background: #e5e7eb;
+	color: #374151;
+	content: "i";
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 18px;
+	text-align: center;
+}
+
+.ob-pro-signup__msg.is-ok {
+	border-color: #a7f3d0;
+	background: #ecfdf5;
+	color: #065f46;
+}
+
+.ob-pro-signup__msg.is-ok::before {
+	background: #059669;
+	color: #fff;
+	content: "\2713"; /* check mark */
+}
+
+.ob-pro-signup__msg.is-error {
+	border-color: #fecaca;
+	background: #fef2f2;
+	color: #991b1b;
+}
+
+.ob-pro-signup__msg.is-error::before {
+	background: #b91c1c;
+	color: #fff;
+	content: "!";
+}
+
+/* Waiting for the answer: house indigo, a turning ring instead of a letter. */
+.ob-pro-signup__msg.is-wait {
+	border-color: #c7d2fe;
+	background: #eef2ff;
+	color: #3730a3;
+}
+
+.ob-pro-signup__msg.is-wait::before {
+	box-sizing: border-box;
+	border: 2px solid #c7d2fe;
+	border-top-color: #4f46e5;
+	background: none;
+	content: "";
+	animation: ob-pro-signup-spin .8s linear infinite;
+}
+
+@keyframes ob-pro-signup-spin {
+	to { transform: rotate( 360deg ); }
+}
+
+@media ( prefers-reduced-motion: reduce ) {
+	.ob-pro-signup__msg.is-wait::before {
+		animation: none;
+	}
+}
+
+.ob-pro-signup__msg a {
+	color: inherit;
+	font-weight: 600;
+}
+
+.ob-pro-signup__msg[hidden] {
+	display: none;
+}
+
+/* OPT-3109: "Open my account →" of the success message = a real button. */
+.ob-pro-signup__msg .ob-pro-signup__account {
+	display: inline-block;
+	margin-top: 8px;
+	padding: 7px 16px;
+	border-radius: 6px;
+	background: #6d28d9;
+	color: #fff;
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.ob-pro-signup__msg .ob-pro-signup__account:hover,
+.ob-pro-signup__msg .ob-pro-signup__account:focus {
+	background: #5b21b6;
+	color: #fff;
+}
+
 /* Download button: same .button-hero, only centred inside the action row. */
 .ob-pro-cta__actions .button-hero {
 	margin: 0;
@@ -500,5 +622,309 @@
 	}
 	.ob-pro-demo-btn {
 		width: 100%;
+	}
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Pro offer + trial form + trust strip (OPT-3026)
+   Same words and same look as the Pro block of the welcome screen. The
+   welcome screen prints its own copy of these rules inline
+   (Opti_Behavior_Welcome::get_welcome_css); keep the two in step.
+   ────────────────────────────────────────────────────────────────────────── */
+.ob-pro-page .ob-pro-offer {
+	max-width: 520px;
+	margin: 0 auto 16px;
+	padding: 12px 14px;
+	background: #fff;
+	border: 1px solid #DDD6FE;
+	border-radius: 10px;
+	text-align: left;
+}
+/* OPT-3109: one block, a title and three lines (WHERE / WHY / the offer). */
+.ob-pro-page .ob-pro-offer__title {
+	margin: 0 0 8px;
+	font-size: 18px;
+	line-height: 1.3;
+	font-weight: 800;
+	color: #312E81;
+	text-align: center;
+}
+.ob-pro-page .ob-pro-offer__list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.ob-pro-page .ob-pro-offer__list li {
+	position: relative;
+	margin: 0 0 6px;
+	padding-left: 18px;
+	font-size: 14px;
+	line-height: 1.45;
+	color: #1F2937;
+}
+.ob-pro-page .ob-pro-offer__list li:last-child {
+	margin-bottom: 0;
+	font-weight: 700;
+}
+.ob-pro-page .ob-pro-offer__list li::before {
+	content: "";
+	position: absolute;
+	top: 8px;
+	left: 4px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: #4F46E5;
+}
+.ob-pro-page .ob-pro-offer__main {
+	margin: 0 0 4px;
+	font-size: 18px;
+	line-height: 1.3;
+	font-weight: 800;
+	color: #312E81;
+}
+.ob-pro-page .ob-pro-offer__then {
+	margin: 0 0 4px;
+	font-size: 15px;
+	line-height: 1.35;
+	font-weight: 700;
+	color: #1F2937;
+}
+.ob-pro-page .ob-pro-offer__nocard {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.35;
+	font-weight: 600;
+	color: #374151;
+}
+.ob-pro-page .ob-pro-trial-form {
+	max-width: 420px;
+	margin: 0 auto 6px;
+	text-align: left;
+}
+.ob-pro-page .ob-welcome-field {
+	margin: 0 0 12px;
+}
+.ob-pro-page .ob-welcome-field label {
+	display: block;
+	margin-bottom: 4px;
+	font-size: 13px;
+	font-weight: 600;
+	color: #1F2937;
+}
+.ob-pro-page .ob-welcome-field input[type="email"],
+.ob-pro-page .ob-welcome-field input[type="text"] {
+	width: 100%;
+	box-sizing: border-box;
+	min-height: 36px;
+	padding: 6px 10px;
+	border: 1px solid #C7C3F0;
+	border-radius: 6px;
+	background: #fff;
+	color: #111827;
+	font-size: 14px;
+}
+/* OPT-3055: the border alone was the only focus sign of the two fields (the
+   WordPress shadow is overwritten above): give them the house indigo ring. */
+.ob-pro-page .ob-welcome-field input[type="email"]:focus,
+.ob-pro-page .ob-welcome-field input[type="text"]:focus {
+	border-color: #4F46E5;
+	outline: 3px solid #A5B4FC;
+	outline-offset: 1px;
+	box-shadow: none;
+}
+.ob-pro-page .ob-welcome-field--site input[type="text"] {
+	background: #EEF2FF;
+	color: #374151;
+}
+/* Read-only field: it is shown, not typed in — a softer ring, still visible. */
+.ob-pro-page .ob-welcome-field--site input[type="text"]:focus {
+	border-color: #818CF8;
+	outline-color: #C7D2FE;
+}
+.ob-pro-page .ob-welcome-cta {
+	display: inline-block;
+	min-height: 48px;
+	padding: 13px 26px;
+	border: 0;
+	border-radius: 8px;
+	background: #4F46E5;
+	color: #fff;
+	font-size: 15px;
+	font-weight: 700;
+	cursor: pointer;
+	box-shadow: 0 2px 10px rgba(79, 70, 229, .30);
+	animation: obWelcomePulse 2.6s ease-out infinite;
+}
+.ob-pro-page .ob-welcome-cta:hover {
+	background: #4338CA;
+}
+.ob-pro-page .ob-welcome-cta:focus-visible {
+	outline: 2px solid #312E81;
+	outline-offset: 2px;
+}
+@keyframes obWelcomePulse {
+	0% { box-shadow: 0 2px 10px rgba(79, 70, 229, .30), 0 0 0 0 rgba(79, 70, 229, .45); }
+	70% { box-shadow: 0 2px 10px rgba(79, 70, 229, .30), 0 0 0 12px rgba(79, 70, 229, 0); }
+	100% { box-shadow: 0 2px 10px rgba(79, 70, 229, .30), 0 0 0 0 rgba(79, 70, 229, 0); }
+}
+/* Trust strip + "needs Pro" box: design OPT-3041, coded by OPT-3042. The same
+   rules live in Opti_Behavior_Welcome::get_welcome_css(): keep them in step. */
+.ob-pro-page .ob-trust {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 14px 18px;
+	max-width: 760px;
+	margin: 14px auto 12px;
+	padding: 14px 0 0;
+	border-top: 1px solid #E5E7EB;
+	list-style: none;
+	text-align: left;
+}
+/* The Pro pages are wide: the 4 items fit one row from ~700 px of inner width. */
+.ob-pro-page .ob-trust__item {
+	display: flex;
+	flex: 1 1 calc(25% - 18px);
+	min-width: 170px;
+	gap: 10px;
+	align-items: center;
+	margin: 0;
+}
+.ob-pro-page .ob-trust__icon {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	border-radius: 50%;
+	color: #4F46E5;
+	background: #EEF2FF;
+	border: 1px solid #E0E7FF;
+	line-height: 1;
+}
+/* Real WordPress mark (OPT-3051): the Dashicons glyph, sized like the SVGs. */
+.ob-pro-page .ob-trust__icon .ob-trust__dashicon {
+	display: block;
+	width: 19px;
+	height: 19px;
+	font-size: 19px;
+	line-height: 19px;
+}
+.ob-pro-page .ob-trust__icon .ob-trust__svg {
+	display: block;
+	width: 18px;
+	height: 18px;
+}
+.ob-pro-page .ob-trust__text {
+	display: block;
+}
+.ob-pro-page .ob-trust__title {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 14px;
+	font-weight: 800;
+	line-height: 1.2;
+	color: #111827;
+}
+.ob-pro-page .ob-trust__sub {
+	display: block;
+	margin-top: 2px;
+	font-size: 11px;
+	line-height: 1.4;
+	font-weight: 600;
+	color: #4B5563;
+}
+.ob-pro-page .ob-trust__item--rating .ob-trust__icon {
+	background: #111827;
+	border-color: #111827;
+	color: #FFFFFF;
+}
+.ob-pro-page .ob-trust__item--rating .ob-trust__svg {
+	stroke-width: 1.7;
+}
+.ob-pro-page .ob-trust__num {
+	font-size: 16px;
+	font-weight: 800;
+	color: #111827;
+}
+.ob-pro-page .ob-trust__stars {
+	display: inline-flex;
+	gap: 1px;
+}
+.ob-pro-page .ob-trust__stars svg {
+	display: block;
+	width: 13px;
+	height: 13px;
+	fill: #FBBF24;
+	stroke: #B45309;
+	stroke-width: 1;
+}
+.ob-pro-page .ob-trust__item--installs .ob-trust__icon {
+	background: #ECFDF5;
+	border-color: #A7F3D0;
+	color: #059669;
+}
+.ob-pro-page .ob-trust__item--installs .ob-trust__title {
+	font-variant-numeric: tabular-nums;
+}
+.ob-pro-page .ob-pro-need {
+	max-width: 620px;
+	margin: 0 auto 14px;
+	padding: 12px 14px 12px 16px;
+	background: #FFFBEB;
+	border: 1px solid #FDE68A;
+	border-left: 3px solid #F59E0B;
+	border-radius: 10px;
+	text-align: left;
+}
+.ob-pro-page .ob-pro-need__title {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0 0 4px;
+	font-size: 14px;
+	line-height: 1.35;
+	font-weight: 800;
+	color: #92400E;
+}
+.ob-pro-page .ob-pro-need__title svg {
+	flex: 0 0 auto;
+	width: 18px;
+	height: 18px;
+	margin-top: 1px;
+	fill: #B45309;
+}
+.ob-pro-page .ob-pro-need__text {
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.5;
+	color: #78350F;
+}
+.ob-pro-page .ob-pro-cta__download {
+	margin: 4px 0 8px;
+	font-size: 13px;
+}
+.ob-pro-page .ob-pro-cta__download a {
+	color: #3730A3;
+	text-decoration: underline;
+}
+@media (max-width: 782px) {
+	.ob-pro-page .ob-welcome-cta {
+		display: block;
+		width: 100%;
+		box-sizing: border-box;
+	}
+	.ob-pro-page .ob-trust__item {
+		flex: 1 1 calc(50% - 18px);
+	}
+	.ob-pro-page .ob-trust__sub {
+		font-size: 10.5px;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.ob-pro-page .ob-welcome-cta {
+		animation: none;
 	}
 }

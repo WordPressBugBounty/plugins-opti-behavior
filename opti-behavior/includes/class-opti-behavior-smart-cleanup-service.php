@@ -958,6 +958,15 @@ class Opti_Behavior_Smart_Cleanup_Service {
 			self::invalidate_bot_breakdown_cache();
 		}
 
+		// AI daily counters (OPT-2859): 12 months, same pass, no new cron.
+		if ( class_exists( 'Opti_Behavior_AI_Bot_Daily' ) ) {
+			$ai_daily_deleted = Opti_Behavior_AI_Bot_Daily::prune();
+			if ( $ai_daily_deleted > 0 ) {
+				$result['ai_bot_daily_deleted']              = $ai_daily_deleted;
+				$rows_by_table['optibehavior_ai_bot_daily'] = $ai_daily_deleted;
+			}
+		}
+
 		$matched_spam = (int) $wpdb->get_var(
 			$wpdb->prepare(
 				'SELECT COUNT(*) FROM ' . $sessions_table . ' WHERE traffic_type IN (' . $placeholders . ')',
@@ -966,7 +975,8 @@ class Opti_Behavior_Smart_Cleanup_Service {
 		);
 
 		if ( $matched_spam < 1 ) {
-			if ( $result['bot_visits_deleted'] > 0 ) {
+			// OPT-2859: an AI counter prune alone is also worth one history entry.
+			if ( $result['bot_visits_deleted'] > 0 || ! empty( $rows_by_table ) ) {
 				$this->clear_analytics_caches();
 				$this->add_cleanup_log(
 					'auto',

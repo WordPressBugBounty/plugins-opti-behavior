@@ -10,6 +10,7 @@
 	var modalId = 'ob-deactivation-survey-modal';
 	var modalBodyId = 'ob-deactivation-survey-description';
 	var deactivateUrl = '';
+	var clickedPluginFile = '';
 	var isRedirecting = false;
 	var $modal = null;
 	var $form = null;
@@ -25,7 +26,13 @@
 	});
 
 	function bindDeactivateInterception() {
-		var selector = 'tr[data-plugin="' + surveyConfig.pluginFile + '"] .deactivate a';
+		// Free row + Pro row when Pro is installed (OPT-2250).
+		var targets = Array.isArray(surveyConfig.targets) && surveyConfig.targets.length ? surveyConfig.targets : [surveyConfig.pluginFile];
+		var selectors = [];
+		for (var i = 0; i < targets.length; i++) {
+			selectors.push('tr[data-plugin="' + String(targets[i]).replace(/["\\]/g, '') + '"] .deactivate a');
+		}
+		var selector = selectors.join(', ');
 
 		$(document).on('click', selector, function(event) {
 			if (isRedirecting) {
@@ -34,8 +41,25 @@
 
 			event.preventDefault();
 			deactivateUrl = $(this).attr('href') || '';
+			clickedPluginFile = getRowPluginFile(this);
 			openModal();
 		});
+	}
+
+	function getRowPluginFile(node) {
+		while (node && node.getAttribute) {
+			var file = node.getAttribute('data-plugin');
+			if (file) {
+				return file;
+			}
+			node = node.parentNode;
+		}
+
+		return surveyConfig.pluginFile;
+	}
+
+	function isProRow() {
+		return clickedPluginFile !== '' && clickedPluginFile !== surveyConfig.pluginFile;
 	}
 
 	function bindModalEvents() {
@@ -104,6 +128,7 @@
 		var requestData = {
 			action: surveyConfig.ajaxAction,
 			nonce: surveyConfig.nonce,
+			plugin_file: clickedPluginFile || surveyConfig.pluginFile,
 			reason_key: reasonKey,
 			reason_label: reasonLabel,
 			feedback: feedback,
@@ -145,6 +170,7 @@
 
 	function openModal() {
 		resetForm();
+		$modal.find('.ob-deactivation-survey__title').text(isProRow() && getI18n('titlePro') ? getI18n('titlePro') : getI18n('title'));
 		$modal.addClass('is-visible').attr('aria-hidden', 'false');
 		$('body').addClass('ob-deactivation-survey-open');
 
@@ -162,6 +188,7 @@
 		$modal.removeClass('is-visible').attr('aria-hidden', 'true');
 		$('body').removeClass('ob-deactivation-survey-open');
 		deactivateUrl = '';
+		clickedPluginFile = '';
 		resetForm();
 	}
 

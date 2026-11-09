@@ -180,6 +180,12 @@
 			this.currentLoad = null; // Tracks pending data/iframe/render phases for the active load
 			this.activeXhrRequests = {}; // jqXHR handles grouped by load ID so superseded loads can be aborted
 			this.pendingOverlayVisible = false;
+			this.previewSoftMs = 15000; // OB-09: measure a parsed preview after this wait
+			this.interactiveActionMs = 3000; // Redraw for page changes this long after an action in the preview.
+			this.previewHardMs = 50000; // OB-09: draw without the page background after this wait (> soft + 30 s proxy)
+			this._previewLateLoadId = 0;
+			this._deviceCountsSeq = 0;
+			this._totalCountSeq = 0;
 
 			// Interactive preview mode (default OFF). When ON the user may click
 			// inside the preview iframe to reveal hidden UI (accordions, menus,
@@ -423,6 +429,7 @@
 			$wrapper.addClass('is-pending').attr('aria-busy', 'true');
 			$('#heatmap-container').attr('aria-hidden', 'true');
 			$('.heatmap-no-data').hide();
+			$('#heatmap-overlay-warning').removeClass('is-visible').hide(); // a reason belongs to the load that showed it
 			$('.heatmap-loading')
 				.addClass('opti-heatmap-pending-overlay')
 				.css('display', 'flex')
@@ -431,6 +438,8 @@
 					'aria-live': 'polite'
 				});
 			$('.heatmap-loading p').text(pendingMessage);
+			this._heatStatusFinal = '';
+			this._setHeatStatus(this.t('wait_title', 'Heatmap loading, please wait.'), pendingMessage);
 
 			this.debug('debug', 'Started pending heatmap load #' + this.activeLoadId + ' (' + reason + ')');
 			return this.activeLoadId;
@@ -450,6 +459,11 @@
 
 			if (message) {
 				$('.heatmap-loading p').text(message);
+				// A redraw after the end of the load (late height, an action in the preview)
+				// says nothing: the page is ready.
+				if (this.pendingOverlayVisible) {
+					this._setHeatStatus(this.t('wait_title', 'Heatmap loading, please wait.'), message, { stop: !!this.firstBatchRendered && this.isLoading });
+				}
 			}
 		}
 
@@ -577,6 +591,8 @@
 			}
 
 			this.debug('debug', 'Finished pending heatmap load #' + loadId + ' (' + status + ')');
+			this._flushStatsAfterDraw();
+			this._afterHeatLoad();
 			return true;
 		}
 
@@ -614,6 +630,72 @@
 			this.iframeRenderPending = false;
 			this.pendingHeatmapData = null;
 			this.debug('debug', 'Cancelled active heatmap load (' + reason + ')');
+		}
+
+		/**
+		 * Bound the page preview wait (OB-09). A page whose load event never
+		 * comes (slow third-party resource, dropped connection) kept "Loading
+		 * page preview..." forever while the data and stats were ready.
+		 * Soft deadline: a parsed document ("interactive") is measured as is,
+		 * and an iframe whose onload never fired is checked once by hand.
+		 * Hard deadline: the heatmap is drawn without the page background and
+		 * the reason is shown. Both timers belong to one load only.
+		 *
+		 * @param {HTMLIFrameElement} iframe   Preview iframe.
+		 * @param {number}            loadId   Load ID the timers belong to.
+		 * @param {Function}          onGiveUp Called once at the hard deadline.
+		 */
+		_armPreviewDeadline(iframe, loadId, onGiveUp) {
+			const self = this;
+			setTimeout(function() {
+				if (self.isStaleLoad(loadId) || self.heatmapAlreadyRendered) {
+					return;
+				}
+				self._previewLateLoadId = loadId;
+				self.debug('warn', 'Page preview still loading after ' + self.previewSoftMs + ' ms: measuring the parsed document.');
+				if (!iframe._obOnloadStarted && typeof iframe.onload === 'function') {
+					iframe.onload();
+				}
+			}, this.previewSoftMs);
+			setTimeout(function() {
+				if (self.isStaleLoad(loadId) || self.heatmapAlreadyRendered) {
+					return;
+				}
+				self.debug('warn', 'Page preview did not load within ' + self.previewHardMs + ' ms: drawing the heatmap without the page background.');
+				onGiveUp();
+			}, this.previewHardMs);
+		}
+
+		/**
+		 * Whether the preview document may be measured now: complete, or parsed
+		 * once the soft deadline of this load has passed.
+		 *
+		 * @param {Document} doc    Preview document.
+		 * @param {number}   loadId Load ID.
+		 * @returns {boolean}
+		 */
+		_previewDocReady(doc, loadId) {
+			return doc.readyState === 'complete' ||
+				(doc.readyState === 'interactive' && this._previewLateLoadId === loadId);
+		}
+
+		/**
+		 * Hard-deadline fallback: hide the unfinished preview, draw the heatmap
+		 * on the reference size and say why the page background is missing.
+		 */
+		_renderWithoutPreview(iframe, data, viewport, container, referenceWidth, referenceHeight, loadId) {
+			if (iframe) {
+				iframe.style.visibility = 'hidden';
+			}
+			this.idealWidth = referenceWidth;
+			this.idealHeight = referenceHeight;
+			this.canvasScaleFactor = 1;
+			container.style.height = referenceHeight + 'px';
+			// Reason first: the render below finishes the load (an overlay
+			// failure still replaces it with its own reason).
+			this.showOverlayWarning('');
+			$('#heatmap-overlay-warning .heatmap-overlay-warning-text').text(this.t('preview_timeout', 'The page preview took too long to load (a slow or blocked resource on the page). The heatmap is drawn without the page background. Use Refresh to try again.'));
+			this.createOverlayAndRenderHeatmap(data, viewport, loadId);
 		}
 
 
@@ -988,7 +1070,7 @@
 							self._interactivePreviewContext.height = measuredH;
 						}
 						self._applyIframeContentSize(iframe, container, actualWidth, measuredH, containerWidth);
-						self.createOverlayAndRenderHeatmap(data, viewport, loadId);
+						self._scheduleSettledRedraw(data, viewport, loadId);
 					}
 				} catch (watchErr) {
 					self.debug('warn', 'Late iframe height check failed (' + reason + '):', watchErr);
@@ -1004,7 +1086,7 @@
 				}
 				debounceTimer = setTimeout(function() {
 					remeasure(reason);
-				}, 200);
+				}, 1000);
 			};
 
 			try {
@@ -2059,6 +2141,10 @@
 		 * Load device counts
 		 */
 		async loadDeviceCounts() {
+			// Only the latest request may paint (OB-09: a slower answer of the
+			// previous mode or period must not overwrite the badges).
+			this._deviceCountsSeq = (this._deviceCountsSeq || 0) + 1;
+			const seq = this._deviceCountsSeq;
 			try {
 				const response = await $.ajax({
 					url: this.config.ajax_url,
@@ -2078,6 +2164,9 @@
 					})
 				});
 
+				if (seq !== this._deviceCountsSeq) {
+					return;
+				}
 				if (response.success && response.data) {
 					this.updateDeviceCounts(response.data);
 				}
@@ -2120,6 +2209,8 @@
 		 * filters as the badges) so the header matches the Heatmaps list total.
 		 */
 		async loadTotalRecordingsCount() {
+			this._totalCountSeq = (this._totalCountSeq || 0) + 1; // latest request only (OB-09)
+			const seq = this._totalCountSeq;
 			try {
 				const response = await $.ajax({
 					url: this.config.ajax_url,
@@ -2142,6 +2233,9 @@
 					})
 				});
 
+				if (seq !== this._totalCountSeq) {
+					return;
+				}
 				if (response.success && response.data) {
 					$(".recordings-count .count-num").text(response.data.total || 0);
 
@@ -2747,8 +2841,9 @@
 								if (this.currentType === 'move' && this.trajectoryCanvas) {
 									// For move heatmaps, re-render trajectory canvas with all accumulated data
 									this.updateTrajectoryCanvas();
-								} else if (this.heatmapInstance) {
-									// For click/scroll heatmaps, add points incrementally
+								} else if (this.heatmapInstance && this.currentType !== 'click') {
+									// Scroll heatmaps add points incrementally. Clicks wait for
+									// the last batch: adding them repaints the canvas per point.
 									this.updateHeatmapOverlay(loadId);
 								}
 							}
@@ -2794,7 +2889,11 @@
 						if (this.allCoordinates.length > 0) {
 							// Only do a lightweight update of the heatmap overlay
 							// Skip full re-render to avoid freezing with 15000+ points
-							if (this.heatmapAlreadyRendered && this.heatmapInstance) {
+							if (this.heatmapAlreadyRendered && this.heatmapInstance && this.currentType === 'click') {
+								this._drawAllClicksOnce(loadId);
+								this.finishPendingState(loadId);
+								this.showBatchComplete(this.allCoordinates.length);
+							} else if (this.heatmapAlreadyRendered && this.heatmapInstance) {
 								// Just update the heatmap data incrementally
 									this.debug('debug', 'Updating heatmap overlay with final data (no full re-render)');
 								this.updateHeatmapOverlay(loadId, () => {
@@ -3162,10 +3261,16 @@
 						self.debug('debug', 'Heatmap already rendered, skipping onload handler');
 						return;
 					}
+					// One pass per iframe: the soft deadline may already have
+					// started it by hand before the real load event (OB-09).
+					if (iframe._obOnloadStarted) {
+						return;
+					}
+					iframe._obOnloadStarted = true;
 					self.debug('debug', 'Iframe onload fired!');
 
 					const waitForPageReady = function() {
-						if (self.isStaleLoad(loadId)) {
+						if (self.isStaleLoad(loadId) || self.heatmapAlreadyRendered) {
 							return;
 						}
 
@@ -3178,7 +3283,7 @@
 								return;
 							}
 
-							if (iframeDoc.readyState !== 'complete') {
+							if (!self._previewDocReady(iframeDoc, loadId)) {
 								self.debug('debug', 'Iframe readyState: ' + iframeDoc.readyState + ' - waiting for complete...');
 								setTimeout(waitForPageReady, 100);
 								return;
@@ -3435,6 +3540,9 @@
 				iframe.src = pageUrl;
 
 				innerWrapper.appendChild(iframe);
+				self._armPreviewDeadline(iframe, loadId, function() {
+					self._renderWithoutPreview(iframe, data, viewport, container, referenceWidth, referenceHeight, loadId);
+				});
 			}
 
 			// If there's no iframe, create overlay and render immediately
@@ -3554,7 +3662,8 @@
 				},
 				success: function(response) {
 					self.untrackXhr(loadId, request);
-					if (self.isStaleLoad(loadId)) {
+					// Stale, or the hard deadline already drew the heatmap (OB-09).
+					if (self.isStaleLoad(loadId) || self.heatmapAlreadyRendered) {
 						return;
 					}
 
@@ -3582,7 +3691,7 @@
 							}
 							self.debug('debug', 'Proxy blob iframe onload fired!');
 							var waitForPageReady = function() {
-								if (self.isStaleLoad(loadId)) {
+								if (self.isStaleLoad(loadId) || self.heatmapAlreadyRendered) {
 									return;
 								}
 
@@ -3592,7 +3701,7 @@
 										setTimeout(waitForPageReady, 100);
 										return;
 									}
-									if (iframeDoc.readyState !== 'complete') {
+									if (!self._previewDocReady(iframeDoc, loadId)) {
 										setTimeout(waitForPageReady, 100);
 										return;
 									}
@@ -3672,7 +3781,7 @@
 				},
 				error: function(xhr, status, err) {
 					self.untrackXhr(loadId, request);
-					if (self.isStaleLoad(loadId) || status === 'abort') {
+					if (self.isStaleLoad(loadId) || status === 'abort' || self.heatmapAlreadyRendered) {
 						return;
 					}
 
@@ -3824,6 +3933,11 @@
 					if (bundle.suspended || !self.interactiveMode || bundle !== self._interactivePreviewObservers) {
 						return;
 					}
+					// Sliders, ads and counters change the page all the time: only the
+					// admin's own action in the preview is worth a full redraw.
+					if (Date.now() - (bundle.lastAction || 0) > self.interactiveActionMs) {
+						return;
+					}
 					// Phase 1 scroll-perf: defer live re-render while the user is
 					// actively scrolling the wrapper. Remember that a change was
 					// observed so _onWrapperScrollStop() can run it once scroll ends.
@@ -3841,6 +3955,11 @@
 				};
 				// Exposed so the scroll-stop handler can resume a deferred re-render.
 				bundle.__schedule = schedule;
+				['pointerdown', 'keydown', 'change'].forEach(function(name) {
+					watchedDoc.addEventListener(name, function() {
+						bundle.lastAction = Date.now();
+					}, true);
+				});
 
 				this._interactivePreviewObservers = bundle;
 
@@ -4302,6 +4421,16 @@
 				if (!iframe) {
 					return null;
 				}
+				// The preview can still be hidden (0 px, display:none) when the
+				// first render runs: every element then reports offsetParent null
+				// and a 0x0 rect, so strict matching dropped ALL anchored clicks
+				// and the heatmap stayed empty until Refresh. A hidden preview is
+				// not a settled layout: keep the gate closed (absolute fallback);
+				// _scheduleAnchorRecheck() re-renders once it is shown.
+				if (typeof iframe.offsetHeight === 'number' && typeof iframe.offsetWidth === 'number' &&
+					(iframe.offsetHeight === 0 || iframe.offsetWidth === 0)) {
+					return null;
+				}
 				const doc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
 				if (!doc || !doc.body || !doc.documentElement || !doc.body.children || doc.body.children.length === 0) {
 					return null;
@@ -4516,6 +4645,10 @@
 				if (!doc) {
 					// Settle gate closed (or preview document unavailable):
 					// keep absolute coordinates — identical to legacy behaviour.
+					// Check again shortly: once the preview is shown and settled,
+					// re-render with the verified anchors.
+					this._lastAnchorSig = 'closed';
+					this._scheduleAnchorRecheck(loadId);
 					return data;
 				}
 
@@ -4610,6 +4743,15 @@
 					reprojectedCount++;
 				}
 
+				// Remember which anchors were drawn. Anchors skipped as hidden or
+				// missing may only be "not there YET" (late theme fade-in, lazy
+				// content, preview shown after the first render): re-check a few
+				// times and re-render as soon as their state changes.
+				this._lastAnchorSig = this._anchorSigFromCache(cache);
+				if (hiddenCount || missingCount) {
+					this._scheduleAnchorRecheck(loadId);
+				}
+
 				if (!reprojectedCount && !hiddenCount && !missingCount && !dedupedCount) {
 					return data;
 				}
@@ -4628,6 +4770,87 @@
 				this.debug('warn', 'Anchored click reprojection failed; using absolute coordinates:', reprojectErr);
 				return data;
 			}
+		}
+
+		/**
+		 * Anchor states of the last reprojection, in insertion order:
+		 * v (visible), h (hidden), m (missing). First 400 anchors only.
+		 */
+		_anchorSigFromCache(cache) {
+			const keys = Object.keys(cache || {});
+			let sig = '';
+			for (let i = 0; i < keys.length && i < 400; i++) {
+				const st = cache[keys[i]] && cache[keys[i]].state;
+				sig += st === 'visible' ? 'v' : (st === 'hidden' ? 'h' : 'm');
+			}
+			return sig;
+		}
+
+		/**
+		 * Anchor states right now for the same data, same order and cap as
+		 * _anchorSigFromCache(); 'closed' while the settle gate is closed.
+		 */
+		_currentAnchorSig(data, loadId) {
+			const doc = this._getSettledAnchorDocument(loadId);
+			if (!doc) {
+				return 'closed';
+			}
+			const coords = (data && data.coordinates) || [];
+			const seen = {};
+			let sig = '';
+			let n = 0;
+			for (let i = 0; i < coords.length && n < 400; i++) {
+				const c = coords[i];
+				if (!c || !c.xp || seen[c.xp] || !isFinite(parseFloat(c.rx)) || !isFinite(parseFloat(c.ry))) {
+					continue;
+				}
+				seen[c.xp] = true;
+				n++;
+				const el = this._findAnchorElement(doc, c.xp);
+				sig += el ? (this._isAnchorElementVisible(el, doc) ? 'v' : 'h') : 'm';
+			}
+			return sig;
+		}
+
+		/**
+		 * Re-check skipped anchors a few times after a click render (bounded:
+		 * 6 checks per load, up to ~30 s) and re-render ONLY when their state
+		 * changed. Fixes the empty click heatmap on first load when the preview
+		 * is shown or finishes painting after the first render (seen on
+		 * stag.optiuser.com, 06/11: Refresh was the only way to see the clicks).
+		 */
+		_scheduleAnchorRecheck(loadId) {
+			if (this._anchorRecheckLoadId !== loadId) {
+				this._anchorRecheckLoadId = loadId;
+				this._anchorRecheckStep = 0;
+				clearTimeout(this._anchorRecheckTimer);
+				this._anchorRecheckTimer = null;
+			}
+			const delays = [700, 1500, 3000, 5000, 8000, 12000];
+			if (this._anchorRecheckTimer || this._anchorRecheckStep >= delays.length) {
+				return;
+			}
+			const delay = delays[this._anchorRecheckStep++];
+			this._anchorRecheckTimer = setTimeout(() => {
+				this._anchorRecheckTimer = null;
+				const args = this._lastAnchorRenderArgs;
+				if (this.isStaleLoad(loadId) || !args || args.loadId !== loadId || this.currentType !== 'click') {
+					return;
+				}
+				let sig = null;
+				try {
+					sig = this._currentAnchorSig(args.data, loadId);
+				} catch (e) {
+					return;
+				}
+				if (sig !== this._lastAnchorSig) {
+					this.debug('debug', 'Anchor states changed since the last render (' + this._lastAnchorSig + ' -> ' + sig + '): re-render');
+					this._suppressScrollToCenterOnce = true;
+					this.createOverlayAndRenderHeatmap(args.data, args.viewport, loadId);
+				} else {
+					this._scheduleAnchorRecheck(loadId);
+				}
+			}, delay);
 		}
 
 		/**
@@ -5109,6 +5332,7 @@
 					// window repaints (scroll-stop) can re-derive any window subset,
 					// and keep a GLOBAL max so colors stay identical across windows.
 					this._canvasSpacePoints = scaledCoordinates.slice();
+					this._drawnClickCount = (this.allCoordinates || []).length;
 					this._hmDataMax = Math.max(10, this.getMaxValue(scaledCoordinates));
 
 					// COUNT-BAR HOVER SOURCE: paint reprojects anchored clicks onto
@@ -6379,13 +6603,156 @@
 		/**
 		 * Load statistics
 		 */
-		async loadStats() {
+		/**
+		 * THE loading message of this screen: one bar fixed at the top of the window,
+		 * whatever the scroll, with the only Stop button. The veil over the preview
+		 * says nothing any more (a message inside it was out of sight).
+		 *
+		 * @param {string} title  What the visitor has to know.
+		 * @param {string} detail Current step, may be empty.
+		 * @param {Object} opts   { stop: show Stop, done: no spinner }.
+		 */
+		_setHeatStatus(title, detail = '', opts = {}) {
+			let bar = document.getElementById('ob-heatmap-status');
+			if (!bar) {
+				bar = document.createElement('div');
+				bar.id = 'ob-heatmap-status';
+				bar.className = 'ob-stats-loading ob-heatmap-status';
+				bar.setAttribute('role', 'status');
+				bar.setAttribute('aria-live', 'polite');
+				const icon = document.createElement('span');
+				icon.className = 'ob-stats-loading__icon';
+				icon.setAttribute('aria-hidden', 'true');
+				const text = document.createElement('span');
+				text.className = 'ob-heatmap-status__text';
+				const strong = document.createElement('strong');
+				const small = document.createElement('small');
+				text.appendChild(strong);
+				text.appendChild(small);
+				const stop = document.createElement('button');
+				stop.type = 'button';
+				stop.id = 'stop-loading-btn';
+				stop.className = 'ob-heatmap-status__stop';
+				stop.title = this.t('stop_loading_title', 'Stop loading more data');
+				stop.textContent = this.t('stop', 'Stop');
+				stop.addEventListener('click', () => this.stopLoading());
+				bar.appendChild(icon);
+				bar.appendChild(text);
+				bar.appendChild(stop);
+				document.body.appendChild(bar);
+			}
+			bar.querySelector('strong').textContent = title;
+			bar.querySelector('small').textContent = detail;
+			bar.querySelector('#stop-loading-btn').hidden = !opts.stop;
+			bar.classList.toggle('is-done', !!opts.done);
+			bar.hidden = false;
+			clearTimeout(this._heatStatusTimer);
+			// Never a message for ever, whatever happens to a request.
+			this._heatStatusTimer = setTimeout(() => this._hideHeatStatus(), opts.done ? 3000 : 180000);
+		}
+
+		_hideHeatStatus() {
+			clearTimeout(this._heatStatusTimer);
+			const bar = document.getElementById('ob-heatmap-status');
+			if (bar) {
+				bar.hidden = true;
+			}
+		}
+
+		/**
+		 * The drawing is finished: the figures may still be on their way, the bar
+		 * stays until they are there.
+		 */
+		_afterHeatLoad() {
+			if (this.pendingOverlayVisible) {
+				return;
+			}
+			if (this._statsBusy) {
+				this._setHeatStatus(this.t('stats_wait', 'Calculating the figures, please wait.'));
+				return;
+			}
+			if (this._heatStatusFinal) {
+				const message = this._heatStatusFinal;
+				this._heatStatusFinal = '';
+				this._setHeatStatus(message, '', { done: true });
+				return;
+			}
+			this._hideHeatStatus();
+		}
+
+		/**
+		 * Draw every click of the finished load in one pass (nothing when the
+		 * first draw already had them all). Same path as every other redraw, so
+		 * the positions are the ones of the first batch.
+		 */
+		_drawAllClicksOnce(loadId) {
+			if (this._drawnClickCount === this.allCoordinates.length || this.isStaleLoad(loadId)) {
+				return;
+			}
+			this._suppressScrollToCenterOnce = true;
+			this.createOverlayAndRenderHeatmap({
+				coordinates: this.allCoordinates,
+				trajectories: this.allTrajectories || [],
+				viewport: this.heatmapViewport,
+				reference_width: this.heatmapReferenceWidth,
+				reference_height: this.heatmapReferenceHeight,
+				loading_more: false
+			}, this.heatmapViewport, loadId);
+		}
+
+		/**
+		 * One redraw once the height of the preview has stopped moving, not one
+		 * per change.
+		 */
+		_scheduleSettledRedraw(data, viewport, loadId) {
+			clearTimeout(this._settledRedrawTimer);
+			this._settledRedrawTimer = setTimeout(() => {
+				if (!this.isStaleLoad(loadId)) {
+					this._suppressScrollToCenterOnce = true;
+					this.createOverlayAndRenderHeatmap(data, viewport, loadId);
+				}
+			}, 1500);
+		}
+
+		/**
+		 * Ask for the statistics once the running heatmap load is finished. The
+		 * timer covers a load that never reaches finishPendingState().
+		 */
+		_deferStatsUntilDrawn() {
+			this._statsAfterDraw = true;
+			$('.stats-loading').show();
+			$('#stat-views, #stat-clicks, #stat-scrolls, #stat-moves, #stat-avg-time').text('…').addClass('is-loading');
+			this._statsBusy = true;
+			clearTimeout(this._statsAfterDrawTimer);
+			this._statsAfterDrawTimer = setTimeout(() => this._flushStatsAfterDraw(), (this.previewHardMs || 50000) + 5000);
+		}
+
+		_flushStatsAfterDraw() {
+			if (!this._statsAfterDraw) {
+				return;
+			}
+			this.loadStats(true);
+		}
+
+		async loadStats(afterDraw = false) {
+			// The statistics hold every other admin request of this user on some
+			// hosts, the page preview included: the heatmap is drawn first.
+			if (afterDraw !== true && this.isLoading && this.currentLoad && !this.currentLoad.finished) {
+				this._deferStatsUntilDrawn();
+				return;
+			}
+			clearTimeout(this._statsAfterDrawTimer);
+			this._statsAfterDraw = false;
 			// Only the latest request may paint: a slower answer for the view the
 			// user already left must not overwrite the current one (QA-B-HEAT-103).
 			this._statsSeq = (this._statsSeq || 0) + 1;
 			const statsSeq = this._statsSeq;
 			$('.stats-loading').show();
 			$('#top-elements-list').empty();
+			// OB-09: never show a number of the previous mode, device or period
+			// under the new one while this answer is on its way.
+			$('#stat-views, #stat-clicks, #stat-scrolls, #stat-moves, #stat-avg-time').text('…').addClass('is-loading');
+			this._statsBusy = true;
 
 			try {
 				const response = await $.ajax({
@@ -6413,6 +6780,7 @@
 				if (response.success && response.data) {
 					this.renderStats(response.data);
 				} else {
+					$('#stat-views, #stat-clicks, #stat-scrolls, #stat-moves, #stat-avg-time').text('—');
 					// Show coming soon message when no data
 					this.showComingSoonMessage();
 				}
@@ -6420,11 +6788,17 @@
 				if (statsSeq !== this._statsSeq) {
 					return;
 				}
+				$('#stat-views, #stat-clicks, #stat-scrolls, #stat-moves, #stat-avg-time').text('—');
 				this.debug('error', 'Failed to load stats:', error);
 				// Show coming soon message on error
 				this.showComingSoonMessage();
 			} finally {
 				$('.stats-loading').hide();
+				if (statsSeq === this._statsSeq) {
+					$('#stat-views, #stat-clicks, #stat-scrolls, #stat-moves, #stat-avg-time').removeClass('is-loading');
+					this._statsBusy = false;
+					this._afterHeatLoad();
+				}
 			}
 		}
 
@@ -6878,101 +7252,14 @@
 		 * @param {string} statusMessage - Optional status message (e.g., "Paused", "Resuming...")
 		 */
 		showBatchProgress(currentBatch, totalBatches, totalPoints, statusMessage = null) {
-			// Remove any existing progress indicator
-			$('#batch-progress-indicator').remove();
-
-			// Determine the text to display
-			let progressText;
-			if (statusMessage) {
-				progressText = (this.config.i18n.points_loaded_status || '%1$s - %2$s points loaded')
-					.replace('%1$s', statusMessage)
-					.replace('%2$s', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : String(totalPoints)));
-			} else {
-				progressText = (this.config.i18n.batch_loaded || 'Batch %1$s/%2$s loaded (%3$s points)')
-					.replace('%1$s', currentBatch)
-					.replace('%2$s', totalBatches)
-					.replace('%3$s', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : String(totalPoints)));
-			}
-			if (this.pendingOverlayVisible) {
-				this.updatePendingState(progressText, this.activeLoadId);
-				if (!$('.heatmap-loading .opti-heatmap-stop-loading-btn').length) {
-					$('.heatmap-loading').append(
-						'<button type="button" class="opti-heatmap-stop-loading-btn" style="margin-top:10px;">' + (this.config.i18n.stop_loading || 'Stop Loading') + '</button>'
-					);
-				}
-				$('.opti-heatmap-stop-loading-btn').off('click').on('click', () => {
-					this.stopLoading();
-				});
-			}
-
-			// Determine spinner animation based on status
-			const isPaused = statusMessage && (statusMessage.includes('Paused') || statusMessage.includes('hidden'));
-			const spinnerStyle = isPaused
-				? 'animation: none; border-top-color: #ffc107;' // Yellow, no spin when paused
-				: 'animation: batch-spin 1s linear infinite;';
-
-			// Create a small progress indicator that overlays on the heatmap with Stop button
-			const progressHtml = `
-				<div id="batch-progress-indicator" style="
-					position: absolute;
-					top: 10px;
-					left: 50%;
-					transform: translateX(-50%);
-					background: rgba(0, 0, 0, 0.85);
-					color: #fff;
-					padding: 8px 12px;
-					border-radius: 6px;
-					font-size: 12px;
-					z-index: 100;
-					display: flex;
-					align-items: center;
-					gap: 10px;
-				">
-					<span class="batch-spinner" style="
-						width: 14px;
-						height: 14px;
-						border: 2px solid rgba(255,255,255,0.3);
-						border-top-color: #fff;
-						border-radius: 50%;
-						${spinnerStyle}
-					"></span>
-					<span class="batch-progress-text">${progressText}</span>
-					<button id="stop-loading-btn" style="
-						background: #dc3545;
-						color: #fff;
-						border: none;
-						padding: 4px 10px;
-						border-radius: 3px;
-						cursor: pointer;
-						font-size: 9px;
-						font-weight: 500;
-						display: flex;
-						align-items: center;
-						gap: 4px;
-						transition: background 0.2s;
-					" title="${this.config.i18n.stop_loading_more || 'Stop loading more data'}">
-						<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
-							<rect x="6" y="6" width="12" height="12" rx="1"/>
-						</svg>
-						${this.config.i18n.stop || 'Stop'}
-					</button>
-				</div>
-				<style>
-					@keyframes batch-spin {
-						to { transform: rotate(360deg); }
-					}
-					#stop-loading-btn:hover {
-						background: #c82333 !important;
-					}
-				</style>
-			`;
-
-			$('#heatmap-container').append(progressHtml);
-
-			// Bind stop button click handler
-			$('#stop-loading-btn').off('click').on('click', () => {
-				this.stopLoading();
-			});
+			const i18n = (window.optiHeatmapDetail && optiHeatmapDetail.i18n) || {};
+			const points = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : totalPoints);
+			const text = statusMessage || (i18n.batch_progress || 'Batch {current}/{total} loaded ({points} points)')
+				.replace('{current}', currentBatch)
+				.replace('{total}', totalBatches)
+				.replace('{points}', points);
+			$('.heatmap-loading p').text(text);
+			this._setHeatStatus(this.t('wait_title', 'Heatmap loading, please wait.'), text, { stop: true });
 		}
 
 		/**
@@ -7137,62 +7424,17 @@
 		 * @param {boolean} stopped - Whether loading was stopped by user
 		 */
 		showBatchComplete(totalPoints, stopped = false) {
-			// Remove any existing progress indicator
-			$('#batch-progress-indicator').remove();
-
-			// Different colors/messages for complete vs stopped vs no data
-			let bgColor, textColor, icon, message;
-
+			const points = (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : totalPoints);
+			let message;
 			if (totalPoints === 0) {
-				// No data case - show info message
-				bgColor = 'rgba(23, 162, 184, 0.9)'; // Info blue
-				textColor = '#fff';
-				icon = '&#9432;'; // Info icon
-				message = this.config.i18n.no_data_yet || 'No heatmap data yet for this page';
+				message = this.t('no_data_yet', 'No heatmap data yet for this page');
 			} else if (stopped) {
-				bgColor = 'rgba(255, 193, 7, 0.9)';
-				textColor = '#212529';
-				icon = '&#9632;'; // Square for stop
-				message = (this.config.i18n.stopped_points_loaded || 'Stopped - %s points loaded').replace('%s', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : String(totalPoints)));
+				message = this.t('points_stopped', 'Stopped - %s points loaded').replace('%s', points);
 			} else {
-				bgColor = 'rgba(40, 167, 69, 0.9)';
-				textColor = '#fff';
-				icon = '&#10003;'; // Checkmark for complete
-				message = (this.config.i18n.complete_points_loaded || 'Complete! %s points loaded').replace('%s', (typeof OptiBehaviorLocale === 'object' ? OptiBehaviorLocale.number(totalPoints) : String(totalPoints)));
+				message = this.t('points_complete', 'Complete! %s points loaded').replace('%s', points);
 			}
-
-			// Create a completion indicator that fades out
-			const completeHtml = `
-				<div id="batch-progress-indicator" style="
-					position: absolute;
-					top: 10px;
-					left: 50%;
-					transform: translateX(-50%);
-					background: ${bgColor};
-					color: ${textColor};
-					padding: 8px 12px;
-					border-radius: 6px;
-					font-size: 12px;
-					z-index: 100;
-					display: flex;
-					align-items: center;
-					gap: 8px;
-					transition: opacity 0.5s ease;
-				">
-					<span style="font-size: 14px;">${icon}</span>
-					<span>${message}</span>
-				</div>
-			`;
-
-			$('#heatmap-container').append(completeHtml);
-
-			// Fade out and remove after 3 seconds
-			setTimeout(() => {
-				$('#batch-progress-indicator').css('opacity', '0');
-				setTimeout(() => {
-					$('#batch-progress-indicator').remove();
-				}, 500);
-			}, 3000);
+			this._heatStatusFinal = message;
+			this._afterHeatLoad();
 		}
 
 		/**
@@ -7319,13 +7561,14 @@
 			let $banner = $('#heatmap-overlay-warning');
 			if ($banner.length === 0) {
 				$banner = $(
-					'<div id="heatmap-overlay-warning" class="notice notice-warning heatmap-overlay-warning" role="alert">' +
+					// opti-behavior-* class: notice-cleanup.js removes every other .notice (OB-09).
+					'<div id="heatmap-overlay-warning" class="notice notice-warning heatmap-overlay-warning opti-behavior-overlay-warning" role="alert">' +
 						'<span class="heatmap-overlay-warning-text"></span>' +
 						'<button type="button" class="heatmap-overlay-warning-dismiss" aria-label="' + ((window.optiHeatmapDetail && optiHeatmapDetail.i18n && optiHeatmapDetail.i18n.dismiss) || 'Dismiss') + '">&times;</button>' +
 					'</div>'
 				);
 				$banner.on('click', '.heatmap-overlay-warning-dismiss', function() {
-					$banner.hide();
+					$banner.removeClass('is-visible').hide();
 				});
 				$(container).prepend($banner);
 			}
@@ -7333,7 +7576,8 @@
 				(this.config.i18n && this.config.i18n.overlay_render_failed) ||
 				'Heatmap overlay could not be drawn for this page (it may be unusually tall). The page preview below is still accurate.'
 			);
-			$banner.css('display', 'flex');
+			// is-visible = the admin-notices.css exception that keeps it shown.
+			$banner.addClass('is-visible').css('display', 'flex');
 		}
 
 		/**

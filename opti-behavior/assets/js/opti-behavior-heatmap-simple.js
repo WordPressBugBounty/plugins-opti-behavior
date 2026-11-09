@@ -191,6 +191,62 @@
         return obStripSensitiveUrl( window.location.href );
     }
 
+    // UTM tags of THIS page view, read in the browser (OPT-1927). A page cache
+    // (LiteSpeed, WP Rocket…) drops utm_* from its cache key, so the copy the
+    // server printed in optiBehaviorHeatmapConfig is empty, or the tags of the
+    // visitor who filled the cache. Order: the address bar, then the address of
+    // the navigation itself (still holds the tags when a script removed them
+    // with history.replaceState), then the server copy only on a browser
+    // without the Navigation Timing API. Same cleaning + 100-char cap as PHP.
+    var OB_UTM_KEYS = [ 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content' ];
+    var OB_UTM_MAX = 100;
+
+    function obCleanUtm( value ) {
+        value = String( value === null || value === undefined ? '' : value );
+        value = value.replace( /<[^>]*>/g, '' ).replace( /[\u0000-\u001F\u007F]+/g, ' ' ).replace( /\s+/g, ' ' ).trim();
+        return value.length > OB_UTM_MAX ? value.slice( 0, OB_UTM_MAX ) : value;
+    }
+
+    function obUtmFromQuery( search ) {
+        var out = {};
+        var found = false;
+        var params;
+        try {
+            params = new URLSearchParams( search || '' );
+        } catch ( e ) {
+            return null;
+        }
+        for ( var i = 0; i < OB_UTM_KEYS.length; i++ ) {
+            out[ OB_UTM_KEYS[ i ] ] = obCleanUtm( params.get( OB_UTM_KEYS[ i ] ) );
+            if ( out[ OB_UTM_KEYS[ i ] ] ) {
+                found = true;
+            }
+        }
+        return found ? out : null;
+    }
+
+    function obPageUtm( config ) {
+        var utm = obUtmFromQuery( window.location.search );
+        var navKnown = false;
+        if ( ! utm ) {
+            try {
+                var nav = window.performance && performance.getEntriesByType ? performance.getEntriesByType( 'navigation' ) : [];
+                if ( nav && nav.length && nav[0].name ) {
+                    navKnown = true;
+                    utm = obUtmFromQuery( new URL( nav[0].name ).search );
+                }
+            } catch ( e ) {}
+        }
+        if ( utm ) {
+            return utm;
+        }
+        var out = {};
+        for ( var i = 0; i < OB_UTM_KEYS.length; i++ ) {
+            out[ OB_UTM_KEYS[ i ] ] = navKnown ? '' : obCleanUtm( config && config[ OB_UTM_KEYS[ i ] ] );
+        }
+        return out;
+    }
+
     // -------------------------------------------------------------------------
     // Nonce refresh — ONE network refresh per page load to heal cached-page
     // nonce expiry. A full-page-cache TTL can outlive the WordPress nonce
@@ -1924,8 +1980,9 @@
         // Use optiBehaviorHeatmapConfig if available, otherwise use config
         const trackingConfig = window.optiBehaviorHeatmapConfig || this.config;
 
-        // Send referrer - filter out internal referrers (same domain = not an external referral)
-        let referrer = obStripSensitiveUrl(document.referrer || trackingConfig.referrer || '');
+        // Send referrer - filter out internal referrers (same domain = not an external referral).
+        // document.referrer only: the server copy can come from a cached page (OPT-1927).
+        let referrer = obStripSensitiveUrl(document.referrer || '');
         if (referrer) {
             try {
                 var referrerHost = new URL(referrer).hostname;
@@ -1943,22 +2000,13 @@
             formData.append('referrer', referrer);
         }
 
-        // Send UTM parameters if available
-        if (trackingConfig.utm_source) {
-            formData.append('utm_source', trackingConfig.utm_source);
-        }
-        if (trackingConfig.utm_medium) {
-            formData.append('utm_medium', trackingConfig.utm_medium);
-        }
-        if (trackingConfig.utm_campaign) {
-            formData.append('utm_campaign', trackingConfig.utm_campaign);
-        }
-        if (trackingConfig.utm_term) {
-            formData.append('utm_term', trackingConfig.utm_term);
-        }
-        if (trackingConfig.utm_content) {
-            formData.append('utm_content', trackingConfig.utm_content);
-        }
+        // Send UTM parameters if available (read from the page address, OPT-1927)
+        const pageUtm = obPageUtm(trackingConfig);
+        OB_UTM_KEYS.forEach(function(key) {
+            if (pageUtm[key]) {
+                formData.append(key, pageUtm[key]);
+            }
+        });
 
         // Include A/B test variant info if visitor is in an active test.
         // window.optiBehaviorAB is set by the A/B test renderer on the frontend.
@@ -2413,6 +2461,10 @@
 
         if (window.OptiBehaviorDebug) window.OptiBehaviorDebug.debug('Device info - Browser:', 'heatmap-simple', browser, 'OS:', os, 'Type:', deviceType);
 
+        // UTM tags of this page view: the server stores them on the session the
+        // first time it sees them and never overwrites them (OPT-1927).
+        const startUtm = obPageUtm(trackingConfig);
+
         // Build the data object matching server's expected format
         const data = {
             action: 'session_start',
@@ -2432,7 +2484,7 @@
             // Browser driven by an automation tool (Selenium, Puppeteer, Playwright…).
             webdriver: navigator.webdriver === true ? 1 : 0,
             referrer: (function() {
-                var ref = obStripSensitiveUrl(document.referrer || trackingConfig.referrer || '');
+                var ref = obStripSensitiveUrl(document.referrer || '');
                 if (ref) {
                     try {
                         var refHost = new URL(ref).hostname.replace(/^www\./i, '');
@@ -2442,11 +2494,11 @@
                 }
                 return ref;
             })(),
-            utm_source: trackingConfig.utm_source || '',
-            utm_medium: trackingConfig.utm_medium || '',
-            utm_campaign: trackingConfig.utm_campaign || '',
-            utm_term: trackingConfig.utm_term || '',
-            utm_content: trackingConfig.utm_content || '',
+            utm_source: startUtm.utm_source,
+            utm_medium: startUtm.utm_medium,
+            utm_campaign: startUtm.utm_campaign,
+            utm_term: startUtm.utm_term,
+            utm_content: startUtm.utm_content,
             entry_page: obPageUrl(),
             device: {
                 browser: browser,

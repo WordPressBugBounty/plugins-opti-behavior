@@ -516,6 +516,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		add_action( 'wp_ajax_optibehavior_smart_insights_summary', array( $this, 'ajax_smart_insights_summary' ) );
 		add_action( 'wp_ajax_optibehavior_smart_insights_notifications', array( $this, 'ajax_smart_insights_notifications' ) );
 		add_action( 'wp_ajax_optibehavior_smart_insights_notification_state', array( $this, 'ajax_smart_insights_notification_state' ) );
+		add_action( 'wp_ajax_opti_behavior_si_loop_state', array( 'Opti_Behavior_Smart_Insights_Sensors', 'ajax_save_state' ) );
 		// Export handlers (admin-post)
 		add_action( 'admin_post_opti_behavior_export', array( $this, 'handle_export' ) );
 		add_action( 'admin_post_opti_behavior_dashboard_export', array( $this, 'handle_dashboard_export' ) );
@@ -1172,6 +1173,13 @@ class Opti_Behavior_Heatmap_Dashboard {
 			'tryBroadeningDateRange' => __( 'Try broadening the date range or check back later.', 'opti-behavior' ),
 		'noPageData'              => __( 'No page data available', 'opti-behavior' ),
 		'noVisitorData'           => __( 'No visitor data available', 'opti-behavior' ),
+		// OB-18: block that failed to load (dashboard.js showWidgetError()).
+		'widgetLoadError'         => __( 'This block could not be loaded.', 'opti-behavior' ),
+		'widgetTimeout'           => __( 'This block took too long to load.', 'opti-behavior' ),
+		/* translators: %s: time of the last figures loaded */
+		'widgetLastData'          => __( 'Showing the figures loaded at %s.', 'opti-behavior' ),
+		'widgetRetry'             => __( 'Retry', 'opti-behavior' ),
+		'widgetLoading'           => __( 'Loading...', 'opti-behavior' ),
 		'noBrowserData'           => __( 'No browser data available', 'opti-behavior' ),
 		'noDeviceData'            => __( 'No device data available', 'opti-behavior' ),
 		'dataWillAppear'          => __( 'Data will appear as visitors interact with your site.', 'opti-behavior' ),
@@ -8648,7 +8656,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		global $wpdb;
 
 		$dimension = sanitize_key( (string) $dimension );
-		$supported = array( 'country', 'browser', 'os', 'entry_page', 'exit_page', 'traffic_channel', 'referrer' );
+		$supported = array( 'country', 'browser', 'os', 'entry_page', 'exit_page', 'traffic_channel', 'referrer', 'utm_campaign', 'utm_source', 'utm_medium' );
 		if ( ! in_array( $dimension, $supported, true ) || ! class_exists( 'Opti_Behavior_Page_Analytics_Repository' ) ) {
 			return null;
 		}
@@ -8716,6 +8724,17 @@ class Opti_Behavior_Heatmap_Dashboard {
 			case 'referrer':
 				$value_expr = $referrer_norm;
 				break;
+			// UTM tags live on the session row (OPT-2297: they were read from
+			// session_pages only, empty for most heatmap pages = empty lists).
+			case 'utm_campaign':
+				$value_expr = "TRIM(COALESCE(s.utm_campaign, ''))";
+				break;
+			case 'utm_source':
+				$value_expr = "TRIM(COALESCE(s.utm_source, ''))";
+				break;
+			case 'utm_medium':
+				$value_expr = "TRIM(COALESCE(s.utm_medium, ''))";
+				break;
 			case 'traffic_channel':
 			default:
 				$value_expr = $this->build_traffic_channel_case_sql();
@@ -8742,7 +8761,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// closed set): drop blank / same-site values instead of bucketing them,
 		// so they stay usable filter suggestions. The closed dimensions bucket
 		// blanks into 'Unknown' so their sum equals the pill total.
-		$suggestion_dims = array( 'entry_page', 'exit_page', 'referrer' );
+		// UTM lists = the values Traffic shows: a visit without a tag is no option.
+		$suggestion_dims = array( 'entry_page', 'exit_page', 'referrer', 'utm_campaign', 'utm_source', 'utm_medium' );
 		$is_suggestion   = in_array( $dimension, $suggestion_dims, true );
 		$site_host       = wp_parse_url( home_url(), PHP_URL_HOST );
 		$site_host       = $site_host ? preg_replace( '/^www\./i', '', (string) $site_host ) : '';
@@ -11185,6 +11205,28 @@ class Opti_Behavior_Heatmap_Dashboard {
 	}
 
 	/**
+	 * Public bridge (Free -> detail screens): fill the allow-list memo of a page
+	 * group for the sessions that have a heatmap file of that group, so the
+	 * next get_heatmap_session_allowlist_for_page_bridge() calls run on an
+	 * indexed session_id IN () instead of walking every page view (RC4 rule; 65 s
+	 * measured on a site with many page views). Only for callers that test the
+	 * lookup with tokens of those files. A set too large to restrict stays
+	 * unrestricted (resolve_allowlist_session_ids_for_tokens()).
+	 *
+	 * @param array $page_ids Canonical page IDs of the group.
+	 * @return void
+	 */
+	public function prime_heatmap_session_allowlist_bridge( $page_ids ) {
+		$page_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $page_ids ) ) ) );
+		if ( empty( $page_ids ) ) {
+			return;
+		}
+		$upload_dir = wp_upload_dir();
+		$tokens     = $this->collect_heatmap_file_session_tokens_for_pages( $page_ids, trailingslashit( $upload_dir['basedir'] ) . 'opti-behavior-data/' );
+		$this->get_allowed_heatmap_session_lookup_for_pages( $page_ids, $tokens );
+	}
+
+	/**
 	 * Build the "known DB session" lookup for a page's heatmap file tokens
 	 * (RC-C orphan gating, spec §3.2).
 	 *
@@ -12255,7 +12297,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 				'changes_not_comparable' => ! empty( $stats['changes_not_comparable'] ),
 				'date_range' => isset( $stats['date_range'] ) ? $stats['date_range'] : array(),
 			);
-			foreach ( array( 'top_pages', 'device_types', 'referrers', 'sessions_chart', 'new_vs_returning' ) as $widget ) {
+			// OPT-2860: `ai_bots` = the same answer as the three AI widgets of the
+			// Traffic screen, read from the same widget cache: the report block
+			// costs no extra query.
+			foreach ( array( 'top_pages', 'device_types', 'referrers', 'sessions_chart', 'new_vs_returning', 'ai_bots' ) as $widget ) {
 				$data                = $this->get_widget_data( $widget, $period, $start, $end );
 				$traffic[ $widget ] = isset( $data[ $widget ] ) && is_array( $data[ $widget ] ) ? $data[ $widget ] : array();
 			}
@@ -12366,8 +12411,10 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * @param string $start        Start date-time (Y-m-d H:i:s).
 	 * @param string $end          End date-time (Y-m-d H:i:s).
 	 * @param bool   $exclude_spam Exclude spam like the screen toggle.
-	 * @param array  $parts        Any of 'scroll', 'referrers'.
-	 * @return array { scroll?: float, referrers?: array }
+	 * @param array  $parts        Any of 'scroll', 'referrers', 'top_pages'
+	 *                             (OPT-2484: Top Pages widget rows, `sessions`
+	 *                             = the screen's visits per merged page).
+	 * @return array { scroll?: float, referrers?: array, top_pages?: array }
 	 */
 	public function get_report_email_figures( $start, $end, $exclude_spam, array $parts = array( 'scroll', 'referrers' ) ) {
 		$had_spam = array_key_exists( 'opti_behavior_exclude_spam', $GLOBALS );
@@ -12380,6 +12427,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 			}
 			if ( in_array( 'referrers', $parts, true ) ) {
 				$out['referrers'] = (array) $this->get_referrers_data( $start, $end );
+			}
+			if ( in_array( 'top_pages', $parts, true ) ) {
+				$out['top_pages'] = (array) $this->get_top_pages_data( $start, $end );
 			}
 		} finally {
 			if ( $had_spam ) {
@@ -12818,7 +12868,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$cache_seed = class_exists( 'Opti_Behavior_Stats_Context' )
 			? Opti_Behavior_Stats_Context::cache_key( $context )
 			: md5( $start_date . '|' . $end_date );
-		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_screen_res_' . md5( 'dim-v2|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
+		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_screen_res_' . md5( 'dim-v3-prev|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
 		$cached     = $this->get_dashboard_widget_cached_data( $cache_key, $start_date, $end_date, 'screen_resolution' );
 		if ( false !== $cached ) {
 			return $cached;
@@ -12875,6 +12925,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'resolution' => $display_label,
 				'count'      => absint( $count ),
+				'_key'       => (string) $label,
 			);
 		}
 
@@ -12882,6 +12933,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'resolution' => __( 'Unknown', 'opti-behavior' ),
 				'count'      => $unknown,
+				'_key'       => 'Unknown',
 			);
 		}
 
@@ -12889,8 +12941,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'resolution' => __( 'Unclassified', 'opti-behavior' ),
 				'count'      => $unclassified,
+				'_key'       => 'Unclassified',
 			);
 		}
+
+		// Row trend vs the previous period of the same length (OPT-2294).
+		$data = $this->add_dimension_previous_counts( $data, 'resolution', $start_date, $end_date, array(), '_key', 'Other', array( 'Unknown', 'Unclassified' ) );
 
 		// Never freeze an empty result (Bug #4): that's the state most likely to
 		// change on the very next session insert.
@@ -12956,6 +13012,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'resolution' => $display_label,
 				'count'      => absint( $count ),
+				'_key'       => (string) $label,
 			);
 		}
 
@@ -12963,10 +13020,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'resolution' => __( 'Unknown', 'opti-behavior' ),
 				'count'      => $unknown,
+				'_key'       => 'Unknown',
 			);
 		}
 
-		return $data;
+		// Row trend vs the previous period, same filters (OPT-2294).
+		return $this->add_dimension_previous_counts( $data, 'resolution', $start_date, $end_date, $filters, '_key', 'Other', array( 'Unknown' ) );
 	}
 
 	/**
@@ -13553,6 +13612,232 @@ class Opti_Behavior_Heatmap_Dashboard {
 		}
 
 		return $map;
+	}
+
+	/**
+	 * Bucket expression of a Traffic dimension widget (OPT-2293): the same
+	 * CASE as the widget's own query (get_countries_data() country_code,
+	 * get_browsers_data(), get_operating_systems_data(), get_device_types_data()),
+	 * so a previous-period row lands on the same key as the current one.
+	 * Test `tests/traffic-row-trend-opt2293-test.php` compares them.
+	 *
+	 * @param string $dimension country|browser|os|device_type.
+	 * @return string SQL expression on alias v (no placeholder), '' when unknown.
+	 */
+	private function get_dimension_bucket_sql( $dimension ) {
+		switch ( $dimension ) {
+			case 'country':
+				return "CASE
+						WHEN v.country IS NULL OR TRIM(v.country) = '' OR UPPER(TRIM(v.country)) = 'UN' THEN 'UN'
+						ELSE UPPER(TRIM(v.country))
+					END";
+			case 'browser':
+				return "CASE
+						WHEN v.browser IS NULL OR TRIM(v.browser) = '' THEN 'Unknown'
+						WHEN LOWER(TRIM(v.browser)) IN ('unknown','undefined','other') THEN 'Unknown'
+						ELSE TRIM(v.browser)
+					END";
+			case 'os':
+				return "CASE
+					WHEN v.os IS NULL OR TRIM(v.os) = '' THEN 'Unknown'
+					WHEN LOWER(TRIM(v.os)) IN ('unknown','undefined','other','') THEN 'Unknown'
+					WHEN LOWER(TRIM(v.os)) IN ('mac os','macos','os x','mac os x','macintosh') OR LOWER(TRIM(v.os)) LIKE 'mac%' THEN 'macOS'
+					WHEN LOWER(TRIM(v.os)) IN ('ios','iphone os','ipados') OR LOWER(TRIM(v.os)) LIKE 'ios%' THEN 'iOS'
+					WHEN LOWER(TRIM(v.os)) LIKE 'windows%' OR LOWER(TRIM(v.os)) LIKE 'win %' OR LOWER(TRIM(v.os)) LIKE 'win10%' OR LOWER(TRIM(v.os)) LIKE 'win11%' THEN 'Windows'
+					WHEN LOWER(TRIM(v.os)) LIKE 'android%' THEN 'Android'
+					WHEN LOWER(TRIM(v.os)) IN ('ubuntu','debian','fedora','centos','red hat','suse','freebsd','openbsd','netbsd') OR LOWER(TRIM(v.os)) LIKE 'linux%' THEN 'Linux'
+					WHEN LOWER(TRIM(v.os)) IN ('chromeos','chrome os','cros') THEN 'Chrome OS'
+					ELSE TRIM(v.os)
+				END";
+			case 'device_type':
+				return "CASE
+						WHEN v.device_type IS NULL OR TRIM(v.device_type) = '' THEN 'Unknown'
+						WHEN LOWER(TRIM(v.device_type)) IN ('mobile','phone','smartphone') THEN 'Mobile'
+						WHEN LOWER(TRIM(v.device_type)) IN ('tablet','ipad') THEN 'Tablet'
+						WHEN LOWER(TRIM(v.device_type)) IN ('desktop','pc','computer','laptop') THEN 'Desktop'
+						WHEN LOWER(TRIM(v.device_type)) IN ('unknown','undefined','other') THEN 'Unknown'
+						ELSE 'Unknown'
+					END";
+			case 'resolution':
+				// get_screen_resolution_data() (OPT-2294).
+				return "CASE
+						WHEN v.screen_width IS NULL OR v.screen_height IS NULL THEN 'Unknown'
+						WHEN v.screen_width <= 0 OR v.screen_height <= 0 THEN 'Unknown'
+						ELSE CONCAT(v.screen_width, 'x', v.screen_height)
+					END";
+		}
+		return '';
+	}
+
+	/**
+	 * Previous period of the same length as [start, end] (OPT-2293): the rule of
+	 * the KPI tiles (get_summary_stats_data() → build_period_changes()).
+	 *
+	 * @param string $start_date Range start (Y-m-d H:i:s).
+	 * @param string $end_date   Range end (Y-m-d H:i:s).
+	 * @return array { start, end }
+	 */
+	private function get_dimension_previous_range( $start_date, $end_date ) {
+		$duration = max( 1, strtotime( $end_date ) - strtotime( $start_date ) + 1 );
+		return array(
+			'start' => gmdate( 'Y-m-d H:i:s', strtotime( $start_date ) - $duration ),
+			'end'   => gmdate( 'Y-m-d H:i:s', strtotime( $start_date ) - 1 ),
+		);
+	}
+
+	/**
+	 * Sessions per row of a Traffic dimension widget in the previous period of
+	 * the same length (OPT-2293). ONE grouped query, same table / spam clause /
+	 * advanced filters / metric (COUNT DISTINCT session) as the widget; without
+	 * filters the daily aggregates older than the raw window are merged like the
+	 * widget does. Memoized per request.
+	 *
+	 * @param string $dimension  country|browser|os|device_type|resolution|referrer.
+	 * @param string $start_date Current range start.
+	 * @param string $end_date   Current range end.
+	 * @param array  $filters    Sanitized advanced filters (empty = none).
+	 * @return array bucket key => previous sessions.
+	 */
+	private function get_dimension_previous_counts( $dimension, $start_date, $end_date, array $filters = array() ) {
+		static $memo = array();
+		global $wpdb;
+
+		$range = $this->get_dimension_previous_range( $start_date, $end_date );
+		$key   = md5( wp_json_encode( array( $dimension, $range, $filters, $this->is_spam_excluded() ) ) );
+		if ( isset( $memo[ $key ] ) ) {
+			return $memo[ $key ];
+		}
+
+		// Referrer labels are built in PHP, not by a CASE (OPT-2294).
+		if ( 'referrer' === $dimension ) {
+			$memo[ $key ] = $this->get_referrer_label_counts( $range['start'], $range['end'], $filters );
+			return $memo[ $key ];
+		}
+
+		$bucket_sql = $this->get_dimension_bucket_sql( $dimension );
+		if ( '' === $bucket_sql ) {
+			return array();
+		}
+
+		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+		$filter_sql  = ! empty( $filters ) ? $this->build_advanced_filters_sql( $filters ) : array( 'where' => '', 'params' => array() );
+		$params      = array_merge( array( $range['start'], $range['end'] ), $filter_sql['params'] );
+		// The LIKE patterns of the bucket SQL carry "%": escape them for prepare().
+		$bucket_sql = str_replace( '%', '%%', $bucket_sql );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.LikeWildcardsInQuery,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix, bucket SQL from the internal switch above (never user input), values bound via $wpdb->prepare(); the widget result that carries these counts is cached.
+		$results = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT ' . $bucket_sql . ' AS bucket, COUNT(DISTINCT s.id) AS count
+				FROM ' . $wpdb->prefix . 'optibehavior_sessions s
+				LEFT JOIN ' . $wpdb->prefix . 'optibehavior_visitors v ON s.visitor_id = v.id
+				WHERE s.start_time BETWEEN %s AND %s' . $spam_clause . $filter_sql['where'] . '
+				GROUP BY bucket',
+				$params
+			)
+		);
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.LikeWildcardsInQuery,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		$map = array();
+		foreach ( (array) $results as $row ) {
+			$bucket = isset( $row->bucket ) ? trim( (string) $row->bucket ) : '';
+			if ( '' === $bucket ) {
+				$bucket = 'country' === $dimension ? 'UN' : 'Unknown';
+			}
+			$map[ $bucket ] = ( isset( $map[ $bucket ] ) ? $map[ $bucket ] : 0 ) + absint( $row->count );
+		}
+
+		if ( empty( $filters ) && class_exists( 'Opti_Behavior_Dimension_Aggregates' ) ) {
+			$aggregate = 'device_type' === $dimension ? 'device' : $dimension;
+			$merged    = $this->merge_pre_raw_dimension_counts( $aggregate, $range['start'], $range['end'], array() );
+			foreach ( $merged as $bucket => $count ) {
+				$bucket = trim( (string) $bucket );
+				if ( 'country' === $dimension ) {
+					$bucket = strtoupper( $bucket );
+					if ( '' === $bucket || 'UNKNOWN' === $bucket ) {
+						$bucket = 'UN';
+					}
+				} elseif ( '' === $bucket ) {
+					$bucket = 'Unknown';
+				}
+				$map[ $bucket ] = ( isset( $map[ $bucket ] ) ? $map[ $bucket ] : 0 ) + absint( $count );
+			}
+		}
+
+		$memo[ $key ] = $map;
+		return $map;
+	}
+
+	/**
+	 * Previous count of one displayed row (OPT-2293). Pure.
+	 * - a named row = its own previous count;
+	 * - the "Other" row = every previous bucket not shown on its own row and not
+	 *   kept apart ($separate_keys: Unknown, Unclassified…);
+	 * - a key the previous period does not have (Unclassified) = 0, so the row
+	 *   shows "—", never "+100 %".
+	 *
+	 * @param array  $previous      bucket key => previous count.
+	 * @param string $key           Raw key of the row (before translation).
+	 * @param array  $shown_keys    Raw keys printed on their own row.
+	 * @param string $other_key     Raw key of the catch-all row.
+	 * @param array  $separate_keys Keys never folded into the catch-all row.
+	 * @return int
+	 */
+	public static function dimension_previous_count( array $previous, $key, array $shown_keys, $other_key = 'Other', array $separate_keys = array() ) {
+		$key = (string) $key;
+		if ( $key === (string) $other_key ) {
+			$sum = 0;
+			foreach ( $previous as $bucket => $count ) {
+				$bucket = (string) $bucket;
+				if ( in_array( $bucket, $shown_keys, true ) || in_array( $bucket, $separate_keys, true ) ) {
+					continue;
+				}
+				$sum += absint( $count );
+			}
+			return $sum;
+		}
+		return isset( $previous[ $key ] ) ? absint( $previous[ $key ] ) : 0;
+	}
+
+	/**
+	 * Add `previous_count` to every row of a dimension widget (OPT-2293).
+	 *
+	 * @param array  $data          Widget rows.
+	 * @param string $dimension     country|browser|os|device_type.
+	 * @param string $start_date    Current range start.
+	 * @param string $end_date      Current range end.
+	 * @param array  $filters       Sanitized advanced filters.
+	 * @param string $key_field     Row field holding the raw key; '_key' is removed after use.
+	 * @param string $other_key     Raw key of the catch-all row.
+	 * @param array  $separate_keys Keys never folded into the catch-all row.
+	 * @return array
+	 */
+	private function add_dimension_previous_counts( array $data, $dimension, $start_date, $end_date, array $filters, $key_field, $other_key, array $separate_keys ) {
+		$previous = $this->get_dimension_previous_counts( $dimension, $start_date, $end_date, $filters );
+		$shown    = array();
+		foreach ( $data as $row ) {
+			$shown[] = isset( $row[ $key_field ] ) ? (string) $row[ $key_field ] : '';
+		}
+		foreach ( $data as $i => $row ) {
+			$key                          = isset( $row[ $key_field ] ) ? (string) $row[ $key_field ] : '';
+			$data[ $i ]['previous_count'] = self::dimension_previous_count( $previous, $key, $shown, $other_key, $separate_keys );
+			if ( '_key' === $key_field ) {
+				unset( $data[ $i ]['_key'] );
+			}
+		}
+		return $data;
+	}
+
+	/**
+	 * Whether the previous period of a widget range is comparable (OPT-2293,
+	 * same rule as the KPI tiles, OPT-1624). Read by get_widget_data().
+	 *
+	 * @param string $start_date Current range start.
+	 * @param string $end_date   Current range end.
+	 * @return bool True = the previous period is incomplete.
+	 */
+	private function is_dimension_previous_not_comparable( $start_date, $end_date ) {
+		$range = $this->get_dimension_previous_range( $start_date, $end_date );
+		return ! $this->is_previous_period_comparable( $range['start'], $range['end'] );
 	}
 
 	/**
@@ -14332,7 +14617,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$cache_seed = class_exists( 'Opti_Behavior_Stats_Context' )
 			? Opti_Behavior_Stats_Context::cache_key( $context )
 			: md5( $start_date . '|' . $end_date );
-		$cache_key = opti_behavior_dashboard_cache_key( 'opti_behavior_device_types_' . md5( 'dim-v2|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
+		$cache_key = opti_behavior_dashboard_cache_key( 'opti_behavior_device_types_' . md5( 'dim-v3-prev|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
 		$cached    = $this->get_dashboard_widget_cached_data( $cache_key, $start_date, $end_date, 'device_types' );
 		if ( false !== $cached ) {
 			return $cached;
@@ -14404,8 +14689,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'name'  => $display_label,
 				'count' => $count,
+				'_key'  => $label,
 			);
 		}
+
+		// Row trend vs the previous period of the same length (OPT-2293).
+		$data = $this->add_dimension_previous_counts( $data, 'device_type', $start_date, $end_date, array(), '_key', '', array() );
 
 		// Never freeze an empty result (Bug #4): that's the state most likely to
 		// change on the very next session insert.
@@ -14478,10 +14767,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'name'  => 'Unknown' === $label ? __( 'Unknown', 'opti-behavior' ) : $label,
 				'count' => $count,
+				'_key'  => $label,
 			);
 		}
 
-		return $data;
+		// Row trend vs the previous period, same filters (OPT-2293).
+		return $this->add_dimension_previous_counts( $data, 'device_type', $start_date, $end_date, $filters, '_key', '', array() );
 	}
 
 
@@ -14530,6 +14821,131 @@ class Opti_Behavior_Heatmap_Dashboard {
 			return false;
 		}
 		return ( ( $views - $views_previous ) / $views_previous ) * 100 >= self::TOP_PAGE_HOT_MIN_CHANGE;
+	}
+
+	/**
+	 * SQL of the Top Pages "Time on page" per page id: time_on_page when
+	 * recorded; otherwise the gap to the NEXT pageview of the same session
+	 * (correlated subquery on the (session_id, view_time) index), falling back
+	 * to the session end only for the last pageview of a session.
+	 * Fallback-derived values are capped at 1800s to bound idle-tab outliers;
+	 * beacon-recorded time_on_page is never capped. NULL (excluded from AVG)
+	 * when neither bound exists. Placeholders: start, end, then the page ids.
+	 *
+	 * @param string $placeholders     `%d` list of the page ids.
+	 * @param bool   $exclude_spam     Spam visits left out (INNER JOIN + exclusion clause), else LEFT JOIN.
+	 * @param string $url_placeholders `%s` list of the page addresses, '' = page ids only (OPT-2683).
+	 * @return string
+	 */
+	private function top_pages_avg_time_sql( $placeholders, $exclude_spam, $url_placeholders = '' ) {
+		global $wpdb;
+
+		$join = $exclude_spam
+			? 'INNER JOIN ' . $wpdb->prefix . 'optibehavior_sessions sess ON pv.session_id = sess.id'
+			: 'LEFT JOIN ' . $wpdb->prefix . 'optibehavior_sessions sess ON pv.session_id = sess.id';
+
+		// Views written with a page id that has no registry row (OPT-2683): the
+		// Top Pages row of such a page falls back to pv.url
+		// (COALESCE(NULLIF(p.url,''), pv.url) in get_top_pages_data()), so its
+		// time is counted on the id of the views. A reader that knows only the
+		// registry id of the same address (Page X-Ray tile, report annex) found
+		// no view at all and printed 0:00 under a 1 min table row. Those views
+		// are taken here too — never a view whose page id IS a registry row, so
+		// nothing is counted twice and no other page is pulled in.
+		$url_join  = '';
+		$url_where = '';
+		if ( '' !== (string) $url_placeholders ) {
+			$url_join  = ' LEFT JOIN ' . $wpdb->prefix . 'optibehavior_pages reg ON pv.page_id = reg.id';
+			$url_where = ' OR ( reg.id IS NULL AND pv.url IN ( ' . $url_placeholders . ' ) )';
+		}
+
+		// The spam clause follows $exclude_spam, not the request global (OB-08):
+		// get_spam_exclusion_clause() reads $GLOBALS['opti_behavior_exclude_spam'],
+		// which only the Traffic AJAX and the site report table set. The Page
+		// X-Ray dossier and the report annex call get_pages_avg_time() without
+		// it, so their time counted spam views the table left out.
+		$spam_clause = '';
+		if ( $exclude_spam ) {
+			$had_spam = array_key_exists( 'opti_behavior_exclude_spam', $GLOBALS );
+			$old_spam = $had_spam ? $GLOBALS['opti_behavior_exclude_spam'] : null;
+			$GLOBALS['opti_behavior_exclude_spam'] = true;
+			$spam_clause = $this->get_spam_exclusion_clause( 'sess' );
+			if ( $had_spam ) {
+				$GLOBALS['opti_behavior_exclude_spam'] = $old_spam;
+			} else {
+				unset( $GLOBALS['opti_behavior_exclude_spam'] );
+			}
+		}
+
+		return "SELECT pv.page_id, COUNT(*) AS n,
+				AVG(
+					CASE
+						WHEN pv.time_on_page > 0 THEN pv.time_on_page
+						ELSE LEAST(1800, GREATEST(0, TIMESTAMPDIFF(SECOND, pv.view_time,
+							COALESCE(
+								(
+									SELECT MIN(pv_next.view_time)
+									FROM " . $wpdb->prefix . "optibehavior_pageviews pv_next
+									WHERE pv_next.session_id = pv.session_id
+									AND pv_next.session_id <> ''
+									AND pv_next.view_time > pv.view_time
+								),
+								sess.end_time
+							)
+						)))
+					END
+				) AS avg_time
+				FROM " . $wpdb->prefix . "optibehavior_pageviews pv
+				" . $join . $url_join . "
+				WHERE pv.view_time BETWEEN %s AND %s
+				AND ( pv.page_id IN ( " . $placeholders . " )" . $url_where . " )" . $spam_clause . "
+				GROUP BY pv.page_id";
+	}
+
+	/**
+	 * Top Pages "Time on page" of ONE page made of several page ids (its URL
+	 * variants), exactly as the Traffic screen prints its merged row: each id
+	 * rounded, then weighted by its page views (OPT-1939: the Page X-Ray
+	 * dossier and the report annex print this figure, not a second formula).
+	 *
+	 * @param int[]    $page_ids     Page ids of the page.
+	 * @param string   $start        First moment, Y-m-d H:i:s.
+	 * @param string   $end          Last moment, Y-m-d H:i:s.
+	 * @param bool     $exclude_spam Spam visits left out.
+	 * @param string[] $page_urls    Addresses of the page: views written with a page id
+	 *                               that has no registry row count too (OPT-2683).
+	 * @return array { seconds int, views int } (views 0 = no timed view).
+	 */
+	public function get_pages_avg_time( $page_ids, $start, $end, $exclude_spam, $page_urls = array() ) {
+		global $wpdb;
+
+		$page_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $page_ids ) ) ) );
+		if ( empty( $page_ids ) ) {
+			return array(
+				'seconds' => 0,
+				'views'   => 0,
+			);
+		}
+		$page_urls = array_values( array_unique( array_filter( array_map( 'strval', (array) $page_urls ) ) ) );
+		$url_ph    = empty( $page_urls ) ? '' : implode( ',', array_fill( 0, count( $page_urls ), '%s' ) );
+		$sql       = $this->top_pages_avg_time_sql( implode( ',', array_fill( 0, count( $page_ids ), '%d' ) ), (bool) $exclude_spam, $url_ph );
+// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Plugin tables from $wpdb->prefix; values bound through prepare().
+		$rows = $wpdb->get_results( $wpdb->prepare( $sql, array_merge( array( (string) $start, (string) $end ), $page_ids, $page_urls ) ), ARRAY_A );
+// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$sum  = 0.0;
+		$n    = 0;
+		foreach ( (array) $rows as $row ) {
+			if ( null === ( $row['avg_time'] ?? null ) ) {
+				continue;
+			}
+			$sum += (int) round( (float) $row['avg_time'] ) * absint( $row['n'] );
+			$n   += absint( $row['n'] );
+		}
+
+		return array(
+			'seconds' => $n > 0 ? (int) round( $sum / $n ) : 0,
+			'views'   => $n,
+		);
 	}
 
 	/**
@@ -14907,32 +15323,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			// so the pageview universe matches the main Top Pages query exactly;
 			// when spam is excluded we reuse the same INNER JOIN + exclusion
 			// clause as the other Top Pages sub-queries.
-			$avg_time_join = $exclude_spam
-				? $spam_join_pageviews
-				: 'LEFT JOIN ' . $wpdb->prefix . 'optibehavior_sessions sess ON pv.session_id = sess.id';
-			$avg_time_select = "SELECT pv.page_id, COUNT(*) AS n,
-					AVG(
-						CASE
-							WHEN pv.time_on_page > 0 THEN pv.time_on_page
-							ELSE LEAST(1800, GREATEST(0, TIMESTAMPDIFF(SECOND, pv.view_time,
-								COALESCE(
-									(
-										SELECT MIN(pv_next.view_time)
-										FROM " . $wpdb->prefix . "optibehavior_pageviews pv_next
-										WHERE pv_next.session_id = pv.session_id
-										AND pv_next.session_id <> ''
-										AND pv_next.view_time > pv.view_time
-									),
-									sess.end_time
-								)
-							)))
-						END
-					) AS avg_time
-					FROM " . $wpdb->prefix . "optibehavior_pageviews pv
-					" . $avg_time_join . "
-					WHERE pv.view_time BETWEEN %s AND %s
-					AND pv.page_id IN ( " . $placeholders . " )" . $spam_where_pageviews . "
-					GROUP BY pv.page_id";
+			$avg_time_select = $this->top_pages_avg_time_sql( $placeholders, $exclude_spam );
 
 			// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 			$avg_time_current_params = array_merge( array( $start_date, $end_date ), $page_ids );
@@ -15240,7 +15631,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$cache_seed = class_exists( 'Opti_Behavior_Stats_Context' )
 			? Opti_Behavior_Stats_Context::cache_key( $context )
 			: md5( $start_date . '|' . $end_date );
-		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_countries_' . md5( 'dim-v3|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
+		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_countries_' . md5( 'dim-v4-prev|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
 		$cached     = $this->get_dashboard_widget_cached_data( $cache_key, $start_date, $end_date, 'countries' );
 		if ( false !== $cached ) {
 			return $cached;
@@ -15398,6 +15789,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = $unclassified;
 		}
 
+		// Row trend vs the previous period of the same length (OPT-2293).
+		$data = $this->add_dimension_previous_counts( $data, 'country', $start_date, $end_date, array(), 'country', 'OTHER', array( 'UN', 'UNCLASSIFIED' ) );
+
 		// Never freeze an empty result (Bug #4): that's the state most likely to
 		// change on the very next session insert.
 		return $this->set_dashboard_widget_cached_data( $cache_key, $data, empty( $data ), $start_date, $end_date, 'countries' );
@@ -15497,7 +15891,8 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = $unknown;
 		}
 
-		return $data;
+		// Row trend vs the previous period, same filters (OPT-2293).
+		return $this->add_dimension_previous_counts( $data, 'country', $start_date, $end_date, $filters, 'country', 'OTHER', array( 'UN' ) );
 	}
 
 	/**
@@ -15518,7 +15913,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$cache_seed = class_exists( 'Opti_Behavior_Stats_Context' )
 			? Opti_Behavior_Stats_Context::cache_key( $context )
 			: md5( $start_date . '|' . $end_date );
-		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_browsers_' . md5( 'dim-v3|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
+		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_browsers_' . md5( 'dim-v4-prev|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
 		$cached     = $this->get_dashboard_widget_cached_data( $cache_key, $start_date, $end_date, 'browsers' );
 		if ( false !== $cached ) {
 			return $cached;
@@ -15575,6 +15970,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'browser' => $display_label,
 				'count'   => absint( $count ),
+				'_key'    => (string) $label,
 			);
 		}
 
@@ -15582,14 +15978,19 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'browser' => __( 'Unknown', 'opti-behavior' ),
 				'count'   => $unknown,
+				'_key'    => 'Unknown',
 			);
 		}
 		if ( $unclassified > 0 ) {
 			$data[] = array(
 				'browser' => __( 'Unclassified', 'opti-behavior' ),
 				'count'   => $unclassified,
+				'_key'    => 'Unclassified',
 			);
 		}
+
+		// Row trend vs the previous period of the same length (OPT-2293).
+		$data = $this->add_dimension_previous_counts( $data, 'browser', $start_date, $end_date, array(), '_key', 'Other', array( 'Unknown', 'Unclassified' ) );
 
 		// Never freeze an empty result (Bug #4): that's the state most likely to
 		// change on the very next session insert.
@@ -15654,6 +16055,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'browser' => $display_label,
 				'count'   => absint( $count ),
+				'_key'    => (string) $label,
 			);
 		}
 
@@ -15661,10 +16063,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$data[] = array(
 				'browser' => __( 'Unknown', 'opti-behavior' ),
 				'count'   => $unknown,
+				'_key'    => 'Unknown',
 			);
 		}
 
-		return $data;
+		// Row trend vs the previous period, same filters (OPT-2293).
+		return $this->add_dimension_previous_counts( $data, 'browser', $start_date, $end_date, $filters, '_key', 'Other', array( 'Unknown' ) );
 	}
 
 	/**
@@ -15725,16 +16129,61 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$cache_seed = class_exists( 'Opti_Behavior_Stats_Context' )
 			? Opti_Behavior_Stats_Context::cache_key( $context )
 			: md5( $start_date . '|' . $end_date );
-		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_referrers_' . md5( 'dim-v3|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
+		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_referrers_' . md5( 'dim-v4-prev|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
 		$cached     = $this->get_dashboard_widget_cached_data( $cache_key, $start_date, $end_date, 'referrers' );
 		if ( false !== $cached ) {
 			return $cached;
 		}
 
-		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- Fallback for HTTP_HOST, sanitized by wp_parse_url
-		$site_host = function_exists('home_url') ? wp_parse_url( home_url(), PHP_URL_HOST ) : ( isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '' );
+		// Raw sessions only here: the Unclassified bucket is balanced against
+		// the raw baseline BEFORE the pre-raw history is merged.
+		$agg = $this->get_referrer_label_counts( $start_date, $end_date, array(), false );
+
+		$baseline = $this->get_dashboard_dimension_session_baseline( $context );
+		$agg      = $this->add_dashboard_unclassified_bucket( $agg, $baseline, 'Unclassified' );
+
+		// Unified Retention Protocol: merge aggregated referrer history (domain
+		// or "(direct)") for days older than the raw retention window.
+		$agg = $this->merge_pre_raw_referrer_counts( $agg, $start_date, $end_date );
+
+		$unclassified = isset( $agg['Unclassified'] ) ? absint( $agg['Unclassified'] ) : 0;
+		unset( $agg['Unclassified'] );
+		$agg = $this->limit_dashboard_bucket_map( $agg, 49, 'Other' );
+		if ( $unclassified > 0 ) {
+			$agg['Unclassified'] = $unclassified;
+		}
+
+		$out = $this->build_referrer_rows( $agg );
+
+		// Row trend vs the previous period of the same length (OPT-2294).
+		$out = $this->add_dimension_previous_counts( $out, 'referrer', $start_date, $end_date, array(), '_key', 'Other', array( 'Unclassified' ) );
+
+		// Never freeze an empty result (Bug #4): that's the state most likely to
+		// change on the very next session insert.
+		return $this->set_dashboard_widget_cached_data( $cache_key, $out, empty( $out ), $start_date, $end_date, 'referrers' );
+	}
+
+	/**
+	 * Sessions per Referrers widget label (OPT-2294: one place for the widget,
+	 * its filtered twin and the previous period of the row trend). Same query
+	 * and same labels as before: known search / social / AI domain = its name,
+	 * same-site referrer = "Direct / None", ad click ids, UTM source / medium.
+	 *
+	 * @param string $start_date   Range start.
+	 * @param string $end_date     Range end.
+	 * @param array  $filters      Sanitized advanced filters (empty = none).
+	 * @param bool   $with_pre_raw Merge the daily referrer aggregates older than
+	 *                             the raw window (only without filters).
+	 * @return array raw label => sessions.
+	 */
+	private function get_referrer_label_counts( $start_date, $end_date, array $filters = array(), $with_pre_raw = true ) {
+		global $wpdb;
 
 		$spam_clause = $this->get_spam_exclusion_clause( 's' );
+		$filter_sql  = ! empty( $filters ) ? $this->build_advanced_filters_sql( $filters ) : array( 'where' => '', 'params' => array() );
+		$params      = array_merge( array( $start_date, $end_date ), $filter_sql['params'] );
+		// The advanced filters may read visitor columns; the unfiltered query never did.
+		$join        = ! empty( $filters ) ? ' LEFT JOIN ' . $wpdb->prefix . 'optibehavior_visitors v ON s.visitor_id = v.id' : '';
 // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
 
 		// Pull sessions in the range. We fetch referrer, entry_page (for UTM/click ids), and basic counts.
@@ -15743,19 +16192,19 @@ class Opti_Behavior_Heatmap_Dashboard {
 		// phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$rows = $wpdb->get_results( $wpdb->prepare(
 			"SELECT s.referrer AS raw_ref, s.utm_source AS raw_utm, s.utm_medium AS raw_med, s.entry_page AS entry_url, COUNT(DISTINCT s.id) AS cnt
-			 FROM " . $wpdb->prefix . "optibehavior_sessions s
-			 WHERE s.start_time BETWEEN %s AND %s" . $spam_clause . "
+			 FROM " . $wpdb->prefix . "optibehavior_sessions s" . $join . "
+			 WHERE s.start_time BETWEEN %s AND %s" . $spam_clause . $filter_sql['where'] . "
 			 GROUP BY s.referrer, s.utm_source, s.utm_medium, s.entry_page
 			 ORDER BY cnt DESC
 			 LIMIT 5000",
-			$start_date, $end_date
+			$params
 // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
 		) );
 
 		$agg = array();
 
 		// Strip www. prefix from site host for robust comparison (handles www vs non-www mismatch)
-		$site_host_clean = $site_host ? preg_replace( '/^www\./i', '', $site_host ) : '';
+		$site_host_clean = $this->get_referrer_site_host_clean();
 
 		// Known classifiers (shared with the Traffic Channel filter).
 		list( $search_map, $social_map, $ai_map ) = $this->get_traffic_channel_domain_maps();
@@ -15814,13 +16263,29 @@ class Opti_Behavior_Heatmap_Dashboard {
 			$agg[$label] = ($agg[$label] ?? 0) + intval($r->cnt);
 		}
 
-		$baseline = $this->get_dashboard_dimension_session_baseline( $context );
-		$agg      = $this->add_dashboard_unclassified_bucket( $agg, $baseline, 'Unclassified' );
+		if ( $with_pre_raw && empty( $filters ) ) {
+			$agg = $this->merge_pre_raw_referrer_counts( $agg, $start_date, $end_date );
+		}
 
-		// Unified Retention Protocol: merge aggregated referrer history (domain
-		// or "(direct)") for days older than the raw retention window.
+		return $agg;
+	}
+
+	/**
+	 * Merge the daily referrer aggregates (domain or "(direct)") of the days
+	 * older than the raw retention window into a label => sessions map, with
+	 * the labels of get_referrer_label_counts() (Unified Retention Protocol).
+	 *
+	 * @param array  $agg        raw label => sessions.
+	 * @param string $start_date Range start.
+	 * @param string $end_date   Range end.
+	 * @return array
+	 */
+	private function merge_pre_raw_referrer_counts( array $agg, $start_date, $end_date ) {
 		$pre_raw_segment = $this->get_pre_raw_aggregate_segment( $start_date, $end_date );
-		if ( null !== $pre_raw_segment ) {
+		if ( null !== $pre_raw_segment && class_exists( 'Opti_Behavior_Dimension_Aggregates' ) ) {
+			$site_host_clean = $this->get_referrer_site_host_clean();
+			list( $search_map, $social_map, $ai_map ) = $this->get_traffic_channel_domain_maps();
+			$search_map = $ai_map + $search_map;
 			$agg_counts = Opti_Behavior_Dimension_Aggregates::get_dimension_counts( 'referrer', $pre_raw_segment['start'], $pre_raw_segment['end'], $this->is_spam_excluded() );
 			foreach ( $agg_counts as $agg_value => $agg_row ) {
 				$agg_sessions = absint( $agg_row['sessions'] ?? 0 );
@@ -15846,13 +16311,29 @@ class Opti_Behavior_Heatmap_Dashboard {
 			}
 		}
 
-		$unclassified = isset( $agg['Unclassified'] ) ? absint( $agg['Unclassified'] ) : 0;
-		unset( $agg['Unclassified'] );
-		$agg = $this->limit_dashboard_bucket_map( $agg, 49, 'Other' );
-		if ( $unclassified > 0 ) {
-			$agg['Unclassified'] = $unclassified;
-		}
+		return $agg;
+	}
 
+	/**
+	 * Site host without "www." (a same-site referrer = "Direct / None").
+	 *
+	 * @return string
+	 */
+	private function get_referrer_site_host_clean() {
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- Fallback for HTTP_HOST, sanitized by wp_parse_url
+		$site_host = function_exists( 'home_url' ) ? wp_parse_url( home_url(), PHP_URL_HOST ) : ( isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '' );
+		return $site_host ? preg_replace( '/^www\./i', '', $site_host ) : '';
+	}
+
+	/**
+	 * Referrers widget rows of a label => sessions map (display label, favicon
+	 * domain). `_key` = raw label, read then removed by
+	 * add_dimension_previous_counts() (OPT-2294).
+	 *
+	 * @param array $agg raw label => sessions, in display order.
+	 * @return array
+	 */
+	private function build_referrer_rows( array $agg ) {
 		$out = array();
 		foreach ( array_keys($agg) as $k ) {
 
@@ -15891,13 +16372,12 @@ class Opti_Behavior_Heatmap_Dashboard {
 				'referrer' => $display_label,
 				'count' => intval($agg[$k]),
 				'domain' => $domain,
-				'favicon_url' => $favicon_url
+				'favicon_url' => $favicon_url,
+				'_key' => (string) $k,
 			);
 		}
 
-		// Never freeze an empty result (Bug #4): that's the state most likely to
-		// change on the very next session insert.
-		return $this->set_dashboard_widget_cached_data( $cache_key, $out, empty( $out ), $start_date, $end_date, 'referrers' );
+		return $out;
 	}
 
 	/**
@@ -15913,118 +16393,11 @@ class Opti_Behavior_Heatmap_Dashboard {
 	 * @return array
 	 */
 	private function get_referrers_data_filtered( $start_date, $end_date, array $filters ) {
-		global $wpdb;
-
-		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- Fallback for HTTP_HOST, sanitized by wp_parse_url
-		$site_host = function_exists( 'home_url' ) ? wp_parse_url( home_url(), PHP_URL_HOST ) : ( isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '' );
-
-		$spam_clause = $this->get_spam_exclusion_clause( 's' );
-		$filter_sql  = $this->build_advanced_filters_sql( $filters );
-		$params      = array_merge( array( $start_date, $end_date ), $filter_sql['params'] );
-// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Custom analytics tables; identifiers from $wpdb->prefix and internal allow-lists (never user input), values bound via $wpdb->prepare(); direct real-time query, per-request caching not applicable; schema managed on plugin activation.
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- Analytics data requires direct DB queries; table name from $wpdb->prefix.
-		$rows = $wpdb->get_results( $wpdb->prepare(
-			"SELECT s.referrer AS raw_ref, s.utm_source AS raw_utm, s.utm_medium AS raw_med, s.entry_page AS entry_url, COUNT(DISTINCT s.id) AS cnt
-			 FROM " . $wpdb->prefix . "optibehavior_sessions s
-			 LEFT JOIN " . $wpdb->prefix . "optibehavior_visitors v ON s.visitor_id = v.id
-			 WHERE s.start_time BETWEEN %s AND %s" . $spam_clause . $filter_sql['where'] . "
-			 GROUP BY s.referrer, s.utm_source, s.utm_medium, s.entry_page
-			 ORDER BY cnt DESC
-			 LIMIT 5000",
-			$params
-// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter
-		) );
-
-		$agg = array();
-
-		$site_host_clean = $site_host ? preg_replace( '/^www\./i', '', $site_host ) : '';
-
-		list( $search_map, $social_map, $ai_map ) = $this->get_traffic_channel_domain_maps();
-		$search_map     = $ai_map + $search_map;
-		$paid_click_ids = array( 'gclid', 'msclkid', 'fbclid', 'twclid', 'ttclid', 'yclid', 'gbraid', 'wbraid', 'mc_eid' );
-
-		foreach ( (array) $rows as $r ) {
-			$ref   = is_string( $r->raw_ref ) ? trim( $r->raw_ref ) : '';
-			$utm   = is_string( $r->raw_utm ) ? trim( $r->raw_utm ) : '';
-			$med   = is_string( $r->raw_med ) ? trim( $r->raw_med ) : '';
-			$entry = is_string( $r->entry_url ) ? trim( $r->entry_url ) : '';
-			$host  = '';
-			if ( $ref !== '' ) { $host = wp_parse_url( $ref, PHP_URL_HOST ) ?: ''; }
-			$host_clean = $host ? preg_replace( '/^www\./i', '', $host ) : '';
-			if ( $host_clean && $site_host_clean && strcasecmp( $host_clean, $site_host_clean ) === 0 ) { $host = ''; }
-
-			$qs     = $entry ? wp_parse_url( $entry, PHP_URL_QUERY ) : '';
-			$params = array();
-			if ( $qs ) { parse_str( $qs, $params ); }
-			$has_click_id = false;
-			foreach ( $paid_click_ids as $cid ) { if ( ! empty( $params[ $cid ] ) ) { $has_click_id = true; break; } }
-
-			$label = 'Direct / None';
-
-			if ( $host !== '' ) {
-				$name = $this->match_referrer_domain_map( $host, $search_map );
-				if ( '' === $name ) { $name = $this->match_referrer_domain_map( $host, $social_map ); }
-				$label = ( '' !== $name ) ? $name : $host;
-			} else {
-				if ( $has_click_id ) {
-					if ( ! empty( $params['gclid'] ) )      { $label = 'Google Ads'; }
-					elseif ( ! empty( $params['msclkid'] ) ) { $label = 'Microsoft Ads'; }
-					elseif ( ! empty( $params['fbclid'] ) )  { $label = 'Facebook Ads'; }
-					elseif ( ! empty( $params['twclid'] ) )  { $label = 'Twitter Ads'; }
-					elseif ( ! empty( $params['ttclid'] ) )  { $label = 'TikTok Ads'; }
-					else { $label = 'Paid Ads'; }
-				} elseif ( $utm !== '' || $med !== '' ) {
-					$src   = $utm !== '' ? $utm : $med;
-					$src_l = strtolower( $src );
-					if ( in_array( $src_l, array( 'cpc', 'ppc', 'paid', 'paid_search' ) ) ) { $label = 'Paid Search'; }
-					elseif ( in_array( $src_l, array( 'email', 'newsletter' ) ) ) { $label = 'Email'; }
-					elseif ( in_array( $src_l, array( 'social', 'social_media' ) ) ) { $label = 'Social'; }
-					else { $label = $src; }
-				} else {
-					$label = 'Direct / None';
-				}
-			}
-
-			$agg[ $label ] = ( $agg[ $label ] ?? 0 ) + intval( $r->cnt );
-		}
-
+		$agg = $this->get_referrer_label_counts( $start_date, $end_date, $filters );
 		$agg = $this->limit_dashboard_bucket_map( $agg, 49, 'Other' );
 
-		$out = array();
-		foreach ( array_keys( $agg ) as $k ) {
-			$domain      = '';
-			$favicon_url = '';
-
-			if ( $k !== 'Direct / None' && $k !== 'Paid Ads' && $k !== 'Paid Search' && $k !== 'Email' && $k !== 'Social' && $k !== 'Other' ) {
-				$known_domains = $this->get_referrer_known_domains();
-
-				if ( isset( $known_domains[ $k ] ) ) {
-					$domain = $known_domains[ $k ];
-				} else {
-					$domain = $this->extract_main_domain( $k );
-				}
-
-				if ( $domain ) {
-					$favicon_url = 'https://' . $domain . '/favicon.ico';
-				}
-			}
-
-			$display_label = $k;
-			if ( $k === 'Direct / None' ) {
-				$display_label = __( 'Direct / None', 'opti-behavior' );
-			} elseif ( $k === 'Other' ) {
-				$display_label = __( 'Other', 'opti-behavior' );
-			}
-			$out[] = array(
-				'referrer'    => $display_label,
-				'count'       => intval( $agg[ $k ] ),
-				'domain'      => $domain,
-				'favicon_url' => $favicon_url,
-			);
-		}
-
-		return $out;
+		// Row trend vs the previous period, same filters (OPT-2294).
+		return $this->add_dimension_previous_counts( $this->build_referrer_rows( $agg ), 'referrer', $start_date, $end_date, $filters, '_key', 'Other', array() );
 	}
 
 	/**
@@ -16169,6 +16542,9 @@ class Opti_Behavior_Heatmap_Dashboard {
 			'Brave Search' => 'brave.com', 'Kagi' => 'kagi.com', 'Seznam' => 'seznam.cz', 'Sogou' => 'sogou.com',
 			'ChatGPT' => 'chatgpt.com', 'Perplexity' => 'perplexity.ai', 'Claude' => 'claude.ai',
 			'Copilot' => 'microsoft.com',
+			// OPT-2824.
+			'Gemini' => 'gemini.google.com', 'Mistral' => 'mistral.ai', 'DeepSeek' => 'deepseek.com',
+			'Grok' => 'grok.com', 'Meta AI' => 'meta.ai', 'You.com' => 'you.com',
 			'Facebook' => 'facebook.com', 'Instagram' => 'instagram.com', 'Twitter/X' => 'x.com',
 			'LinkedIn' => 'linkedin.com', 'Pinterest' => 'pinterest.com', 'Reddit' => 'reddit.com',
 			'TikTok' => 'tiktok.com', 'Snapchat' => 'snapchat.com', 'YouTube' => 'youtube.com',
@@ -16199,7 +16575,7 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$cache_seed = class_exists( 'Opti_Behavior_Stats_Context' )
 			? Opti_Behavior_Stats_Context::cache_key( $context )
 			: md5( $start_date . '|' . $end_date );
-		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_os_' . md5( 'dim-v2|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
+		$cache_key  = opti_behavior_dashboard_cache_key( 'opti_behavior_os_' . md5( 'dim-v3-prev|' . $cache_seed . '|' . ( $this->is_spam_excluded() ? '1' : '0' ) ) );
 		$cached     = $this->get_dashboard_widget_cached_data( $cache_key, $start_date, $end_date, 'operating_systems' );
 		if ( false !== $cached ) {
 			return $cached;
@@ -16261,15 +16637,18 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$data = array();
 		foreach ( $map as $label => $count ) {
 			$display_label = 'Other' === $label ? __( 'Other', 'opti-behavior' ) : $label;
-			$data[] = array( 'os' => $display_label, 'count' => absint( $count ) );
+			$data[] = array( 'os' => $display_label, 'count' => absint( $count ), '_key' => (string) $label );
 		}
 
 		if ( $unknown > 0 ) {
-			$data[] = array( 'os' => __( 'Unknown', 'opti-behavior' ), 'count' => $unknown );
+			$data[] = array( 'os' => __( 'Unknown', 'opti-behavior' ), 'count' => $unknown, '_key' => 'Unknown' );
 		}
 		if ( $unclassified > 0 ) {
-			$data[] = array( 'os' => __( 'Unclassified', 'opti-behavior' ), 'count' => $unclassified );
+			$data[] = array( 'os' => __( 'Unclassified', 'opti-behavior' ), 'count' => $unclassified, '_key' => 'Unclassified' );
 		}
+
+		// Row trend vs the previous period of the same length (OPT-2293).
+		$data = $this->add_dimension_previous_counts( $data, 'os', $start_date, $end_date, array(), '_key', 'Other', array( 'Unknown', 'Unclassified' ) );
 
 		// Never freeze an empty result (Bug #4): that's the state most likely to
 		// change on the very next session insert.
@@ -16339,14 +16718,15 @@ class Opti_Behavior_Heatmap_Dashboard {
 		$data = array();
 		foreach ( $map as $label => $count ) {
 			$display_label = 'Other' === $label ? __( 'Other', 'opti-behavior' ) : $label;
-			$data[] = array( 'os' => $display_label, 'count' => absint( $count ) );
+			$data[] = array( 'os' => $display_label, 'count' => absint( $count ), '_key' => (string) $label );
 		}
 
 		if ( $unknown > 0 ) {
-			$data[] = array( 'os' => __( 'Unknown', 'opti-behavior' ), 'count' => $unknown );
+			$data[] = array( 'os' => __( 'Unknown', 'opti-behavior' ), 'count' => $unknown, '_key' => 'Unknown' );
 		}
 
-		return $data;
+		// Row trend vs the previous period, same filters (OPT-2293).
+		return $this->add_dimension_previous_counts( $data, 'os', $start_date, $end_date, $filters, '_key', 'Other', array( 'Unknown' ) );
 	}
 
 

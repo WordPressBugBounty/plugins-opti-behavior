@@ -486,17 +486,19 @@ class Opti_Behavior_Smart_Insights_Impact_Calculator {
 				/* translators: %s: number of visits. */
 				return sprintf( _n( '%s visit hit rage or dead clicks', '%s visits hit rage or dead clicks', $users_lost, 'opti-behavior' ), $formatted );
 			case self::BASIS_FORM_ABANDONMENT:
-				/* translators: %s: number of visitors. */
-				return sprintf( _n( '%s visitor abandoned this form', '%s visitors abandoned this form', $users_lost, 'opti-behavior' ), $formatted );
+				/* translators: %s: number of form attempts. */
+				return sprintf( _n( '%s attempt abandoned on this form', '%s attempts abandoned on this form', $users_lost, 'opti-behavior' ), $formatted );
 			case self::BASIS_ERROR_IMPACT:
 				/* translators: %s: number of visitors. */
 				return sprintf( _n( '%s visitor hit an error here', '%s visitors hit an error here', $users_lost, 'opti-behavior' ), $formatted );
+			// OB-07: a gap to a reference rate is an estimate, never a loss
+			// (mobile is compared with desktop, a page with the site).
 			case self::BASIS_CONVERSION_GAP:
-				/* translators: %s: number of visitors. */
-				return sprintf( _n( '%s conversion lost versus your site average', '%s conversions lost versus your site average', $users_lost, 'opti-behavior' ), $formatted );
+				/* translators: %s: number of conversions. */
+				return sprintf( _n( 'About %s conversion fewer than at the comparison rate (estimate)', 'About %s conversions fewer than at the comparison rate (estimate)', $users_lost, 'opti-behavior' ), $formatted );
 			default:
-				/* translators: %s: number of visitors. */
-				return sprintf( _n( '%s visitor lost versus your site average', '%s visitors lost versus your site average', $users_lost, 'opti-behavior' ), $formatted );
+				/* translators: %s: number of visits. */
+				return sprintf( _n( 'About %s visit under the comparison (estimate)', 'About %s visits under the comparison (estimate)', $users_lost, 'opti-behavior' ), $formatted );
 		}
 	}
 

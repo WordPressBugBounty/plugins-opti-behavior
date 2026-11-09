@@ -2335,27 +2335,44 @@
 	min-width: 0;
 }
 
+/* Design OPT-2390: the funnel name is never cut ("…" on a title is banned):
+   it wraps; the description keeps at most 2 lines. */
 .opti-funnel-row__title-text .funnel-title {
 	margin: 0 0 2px;
 	font-size: 16px;
 	font-weight: 600;
 	color: #1a1a1a;
+	white-space: normal;
+	overflow-wrap: anywhere;
 }
 
 .opti-funnel-row__title-text .funnel-description {
+	display: -webkit-box;
 	margin: 0 0 4px;
 	font-size: 13px;
 	color: #6c757d;
-	white-space: nowrap;
+	white-space: normal;
 	overflow: hidden;
-	text-overflow: ellipsis;
-	max-width: 320px;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	max-width: 520px;
 }
 
 .opti-funnel-row__steps {
 	font-size: 12px;
 	color: #94a3b8;
 	font-weight: 500;
+}
+
+/* OB-20: days the card figures cover. */
+.opti-funnel-row__period {
+	display: block;
+	font-size: 12px;
+	color: #64748b;
+}
+.opti-funnel-row__period:empty {
+	display: none;
 }
 
 .opti-funnel-row__badges {
